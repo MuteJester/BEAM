@@ -380,6 +380,25 @@ def test_repr_reports_the_cohort(uneven_model):
     assert "k_fft=16" in text
 
 
+def test_pickle_path_survives_the_module_split():
+    """A pickle records the class by module path, so the path must not move.
+
+    PublicnessModel's definition now lives in BEAM.publicness.model, but its
+    __module__ is pinned to BEAM._publicness, where it was written. Without
+    that pin, every pickle produced before the split would fail to load and
+    every one produced after would name a module older versions do not have.
+    The pin is only load-bearing while this assertion holds.
+    """
+    import pickle
+
+    assert PublicnessModel.__module__ == "BEAM._publicness"
+
+    model = PublicnessModel([10, 20, 30], depth_bins=3)
+    revived = pickle.loads(pickle.dumps(model))
+    np.testing.assert_array_equal(revived.pmf(1e-3), model.pmf(1e-3))
+    assert pickle.dumps(model).find(b"BEAM._publicness") != -1
+
+
 # ── Integration with the p-sequence spectrum ──────────────────
 #
 # In LZGraphs this section drove PublicnessModel through
