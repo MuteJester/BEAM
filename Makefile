@@ -56,7 +56,7 @@ build/tests/c_unit/test_model: LDEXTRA = -Wl,--wrap=malloc
 
 build/tests/c_unit/%: tests/c_unit/%.c build/libbeam.a
 	@mkdir -p $(@D)
-	$(CC) $(CFLAGS) -Ilib/model -Itests/c_unit $< build/libbeam.a $(LDLIBS) \
+	$(CC) $(CFLAGS) -Isrc/native/model -Itests/c_unit $< build/libbeam.a $(LDLIBS) \
 	    $(LDEXTRA) -o $@
 
 clean:

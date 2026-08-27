@@ -2,7 +2,7 @@
  * @file internal.h
  * @brief Shared layout and helpers for the BEAM implementation.
  *
- * Not part of the public API. Do not include from outside lib/edge_model/.
+ * Not part of the public API. Do not include from outside src/native/.
  *
  * ## Table layout, and why it is what it is
  *

@@ -52,10 +52,11 @@ python -m pytest tests/   # Python suite
 | Path | Contents |
 |---|---|
 | `include/beam/` | Public C headers |
-| `lib/model/` | The model: build, score, sample, analytics, sparse storage, I/O |
-| `lib/occupancy/` | Poisson-binomial sharing model (`PublicnessModel`) |
-| `lib/core/` | Shared support: error handling, RNG, CRC32C |
+| `src/native/model/` | The model: build, score, sample, analytics, sparse storage, I/O |
+| `src/native/occupancy/` | Poisson-binomial sharing model (`PublicnessModel`) |
+| `src/native/core/` | Shared support: error handling, RNG, CRC32C |
 | `src/BEAM/` | Python package and its C extension |
+| `build_support/` | Explicit source manifests read by both `Makefile` and `setup.py` |
 | `docs/api/model.md` | Full API reference |
 
 ## A note on the file format

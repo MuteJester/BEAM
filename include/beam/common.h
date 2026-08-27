@@ -217,7 +217,7 @@ void beam_log_emit(BeamLogLevel level, const char *fmt, ...);
  * Bit 21:     End sentinel '$'
  * Bit 31:     Non-standard (ignored in bitmask checks)
  */
-uint8_t beam_aa_to_bit(char c);  /* implemented in lib/core/common.c */
+uint8_t beam_aa_to_bit(char c);  /* implemented in src/native/core/common.c */
 
 /**
  * Compute the character bitmask for a string of length `len`.

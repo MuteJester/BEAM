@@ -10,17 +10,17 @@
 # Python headers must never be required to build this list. Binding sources
 # belong in python_binding_sources.txt.
 
-lib/core/common.c
-lib/core/crc32c.c
-lib/core/rng.c
+src/native/core/common.c
+src/native/core/crc32c.c
+src/native/core/rng.c
 
-lib/model/analytics.c
-lib/model/build.c
-lib/model/io.c
-lib/model/moments.c
-lib/model/sample.c
-lib/model/score.c
-lib/model/sparse.c
-lib/model/topk.c
+src/native/model/analytics.c
+src/native/model/build.c
+src/native/model/io.c
+src/native/model/moments.c
+src/native/model/sample.c
+src/native/model/score.c
+src/native/model/sparse.c
+src/native/model/topk.c
 
-lib/occupancy/publicness.c
+src/native/occupancy/publicness.c
