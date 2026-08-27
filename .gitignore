@@ -1,6 +1,7 @@
 # Research and working material, never published
 .research/
 .private/
+.dev/
 
 # Build artifacts
 build/
