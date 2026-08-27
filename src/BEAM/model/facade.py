@@ -436,7 +436,7 @@ class BeamModel:
         .. warning::
            This is a **process-wide** setting, not a per-model one. Assigning
            to it on any model changes it for every model in the process, and
-           for every other part of the library that runs an BeamModel parallel
+           for every other part of the library that runs a BeamModel parallel
            region. It is exposed here because this is where a caller looks for
            it; :func:`set_threads` is the spelling that says so.
 
@@ -1762,14 +1762,14 @@ class BeamModel:
         elif abundances is not None:
             raise TypeError(
                 "abundances applies only when `other` is a list of sequences; "
-                "an BeamModel already carries its own weights")
+                "a BeamModel already carries its own weights")
         out = self.copy()
         out.subtract(other)
         return out
 
     def _check_operand(self, op: str, other: Any) -> None:
         if not isinstance(other, BeamModel):
-            raise TypeError(f"{op}() expects an BeamModel, got "
+            raise TypeError(f"{op}() expects a BeamModel, got "
                             f"{type(other).__name__}")
         if other is self:
             raise ValueError(

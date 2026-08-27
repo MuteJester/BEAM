@@ -115,7 +115,7 @@ def test_posterior_rejects_bad_operands(corpus):
     prior = BeamModel(seqs[300:], abundances=abund[300:], order=2, max_length=20)
     with pytest.raises(ValueError, match="kappa must be non-negative"):
         donor.posterior(prior, kappa=-1.0)
-    with pytest.raises(TypeError, match="expects an BeamModel"):
+    with pytest.raises(TypeError, match="expects a BeamModel"):
         donor.posterior(object(), kappa=1.0)
     with pytest.raises(ValueError, match="with the model itself"):
         donor.posterior(donor, kappa=1.0)

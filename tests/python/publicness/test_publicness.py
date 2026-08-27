@@ -404,7 +404,7 @@ def test_pickle_path_survives_the_module_split():
 # In LZGraphs this section drove PublicnessModel through
 # `FlashBackGraph.pseq_analysis().publicness_distribution(...)`, a convenience
 # wrapper on the graph. BEAM has no such wrapper and does not want one: the
-# supported path is the atom pair off an BeamModel spectrum, handed to the model
+# supported path is the atom pair off a BeamModel spectrum, handed to the model
 # directly, which is exactly what the figure pipeline does. The properties
 # checked below are the ones that section checked -- conservation, monotonicity
 # in depth, level aggregation, agreement between the batched transform and an

@@ -62,7 +62,8 @@
  * Nothing in the FlashBack implementation is changed or shared.
  *
  * Reference implementation and the measurements behind every default:
- * `.private/edge/METHOD.md`.
+ * `.private/edge/METHOD.md`, a working-tree document that is not shipped
+ * with the package. Every number quoted in these comments comes from it.
  */
 #ifndef BEAM_MODEL_H
 #define BEAM_MODEL_H
@@ -95,7 +96,8 @@ extern "C" {
 
 /**
  * Build-time configuration. `beam_model_config_default()` fills this with
- * the values measured in `.private/edge/METHOD.md`; change a field only with a
+ * the values measured in `.private/edge/METHOD.md` (working tree, not
+ * shipped); change a field only with a
  * measurement to justify it.
  */
 typedef struct {

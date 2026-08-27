@@ -8,7 +8,8 @@
  * argument: the product of the local choices telescopes into the path's own
  * probability.
  *
- * Reference: `.private/edge/src/edge.py::EDGE.sample`.
+ * Reference: `.private/edge/src/edge.py::EDGE.sample`, the prototype this
+ * was derived from. Working tree only, not shipped.
  */
 #include "beam/internal.h"
 
