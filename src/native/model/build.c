@@ -10,7 +10,7 @@
  */
 #include <stdio.h>
 
-#include "internal.h"
+#include "beam/internal.h"
 
 /* ── Parallelism ─────────────────────────────────────────────── */
 

@@ -17,7 +17,7 @@
  * analytics are describing a different model from the one being scored, which
  * is the failure mode this file is arranged to make impossible to miss.
  */
-#include "internal.h"
+#include "beam/internal.h"
 
 #ifdef _OPENMP
 #include <omp.h>

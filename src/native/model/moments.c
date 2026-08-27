@@ -15,7 +15,7 @@
  *
  * All exact. Nothing here samples.
  */
-#include "internal.h"
+#include "beam/internal.h"
 
 /* ── Shared scratch for a forward sweep ──────────────────────── */
 

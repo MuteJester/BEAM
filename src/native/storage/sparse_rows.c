@@ -3,7 +3,7 @@
  * @brief Dense-directory, sparse-payload storage for strict BEAM tables.
  */
 
-#include "internal.h"
+#include "beam/internal.h"
 
 /* A small first allocation avoids penalising one-row partitions while keeping
  * the normal observe path from allocating for every new row. */

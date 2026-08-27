@@ -31,7 +31,7 @@
  * no public entry point can distinguish it. Reaching into the implementation
  * header is the price of testing them at all.
  */
-#include "../../src/native/model/internal.h"
+#include "../../src/native/internal/beam/internal.h"
 
 static int pass_count = 0, fail_count = 0;
 

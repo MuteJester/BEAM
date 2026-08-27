@@ -10,7 +10,7 @@
  *
  * Reference: `.private/edge/src/edge.py::EDGE.sample`.
  */
-#include "internal.h"
+#include "beam/internal.h"
 
 static uint32_t draw_length(const BeamModel *m, BeamRng *rng) {
     double u = beam_rng_double(rng);

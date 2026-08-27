@@ -15,7 +15,7 @@
  * Cost is O(k * L * 20 * log) after the backward pass, so asking for the top
  * hundred is cheap even on a 194,481-state trellis.
  */
-#include "internal.h"
+#include "beam/internal.h"
 
 /* ── A binary max-heap over partial paths ────────────────────── */
 

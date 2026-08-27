@@ -9,7 +9,7 @@
  *
  * Reference: `.private/edge/src/spectrum.py`.
  */
-#include "internal.h"
+#include "beam/internal.h"
 
 /* ── Live-state trimming ─────────────────────────────────────── */
 

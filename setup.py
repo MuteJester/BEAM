@@ -31,7 +31,7 @@ setup(
     ext_modules=[Extension(
         "BEAM._cbeam",
         sources=manifest("python_binding_sources.txt") + manifest("native_sources.txt"),
-        include_dirs=["include", "src/native/model"],
+        include_dirs=["include", "src/native/internal"],
         extra_compile_args=["-O2", "-std=c11", "-fopenmp"],
         extra_link_args=["-fopenmp"],
         libraries=["m"],

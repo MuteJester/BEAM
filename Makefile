@@ -10,7 +10,7 @@
 # wildcards. See build_support/native_sources.txt for why.
 
 CC      ?= gcc
-CFLAGS   = -O2 -Wall -Wextra -std=c11 -Iinclude
+CFLAGS   = -O2 -Wall -Wextra -std=c11 -Iinclude -Isrc/native/internal
 CFLAGS  += -fopenmp
 LDLIBS   = -lm -fopenmp
 
@@ -56,7 +56,7 @@ build/tests/c_unit/test_model: LDEXTRA = -Wl,--wrap=malloc
 
 build/tests/c_unit/%: tests/c_unit/%.c build/libbeam.a
 	@mkdir -p $(@D)
-	$(CC) $(CFLAGS) -Isrc/native/model -Itests/c_unit $< build/libbeam.a $(LDLIBS) \
+	$(CC) $(CFLAGS) -Itests/c_unit $< build/libbeam.a $(LDLIBS) \
 	    $(LDEXTRA) -o $@
 
 clean:

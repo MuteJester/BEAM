@@ -10,8 +10,10 @@
 # Python headers must never be required to build this list. Binding sources
 # belong in python_binding_sources.txt.
 
-src/native/core/common.c
+src/native/core/alphabet.c
 src/native/core/crc32c.c
+src/native/core/errors.c
+src/native/core/logging.c
 src/native/core/rng.c
 
 src/native/model/analytics.c
@@ -20,7 +22,8 @@ src/native/model/io.c
 src/native/model/moments.c
 src/native/model/sample.c
 src/native/model/score.c
-src/native/model/sparse.c
 src/native/model/topk.c
 
 src/native/occupancy/publicness.c
+
+src/native/storage/sparse_rows.c

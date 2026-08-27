@@ -17,7 +17,7 @@
 #include <stdio.h>
 
 #include "beam/crc32c.h"
-#include "internal.h"
+#include "beam/internal.h"
 
 /* 0x4245414D is 'B','E','A','M' as ASCII, most significant byte first. The
  * field is written in host byte order, so those bytes appear reversed in a
