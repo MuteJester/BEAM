@@ -1,5 +1,5 @@
 /**
- * @file topk.c
+ * @file top_k.c
  * @brief The k most probable sequences, exactly.
  *
  * Best-first search over the DAG, guided by the backward values.

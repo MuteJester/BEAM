@@ -1,5 +1,5 @@
 /**
- * @file io.c
+ * @file model_file.c
  * @brief Persistence for BEAM models.
  *
  * Counts are written, not the derived log-probability tables. That costs

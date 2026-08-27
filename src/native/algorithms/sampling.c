@@ -1,5 +1,5 @@
 /**
- * @file sample.c
+ * @file sampling.c
  * @brief Exact generation from the BEAM DAG.
  *
  * Draws are exactly proportional to sequence probability, not approximately.
