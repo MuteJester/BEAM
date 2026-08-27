@@ -181,8 +181,7 @@ static BeamError best_completions(const BeamModel *m, uint32_t len,
     for (int32_t i = (int32_t)len - 1; i >= 0; --i) {
         const uint32_t  nr = L->n_reached[i];
         const uint32_t *rv = L->reached[i];
-        memset(alive, 0, S);
-        for (uint32_t k = 0; k < nr; ++k) alive[rv[k]] = 1;
+        beam_reached_mask(L, (uint32_t)i, S, alive);
         beam_layer_weights_live(m, (uint32_t)i, len, w, NULL, alive);
         const double *nb = best[i + 1];
         double *cu = best[i];

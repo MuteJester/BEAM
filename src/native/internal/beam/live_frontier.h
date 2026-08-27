@@ -10,6 +10,8 @@
 #ifndef BEAM_INTERNAL_LIVE_FRONTIER_H
 #define BEAM_INTERNAL_LIVE_FRONTIER_H
 
+#include <string.h>
+
 #include "beam/model.h"
 #include "beam/model_state.h"
 
@@ -109,5 +111,24 @@ void beam_live_release(LiveHandle *h);
 
 /** Producible lengths, longest first. Returns how many were written. */
 uint32_t beam_live_lengths_desc(const BeamModel *m, uint32_t *out);
+
+/**
+ * Byte mask of the states reached at layer `i`, for `beam_layer_weights_live`.
+ *
+ * The frontier stores membership as a bitset plus an ascending index list;
+ * the layer-weight builder wants one byte per state. Rebuilding it per layer
+ * costs a memset over the state space, which is far less than building
+ * weights for states no path reaches.
+ *
+ * Only for callers that pass `out_max = NULL`, or that obtain the layer
+ * maximum separately and exactly. See beam_layer_weights_live.
+ */
+static inline void beam_reached_mask(const BeamLive *L, uint32_t i,
+                                     uint32_t n_states, uint8_t *alive) {
+    memset(alive, 0, n_states);
+    const uint32_t  n = L->n_reached[i];
+    const uint32_t *v = L->reached[i];
+    for (uint32_t k = 0; k < n; ++k) alive[v[k]] = 1;
+}
 
 #endif /* BEAM_INTERNAL_LIVE_FRONTIER_H */

@@ -69,11 +69,24 @@ BeamError jet_sweep(const BeamModel *m, uint32_t len, double q,
     if (!sweep_alloc(&sw, S, NM))
         return BEAM_EALLOC("the jet-sweep scratch buffers");
 
+    /* Sweep the reached set, not the state space. This asks for no layer
+     * maximum -- it computes its own below, over states carrying mass, which
+     * is a subset of reached -- so the live weight builder is sound here.
+     * Ascending order keeps every sum's terms in their original sequence. */
+    uint8_t *alive = (uint8_t *)malloc(S);
+    LiveHandle h;
+    if (!alive || beam_live_acquire(m, len, &h) != BEAM_OK) {
+        free(alive); sweep_free(&sw);
+        return BEAM_EALLOC("the forward frontier");
+    }
+    const BeamLive *L = h.L;
+
     sw.cur[(size_t)0 * S + (S - 1)] = 1.0;    /* moment 0 of the start state */
     double log_scale = 0.0;
 
     for (uint32_t i = 0; i < len; ++i) {
-        beam_layer_weights(m, i, len, sw.w, NULL);
+        beam_reached_mask(L, i, S, alive);
+        beam_layer_weights_live(m, i, len, sw.w, NULL, alive);
 
         /*
          * Rescale by the best edge THAT CARRIES MASS, not the best edge
@@ -87,25 +100,30 @@ BeamError jet_sweep(const BeamModel *m, uint32_t len, double q,
         #pragma omp parallel for schedule(static) reduction(max:wmax) \
                 num_threads(beam_threads())
 #endif
-        for (int64_t s = 0; s < (int64_t)S; ++s) {
+        for (int64_t k = 0; k < (int64_t)L->n_reached[i]; ++k) {
+            const uint32_t s = L->reached[i][k];
             if (sw.cur[s] == 0.0) continue;
             const double *row = sw.w + (size_t)s * R;
             for (uint32_t x = 0; x < R; ++x)
                 if (row[x] > wmax) wmax = row[x];
         }
-        if (wmax == -INFINITY) { sweep_free(&sw); *out_log_z = -INFINITY; return BEAM_OK; }
+        if (wmax == -INFINITY) { free(alive); beam_live_release(&h); sweep_free(&sw);
+          *out_log_z = -INFINITY; return BEAM_OK; }
         const double qmax = q * wmax;
 
         memset(sw.next, 0, (size_t)NM * S * sizeof(double));
         double nmax = 0.0;
+        const uint32_t  nt  = L->n_reached[i + 1];
+        const uint32_t *tgt = L->reached[i + 1];
 #ifdef _OPENMP
         #pragma omp parallel for schedule(static) reduction(max:nmax) \
                 num_threads(beam_threads())
 #endif
-        for (int64_t t = 0; t < (int64_t)S; ++t) {
-            const uint32_t x = (uint32_t)t % A;
+        for (int64_t k = 0; k < (int64_t)nt; ++k) {
+            const uint32_t t = tgt[k];
+            const uint32_t x = t % A;
             if (x >= R) continue;
-            const uint32_t rest = (uint32_t)t / A;
+            const uint32_t rest = t / A;
             for (uint32_t a = 0; a < A; ++a) {
                 const uint32_t src = a * SK + rest;
                 if (sw.cur[src] == 0.0) continue;          /* no mass here */
@@ -128,11 +146,14 @@ BeamError jet_sweep(const BeamModel *m, uint32_t len, double q,
         }
         log_scale += qmax;
 
-        if (!(nmax > 0.0)) { sweep_free(&sw); *out_log_z = -INFINITY; return BEAM_OK; }
+        if (!(nmax > 0.0)) { free(alive); beam_live_release(&h); sweep_free(&sw);
+          *out_log_z = -INFINITY; return BEAM_OK; }
 #ifdef _OPENMP
         #pragma omp parallel for schedule(static) num_threads(beam_threads())
 #endif
-        for (int64_t t = 0; t < (int64_t)NM * S; ++t) sw.next[t] /= nmax;
+        for (int64_t k = 0; k < (int64_t)nt; ++k)
+            for (uint32_t j = 0; j < NM; ++j)
+                sw.next[(size_t)j * S + tgt[k]] /= nmax;
         log_scale += log(nmax);
 
         double *tmp = sw.cur; sw.cur = sw.next; sw.next = tmp;
@@ -141,14 +162,19 @@ BeamError jet_sweep(const BeamModel *m, uint32_t len, double q,
     /* Sink: one more edge whose weight is the tail. */
     beam_tail_weights(m, len, sw.tail);
     double tmax = -INFINITY;
-    for (uint32_t s = 0; s < S; ++s)
+    for (uint32_t k = 0; k < L->n_reached[len]; ++k) {
+        const uint32_t s = L->reached[len][k];
         if (sw.cur[s] > 0.0 && sw.tail[s] != -INFINITY && q * sw.tail[s] > tmax)
             tmax = q * sw.tail[s];
-    if (tmax == -INFINITY) { sweep_free(&sw); *out_log_z = -INFINITY; return BEAM_OK; }
+    }
+    if (tmax == -INFINITY) { free(alive); beam_live_release(&h); sweep_free(&sw);
+          *out_log_z = -INFINITY; return BEAM_OK; }
 
     double *fin = (double *)calloc(NM, sizeof(double));
-    if (!fin) { sweep_free(&sw); return BEAM_EALLOC("the sink jet"); }
-    for (uint32_t s = 0; s < S; ++s) {
+    if (!fin) { free(alive); beam_live_release(&h); sweep_free(&sw);
+                return BEAM_EALLOC("the sink jet"); }
+    for (uint32_t k = 0; k < L->n_reached[len]; ++k) {
+        const uint32_t s = L->reached[len][k];
         if (sw.cur[s] == 0.0 || sw.tail[s] == -INFINITY) continue;
         const double tv = sw.tail[s];
         const double e = exp(q * tv - tmax);
@@ -162,14 +188,15 @@ BeamError jet_sweep(const BeamModel *m, uint32_t len, double q,
         }
     }
     if (!(fin[0] > 0.0)) {
-        free(fin); sweep_free(&sw);
+        free(fin); free(alive); beam_live_release(&h); sweep_free(&sw);
         *out_log_z = -INFINITY;
         return BEAM_OK;
     }
     for (uint32_t j = 0; j < NM; ++j) out_moments[j] = fin[j] / fin[0];
     *out_log_z = log_scale + tmax + log(fin[0]);
 
-    free(fin);
+    free(fin); free(alive);
+    beam_live_release(&h);
     sweep_free(&sw);
     return BEAM_OK;
 }

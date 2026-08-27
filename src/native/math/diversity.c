@@ -7,22 +7,6 @@
 
 /* ── Entropy and Hill numbers ────────────────────────────────── */
 
-/**
- * Byte mask of the states reached at layer `i`, for `beam_layer_weights_live`.
- *
- * The frontier stores membership as a bitset and an ascending index list;
- * the layer-weight builder wants one byte per state. Rebuilding it per layer
- * costs a memset over the state space, which is still far less than building
- * weights for states no path reaches.
- */
-static void reached_mask(const BeamLive *L, uint32_t i, uint32_t S,
-                         uint8_t *alive) {
-    memset(alive, 0, S);
-    const uint32_t  n = L->n_reached[i];
-    const uint32_t *v = L->reached[i];
-    for (uint32_t k = 0; k < n; ++k) alive[v[k]] = 1;
-}
-
 
 /**
  * Tilted partition function `sum over length-L paths of exp(alpha * raw)`.
@@ -89,7 +73,7 @@ static BeamError tilted_log_z(const BeamModel *m, uint32_t len, double alpha,
          * default and is what the per-repertoire work uses. */
         if (m->cfg.sparse) {
             wmax = beam_layer_max(m, i, len);
-            reached_mask(L, i, S, alive);
+            beam_reached_mask(L, i, S, alive);
             beam_layer_weights_live(m, i, len, w, NULL, alive);
         } else {
             beam_layer_weights(m, i, len, w, &wmax);
@@ -226,7 +210,7 @@ static BeamError expected_raw(const BeamModel *m, uint32_t len, double *out) {
          * default and is what the per-repertoire work uses. */
         if (m->cfg.sparse) {
             wmax = beam_layer_max(m, i, len);
-            reached_mask(L, i, S, alive);
+            beam_reached_mask(L, i, S, alive);
             beam_layer_weights_live(m, i, len, w, NULL, alive);
         } else {
             beam_layer_weights(m, i, len, w, &wmax);

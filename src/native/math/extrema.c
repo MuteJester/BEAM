@@ -37,14 +37,29 @@ static double accumulator_max_at(const BeamModel *m, uint32_t len) {
         (void)BEAM_EALLOC("the max-plus accumulator sweep buffers");
         return 0.0;
     }
+    /* Sweep the reached set. These are min-plus / max-plus scatters by SOURCE
+     * that already skip unreachable states, so restricting the loop drops
+     * only iterations that did nothing. No layer maximum is requested, which
+     * is the case beam_layer_weights_live permits, and max/min is
+     * order-independent so the result cannot depend on visit order. */
+    uint8_t *alive = (uint8_t *)malloc(S);
+    LiveHandle h;
+    if (!alive || beam_live_acquire(m, len, &h) != BEAM_OK) {
+        free(alive); free(w); free(cur); free(next); free(tail);
+        return 0.0;
+    }
+    const BeamLive *L = h.L;
+
     double hi = 0.0;
     for (uint32_t s = 0; s < S; ++s) cur[s] = -INFINITY;
     cur[S - 1] = 0.0;
 
     for (uint32_t i = 0; i < len; ++i) {
-        beam_layer_weights(m, i, len, w, NULL);
+        beam_reached_mask(L, i, S, alive);
+        beam_layer_weights_live(m, i, len, w, NULL, alive);
         for (uint32_t s = 0; s < S; ++s) next[s] = -INFINITY;
-        for (uint32_t s = 0; s < S; ++s) {
+        for (uint32_t k = 0; k < L->n_reached[i]; ++k) {
+            const uint32_t s = L->reached[i][k];
             if (cur[s] == -INFINITY) continue;
             const double *row = w + (size_t)s * R;
             const uint32_t base = (s % SK) * A;
@@ -67,7 +82,8 @@ static double accumulator_max_at(const BeamModel *m, uint32_t len) {
             if (surprisal > hi) hi = surprisal;
         }
     }
-    free(w); free(cur); free(next); free(tail);
+    free(w); free(cur); free(next); free(tail); free(alive);
+    beam_live_release(&h);
     return hi;
 }
 
@@ -125,13 +141,28 @@ static BeamError range_at(const BeamModel *m, uint32_t len,
         free(w); free(lo); free(hi); free(nlo); free(nhi); free(tail);
         return BEAM_EALLOC("the min-plus / max-plus sweep buffers");
     }
+    /* Sweep the reached set. These are min-plus / max-plus scatters by SOURCE
+     * that already skip unreachable states, so restricting the loop drops
+     * only iterations that did nothing. No layer maximum is requested, which
+     * is the case beam_layer_weights_live permits, and max/min is
+     * order-independent so the result cannot depend on visit order. */
+    uint8_t *alive = (uint8_t *)malloc(S);
+    LiveHandle h;
+    if (!alive || beam_live_acquire(m, len, &h) != BEAM_OK) {
+        free(alive); free(w); free(lo); free(hi); free(nlo); free(nhi); free(tail);
+        return BEAM_EALLOC("the forward frontier");
+    }
+    const BeamLive *L = h.L;
+
     for (uint32_t s = 0; s < S; ++s) { lo[s] = INFINITY; hi[s] = -INFINITY; }
     lo[S - 1] = 0.0; hi[S - 1] = 0.0;
 
     for (uint32_t i = 0; i < len; ++i) {
-        beam_layer_weights(m, i, len, w, NULL);
+        beam_reached_mask(L, i, S, alive);
+        beam_layer_weights_live(m, i, len, w, NULL, alive);
         for (uint32_t s = 0; s < S; ++s) { nlo[s] = INFINITY; nhi[s] = -INFINITY; }
-        for (uint32_t s = 0; s < S; ++s) {
+        for (uint32_t k = 0; k < L->n_reached[i]; ++k) {
+            const uint32_t s = L->reached[i][k];
             if (hi[s] == -INFINITY) continue;
             const double *row = w + (size_t)s * R;
             const uint32_t base = (s % SK) * A;
@@ -157,7 +188,8 @@ static BeamError range_at(const BeamModel *m, uint32_t len,
         if (a < best) best = a;
         if (b > worst) worst = b;
     }
-    free(w); free(lo); free(hi); free(nlo); free(nhi); free(tail);
+    free(w); free(lo); free(hi); free(nlo); free(nhi); free(tail); free(alive);
+    beam_live_release(&h);
     *out_min = best;
     *out_max = worst;
     return BEAM_OK;
