@@ -156,18 +156,44 @@ static BeamError best_completions(const BeamModel *m, uint32_t len,
     const uint32_t SK = m->state_shift;
 
     double *w = (double *)malloc((size_t)S * R * sizeof(double));
-    if (!w) return BEAM_EALLOC("one layer of edge weights");
+    uint8_t *alive = (uint8_t *)malloc(S);
+    if (!w || !alive) { free(w); free(alive);
+        return BEAM_EALLOC("one layer of edge weights"); }
+
+    /* Only states the root can reach are ever expanded by the search below,
+     * so only their completions are read. This asks for no `out_max`, which
+     * is the case `beam_layer_weights_live` documents as safe: dead rows are
+     * provably unread, because a reached state's finite edge always lands on
+     * a reached target, and an infinite one is rejected before the target is
+     * touched.
+     *
+     * Unreached entries are filled with -inf rather than left stale. Nothing
+     * should read them; if anything ever does, an impossible completion is a
+     * loud wrong answer instead of a quiet one. */
+    LiveHandle h;
+    if (beam_live_acquire(m, len, &h) != BEAM_OK) {
+        free(w); free(alive);
+        return BEAM_EALLOC("the forward frontier");
+    }
+    const BeamLive *L = h.L;
+
     beam_tail_weights(m, len, best[len]);
     for (int32_t i = (int32_t)len - 1; i >= 0; --i) {
-        beam_layer_weights(m, (uint32_t)i, len, w, NULL);
+        const uint32_t  nr = L->n_reached[i];
+        const uint32_t *rv = L->reached[i];
+        memset(alive, 0, S);
+        for (uint32_t k = 0; k < nr; ++k) alive[rv[k]] = 1;
+        beam_layer_weights_live(m, (uint32_t)i, len, w, NULL, alive);
         const double *nb = best[i + 1];
         double *cu = best[i];
+        for (uint32_t t = 0; t < S; ++t) cu[t] = -INFINITY;
 #ifdef _OPENMP
         #pragma omp parallel for schedule(static) num_threads(beam_threads())
 #endif
-        for (int64_t s = 0; s < (int64_t)S; ++s) {
+        for (int64_t k = 0; k < (int64_t)nr; ++k) {
+            const uint32_t s = rv[k];
             const double *row = w + (size_t)s * R;
-            const uint32_t base = ((uint32_t)s % SK) * A;
+            const uint32_t base = (s % SK) * A;
             double mx = -INFINITY;
             for (uint32_t x = 0; x < R; ++x) {
                 if (row[x] == -INFINITY || nb[base + x] == -INFINITY) continue;
@@ -177,7 +203,8 @@ static BeamError best_completions(const BeamModel *m, uint32_t len,
             cu[s] = mx;
         }
     }
-    free(w);
+    free(w); free(alive);
+    beam_live_release(&h);
     return BEAM_OK;
 }
 

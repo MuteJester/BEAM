@@ -8,6 +8,23 @@
 /* ── Entropy and Hill numbers ────────────────────────────────── */
 
 /**
+ * Byte mask of the states reached at layer `i`, for `beam_layer_weights_live`.
+ *
+ * The frontier stores membership as a bitset and an ascending index list;
+ * the layer-weight builder wants one byte per state. Rebuilding it per layer
+ * costs a memset over the state space, which is still far less than building
+ * weights for states no path reaches.
+ */
+static void reached_mask(const BeamLive *L, uint32_t i, uint32_t S,
+                         uint8_t *alive) {
+    memset(alive, 0, S);
+    const uint32_t  n = L->n_reached[i];
+    const uint32_t *v = L->reached[i];
+    for (uint32_t k = 0; k < n; ++k) alive[v[k]] = 1;
+}
+
+
+/**
  * Tilted partition function `sum over length-L paths of exp(alpha * raw)`.
  *
  * `alpha = 0` counts paths, `alpha = 1` is the ordinary partition function,
@@ -20,12 +37,34 @@ static BeamError tilted_log_z(const BeamModel *m, uint32_t len, double alpha,
     const uint32_t S = m->n_states;
     const uint32_t SK = m->state_shift;
 
+    /* Sweep the states the corpus can reach, not the whole state space. On a
+     * per-repertoire model that is a several-hundred-fold smaller iteration
+     * space; on the foundation the two nearly coincide and this costs nothing.
+     *
+     * REACHED, not LIVE, and the distinction is load-bearing. `nmax` rescales
+     * every layer and `log_scale` accumulates `log(nmax)`, so the maximum must
+     * be taken over the same set as before or the rescaling moves and the last
+     * bits with it. `reached` holds every forward-reachable state, so its
+     * maximum equals the maximum over all states, the rest being 0.0. `live`
+     * additionally demands reaching the sink, and a forward-reachable dead end
+     * can hold the layer maximum: mathematically irrelevant, numerically not.
+     *
+     * Both index arrays are ascending, so every sum receives its terms in the
+     * order it did before. That is what makes this bit-identical rather than
+     * merely equal. */
+    LiveHandle h;
+    if (beam_live_acquire(m, len, &h) != BEAM_OK)
+        return BEAM_EALLOC("the forward frontier");
+    const BeamLive *L = h.L;
+
     double *w    = (double *)malloc((size_t)S * R * sizeof(double));
     double *cur  = (double *)calloc(S, sizeof(double));
-    double *next = (double *)malloc((size_t)S * sizeof(double));
+    double *next = (double *)calloc(S, sizeof(double));
     double *tail = (double *)malloc((size_t)S * sizeof(double));
-    if (!w || !cur || !next || !tail) {
-        free(w); free(cur); free(next); free(tail);
+    uint8_t *alive = (uint8_t *)malloc(S);
+    if (!w || !cur || !next || !tail || !alive) {
+        free(w); free(cur); free(next); free(tail); free(alive);
+        beam_live_release(&h);
         return BEAM_EALLOC("the tilted forward-sweep buffers");
     }
     cur[S - 1] = 1.0;
@@ -33,7 +72,28 @@ static BeamError tilted_log_z(const BeamModel *m, uint32_t len, double alpha,
 
     for (uint32_t i = 0; i < len; ++i) {
         double wmax = -INFINITY;
-        beam_layer_weights(m, i, len, w, &wmax);
+        /* The frontier shortcut is only sound where the layer maximum can be
+         * had without building the whole layer, and `beam_layer_weights_live`
+         * documents that a caller asking for `out_max` does not qualify: its
+         * fused maximum scans only the rows it built. Taking the max over the
+         * reached set alone changes the per-layer rescale and therefore the
+         * last bits, which is exactly what happened here -- the open-world
+         * Hill numbers moved at every order, because in the open world a
+         * state can carry the layer maximum and still be unreachable.
+         *
+         * On a sparse table `beam_layer_max` walks the occupied rows and is
+         * cheap, and its answer IS the maximum over all states: a missing row
+         * reads -inf and cannot win a maximum. On a dense table it would have
+         * to build the layer anyway, so there the original full build stays,
+         * unchanged and trivially identical. Sparse is the closed-world
+         * default and is what the per-repertoire work uses. */
+        if (m->cfg.sparse) {
+            wmax = beam_layer_max(m, i, len);
+            reached_mask(L, i, S, alive);
+            beam_layer_weights_live(m, i, len, w, NULL, alive);
+        } else {
+            beam_layer_weights(m, i, len, w, &wmax);
+        }
         if (wmax == -INFINITY) goto dead;
         const double amax = alpha * wmax;
 
@@ -42,14 +102,17 @@ static BeamError tilted_log_z(const BeamModel *m, uint32_t len, double alpha,
          * parallelising over sources would race; inverting it makes each
          * target the private property of one thread. */
         double nmax = 0.0;
+        const uint32_t  nt  = L->n_reached[i + 1];
+        const uint32_t *tgt = L->reached[i + 1];
 #ifdef _OPENMP
         #pragma omp parallel for schedule(static) reduction(max:nmax) \
                 num_threads(beam_threads())
 #endif
-        for (int64_t t = 0; t < (int64_t)S; ++t) {
-            const uint32_t x = (uint32_t)t % A;
+        for (int64_t k = 0; k < (int64_t)nt; ++k) {
+            const uint32_t t = tgt[k];
+            const uint32_t x = t % A;
             if (x >= R) { next[t] = 0.0; continue; }
-            const uint32_t rest = (uint32_t)t / A;
+            const uint32_t rest = t / A;
             double acc = 0.0;
             for (uint32_t a = 0; a < A; ++a) {
                 const uint32_t src = a * SK + rest;
@@ -67,29 +130,44 @@ static BeamError tilted_log_z(const BeamModel *m, uint32_t len, double alpha,
 #ifdef _OPENMP
         #pragma omp parallel for schedule(static) num_threads(beam_threads())
 #endif
-        for (int64_t s = 0; s < (int64_t)S; ++s) next[s] /= nmax;
+        for (int64_t k = 0; k < (int64_t)nt; ++k) next[tgt[k]] /= nmax;
         log_scale += log(nmax);
+        /* `next` becomes `cur`, and the old `cur` is reused as the next
+         * layer's `next`. Only its reached entries will be written, so its
+         * values from two layers back have to be cleared first. */
+        {
+            const uint32_t  np = L->n_reached[i];
+            const uint32_t *pv = L->reached[i];
+            for (uint32_t q = 0; q < np; ++q) cur[pv[q]] = 0.0;
+        }
         double *tmp = cur; cur = next; next = tmp;
     }
 
     beam_tail_weights(m, len, tail);
     {
+        const uint32_t  ns = L->n_reached[len];
+        const uint32_t *sv = L->reached[len];
         double tmax = -INFINITY;
-        for (uint32_t s = 0; s < S; ++s)
+        for (uint32_t k = 0; k < ns; ++k) {
+            const uint32_t s = sv[k];
             if (cur[s] > 0.0 && tail[s] != -INFINITY && alpha * tail[s] > tmax)
                 tmax = alpha * tail[s];
+        }
         if (tmax == -INFINITY) goto dead;
         double acc = 0.0;
-        for (uint32_t s = 0; s < S; ++s) {
+        for (uint32_t k = 0; k < ns; ++k) {
+            const uint32_t s = sv[k];
             if (cur[s] == 0.0 || tail[s] == -INFINITY) continue;
             acc += cur[s] * exp(alpha * tail[s] - tmax);
         }
         *out = log_scale + tmax + log(acc);
     }
-    free(w); free(cur); free(next); free(tail);
+    free(w); free(cur); free(next); free(tail); free(alive);
+    beam_live_release(&h);
     return BEAM_OK;
 dead:
-    free(w); free(cur); free(next); free(tail);
+    free(w); free(cur); free(next); free(tail); free(alive);
+    beam_live_release(&h);
     *out = -INFINITY;
     return BEAM_OK;
 }
@@ -111,15 +189,48 @@ static BeamError expected_raw(const BeamModel *m, uint32_t len, double *out) {
     double *na = (double *)malloc((size_t)S * sizeof(double));
     double *nb = (double *)malloc((size_t)S * sizeof(double));
     double *tail = (double *)malloc((size_t)S * sizeof(double));
-    if (!w || !a || !b || !na || !nb || !tail) {
-        free(w); free(a); free(b); free(na); free(nb); free(tail);
+    uint8_t *alive = (uint8_t *)malloc(S);
+    /* Same frontier argument as tilted_log_z above: reached, not live, and
+     * ascending order, so every sum sees its terms unchanged. */
+    LiveHandle h;
+    if (beam_live_acquire(m, len, &h) != BEAM_OK) {
+        free(w); free(a); free(b); free(na); free(nb); free(tail); free(alive);
+        return BEAM_EALLOC("the forward frontier");
+    }
+    const BeamLive *L = h.L;
+    if (!w || !a || !b || !na || !nb || !tail || !alive) {
+        free(w); free(a); free(b); free(na); free(nb); free(tail); free(alive);
+        beam_live_release(&h);
         return BEAM_EALLOC("the expectation-semiring buffers");
     }
+    memset(na, 0, (size_t)S * sizeof(double));
+    memset(nb, 0, (size_t)S * sizeof(double));
     a[S - 1] = 1.0;
 
     for (uint32_t i = 0; i < len; ++i) {
         double wmax = -INFINITY;
-        beam_layer_weights(m, i, len, w, &wmax);
+        /* The frontier shortcut is only sound where the layer maximum can be
+         * had without building the whole layer, and `beam_layer_weights_live`
+         * documents that a caller asking for `out_max` does not qualify: its
+         * fused maximum scans only the rows it built. Taking the max over the
+         * reached set alone changes the per-layer rescale and therefore the
+         * last bits, which is exactly what happened here -- the open-world
+         * Hill numbers moved at every order, because in the open world a
+         * state can carry the layer maximum and still be unreachable.
+         *
+         * On a sparse table `beam_layer_max` walks the occupied rows and is
+         * cheap, and its answer IS the maximum over all states: a missing row
+         * reads -inf and cannot win a maximum. On a dense table it would have
+         * to build the layer anyway, so there the original full build stays,
+         * unchanged and trivially identical. Sparse is the closed-world
+         * default and is what the per-repertoire work uses. */
+        if (m->cfg.sparse) {
+            wmax = beam_layer_max(m, i, len);
+            reached_mask(L, i, S, alive);
+            beam_layer_weights_live(m, i, len, w, NULL, alive);
+        } else {
+            beam_layer_weights(m, i, len, w, &wmax);
+        }
         if (wmax == -INFINITY) { *out = 0.0; goto out; }
 
         /* Accumulate by TARGET rather than by source. The scatter
@@ -127,14 +238,17 @@ static BeamError expected_raw(const BeamModel *m, uint32_t len, double *out) {
          * parallelising over sources would race; inverting it makes each
          * target the private property of one thread. */
         double nmax = 0.0;
+        const uint32_t  nt  = L->n_reached[i + 1];
+        const uint32_t *tgt = L->reached[i + 1];
 #ifdef _OPENMP
         #pragma omp parallel for schedule(static) reduction(max:nmax) \
                 num_threads(beam_threads())
 #endif
-        for (int64_t t = 0; t < (int64_t)S; ++t) {
-            const uint32_t x = (uint32_t)t % A;
+        for (int64_t q = 0; q < (int64_t)nt; ++q) {
+            const uint32_t t = tgt[q];
+            const uint32_t x = t % A;
             if (x >= R) { na[t] = 0.0; nb[t] = 0.0; continue; }
-            const uint32_t rest = (uint32_t)t / A;
+            const uint32_t rest = t / A;
             double sa = 0.0, sb = 0.0;
             for (uint32_t k = 0; k < A; ++k) {
                 const uint32_t src = k * SK + rest;
@@ -154,18 +268,32 @@ static BeamError expected_raw(const BeamModel *m, uint32_t len, double *out) {
 #ifdef _OPENMP
         #pragma omp parallel for schedule(static) num_threads(beam_threads())
 #endif
-        for (int64_t s = 0; s < (int64_t)S; ++s) { na[s] /= nmax; nb[s] /= nmax; }
+        for (int64_t q = 0; q < (int64_t)nt; ++q) {
+            const uint32_t s = tgt[q]; na[s] /= nmax; nb[s] /= nmax;
+        }
+        /* Clear what becomes the next layer's scratch: only reached entries
+         * are written, so values from two layers back would survive. */
+        {
+            const uint32_t  np = L->n_reached[i];
+            const uint32_t *pv = L->reached[i];
+            for (uint32_t q = 0; q < np; ++q) { a[pv[q]] = 0.0; b[pv[q]] = 0.0; }
+        }
         { double *t; t = a; a = na; na = t; t = b; b = nb; nb = t; }
     }
 
     beam_tail_weights(m, len, tail);
     {
+        const uint32_t  ns = L->n_reached[len];
+        const uint32_t *sv = L->reached[len];
         double tmax = -INFINITY;
-        for (uint32_t s = 0; s < S; ++s)
+        for (uint32_t k = 0; k < ns; ++k) {
+            const uint32_t s = sv[k];
             if (a[s] > 0.0 && tail[s] != -INFINITY && tail[s] > tmax) tmax = tail[s];
+        }
         if (tmax == -INFINITY) { *out = 0.0; goto out; }
         double A_ = 0.0, B_ = 0.0;
-        for (uint32_t s = 0; s < S; ++s) {
+        for (uint32_t k = 0; k < ns; ++k) {
+            const uint32_t s = sv[k];
             if (tail[s] == -INFINITY || (a[s] == 0.0 && b[s] == 0.0)) continue;
             const double e = exp(tail[s] - tmax);
             A_ += a[s] * e;
@@ -174,7 +302,8 @@ static BeamError expected_raw(const BeamModel *m, uint32_t len, double *out) {
         *out = (A_ > 0.0) ? B_ / A_ : 0.0;
     }
 out:
-    free(w); free(a); free(b); free(na); free(nb); free(tail);
+    free(w); free(a); free(b); free(na); free(nb); free(tail); free(alive);
+    beam_live_release(&h);
     return BEAM_OK;
 }
 
