@@ -1,0 +1,27 @@
+# Research and working material, never published
+.research/
+.private/
+
+# Build artifacts
+build/
+dist/
+*.o
+*.d
+*.a
+*.so
+*.egg-info/
+__pycache__/
+*.py[cod]
+
+# Environments
+.venv/
+venv/
+
+# Editors
+.vscode/
+.idea/
+*.swp
+
+# Models are large binaries; keep them out of git
+*.beam
+*.model
