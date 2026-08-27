@@ -28,4 +28,19 @@ extern const char beam_idx_to_char[BEAM_ALPHABET];
 bool beam_encode(const BeamModel *m, const char *seq,
                      uint8_t *out, uint32_t *out_len);
 
+/**
+ * True for the twenty amino acids BEAM encodes.
+ *
+ * Kept here as `static inline` rather than exported: it sits in the
+ * per-character loop of every encode, and it is what decides validity,
+ * because the char-to-index table maps every unknown byte to 0, which
+ * collides with 'A'.
+ */
+static inline bool beam_is_residue(unsigned char c) {
+    return c == 'A' || c == 'C' || c == 'D' || c == 'E' || c == 'F'
+        || c == 'G' || c == 'H' || c == 'I' || c == 'K' || c == 'L'
+        || c == 'M' || c == 'N' || c == 'P' || c == 'Q' || c == 'R'
+        || c == 'S' || c == 'T' || c == 'V' || c == 'W' || c == 'Y';
+}
+
 #endif /* BEAM_INTERNAL_ALPHABET_H */

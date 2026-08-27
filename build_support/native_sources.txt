@@ -15,14 +15,23 @@ src/native/core/crc32c.c
 src/native/core/errors.c
 src/native/core/logging.c
 src/native/core/rng.c
+src/native/core/runtime.c
 
+src/native/model/algebra.c
 src/native/model/analytics.c
-src/native/model/build.c
+src/native/model/config.c
+src/native/model/encoding.c
+src/native/model/finalize.c
+src/native/model/introspection.c
 src/native/model/io.c
+src/native/model/lifecycle.c
 src/native/model/moments.c
+src/native/model/posterior.c
 src/native/model/sample.c
 src/native/model/score.c
+src/native/model/smoothing.c
 src/native/model/topk.c
+src/native/model/training.c
 
 src/native/occupancy/publicness.c
 

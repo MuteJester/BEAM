@@ -7,6 +7,7 @@
 #include <string.h>
 
 #include "beam/common.h"
+#include "beam/model.h"
 
 /* ── Amino acid mapping ────────────────────────────────────── */
 
@@ -25,3 +26,25 @@ uint8_t beam_aa_to_bit(char c) {
         default:  return 31; /* non-standard → high bit, ignored in bitmask */
     }
 }
+
+/* ── Alphabet ────────────────────────────────────────────────── */
+
+
+const uint8_t beam_char_to_idx[256] = {
+    /* Filled at first use by beam_alphabet_init via a const cast would be
+     * unclean; instead the table is spelled out so it is genuinely const and
+     * thread-safe with no initialisation order to get wrong. 0xFF marks
+     * "not an amino acid"; callers map that to BEAM_NONE. */
+    ['A'] = 0,  ['C'] = 1,  ['D'] = 2,  ['E'] = 3,  ['F'] = 4,
+    ['G'] = 5,  ['H'] = 6,  ['I'] = 7,  ['K'] = 8,  ['L'] = 9,
+    ['M'] = 10, ['N'] = 11, ['P'] = 12, ['Q'] = 13, ['R'] = 14,
+    ['S'] = 15, ['T'] = 16, ['V'] = 17, ['W'] = 18, ['Y'] = 19,
+    /* Every other byte is 0, which collides with 'A'. Validity is therefore
+     * decided by beam_is_residue(), not by the value alone. */
+};
+
+
+const char beam_idx_to_char[BEAM_ALPHABET] = {
+    'A','C','D','E','F','G','H','I','K','L',
+    'M','N','P','Q','R','S','T','V','W','Y','.'
+};

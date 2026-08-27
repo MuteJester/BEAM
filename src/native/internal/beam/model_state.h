@@ -106,7 +106,7 @@ struct BeamModel_ {
      *
      * Hierarchical backoff leaves every cell positive unless a kappa is zero,
      * so this holds on every model the defaults produce. It is measured, not
-     * assumed: `to_log_inplace` reports whether it had to floor anything.
+     * assumed: `beam_to_log_inplace` reports whether it had to floor anything.
      *
      * What it buys is the live-state trim (`trim` in analytics.c). With no
      * dead cell there is no dead edge, so liveness is a property of the
