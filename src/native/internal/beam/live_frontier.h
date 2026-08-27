@@ -71,4 +71,43 @@ uint64_t beam_live_cache_bytes(const BeamModel *m);
 /** Lengths the live cache currently holds. */
 uint32_t beam_live_cache_entries(const BeamModel *m);
 
+/* One bit per state. `static inline` because live_bit_get is a bit test in
+ * the inner loop of the path-count and topology sweeps, called once per
+ * (state, layer); an external call there would be pure overhead. */
+static inline void live_bit_set(uint64_t *b, uint32_t i) {
+    b[i >> 6] |= 1ull << (i & 63u);
+}
+
+static inline uint32_t live_bit_get(const uint64_t *b, uint32_t i) {
+    return (uint32_t)((b[i >> 6] >> (i & 63u)) & 1ull);
+}
+
+/**
+ * Acquire the live/reached frontier for one length, from the cache when it
+ * is there. Release with `beam_live_release`.
+ */
+typedef struct {
+    uint64_t **mask;       /* [len+1][BITWORDS(S)+1]  live, one bit per state */
+    uint32_t **live;       /* [len+1][n_live[i]]      ascending             */
+    uint32_t  *n_live;
+    uint32_t **reached;    /* [len+1][n_reached[i]]   ascending             */
+    uint32_t  *n_reached;
+    uint32_t **edge_bits;  /* [len][n_reached[i]]     parallel to reached   */
+    uint32_t   len;
+    uint32_t   n_states;   /* so a cached set can size its own bitsets      */
+} BeamLive;
+
+typedef struct {
+    const BeamLive *L;
+    BeamLive        scratch;   /* holds the set when it was not cached */
+    bool            cached;
+} LiveHandle;
+
+BeamError beam_live_acquire(const BeamModel *m, uint32_t len,
+                            LiveHandle *h);
+void beam_live_release(LiveHandle *h);
+
+/** Producible lengths, longest first. Returns how many were written. */
+uint32_t beam_live_lengths_desc(const BeamModel *m, uint32_t *out);
+
 #endif /* BEAM_INTERNAL_LIVE_FRONTIER_H */

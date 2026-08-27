@@ -17,176 +17,6 @@
  */
 #include "beam/internal.h"
 
-/* ── Shared scratch for a forward sweep ──────────────────────── */
-
-typedef struct {
-    double *w;      /* [n_states * 20] edge weights of the current layer */
-    double *tail;   /* [n_states]      sink weights                      */
-    double *cur;    /* [(order+1) * n_states] jet, moment-major          */
-    double *next;
-} Sweep;
-
-static void sweep_free(Sweep *s) {
-    free(s->w); free(s->tail); free(s->cur); free(s->next);
-}
-
-static bool sweep_alloc(Sweep *s, uint32_t n_states, uint32_t n_moments) {
-    const size_t jet = (size_t)n_moments * n_states;
-    s->w    = (double *)malloc((size_t)n_states * BEAM_RESIDUES * sizeof(double));
-    s->tail = (double *)malloc((size_t)n_states * sizeof(double));
-    s->cur  = (double *)calloc(jet, sizeof(double));
-    s->next = (double *)calloc(jet, sizeof(double));
-    if (!s->w || !s->tail || !s->cur || !s->next) { sweep_free(s); return false; }
-    return true;
-}
-
-/** Binomial coefficients up to order 16, enough for any sane moment order. */
-#define BEAM_MAX_MOMENT 16u
-
-static void binomials(double c[][BEAM_MAX_MOMENT + 1], uint32_t n) {
-    for (uint32_t i = 0; i <= n; ++i) {
-        c[i][0] = 1.0;
-        for (uint32_t j = 1; j <= i; ++j)
-            c[i][j] = (j == i) ? 1.0 : c[i - 1][j - 1] + c[i - 1][j];
-        for (uint32_t j = i + 1; j <= n; ++j) c[i][j] = 0.0;
-    }
-}
-
-/**
- * Forward jet sweep over one length.
- *
- * On return `out_moments[j]` is `sum over length-L paths of P(s)^q * raw(s)^j`
- * divided by the same sum at `j = 0`, i.e. `E_q[raw^j | L]`, and `*out_log_z`
- * is `ln sum over paths of exp(q * raw)`.
- *
- * `raw` is the accumulated edge weight, so `ln P(s) = c_L + raw(s)` with
- * `c_L = ln pi(L) - ln Z(L)`; the caller shifts by that constant.
- *
- * Numerics: the whole jet is rescaled by the same factor each layer, so the
- * moment ratios are untouched while the mass stays in range. That is why the
- * scale never has to be tracked for the moments, only for the partition
- * function.
- */
-static BeamError jet_sweep(const BeamModel *m, uint32_t len, double q,
-                          uint32_t order, double *out_moments,
-                          double *out_log_z) {
-    const uint32_t A = BEAM_ALPHABET;
-    const uint32_t R = BEAM_RESIDUES;
-    const uint32_t S = m->n_states;
-    const uint32_t SK = m->state_shift;
-    const uint32_t NM = order + 1u;
-
-    double bc[BEAM_MAX_MOMENT + 1][BEAM_MAX_MOMENT + 1];
-    binomials(bc, order);
-
-    Sweep sw = {0};
-    if (!sweep_alloc(&sw, S, NM))
-        return BEAM_EALLOC("the jet-sweep scratch buffers");
-
-    sw.cur[(size_t)0 * S + (S - 1)] = 1.0;    /* moment 0 of the start state */
-    double log_scale = 0.0;
-
-    for (uint32_t i = 0; i < len; ++i) {
-        beam_layer_weights(m, i, len, sw.w, NULL);
-
-        /*
-         * Rescale by the best edge THAT CARRIES MASS, not the best edge
-         * anywhere in the layer. At a strong tilt the two can be far apart,
-         * and scaling by an unreachable edge underflows every reachable one to
-         * zero, which looks exactly like a length with no paths. That is what
-         * made the saddlepoint fail near the ends of the support.
-         */
-        double wmax = -INFINITY;
-#ifdef _OPENMP
-        #pragma omp parallel for schedule(static) reduction(max:wmax) \
-                num_threads(beam_threads())
-#endif
-        for (int64_t s = 0; s < (int64_t)S; ++s) {
-            if (sw.cur[s] == 0.0) continue;
-            const double *row = sw.w + (size_t)s * R;
-            for (uint32_t x = 0; x < R; ++x)
-                if (row[x] > wmax) wmax = row[x];
-        }
-        if (wmax == -INFINITY) { sweep_free(&sw); *out_log_z = -INFINITY; return BEAM_OK; }
-        const double qmax = q * wmax;
-
-        memset(sw.next, 0, (size_t)NM * S * sizeof(double));
-        double nmax = 0.0;
-#ifdef _OPENMP
-        #pragma omp parallel for schedule(static) reduction(max:nmax) \
-                num_threads(beam_threads())
-#endif
-        for (int64_t t = 0; t < (int64_t)S; ++t) {
-            const uint32_t x = (uint32_t)t % A;
-            if (x >= R) continue;
-            const uint32_t rest = (uint32_t)t / A;
-            for (uint32_t a = 0; a < A; ++a) {
-                const uint32_t src = a * SK + rest;
-                if (sw.cur[src] == 0.0) continue;          /* no mass here */
-                const double wv = sw.w[(size_t)src * R + x];
-                if (wv == -INFINITY) continue;
-                const double e = exp(q * wv - qmax);
-                /* (raw + w)^j expands binomially over the carried moments. */
-                for (uint32_t j = 0; j < NM; ++j) {
-                    double acc = 0.0;
-                    double wpow = 1.0;
-                    for (uint32_t u = 0; u <= j; ++u) {
-                        acc += bc[j][j - u] * wpow
-                             * sw.cur[(size_t)(j - u) * S + src];
-                        wpow *= wv;
-                    }
-                    sw.next[(size_t)j * S + t] += e * acc;
-                }
-            }
-            if (sw.next[t] > nmax) nmax = sw.next[t];
-        }
-        log_scale += qmax;
-
-        if (!(nmax > 0.0)) { sweep_free(&sw); *out_log_z = -INFINITY; return BEAM_OK; }
-#ifdef _OPENMP
-        #pragma omp parallel for schedule(static) num_threads(beam_threads())
-#endif
-        for (int64_t t = 0; t < (int64_t)NM * S; ++t) sw.next[t] /= nmax;
-        log_scale += log(nmax);
-
-        double *tmp = sw.cur; sw.cur = sw.next; sw.next = tmp;
-    }
-
-    /* Sink: one more edge whose weight is the tail. */
-    beam_tail_weights(m, len, sw.tail);
-    double tmax = -INFINITY;
-    for (uint32_t s = 0; s < S; ++s)
-        if (sw.cur[s] > 0.0 && sw.tail[s] != -INFINITY && q * sw.tail[s] > tmax)
-            tmax = q * sw.tail[s];
-    if (tmax == -INFINITY) { sweep_free(&sw); *out_log_z = -INFINITY; return BEAM_OK; }
-
-    double *fin = (double *)calloc(NM, sizeof(double));
-    if (!fin) { sweep_free(&sw); return BEAM_EALLOC("the sink jet"); }
-    for (uint32_t s = 0; s < S; ++s) {
-        if (sw.cur[s] == 0.0 || sw.tail[s] == -INFINITY) continue;
-        const double tv = sw.tail[s];
-        const double e = exp(q * tv - tmax);
-        for (uint32_t j = 0; j < NM; ++j) {
-            double acc = 0.0, wpow = 1.0;
-            for (uint32_t u = 0; u <= j; ++u) {
-                acc += bc[j][j - u] * wpow * sw.cur[(size_t)(j - u) * S + s];
-                wpow *= tv;
-            }
-            fin[j] += e * acc;
-        }
-    }
-    if (!(fin[0] > 0.0)) {
-        free(fin); sweep_free(&sw);
-        *out_log_z = -INFINITY;
-        return BEAM_OK;
-    }
-    for (uint32_t j = 0; j < NM; ++j) out_moments[j] = fin[j] / fin[0];
-    *out_log_z = log_scale + tmax + log(fin[0]);
-
-    free(fin);
-    sweep_free(&sw);
-    return BEAM_OK;
-}
 
 /* ── Mellin transform ────────────────────────────────────────── */
 
@@ -203,7 +33,11 @@ static BeamError jet_sweep(const BeamModel *m, uint32_t len, double q,
  * work and cost grows with the length, so the longest must be handed out
  * first or fifteen cores wait on it at the end.
  */
-static uint32_t live_lengths_desc(const BeamModel *m, uint32_t *out) {
+/* A second copy of the producible-lengths walk, distinct from
+ * beam_live_lengths_desc in dp/path_count.c. They agree today, and merging
+ * them is a real cleanup, but it is a behaviour change to be made under its
+ * own test rather than smuggled into a file move. */
+static uint32_t moments_live_lengths_desc(const BeamModel *m, uint32_t *out) {
     uint32_t n = 0;
     for (uint32_t L = m->n_len_slots; L-- > 1; )
         if (beam_length_live(m, L)) out[n++] = L;
@@ -221,7 +55,7 @@ static BeamError mellin_terms(const BeamModel *m, double q, double *terms,
         free(work); free(lzs);
         return BEAM_EALLOC("the per-length Mellin work list");
     }
-    const uint32_t nw = live_lengths_desc(m, work);
+    const uint32_t nw = moments_live_lengths_desc(m, work);
     int failed = BEAM_OK;
 #ifdef _OPENMP
     #pragma omp parallel for schedule(dynamic, 1) reduction(max:failed) \
@@ -284,7 +118,7 @@ BeamError beam_model_surprisal_moments(const BeamModel *m, double q,
 
     const uint32_t NM = order + 1u;
     double bc[BEAM_MAX_MOMENT + 1][BEAM_MAX_MOMENT + 1];
-    binomials(bc, order);
+    beam_binomials(bc, order);
 
     double *mom   = (double *)calloc(NM, sizeof(double));
     double *acc   = (double *)calloc(NM, sizeof(double));
@@ -388,7 +222,7 @@ BeamError beam_model_length_derivatives(const BeamModel *m, double q,
     memset(out, 0, (size_t)n * NM * sizeof(double));
 
     double bc[BEAM_MAX_MOMENT + 1][BEAM_MAX_MOMENT + 1];
-    binomials(bc, order);
+    beam_binomials(bc, order);
 
     double *terms = (double *)malloc((size_t)n * sizeof(double));
     double *jets  = (double *)calloc((size_t)n * NM, sizeof(double));
@@ -475,7 +309,7 @@ BeamError beam_model_surprisal_cumulants(const BeamModel *m, double q,
     if (e != BEAM_OK) { free(mu); return e; }
 
     double bc[BEAM_MAX_MOMENT + 1][BEAM_MAX_MOMENT + 1];
-    binomials(bc, order);
+    beam_binomials(bc, order);
 
     /* k_n = mu_n - sum_{i=1}^{n-1} C(n-1, i-1) k_i mu_{n-i} */
     for (uint32_t n = 1; n <= order; ++n) {
@@ -515,7 +349,7 @@ BeamError beam_model_surprisal_tilt(const BeamModel *m, double q,
         free(work); free(jets); free(terms); free(m1); free(m2);
         return BEAM_EALLOC("the per-length tilt jets");
     }
-    const uint32_t nw = live_lengths_desc(m, work);
+    const uint32_t nw = moments_live_lengths_desc(m, work);
     int failed = BEAM_OK;
 #ifdef _OPENMP
     #pragma omp parallel for schedule(dynamic, 1) reduction(max:failed) \
@@ -854,7 +688,7 @@ BeamError beam_model_surprisal_range(const BeamModel *m,
     if (!m->finalized) return BEAM_ENOTBUILT();
     uint32_t *work = (uint32_t *)malloc((size_t)m->n_len_slots * sizeof(uint32_t));
     if (!work) return BEAM_EALLOC("the per-length work list");
-    const uint32_t nw = live_lengths_desc(m, work);
+    const uint32_t nw = moments_live_lengths_desc(m, work);
     double best = INFINITY, worst = -INFINITY;
     int failed = BEAM_OK;
     /* Minimum and maximum are order-independent, so reducing them across
@@ -900,7 +734,7 @@ BeamError beam_model_length_marginals(const BeamModel *m,
     }
     uint32_t *work = (uint32_t *)malloc((size_t)m->n_len_slots * sizeof(uint32_t));
     if (!work) return BEAM_EALLOC("the per-length work list");
-    const uint32_t nw = live_lengths_desc(m, work);
+    const uint32_t nw = moments_live_lengths_desc(m, work);
     int failed = BEAM_OK;
     /* Every length is an independent pair of sweeps writing its own slot, so
      * this needs no reduction at all. */
@@ -934,5 +768,4 @@ BeamError beam_model_length_marginals(const BeamModel *m,
     return BEAM_OK;
 }
 
-/* ── Count addition ──────────────────────────────────────────── */
 

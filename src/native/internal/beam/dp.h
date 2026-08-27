@@ -108,4 +108,24 @@ static inline bool beam_length_live(const BeamModel *m, uint32_t len) {
 }
 
 
+/* ── Moment jet ──────────────────────────────────────────────── */
+
+/** Highest moment order the jet sweep carries. */
+#define BEAM_MAX_MOMENT 16u
+
+/**
+ * One forward pass carrying `n_moments + 1` moments of the q-tilted law.
+ *
+ * The arithmetic here is a separate numerical path from `tilted_log_z` in
+ * math/diversity.c even though both compute tilted quantities. They are not
+ * to be consolidated on the grounds that they look alike: each has its own
+ * regression value.
+ */
+/** Binomial coefficients up to `n`, for the moment recurrence. */
+void beam_binomials(double c[][BEAM_MAX_MOMENT + 1], uint32_t n);
+
+BeamError jet_sweep(const BeamModel *m, uint32_t len, double q,
+                          uint32_t order, double *out_moments,
+                          double *out_log_z);
+
 #endif /* BEAM_INTERNAL_DP_H */
