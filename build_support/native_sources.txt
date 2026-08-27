@@ -1,0 +1,26 @@
+# Production sources compiled into libbeam.a, one path per line.
+#
+# This is an explicit list rather than a wildcard on purpose. The layout is
+# moving to nested directories, and a one-level glob such as lib/*/*.c
+# silently drops sources one level deeper: the build still succeeds, the
+# archive is simply missing symbols, and the failure surfaces later as an
+# undefined reference or, worse, as a stale object that still resolves.
+# An explicit manifest fails loudly instead, at the file that is missing.
+#
+# Python headers must never be required to build this list. Binding sources
+# belong in python_binding_sources.txt.
+
+lib/core/common.c
+lib/core/crc32c.c
+lib/core/rng.c
+
+lib/model/analytics.c
+lib/model/build.c
+lib/model/io.c
+lib/model/moments.c
+lib/model/sample.c
+lib/model/score.c
+lib/model/sparse.c
+lib/model/topk.c
+
+lib/occupancy/publicness.c

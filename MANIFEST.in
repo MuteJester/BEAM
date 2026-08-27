@@ -1,0 +1,9 @@
+# A source distribution must carry everything the extension build reads: the
+# manifests themselves, every public and internal header, and the C sources
+# they name. Without these an sdist installs but fails to compile.
+include build_support/*.txt
+include MANIFEST.in
+recursive-include include *.h
+recursive-include lib *.c *.h
+recursive-include src *.c
+include README.md LICENSE

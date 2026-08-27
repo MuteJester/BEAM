@@ -1,0 +1,6 @@
+# Sources for the BEAM._cbeam extension, one path per line.
+#
+# Kept separate from native_sources.txt so that libbeam.a can be built and
+# tested without Python headers present.
+
+src/BEAM/_cbeam.c
