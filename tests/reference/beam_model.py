@@ -36,7 +36,7 @@ AA = "ACDEFGHIKLMNPQRSTVWY"
 CODE = {c: i for i, c in enumerate(AA)}
 
 
-class ReferenceEdge:
+class ReferenceBeamModel:
     """Log-probability tables plus the per-length constants."""
 
     def __init__(self, order, depth_cap, max_len, coefs, weights,
@@ -292,8 +292,8 @@ def reference_build(seqs, abundances=None, *, order=4, depth_cap=15,
         for p in range(n):
             x = s[p]
             for d, depth, ctx in (
-                (0, p, ReferenceEdge.ctx_forward),
-                (1, n - 1 - p, ReferenceEdge.ctx_backward),
+                (0, p, ReferenceBeamModel.ctx_forward),
+                (1, n - 1 - p, ReferenceBeamModel.ctx_backward),
             ):
                 cw[d][min(depth, depth_cap), ctx(s, p, order), x] += w
                 cm[d][depth, ctx(s, p, 3), x] += w
@@ -334,7 +334,7 @@ def reference_build(seqs, abundances=None, *, order=4, depth_cap=15,
         lp_mid.append(to_log(mid[3]))
         lp_len.append(to_log(arr))
 
-    return ReferenceEdge(order, depth_cap, max_len, coefs, weights,
+    return ReferenceBeamModel(order, depth_cap, max_len, coefs, weights,
                          lp_wide, lp_mid, lp_len, log_pi)
 
 

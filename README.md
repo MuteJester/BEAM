@@ -57,7 +57,7 @@ data, and it should not arrive by default.
 
 ```bash
 make test                 # C unit tests
-python -m pytest tests/   # Python suite
+python -m pytest tests    # Python suite
 ```
 
 ## Layout
@@ -65,12 +65,21 @@ python -m pytest tests/   # Python suite
 | Path | Contents |
 |---|---|
 | `include/beam/` | Public C headers |
-| `src/native/model/` | The model: build, score, sample, analytics, sparse storage, I/O |
+| `src/native/model/` | Model state: config, lifecycle, training, smoothing, finalize |
+| `src/native/dp/` | The dynamic programs over the trellis |
+| `src/native/math/` | Named probability operations: Mellin, moments, spectrum, diversity |
+| `src/native/algorithms/` | Sampling and exact top-k |
 | `src/native/occupancy/` | Poisson-binomial sharing model (`PublicnessModel`) |
-| `src/native/core/` | Shared support: error handling, RNG, CRC32C |
-| `src/BEAM/` | Python package and its C extension |
+| `src/native/storage/` | Sparse row storage |
+| `src/native/io/` | Model persistence |
+| `src/native/core/` | Errors, logging, alphabet, runtime, RNG, CRC32C |
+| `src/native/bindings/python/` | The `_cbeam` extension, split by domain |
+| `src/BEAM/` | Python package: `model/`, `analytics/`, `math/`, `io/`, `publicness/` |
 | `build_support/` | Explicit source manifests read by both `Makefile` and `setup.py` |
-| `docs/api/model.md` | Full API reference |
+| `tests/python/` | Python suite, grouped as `model/`, `math/`, `analytics/`, `publicness/` |
+| `tests/native/` | C unit tests |
+| `tests/reference/` | An independent reimplementation, used to check the model against |
+| `docs/` | `architecture/`, `api/python/` |
 
 ## A note on the file format
 

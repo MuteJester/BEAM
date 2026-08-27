@@ -41,8 +41,8 @@ build/%.o: %.c
 	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
 
 # ── C unit tests ────────────────────────────────────────────────────────────
-TEST_SRCS := $(wildcard tests/c_unit/test_*.c)
-TEST_BINS := $(TEST_SRCS:tests/c_unit/%.c=build/tests/c_unit/%)
+TEST_SRCS := $(wildcard tests/native/test_*.c)
+TEST_BINS := $(TEST_SRCS:tests/native/%.c=build/tests/native/%)
 
 test: $(TEST_BINS)
 	@for t in $(TEST_BINS); do ./$$t || exit 1; done
@@ -52,11 +52,11 @@ test: $(TEST_BINS)
 # target-specific and must stay that way: --wrap redirects EVERY malloc in the
 # linked objects to __wrap_malloc, so applying it to a binary that does not
 # define that symbol fails to link.
-build/tests/c_unit/test_model: LDEXTRA = -Wl,--wrap=malloc
+build/tests/native/test_model: LDEXTRA = -Wl,--wrap=malloc
 
-build/tests/c_unit/%: tests/c_unit/%.c build/libbeam.a
+build/tests/native/%: tests/native/%.c build/libbeam.a
 	@mkdir -p $(@D)
-	$(CC) $(CFLAGS) -Itests/c_unit $< build/libbeam.a $(LDLIBS) \
+	$(CC) $(CFLAGS) -Itests/native $< build/libbeam.a $(LDLIBS) \
 	    $(LDEXTRA) -o $@
 
 clean:
