@@ -101,3 +101,99 @@ double beam_model_accumulator_max(const BeamModel *m) {
     free(work);
     return hi;
 }
+
+/* ── Surprisal range ─────────────────────────────────────────── */
+
+/**
+ * Min-plus and max-plus sweeps over one length, giving the exact extremes of
+ * `-ln P` among producible sequences of that length.
+ */
+static BeamError range_at(const BeamModel *m, uint32_t len,
+                         double *out_min, double *out_max) {
+    const uint32_t A = BEAM_ALPHABET;
+    const uint32_t R = BEAM_RESIDUES;
+    const uint32_t S = m->n_states;
+    const uint32_t SK = m->state_shift;
+
+    double *w    = (double *)malloc((size_t)S * R * sizeof(double));
+    double *lo   = (double *)malloc((size_t)S * sizeof(double));
+    double *hi   = (double *)malloc((size_t)S * sizeof(double));
+    double *nlo  = (double *)malloc((size_t)S * sizeof(double));
+    double *nhi  = (double *)malloc((size_t)S * sizeof(double));
+    double *tail = (double *)malloc((size_t)S * sizeof(double));
+    if (!w || !lo || !hi || !nlo || !nhi || !tail) {
+        free(w); free(lo); free(hi); free(nlo); free(nhi); free(tail);
+        return BEAM_EALLOC("the min-plus / max-plus sweep buffers");
+    }
+    for (uint32_t s = 0; s < S; ++s) { lo[s] = INFINITY; hi[s] = -INFINITY; }
+    lo[S - 1] = 0.0; hi[S - 1] = 0.0;
+
+    for (uint32_t i = 0; i < len; ++i) {
+        beam_layer_weights(m, i, len, w, NULL);
+        for (uint32_t s = 0; s < S; ++s) { nlo[s] = INFINITY; nhi[s] = -INFINITY; }
+        for (uint32_t s = 0; s < S; ++s) {
+            if (hi[s] == -INFINITY) continue;
+            const double *row = w + (size_t)s * R;
+            const uint32_t base = (s % SK) * A;
+            for (uint32_t x = 0; x < R; ++x) {
+                if (row[x] == -INFINITY) continue;
+                const double a = lo[s] - row[x];      /* surprisal accumulates */
+                const double b = hi[s] - row[x];
+                if (a < nlo[base + x]) nlo[base + x] = a;
+                if (b > nhi[base + x]) nhi[base + x] = b;
+            }
+        }
+        memcpy(lo, nlo, (size_t)S * sizeof(double));
+        memcpy(hi, nhi, (size_t)S * sizeof(double));
+    }
+
+    beam_tail_weights(m, len, tail);
+    const double off = m->log_z[len] - m->log_pi[len];
+    double best = INFINITY, worst = -INFINITY;
+    for (uint32_t s = 0; s < S; ++s) {
+        if (tail[s] == -INFINITY || hi[s] == -INFINITY) continue;
+        const double a = lo[s] - tail[s] + off;
+        const double b = hi[s] - tail[s] + off;
+        if (a < best) best = a;
+        if (b > worst) worst = b;
+    }
+    free(w); free(lo); free(hi); free(nlo); free(nhi); free(tail);
+    *out_min = best;
+    *out_max = worst;
+    return BEAM_OK;
+}
+
+BeamError beam_model_surprisal_range(const BeamModel *m,
+                                        double *out_min, double *out_max) {
+    if (!m) return BEAM_ENULL("model");
+    if (!m->finalized) return BEAM_ENOTBUILT();
+    uint32_t *work = (uint32_t *)malloc((size_t)m->n_len_slots * sizeof(uint32_t));
+    if (!work) return BEAM_EALLOC("the per-length work list");
+    const uint32_t nw = beam_live_lengths_desc(m, work);
+    double best = INFINITY, worst = -INFINITY;
+    int failed = BEAM_OK;
+    /* Minimum and maximum are order-independent, so reducing them across
+     * threads gives the same answer the serial scan did, bit for bit. */
+#ifdef _OPENMP
+    #pragma omp parallel for schedule(dynamic, 1) reduction(min:best) \
+            reduction(max:worst) reduction(max:failed) \
+            num_threads(beam_threads())
+#endif
+    for (int64_t k = 0; k < (int64_t)nw; ++k) {
+        double a = 0.0, b = 0.0;
+        const BeamError e = range_at(m, work[k], &a, &b);
+        if (e != BEAM_OK) { if ((int)e > failed) failed = (int)e; continue; }
+        if (a < best) best = a;
+        if (b > worst) worst = b;
+    }
+    free(work);
+    if (failed != BEAM_OK)
+        return BEAM_FAIL((BeamError)failed,
+                        "surprisal_range: a per-length sweep failed");
+    if (best == INFINITY)
+        return BEAM_ENOPATHS("no length has a producible sequence, so "
+                                 "the surprisal has no range");
+    if (out_min) *out_min = best;
+    if (out_max) *out_max = worst;
+    return BEAM_OK;
+}

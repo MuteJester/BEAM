@@ -19,14 +19,21 @@ src/native/core/runtime.c
 
 src/native/dp/backward.c
 src/native/dp/edge_weights.c
+src/native/dp/jet.c
 src/native/dp/liveness.c
 src/native/dp/partition.c
 src/native/dp/path_count.c
 src/native/dp/topology.c
 
+src/native/math/cumulants.c
 src/native/math/diversity.c
 src/native/math/extrema.c
+src/native/math/marginals.c
+src/native/math/mellin.c
+src/native/math/moments.c
 src/native/math/spectrum.c
+src/native/math/surprisal.c
+src/native/math/tilt.c
 
 src/native/model/algebra.c
 src/native/model/config.c
@@ -35,8 +42,6 @@ src/native/model/finalize.c
 src/native/model/introspection.c
 src/native/model/io.c
 src/native/model/lifecycle.c
-src/native/dp/jet.c
-src/native/model/moments.c
 src/native/model/posterior.c
 src/native/model/sample.c
 src/native/model/scoring.c
