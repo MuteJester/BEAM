@@ -88,7 +88,7 @@ BeamModel(
     kappa_len=None,
     weights=(0.5, 0.5),
     max_length=27,
-    strict=False,
+    strict=True,
     sparse=None,
 )
 ```
@@ -102,12 +102,12 @@ BeamModel(
 | `order` | `int` | Context order of the wide expert, **2 to 4**. Order 4 is the measured optimum. |
 | `depth_cap` | `int` | Depth at which the wide expert stops resolving position exactly, **1 to 26**. Clamped to `max_length - 1`. |
 | `coefficients` | `tuple` | Log-linear mixing weights for the wide, mid and length-conditioned experts. **Must sum to 1.** |
-| `kappa` | `tuple \| None` | Hierarchical backoff strengths for orders 1-3. Defaults to `(20, 20, 20)`, or all zero under `strict=True`. |
-| `kappa_wide`, `kappa_len` | `float \| None` | Backoff strength for the wide and length-conditioned experts. Defaults to 20 and 200, or zero under `strict=True`. |
+| `kappa` | `tuple \| None` | Hierarchical backoff strengths for orders 1-3. All zero by default; `(20, 20, 20)` under `strict=False`. |
+| `kappa_wide`, `kappa_len` | `float \| None` | Backoff strength for the wide and length-conditioned experts. Zero by default; 20 and 200 under `strict=False`. |
 | `weights` | `tuple` | Weight on the N-anchored and C-anchored readings. Both must be non-negative. |
 | `max_length` | `int` | Longest sequence the model represents, **2 to 27**. The floor is 2, not 1, because `depth_cap` must be at least 1 and strictly below `max_length`. |
-| `strict` | `bool` | Closed-world scoring. Removes the order-0 add-one and probability floor; defaults all backoff strengths to zero. |
-| `sparse` | `bool \| None` | Storage selection. `None` automatically uses sparse storage exactly when `strict=True` and all five backoff strengths are zero; `False` forces dense storage. |
+| `strict` | `bool` | Closed-world scoring, and the **default**. Removes the order-0 add-one and probability floor, and defaults all backoff strengths to zero, so the model holds only what the training sequences spell. `strict=False` selects the open world. |
+| `sparse` | `bool \| None` | Storage selection. `None` automatically uses sparse storage exactly when `strict` is true and all five backoff strengths are zero, which is the default; `False` forces dense storage. |
 
 !!! warning "The coefficient sum is not a free parameter"
     It is a pure cross-length calibration knob. Moving it off 1 leaves *within-length* ranking untouched while wrecking *global* ranking: at sum 1.15 average precision falls from 0.847 to 0.830, and at 1.45 to 0.739. A sum other than 1 is rejected at construction rather than silently mis-calibrating.

@@ -61,6 +61,29 @@ def model(corpus):
 
 
 @pytest.fixture(scope="module")
+def open_model(corpus):
+    """The order-3 model in the OPEN world.
+
+    The default is closed-world: the model holds only what the training
+    sequences spell. A handful of properties below are properties of the
+    smoother rather than of the grammar -- graded scores for sequences the
+    corpus never saw, a support of 20**L, agreement with the independent
+    reference, which implements only the smoothed model. Those need backoff
+    switched on, and say so by asking for this fixture instead of `model`.
+    """
+    seqs, abund = corpus
+    return BeamModel(seqs, abundances=abund, order=3, strict=False)
+
+
+@pytest.fixture(scope="module")
+def open_small():
+    """`small` in the open world. See `open_model`."""
+    seqs, abund = make_corpus(n=600, seed=31, lo=6, hi=9)
+    return BeamModel(seqs, abundances=abund, order=2, max_length=10,
+                     strict=False)
+
+
+@pytest.fixture(scope="module")
 def small():
     """A deliberately small model for the analytics that cost a full trellis
     sweep per call. Order 2 and short sequences keep the saddlepoint and the
@@ -77,7 +100,7 @@ def test_scores_match_reference(corpus, order):
     """The whole pipeline — counting, hierarchical backoff, mixing, the
     partition function — reproduced from the specification independently."""
     seqs, abund = corpus
-    m = BeamModel(seqs, abundances=abund, order=order)
+    m = BeamModel(seqs, abundances=abund, order=order, strict=False)
     probe = seqs[:40] + ["CASSLGQGAEQYF", "CASSLGQGAEQYW"]
     probe = [s for s in probe if 11 <= len(s) <= 18]
 
@@ -92,7 +115,7 @@ def test_scores_match_reference(corpus, order):
 
 def test_partition_matches_reference(corpus):
     seqs, abund = corpus
-    m = BeamModel(seqs, abundances=abund, order=3)
+    m = BeamModel(seqs, abundances=abund, order=3, strict=False)
     ref = reference_build(seqs, abund, order=3)
     for length in range(11, 19):
         assert abs(m.log_partition(length) - float(ref.logZ(length))) < 1e-9
@@ -101,7 +124,7 @@ def test_partition_matches_reference(corpus):
 def test_path_count_matches_reference(corpus):
     """Support size over the trellis, against the reference DP."""
     seqs, abund = corpus
-    m = BeamModel(seqs, abundances=abund, order=2)
+    m = BeamModel(seqs, abundances=abund, order=2, strict=False)
     ref = reference_build(seqs, abund, order=2)
     import _reference as R
     want = R.reference_path_counts(ref, range(11, 19))
@@ -192,7 +215,7 @@ def test_support_is_all_of_sequence_space():
     the smoother, not of the grammar, and the number must never be quoted as a
     diversity."""
     seqs, abund = make_corpus(n=300, seed=9, lo=5, hi=6)
-    m = BeamModel(seqs, abundances=abund, order=2, max_length=8)
+    m = BeamModel(seqs, abundances=abund, order=2, max_length=8, strict=False)
     assert m.path_count(5) == pytest.approx(20.0 ** 5)
     assert m.path_count(6) == pytest.approx(20.0 ** 6)
 
@@ -319,11 +342,11 @@ def test_explain_sums_to_the_score(model, corpus):
         assert want == pytest.approx(e["log_pseq"], abs=1e-9)
 
 
-def test_c_terminus_expert_is_doing_work(model):
+def test_c_terminus_expert_is_doing_work(open_model):
     """Swapping the terminal residue for one no J gene produces must cost
     orders of magnitude. A single left-to-right chain cannot see this."""
-    good = model.log_pseq("CASSLGQGAEQYF")
-    bad = model.log_pseq("CASSLGQGAEQYW")
+    good = open_model.log_pseq("CASSLGQGAEQYF")
+    bad = open_model.log_pseq("CASSLGQGAEQYW")
     assert math.isfinite(good) and math.isfinite(bad)
     assert good - bad > math.log(1000), (good, bad)
 
@@ -717,7 +740,7 @@ def test_top_k_more_than_exists():
     have fewer than 500 sequences is a genuinely short model: length 2 gives
     exactly 400.
     """
-    m = BeamModel(["CA", "CF", "SA"], order=2, max_length=3)
+    m = BeamModel(["CA", "CF", "SA"], order=2, max_length=3, strict=False)
     top = m.top_k_sequences(500)
     assert len(top) == 400, "20**2 sequences exist and all should come back"
     assert all(math.isfinite(lp) for _, lp in top)
@@ -994,14 +1017,14 @@ def test_calibration_pvalues_are_uniform_under_its_own_null(small):
     assert 0.05 < np.mean(p < 0.1) < 0.2
 
 
-def test_calibration_flags_an_implausible_sequence(small):
+def test_calibration_flags_an_implausible_sequence(open_small):
     """A sequence ending in a residue the corpus never terminates on must score
     as an outlier against its own length's null."""
-    cal = small.calibrate(bins=1024)
+    cal = open_small.calibrate(bins=1024)
     good = next(s for s in make_corpus(n=20, seed=31, lo=8, hi=8)[0])
     bad = good[:-1] + "W"
-    pg = cal.pvalue(len(good), -small.log_pseq(good))
-    pb = cal.pvalue(len(bad), -small.log_pseq(bad))
+    pg = cal.pvalue(len(good), -open_small.log_pseq(good))
+    pb = cal.pvalue(len(bad), -open_small.log_pseq(bad))
     assert pb < pg
     assert pb < 0.05
 
@@ -1052,7 +1075,7 @@ def _sum_conditional(m, length):
 def test_single_training_sequence_normalises():
     """One sequence, so every count is 1 and every table row is dominated by
     its backoff. The normalisation must still be exact."""
-    m = BeamModel(["CASF"], order=2, max_length=6)
+    m = BeamModel(["CASF"], order=2, max_length=6, strict=False)
     assert m.n_observed == 1 and m.n_skipped == 0
     assert m.length_pmf()[4] == pytest.approx(1.0)
     assert _sum_conditional(m, 4) == pytest.approx(1.0, abs=1e-9)
@@ -1075,7 +1098,7 @@ def test_length_one_sequences_normalise():
     """Length 1 is the shortest thing the model can represent, and the one
     where the backward expert's lag never gets a chance to settle during the
     walk: every residue's backward score is paid at the sink instead."""
-    m = BeamModel(["C", "A", "S", "C"], order=2, max_length=4)
+    m = BeamModel(["C", "A", "S", "C"], order=2, max_length=4, strict=False)
     assert m.length_pmf()[1] == pytest.approx(1.0)
     assert _sum_conditional(m, 1) == pytest.approx(1.0, abs=1e-12)
     assert m.path_count(1) == pytest.approx(20.0)
@@ -1088,7 +1111,7 @@ def test_one_length_carries_a_single_sequence():
     """A length seen exactly once, alongside a length seen many times. Its
     prior is tiny but non-zero, so it must have a partition function, appear
     in the marginals, and normalise like any other."""
-    m = BeamModel(["CASF"] * 60 + ["CASSF"], order=2, max_length=6)
+    m = BeamModel(["CASF"] * 60 + ["CASSF"], order=2, max_length=6, strict=False)
     pmf = m.length_pmf()
     assert pmf[5] == pytest.approx(1.0 / 61.0, rel=1e-12)
     assert math.isfinite(m.log_partition(5))
@@ -1101,7 +1124,7 @@ def test_one_length_carries_a_single_sequence():
 def test_max_length_two_is_the_smallest_model():
     """`depth_cap` must be at least 1 and strictly below `max_length`, so 2 is
     the floor. It has to work, not merely be accepted."""
-    m = BeamModel(["CA", "CF", "SA"], order=2, max_length=2)
+    m = BeamModel(["CA", "CF", "SA"], order=2, max_length=2, strict=False)
     assert m.config["depth_cap"] == 1
     assert _sum_conditional(m, 2) == pytest.approx(1.0, abs=1e-12)
     assert m.path_count(2) == pytest.approx(400.0)
@@ -1113,7 +1136,7 @@ def test_degenerate_corpus_matches_the_reference(order):
     table cell is pure backoff. The agreement tests elsewhere all use a corpus
     with hundreds of sequences, where a smoothing bug is diluted."""
     seqs = ["CASF", "CASSF", "CASF", "CAF"]
-    m = BeamModel(seqs, order=order, max_length=6)
+    m = BeamModel(seqs, order=order, max_length=6, strict=False)
     ref = reference_build(seqs, order=order, max_len=6)
     probe = ["CASF", "CASSF", "CAF", "WWWW", "YYYYY"]
     got = np.array([m.log_pseq(s) for s in probe])
@@ -1243,21 +1266,21 @@ def test_explain_reports_the_reason_it_refuses(small):
         small.explain(None)
 
 
-def test_explain_flags_an_unproducible_length(small):
+def test_explain_flags_an_unproducible_length(open_small):
     """`explain` returns finite per-residue terms for a sequence whose LENGTH
     the model never saw, while `log_pseq` is -inf: the length prior, not any
     residue, is what rules it out. Presenting the decomposition without saying
     so would make it look like a valid explanation of a zero."""
-    dead = next(L for L in range(1, int(small.config["max_length"]) + 1)
-                if not math.isfinite(small.log_length_prior(L)))
-    e = small.explain("C" * dead)
+    dead = next(L for L in range(1, int(open_small.config["max_length"]) + 1)
+                if not math.isfinite(open_small.log_length_prior(L)))
+    e = open_small.explain("C" * dead)
     assert e["length_is_producible"] is False
     assert np.isfinite(e["forward"]).all() and np.isfinite(e["backward"]).all()
     assert e["log_pseq"] == -math.inf
 
-    live = int(np.argmax(small.length_pmf()))
-    good = small.sample(1, length=live, seed=1)[0]
-    assert small.explain(good)["length_is_producible"] is True
+    live = int(np.argmax(open_small.length_pmf()))
+    good = open_small.sample(1, length=live, seed=1)[0]
+    assert open_small.explain(good)["length_is_producible"] is True
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -1671,12 +1694,18 @@ ANALYSIS_BINS = 384
 def tiny():
     """A model whose ENTIRE support can be enumerated: 20**3 + 20**4 = 168,000
     sequences. Small enough that every spectrum quantity has an exact
-    brute-force counterpart to check against."""
+    brute-force counterpart to check against.
+
+    Open-world, and it has to be: the enumeration is only the whole support
+    while backoff keeps every cell positive. Under the closed-world default
+    the support is whatever 500 short sequences happen to spell, which is not
+    a set an exhaustive product enumerates."""
     rng = random.Random(3)
     seqs = ["".join(rng.choice(AA) for _ in range(rng.choice([3, 4])))
             for _ in range(500)]
     abund = [rng.randint(1, 9) for _ in seqs]
-    return BeamModel(seqs, abundances=abund, order=2, depth_cap=2, max_length=4)
+    return BeamModel(seqs, abundances=abund, order=2, depth_cap=2,
+                     max_length=4, strict=False)
 
 
 @pytest.fixture(scope="module")
@@ -1734,7 +1763,7 @@ def test_histograms_by_length_respects_max_length(small):
     assert got and max(got) <= 7
 
 
-def test_atom_mass_is_exactly_one_where_exp_surprisal_is_not(small):
+def test_atom_mass_is_exactly_one_where_exp_surprisal_is_not(open_small):
     """The atom probability is `generated / counting`, not `exp(-surprisal)`.
 
     Both spectra are transported on the same grid with the same linear
@@ -1745,11 +1774,11 @@ def test_atom_mass_is_exactly_one_where_exp_surprisal_is_not(small):
     down: at a coarse grid the naive route is out by tens of percent, and
     every discovery curve built on it inherits that.
     """
-    a = small.pseq_analysis()
+    a = open_small.pseq_analysis()
     for bins in (128, ANALYSIS_BINS):
         atoms = a.atoms(bins)
         assert atoms.mass == pytest.approx(1.0, rel=1e-12)
-        assert atoms.support_size == pytest.approx(small.path_count(), rel=1e-9)
+        assert atoms.support_size == pytest.approx(open_small.path_count(), rel=1e-9)
 
         h = a.histogram(bins, measure="counting")
         keep = h.weights > 0
@@ -2394,8 +2423,8 @@ def test_posterior_closes_on_the_prior_but_never_reaches_it(corpus):
     floor is asserted rather than left to be discovered.
     """
     seqs, abund = corpus
-    donor = BeamModel(seqs[:200], abundances=abund[:200], order=2, max_length=20)
-    prior = BeamModel(seqs[200:], abundances=abund[200:], order=2, max_length=20)
+    donor = BeamModel(seqs[:200], abundances=abund[:200], order=2, max_length=20, strict=False)
+    prior = BeamModel(seqs[200:], abundances=abund[200:], order=2, max_length=20, strict=False)
     probe = seqs[900:1100]
     ref = prior.log_pseq_batch(probe)
 
@@ -2497,7 +2526,7 @@ def test_strict_returns_zero_for_unspellable():
 
 def test_open_world_never_returns_zero_for_an_observed_length():
     """The contrast the flag exists to make: the default floors instead."""
-    m = BeamModel(STRICT_SEQS, max_length=6)
+    m = BeamModel(STRICT_SEQS, max_length=6, strict=False)
     for q in ("CASSW", "WWWWW"):
         assert math.isfinite(m.log_pseq(q))
         assert m.log_pseq(q) < 0.0
@@ -2543,7 +2572,11 @@ def test_strict_defaults_kappa_to_zero_but_explicit_wins():
     assert partial.config["kappa"] == (20.0, 20.0, 20.0)
     assert partial.hill_number(0) > auto.hill_number(0)
 
-    assert BeamModel(STRICT_SEQS, max_length=6).config["kappa"] == (20.0, 20.0, 20.0)
+    # Without strict the smoothed defaults come back. That is now the
+    # explicit request, not the default.
+    assert BeamModel(STRICT_SEQS, max_length=6,
+                     strict=False).config["kappa"] == (20.0, 20.0, 20.0)
+    assert BeamModel(STRICT_SEQS, max_length=6).config["kappa"] == (0.0, 0.0, 0.0)
 
 
 def test_strict_builder_matches_one_shot():
@@ -2595,7 +2628,7 @@ def test_strict_survives_save_and_load(tmp_path):
 
 def test_open_world_save_and_load_unchanged(tmp_path):
     """The reserved-word reuse must not disturb existing files."""
-    m = BeamModel(STRICT_SEQS, max_length=6)
+    m = BeamModel(STRICT_SEQS, max_length=6, strict=False)
     dst = tmp_path / "open.model"
     m.save(dst)
     back = BeamModel.from_file(dst)
@@ -2685,7 +2718,7 @@ def test_sparse_selection_and_positive_backoff_fallback():
     automatic = BeamModel(STRICT_SEQS, order=2, max_length=6, strict=True)
     forced_dense = BeamModel(STRICT_SEQS, order=2, max_length=6, strict=True,
                         sparse=False)
-    open_world = BeamModel(STRICT_SEQS, order=2, max_length=6)
+    open_world = BeamModel(STRICT_SEQS, order=2, max_length=6, strict=False)
     backed_off = BeamModel(
         STRICT_SEQS, order=2, max_length=6, strict=True,
         kappa=(1.0, 1.0, 1.0), kappa_wide=1.0, kappa_len=1.0,
@@ -2702,8 +2735,12 @@ def test_sparse_selection_and_positive_backoff_fallback():
         BeamModel(STRICT_SEQS, order=2, max_length=6, strict=True,
              kappa=(1.0, 1.0, 1.0), kappa_wide=1.0, kappa_len=1.0,
              sparse=True)
+    # Sparse storage is exact only in the closed world, which is now the
+    # default -- so the rejection needs the open world asked for explicitly.
     with pytest.raises(ValueError, match="sparse=True"):
-        BeamModel(STRICT_SEQS, order=2, max_length=6, sparse=True)
+        BeamModel(STRICT_SEQS, order=2, max_length=6, sparse=True, strict=False)
+    # And by default sparse is not merely allowed, it is what you get.
+    assert BeamModel(STRICT_SEQS, order=2, max_length=6).config["sparse"] is True
 
 
 def test_sparse_subtract_shrinks_and_copy_is_independent():

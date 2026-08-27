@@ -28,17 +28,30 @@ model.log_pseq("CASSLGYEQYF")        # exact log probability
 model.save("foundation")             # -> foundation.beam
 ```
 
-### Open world or closed
+### Closed world by default
 
-By default the model smooths, so every sequence over the alphabet gets a finite
-probability and `path_count()` counts the whole lattice. Pass `strict=True` to
-turn smoothing off: unseen sequences then score `-inf`, and `path_count()`
-becomes the number of sequences the training data can actually spell.
+The model holds what the sequences you gave it actually spell. A sequence no
+path supports scores `-inf`, and `path_count()` is the number of sequences the
+data can spell rather than the size of the whole lattice. Storage is sparse,
+so only occupied rows exist.
 
 ```python
-open_world = BeamModel(seqs, abundances=ab)                 # every path positive
-closed     = BeamModel(seqs, abundances=ab, strict=True)    # observed support only
+model = BeamModel(seqs, abundances=ab)          # observed support only
+model.log_pseq("CWWWWWWWF")                     # -inf, if nothing spells it
 ```
+
+Pass `strict=False` for the open world instead. Hierarchical backoff then
+leaves every table cell positive, so every sequence over the alphabet receives
+a graded probability and the support becomes all of sequence space:
+
+```python
+open_world = BeamModel(seqs, abundances=ab, strict=False)
+```
+
+That is a different model, and a useful one: it is what lets BEAM rank
+sequences the corpus never saw. It is no longer what you get without asking,
+because a support of `sum_L 20**L` describes the smoother rather than the
+data, and it should not arrive by default.
 
 ## Testing
 

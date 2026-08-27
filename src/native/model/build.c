@@ -125,7 +125,7 @@ void beam_model_config_default(BeamModelConfig *cfg) {
     cfg->coef_wide       = 0.60;
     cfg->coef_mid        = 0.25;
     cfg->coef_len        = 0.15;
-    cfg->strict          = false;
+    cfg->strict          = true;
     cfg->sparse          = false;
     cfg->kappa[0]        = 20.0;
     cfg->kappa[1]        = 20.0;

@@ -97,6 +97,29 @@ static BeamModel *build(uint8_t order, uint8_t max_length) {
     return m;
 }
 
+/* The open world, asked for explicitly.
+ *
+ * `build` above takes the defaults, and the default is closed-world: the
+ * model holds only what TRAIN spells. A few properties below belong to the
+ * smoother rather than to the grammar -- a finite score for an unseen ending,
+ * a support of 20^L, a posterior that can move a score it would otherwise
+ * leave at -inf -- and those need backoff switched on. */
+static BeamModel *build_open(uint8_t order, uint8_t max_length) {
+    BeamModelConfig cfg;
+    beam_model_config_default(&cfg);
+    cfg.order = order;
+    cfg.max_length = max_length;
+    cfg.strict = false;
+    BeamModel *m = beam_model_new(&cfg);
+    if (!m) return NULL;
+    if (beam_model_observe(m, TRAIN, WEIGHT, N_TRAIN) != BEAM_OK
+        || beam_model_finalize(m) != BEAM_OK) {
+        beam_model_destroy(m);
+        return NULL;
+    }
+    return m;
+}
+
 static const char *STRICT_TRAIN[] = { "CASSF", "CASSY", "CTTGW" };
 
 static BeamModel *build_strict_mode(bool sparse) {
@@ -833,13 +856,17 @@ static void test_posterior_shrinks_towards_the_prior(void) {
      * which leaves every normalised row — and therefore every score — where it
      * was, up to the backoff's own kappa.
      */
-    BeamModel *prior = build(3, 27);
+    BeamModel *prior = build_open(3, 27);
     ASSERT_MSG(prior != NULL, "build");
 
     /* A thin individual: one sequence, so its own counts say almost nothing. */
     BeamModelConfig cfg;
     beam_model_config_default(&cfg);
     cfg.order = 3; cfg.max_length = 27;
+    /* Open, like the prior: under the closed-world default a model
+     * holding one sequence scores the probe -inf, and "moved closer to
+     * the prior" is not a statement about infinity. */
+    cfg.strict = false;
     BeamModel *thin = beam_model_new(&cfg);
     const char *one[] = { "CASSLGEQYF" };
     ASSERT_MSG(thin && beam_model_observe(thin, one, NULL, 1) == BEAM_OK,
@@ -870,7 +897,7 @@ static void test_posterior_shrinks_towards_the_prior(void) {
                "a pseudo-count is not an observed sequence");
 
     /* Shape and argument checks. */
-    BeamModel *wide = build(4, 27);
+    BeamModel *wide = build_open(4, 27);
     ASSERT_MSG(wide != NULL, "build order 4");
     ASSERT_MSG(beam_model_posterior(thin, wide, 1.0) == BEAM_ERR_VARIANT_MISMATCH,
                "a shape mismatch must be refused");
@@ -1019,7 +1046,7 @@ static void test_layer_weights_reproduce_the_scorer(void) {
 /* ── Scoring ─────────────────────────────────────────────────── */
 
 static void test_scores_are_finite_and_ordered(void) {
-    BeamModel *m = build(4, 27);
+    BeamModel *m = build_open(4, 27);
     ASSERT_MSG(m != NULL, "build");
     const double seen = beam_model_log_pseq(m, "CASSLGEQYF");
     const double rare = beam_model_log_pseq(m, "CASSLGEQYW");
@@ -1152,6 +1179,7 @@ static void test_support_is_all_of_sequence_space(void) {
     beam_model_config_default(&cfg);
     cfg.order = 3;
     cfg.max_length = 5;
+    cfg.strict = false;   /* the support IS 20^L only with backoff on */
     BeamModel *m = beam_model_new(&cfg);
     const char *tiny[] = { "CAS", "CAF", "GAS", "CQS" };
     const double tw[] = { 5, 3, 2, 4 };

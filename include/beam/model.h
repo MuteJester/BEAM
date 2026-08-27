@@ -141,22 +141,27 @@ typedef struct {
 
     /**
      * Closed-world mode: a sequence the graph cannot spell scores exactly zero.
-     * Default false.
+     * Default TRUE.
      *
-     * Two things make zero unreachable in the open-world default, and this
-     * turns off both. The order-0 base level adds one pseudo-count to every
+     * The default is closed-world because that is what the model is for: it
+     * should hold what the sequences it was given actually spell, not a full
+     * dictionary over every state the alphabet permits. Clearing this field
+     * selects the open world instead, and that is now the deliberate choice.
+     *
+     * Two things make zero unreachable in the open world, and this turns off
+     * both. The order-0 base level adds one pseudo-count to every
      * residue, so nothing is ever unseen there; and probabilities are floored
      * at `BEAM_PROB_FLOOR` before the log, so a genuine zero arrives as a
      * large finite negative rather than -inf. With `strict` set, the base
      * level is the raw MLE and no floor is applied, so an unobserved
      * transition is -inf and any path through it is impossible.
      *
-     * WHAT IT COSTS. The open-world default is why BEAM ranks unseen CDR3s
-     * well: a sequence absent from the corpus still receives a graded
-     * probability rather than a flat zero. In strict mode it receives zero,
-     * and a held-out sequence using one unobserved context is unscoreable
-     * rather than merely improbable. This is the FlashBack trade, made
-     * explicitly.
+     * WHAT IT COSTS. Clearing this field is why BEAM can rank unseen CDR3s:
+     * a sequence absent from the corpus still receives a graded probability
+     * rather than a flat zero. Under the closed-world default it receives
+     * zero, and a held-out sequence using one unobserved context is
+     * unscoreable rather than merely improbable. This is the FlashBack trade,
+     * made explicitly.
      *
      * WHAT IT BUYS. D0 stops being `sum_L 20**L` and becomes a real path
      * count over the transitions the corpus actually produced, so support and

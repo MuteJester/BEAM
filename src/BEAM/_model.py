@@ -232,7 +232,7 @@ def _iter_parquet(path, sequence_column, abundance_column, batch_size):
 
 
 def _config_args(*, order, depth_cap, max_length, coefficients, kappa,
-                 kappa_wide, kappa_len, weights, strict=False,
+                 kappa_wide, kappa_len, weights, strict=True,
                  sparse=None) -> tuple:
     """Validate a build configuration and flatten it for the C entry points.
 
@@ -304,7 +304,7 @@ def _config_args_from_dict(cfg: dict[str, Any]) -> tuple:
                         coefficients=cfg["coefficients"], kappa=cfg["kappa"],
                         kappa_wide=cfg["kappa_wide"],
                         kappa_len=cfg["kappa_len"], weights=cfg["weights"],
-                        strict=cfg.get("strict", False),
+                        strict=cfg.get("strict", True),
                         sparse=cfg.get("sparse", False))
 
 
@@ -327,9 +327,20 @@ class BeamModel:
             moving it off 1 leaves within-length ranking untouched while
             wrecking global ranking.
         max_length: Longest sequence the model represents.
-        strict: Remove the order-0 add-one and probability floor. Its
-            smoothing defaults are all zero, giving exact closed-world
-            support unless a backoff strength is supplied explicitly.
+        strict: Closed-world support, and the default. The model holds what
+            the training sequences and their abundances actually spell: the
+            order-0 add-one and the probability floor are removed, the five
+            smoothing strengths default to zero, and a sequence no path
+            supports scores ``-inf`` rather than a small positive number.
+            ``path_count()`` is then the number of sequences the data can
+            spell, not the size of the whole lattice.
+
+            Pass ``strict=False`` for the open world: hierarchical backoff
+            leaves every cell of the table positive, so every sequence over
+            the alphabet gets a finite probability and the support becomes all
+            of sequence space. That is a different model, useful for
+            comparison and for scoring sequences the corpus never saw, but it
+            is no longer what you get without asking.
         sparse: Store only occupied rows. ``None`` selects sparse storage when
             ``strict`` is true and all five backoff strengths are zero;
             ``False`` forces the equivalent dense representation. ``True``
@@ -356,7 +367,7 @@ class BeamModel:
         kappa_len: float | None = None,
         weights: tuple[float, float] = (0.5, 0.5),
         max_length: int = 27,
-        strict: bool = False,
+        strict: bool = True,
         sparse: bool | None = None,
     ) -> None:
         seqs = list(sequences)
@@ -2063,7 +2074,7 @@ class Builder:
         kappa_len: float | None = None,
         weights: tuple[float, float] = (0.5, 0.5),
         max_length: int = 27,
-        strict: bool = False,
+        strict: bool = True,
         sparse: bool | None = None,
     ) -> None:
         kappa, kappa_wide, kappa_len = _smoothing_defaults(
