@@ -2,5 +2,16 @@
 #
 # Kept separate from native_sources.txt so that libbeam.a can be built and
 # tested without Python headers present.
+#
+# There is exactly one module initialiser and one method table, both in
+# module.c. The other files hold entry points grouped by domain and declare
+# them in beam/python_bindings.h.
 
-src/BEAM/_cbeam.c
+src/native/bindings/python/common.c
+src/native/bindings/python/buffers.c
+src/native/bindings/python/model_bindings.c
+src/native/bindings/python/scoring_bindings.c
+src/native/bindings/python/analytics_bindings.c
+src/native/bindings/python/algorithm_bindings.c
+src/native/bindings/python/publicness_bindings.c
+src/native/bindings/python/module.c
