@@ -25,3 +25,6 @@ venv/
 # Models are large binaries; keep them out of git
 *.beam
 *.model
+
+# Verification evidence IS tracked; only the rebuildable fixture is not.
+!verification/

@@ -10,6 +10,8 @@ import numpy as np
 import pytest
 
 from BEAM import BeamModel
+from BEAM import _cbeam as _c
+from BEAM._model import _config_args_from_dict
 
 from _helpers import AA, J_MOTIFS, make_corpus
 
@@ -305,3 +307,33 @@ def test_calibration_median_converges_with_the_grid(small):
 
 
 # ════════════════════════════════════════════════════════════════════════
+
+
+def test_c_and_python_defaults_describe_the_same_model():
+    """The two entry points must agree on what "default" means.
+
+    A caller writing BeamModel(seqs) and a caller reaching
+    beam_model_config_default() in C are asking for the same model. Between
+    the closed-world flip and its follow-up they were not: C set strict but
+    kept backoff at 20/20/200, so the same corpus gave a different support --
+    D0 of 4 instead of 3 on three short sequences -- with nothing failing,
+    because both configurations are individually valid.
+
+    Storage is the one field allowed to differ. The C layer stays dense while
+    Python selects sparse, and a dense and a sparse strict model are
+    bit-identical, which is asserted separately.
+    """
+    seqs = ["CASSF", "CASTF", "CAGSF"]
+    py = BeamModel(seqs, abundances=[3, 2, 1], order=2, max_length=6)
+    cfg = py.config
+
+    # What the C default resolves to, read back through a model built with it.
+    c_defaults = _c.config(_c.new(*_config_args_from_dict(
+        {**cfg, "sparse": False})))
+
+    assert cfg["strict"] is True
+    assert cfg["kappa"] == (0.0, 0.0, 0.0)
+    assert cfg["kappa_wide"] == 0.0 and cfg["kappa_len"] == 0.0
+    for field in ("strict", "kappa", "kappa_wide", "kappa_len",
+                  "order", "depth_cap", "coefficients", "weights"):
+        assert c_defaults[field] == cfg[field], field

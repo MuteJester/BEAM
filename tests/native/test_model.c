@@ -188,6 +188,12 @@ static void test_sparse_requires_strict_zero_backoff(void) {
     beam_model_config_default(&c);
     c.strict = true;
     c.sparse = true;
+    /* Backoff has to be asked for explicitly now: the default is the closed
+     * world, which is exactly the regime sparse storage is valid in, so the
+     * defaults alone no longer produce the combination being rejected. */
+    c.kappa[0] = c.kappa[1] = c.kappa[2] = 20.0;
+    c.kappa_wide = 20.0;
+    c.kappa_len = 200.0;
     ASSERT_MSG(beam_model_new(&c) == NULL,
                "positive backoff cannot omit zero-count rows");
 
@@ -2005,6 +2011,11 @@ static void test_top_k_by_enumeration(void) {
     BeamModelConfig cfg;
     beam_model_config_default(&cfg);
     cfg.order = 3; cfg.max_length = 4;
+    /* Open world: the check below enumerates all 20^3 length-3 sequences and
+     * asserts none beats the K-th, which is only a statement about the whole
+     * space while backoff keeps every cell positive. Under the closed-world
+     * default this corpus of five sequences cannot even produce K=12. */
+    cfg.strict = false;
     BeamModel *m = beam_model_new(&cfg);
     const char *tiny[] = { "CAS", "CAF", "GAS", "CQS", "SAF" };
     const double tw[] = { 9, 4, 3, 6, 2 };

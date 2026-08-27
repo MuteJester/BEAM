@@ -19,13 +19,31 @@ void beam_model_config_default(BeamModelConfig *cfg) {
     cfg->coef_wide       = 0.60;
     cfg->coef_mid        = 0.25;
     cfg->coef_len        = 0.15;
+    /* The closed-world default, and it has to be expressed in full here.
+     *
+     * `strict` alone does not give it: strict removes the order-0 add-one and
+     * the probability floor, but hierarchical backoff still carries mass from
+     * shorter contexts, so a sequence the corpus never spelled can still be
+     * live. The closed world is strict AND every backoff strength at zero,
+     * which is also the exact regime sparse storage is valid in.
+     *
+     * The Python layer resolves these the same way (see _smoothing_defaults),
+     * and the two must agree: a caller reaching beam_model_config_default()
+     * directly and a caller writing BeamModel(seqs) are asking for the same
+     * model. They did not agree between 2026-08-27 and this commit, and the
+     * difference was silent -- both produced a model, with different support.
+     * Storage is the one thing that legitimately differs: this layer stays
+     * dense while the Python layer selects sparse, because a dense and a
+     * sparse strict model are bit-identical and a C caller may not want the
+     * sparse path. Support and probabilities are what must agree, and those
+     * are set by strict plus the backoff strengths, not by the layout. */
     cfg->strict          = true;
     cfg->sparse          = false;
-    cfg->kappa[0]        = 20.0;
-    cfg->kappa[1]        = 20.0;
-    cfg->kappa[2]        = 20.0;
-    cfg->kappa_wide      = 20.0;
-    cfg->kappa_len       = 200.0;
+    cfg->kappa[0]        = 0.0;
+    cfg->kappa[1]        = 0.0;
+    cfg->kappa[2]        = 0.0;
+    cfg->kappa_wide      = 0.0;
+    cfg->kappa_len       = 0.0;
     cfg->weight_forward  = 0.5;
     cfg->weight_backward = 0.5;
 }
