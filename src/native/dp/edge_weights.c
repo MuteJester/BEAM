@@ -59,6 +59,41 @@ static inline void state_weights_dense(const BeamModel *m, uint32_t i,
     /* A sentinel in that slot means there is no residue to score.
      * Unreachable for i >= K, but cheap to be explicit about. */
     if (scored >= R) return;
+
+    /*
+     * The same hoist the sparse path performs below, and for the same reason.
+     * See the long comment there for why it is sound and why the gate is what
+     * it is: at order 4 the mid and length backward contexts sit entirely
+     * inside the DAG state, so `x` cannot reach them, and the wide context is
+     * `cw(0) + x` exactly.
+     *
+     * The dense path was left out when the sparse one was done, and here it
+     * costs more than a lookup: each of these helpers runs a base-21 digit
+     * loop with an integer division, twenty times per state, to recompute
+     * three values that do not move. Worth 2.60x single-threaded and 1.69x on
+     * sixteen threads over a full layer, with a bit-identical result -- the
+     * prototype in `.dev/loop_study/` checks the whole 194,481 x 20 output
+     * with memcmp and reports a maximum difference of 0 ULP.
+     *
+     * The gate is not optional. Run ungated, this rewrites 99.76% of the
+     * output at orders 2 and 3, because `n_ctx_mid` is 21^3 while the state
+     * shift is only 21^2 there, so the mid context does move with `x`.
+     */
+    if (K > 3u && m->order == K) {
+        const uint32_t cw0 = beam_ctx_backward_wide_from_state(
+            s, 0u, m->state_shift, K, m->order);
+        const uint32_t cm = beam_ctx_backward_from_state(s, 0u, K, 3u);
+        const uint32_t cl = beam_ctx_backward_from_state(s, 0u, K, 2u);
+        for (uint32_t x = 0; x < R; ++x) {
+            if (row[x] == -INFINITY) continue;
+            const double b = mix_dense(m, BEAM_BWD, len, r,
+                                       cw0 + x, cm, cl, scored);
+            row[x] = (b == -INFINITY) ? -INFINITY
+                                      : row[x] + m->cfg.weight_backward * b;
+        }
+        return;
+    }
+
     for (uint32_t x = 0; x < R; ++x) {
         if (row[x] == -INFINITY) continue;
         const double b = mix_dense(
