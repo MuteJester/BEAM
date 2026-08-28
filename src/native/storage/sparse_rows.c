@@ -99,6 +99,7 @@ static bool sparse_grow_partition(BeamSparseRows *t, uint32_t part,
 
     free(t->values[part]);
     t->values[part] = new_values;
+    if (!t->mutable_rows && part == 0u) t->values0 = new_values;
     {
         free(t->row_ids[part]);
         t->row_ids[part] = new_row_ids;
@@ -288,6 +289,7 @@ void beam_sparse_shrink(BeamSparseRows *t) {
         if (occupied == 0u) {
             free(t->values[part]);
             t->values[part] = NULL;
+            if (part == 0u) t->values0 = NULL;
             if (t->row_ids) {
                 free(t->row_ids[part]);
                 t->row_ids[part] = NULL;
@@ -325,6 +327,7 @@ void beam_sparse_shrink(BeamSparseRows *t) {
 
         free(t->values[part]);
         t->values[part] = new_values;
+        if (!t->mutable_rows && part == 0u) t->values0 = new_values;
         if (has_map) {
             free(t->row_ids[part]);
             t->row_ids[part] = new_row_ids;
