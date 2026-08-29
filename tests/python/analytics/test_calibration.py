@@ -86,16 +86,68 @@ def calibration(small):
     return small.calibrate(bins=CALIBRATION_BINS)
 
 
-def test_scale_score_is_centred_on_the_model_s_own_output(small, calibration):
-    """Sequences drawn FROM the model are its null by definition, so their
-    SCALE scores must have median ~0 and interquartile range ~1. That is what
-    makes the score comparable across lengths."""
+def test_scale_score_is_a_false_positive_rate(small, calibration):
+    """The point of the p-value form: a threshold IS a rate.
+
+    Sequences drawn FROM the model are its null by definition, so their
+    p-values are uniform and ``-log10 p`` exceeds ``t`` for exactly ``10**-t``
+    of them. That is the property the robust form does NOT have, and the whole
+    reason the definition changed."""
     cal = calibration
-    drawn = small.sample(6000, seed=17)
+    drawn = small.sample(20000, seed=17)
     z = small.scale_score(drawn, cal)
-    assert np.median(z) == pytest.approx(0.0, abs=0.06)
-    q25, q75 = np.percentile(z, [25, 75])
-    assert q75 - q25 == pytest.approx(1.0, abs=0.1)
+    assert np.median(z) == pytest.approx(np.log10(2.0), abs=0.05)
+    for t in (1.0, 1.5):
+        assert np.mean(z >= t) == pytest.approx(10.0 ** -t, rel=0.35)
+
+
+def test_scale_score_rate_is_flat_across_lengths(small, calibration):
+    """The defect being fixed. On the 927M foundation the robust form's 1%
+    pooled cutoff flags 5.5% of length-4 sequences and 0.02% of length-25 ones;
+    the p-value form is 10% at every length by construction."""
+    cal = calibration
+    rates_p, rates_robust = [], []
+    for L in small.observed_lengths:
+        drawn = small.sample(4000, length=L, seed=100 + L)
+        if len(drawn) < 500:
+            continue
+        u = -small.log_pseq_batch(drawn)
+        rates_p.append(np.mean([cal.scale(L, float(v)) >= 1.0 for v in u]))
+        rates_robust.append(np.mean(
+            [cal.scale(L, float(v), method="robust") >= 1.35 for v in u]))
+    assert len(rates_p) >= 3
+    assert max(rates_p) == pytest.approx(0.10, abs=0.035)
+    assert min(rates_p) == pytest.approx(0.10, abs=0.035)
+    # The robust form's spread across lengths is the thing being fixed, so it
+    # must be materially wider than the p-value form's.
+    assert (max(rates_robust) - min(rates_robust)) > \
+           (max(rates_p) - min(rates_p))
+
+
+def test_robust_method_keeps_its_historical_definition(small, calibration):
+    """Published thresholds are quoted on the robust form, so it stays exact."""
+    cal = calibration
+    L = max(small.observed_lengths)
+    u = float(-small.log_pseq(small.sample(1, length=L, seed=3)[0]))
+    expected = (u - cal.median(L)) / cal.iqr(L)
+    assert cal.scale(L, u, method="robust") == pytest.approx(expected)
+
+
+def test_scale_methods_rank_identically_within_a_length(small, calibration):
+    """Within one length the two forms are monotone transforms of each other,
+    so they cannot disagree on ordering. All of the difference is BETWEEN
+    lengths."""
+    cal = calibration
+    L = max(small.observed_lengths)
+    drawn = [s for s in small.sample(3000, length=L, seed=11)]
+    u = -small.log_pseq_batch(drawn)
+    a = np.array([cal.scale(L, float(v)) for v in u])
+    b = np.array([cal.scale(L, float(v), method="robust") for v in u])
+    ok = np.isfinite(a) & np.isfinite(b)
+    assert ok.sum() > 100
+    # Ranks must agree up to ties introduced by the p-value grid.
+    from scipy.stats import spearmanr  # noqa: PLC0415
+    assert spearmanr(a[ok], b[ok]).statistic > 0.999
 
 
 def test_scale_score_ranks_an_implausible_sequence_above_a_drawn_one(
@@ -124,10 +176,15 @@ def test_scale_score_is_length_normalised(small, calibration):
 
 
 def test_scale_score_matches_the_calibration_arithmetic(small, calibration):
+    """The facade must be a pass-through to Calibration.scale, both methods."""
     cal = calibration
     s = small.sample(1, seed=3)[0]
-    want = (-small.log_pseq(s) - cal.median(len(s))) / cal.iqr(len(s))
-    assert small.scale_score(s, cal) == pytest.approx(want, rel=1e-12)
+    u = -small.log_pseq(s)
+    assert small.scale_score(s, cal) == pytest.approx(
+        cal.scale(len(s), u), rel=1e-12)
+    robust = (u - cal.median(len(s))) / cal.iqr(len(s))
+    assert small.scale_score(s, cal, method="robust") == pytest.approx(
+        robust, rel=1e-12)
 
 
 def test_scale_score_rejects_a_foreign_calibration(small):

@@ -20,11 +20,13 @@ from ._model import (
     set_threads,
 )
 from ._publicness import PublicnessModel
+from .analytics.scale import Attribution, ScaleIndex, attribute
 
 __all__ = [
     "BeamModel", "Atoms", "Builder", "Calibration", "Histogram",
     "PseqAnalysis", "effective_threads", "memory_budget",
     "threads", "set_memory_budget", "set_threads",
     "PublicnessModel",
+    "Attribution", "ScaleIndex", "attribute",
 ]
 __version__ = "0.1.0"

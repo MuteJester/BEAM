@@ -120,16 +120,47 @@ class Calibration:
         """Interquartile range of the surprisal at this length."""
         return self._median_iqr(length)[1]
 
-    def scale(self, length: int, surprisal):
-        """``(surprisal - median_L) / IQR_L``, the SCALE anomaly score.
+    def scale(self, length: int, surprisal, *, method: str = "pvalue"):
+        """The SCALE anomaly score: higher means more surprising.
 
-        Length-normalised because ``-ln P`` grows with length, so a raw
-        surprisal is not comparable across lengths. An uncovered length falls
-        back to the pooled mixture.
+        ``method="pvalue"`` (the default) returns ``-log10 P(U >= surprisal)``
+        under the model's own exact per-length null. A threshold of 2 is a 1%
+        false-positive rate AT EVERY LENGTH, by construction.
+
+        ``method="robust"`` returns the historical ``(u - median_L) / IQR_L``.
+        That form matches two moments of a null whose SHAPE changes with
+        length, so a single cutoff is a different false-positive rate at every
+        length: on the 927M foundation, the cutoff giving 1% pooled flags 5.5%
+        of length-4 sequences and 0.02% of length-25 ones, and is not even
+        monotone in length. It is kept because published thresholds are quoted
+        on it, not because it is the better score.
+
+        Within one length the two rank IDENTICALLY -- median_L and IQR_L are
+        constants there, so the robust form is affine in ``u`` and the p-value
+        is monotone in it. The whole difference is cross-length comparability,
+        which is the one job this normalisation exists to do.
+
+        An uncovered length falls back to the pooled mixture.
         """
-        m, sd = self._median_iqr(length)
+        if method == "robust":
+            m, sd = self._median_iqr(length)
+            u = np.atleast_1d(np.asarray(surprisal, dtype=np.float64))
+            out = (u - m) / sd
+            return float(out[0]) if _is_scalar_arg(surprisal) else out
+        if method != "pvalue":
+            raise ValueError(
+                f"method must be 'pvalue' or 'robust', got {method!r}")
+        p = np.atleast_1d(np.asarray(
+            self.pvalue(length, surprisal), dtype=np.float64))
+        # A p-value of zero is the grid running out of resolution, not
+        # certainty. Floor it at what the grid can actually resolve, so the
+        # score saturates at a finite, reportable value instead of +inf.
+        out = -np.log10(np.maximum(p, self.resolution_floor))
+        # An unspellable sequence has infinite surprisal and EXACTLY zero
+        # probability, which is a different statement from "too small for this
+        # grid". It keeps the infinite score; only finite tails saturate.
         u = np.atleast_1d(np.asarray(surprisal, dtype=np.float64))
-        out = (u - m) / sd
+        out = np.where(np.isposinf(u), np.inf, out)
         return float(out[0]) if _is_scalar_arg(surprisal) else out
 
     def pvalue(self, length: int, surprisal) -> float | np.ndarray:

@@ -1511,15 +1511,24 @@ class BeamModel:
         from ..analytics.pseq import PseqAnalysis
         return PseqAnalysis(self)
 
-    def scale_score(self, sequence, calibration: Calibration):
+    def scale_score(self, sequence, calibration: Calibration, *,
+                    method: str = "pvalue"):
         """Length-normalised anomaly score; higher means more surprising.
 
-        ``(-ln P(s) - median_L) / IQR_L``, with the median and IQR taken from
-        ``calibration`` — which is the model's own EXACT per-length surprisal
-        law, reconstructed by dynamic programming rather than measured off a
-        few hundred thousand simulated draws. There is no ``n_sim`` and no
-        minimum-count rule, so there is nothing to tune and no sampling noise
-        in the reference.
+        ``-log10 P(U >= -ln P(s))`` under ``calibration``, which is the model's
+        own EXACT per-length surprisal law, reconstructed by dynamic
+        programming rather than measured off simulated draws. There is no
+        ``n_sim`` and no minimum-count rule, so there is nothing to tune and no
+        sampling noise in the reference.
+
+        Because the reference is the exact null, a threshold here IS a false
+        positive rate: 2 means 1% at every length. ``method="robust"`` returns
+        the historical ``(u - median_L) / IQR_L`` instead, whose cutoffs are a
+        different rate at every length. See :meth:`Calibration.scale`.
+
+        This scores the sequence as a whole. For WHICH RESIDUES look wrong, and
+        for the two-channel index that sees deletions, use
+        :func:`BEAM.analytics.scale.attribute` and :class:`ScaleIndex`.
 
         A length the calibration does not cover falls back to the pooled null,
         weighted by the length prior.
@@ -1527,6 +1536,7 @@ class BeamModel:
         Args:
             sequence: A single string, or a sequence of strings.
             calibration: From :meth:`calibrate`.
+            method: ``"pvalue"`` (default) or ``"robust"``.
 
         Returns:
             ``float`` for a single string, ``np.ndarray`` otherwise.
@@ -1542,7 +1552,7 @@ class BeamModel:
         u = -self.log_pseq_batch(seqs)
         lengths = np.fromiter((len(x) for x in seqs), dtype=np.int64,
                               count=len(seqs))
-        out = np.array([calibration.scale(int(L), float(v))
+        out = np.array([calibration.scale(int(L), float(v), method=method)
                         for L, v in zip(lengths, u)], dtype=np.float64)
         return float(out[0]) if single else out
 
