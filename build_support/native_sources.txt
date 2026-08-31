@@ -49,6 +49,7 @@ src/native/model/finalize.c
 src/native/model/introspection.c
 src/native/model/lifecycle.c
 src/native/model/posterior.c
+src/native/model/prism.c
 src/native/model/scoring.c
 src/native/model/smoothing.c
 src/native/model/training.c

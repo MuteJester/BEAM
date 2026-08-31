@@ -51,6 +51,8 @@ PyObject *py_log_mellin(PyObject *self, PyObject *args);
 PyObject *py_log_partition(PyObject *self, PyObject *arg);
 PyObject *py_log_pseq(PyObject *self, PyObject *args);
 PyObject *py_log_pseq_batch(PyObject *self, PyObject *args);
+PyObject *py_prism_factor(PyObject *self, PyObject *args);
+PyObject *py_prism_explain(PyObject *self, PyObject *args);
 PyObject *py_memory_budget(PyObject *self, PyObject *arg);
 PyObject *py_memory_bytes(PyObject *self, PyObject *arg);
 PyObject *py_n_cells(PyObject *self, PyObject *arg);

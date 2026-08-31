@@ -2,6 +2,8 @@
  * @file scoring.c
  * @brief Direct sequence scoring and the mixed per-residue weight.
  */
+#include <string.h>
+
 #include "beam/internal.h"
 #include "beam/mixing.h"
 
@@ -26,8 +28,8 @@ double beam_mix(const BeamModel *m, uint32_t dir, uint32_t len,
  * prior and the partition function. This is the quantity the DAG's edge
  * weights plus its tail weight also sum to.
  */
-static double raw_log_weight(const BeamModel *m, const uint8_t *s,
-                             uint32_t len) {
+double beam_raw_log_weight(const BeamModel *m, const uint8_t *s,
+                           uint32_t len) {
     double total = 0.0;
     for (uint32_t p = 0; p < len; ++p) {
         const uint32_t x = s[p];
@@ -59,7 +61,7 @@ double beam_model_log_pseq(const BeamModel *m, const char *seq) {
     if (!beam_encode(m, seq, buf, &len)) return -INFINITY;
     if (!isfinite(m->log_pi[len]) || !isfinite(m->log_z[len])) return -INFINITY;
 
-    const double raw = raw_log_weight(m, buf, len);
+    const double raw = beam_raw_log_weight(m, buf, len);
     if (raw == -INFINITY) return -INFINITY;
     return raw + m->log_pi[len] - m->log_z[len];
 }
