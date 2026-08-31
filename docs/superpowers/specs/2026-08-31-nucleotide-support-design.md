@@ -444,6 +444,41 @@ copies; it is the same false positive, not a new one.
 The other fourteen migrated files keep the runtime alphabet, where it costs
 nothing measurable.
 
+## The independent reference
+
+`tests/reference/beam_model.py` is a from-scratch NumPy reimplementation
+written against the specification, sharing no code with `src/native/`. It is
+the only thing in the suite that can catch a dimension which is consistently
+wrong in both the C and its own tests. It carried its own hardcoded copy of
+the amino-acid alphabet, so nucleotide models had none of that.
+
+It is now parameterised by an `Alphabet`, and
+`test_reference_agreement.py` checks scores at orders 2, 3 and 4, the
+partition function, and path counts over the radix-6 trellis as well as the
+radix-21 one. The five amino-acid agreement tests passing unchanged through
+the parameterisation is what says the refactor was faithful: the reference is
+independent, so if it had drifted, the amino-acid comparison would have
+broken.
+
+Two mutations were run to check the tests bite, and the pair is more
+informative than either alone:
+
+- **Swapping two nucleotide residue indices** (G and T) is caught by the
+  alphabet table tests and NOT by the reference. That is correct rather than a
+  gap: a consistent relabelling of indices is an isomorphism, so no score
+  moves. What it breaks is decoding and file interchange, which is where it is
+  caught.
+- **Narrowing the mid expert's backward context from order 3 to 2**, in the
+  trellis only, leaves a perfectly self-consistent model that still normalises
+  -- `test_the_partition_normalises_over_nucleotides` passes. Eight of the ten
+  agreement tests fail, including all three nucleotide score tests. That is
+  the class of bug the reference exists for, and nothing else in the suite
+  sees it.
+
+The nucleotide corpus generator deliberately does not build sequences on codon
+boundaries. The model knows nothing about reading frame, and a corpus that
+respected frame could hide a packing error that happens to respect it too.
+
 ## Verification contract
 
 The gate at `verification/check.py` compares every quantity as a hex float, so
