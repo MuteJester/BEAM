@@ -19,6 +19,7 @@ import numpy as np
 
 from ..constants import (BEAM_ALPHABET, BEAM_MAX_LENGTH,
                          BEAM_MAX_MOMENT, BEAM_MAX_ORDER, BEAM_RESIDUES)
+from . import alphabets
 from .validation import _check_int, _is_scalar_arg
 from .config import _config_args, _config_args_from_dict, _smoothing_defaults
 from ..io.readers import _column, _iter_delimited, _iter_parquet
@@ -29,25 +30,59 @@ from .. import _cbeam as _c
 from .._simulation_result import SimulationResult
 
 
+def _default_column(column: str | None, config: dict) -> str:
+    """The sequence column to read when the caller names none.
+
+    `cdr3_aa` for amino acids and `cdr3` for nucleotides, which are the AIRR
+    fields for a junction and its translation. Reading the wrong one is not a
+    subtle failure -- an amino-acid model handed nucleotides skips every row --
+    but it is a silent one until the corpus comes back empty, so the default
+    follows the alphabet rather than making the caller remember.
+    """
+    if column is not None:
+        return column
+    alphabet = config.get("alphabet", alphabets.DEFAULT_ALPHABET)
+    try:
+        return alphabets.DEFAULT_COLUMN[alphabet]
+    except KeyError:
+        raise ValueError(
+            f"no default column for alphabet {alphabet!r}; name one "
+            f"explicitly") from None
+
+
 class BeamModel:
-    """Bidirectional anchored DAG over CDR3 amino-acid sequences.
+    """Bidirectional anchored DAG over CDR3 sequences.
+
+    The model is the same whichever alphabet it is built over -- two anchored
+    experts, log-linear mixing, hierarchical backoff, exact dynamic programs.
+    Only the symbols change, and with them the size of every table.
 
     Args:
         sequences: Training CDR3 strings. Sequences longer than ``max_length``
-            or containing a character outside the twenty amino acids are
+            or containing a character outside the model's alphabet are
             skipped; see :attr:`n_skipped`.
         abundances: Per-sequence observed counts; defaults to 1 each.
-        order: Context order of the wide expert, 2 to 4. Order 4 is the
-            measured optimum and the default; order 2 or 3 build far smaller
-            models (see :attr:`memory_bytes`).
+        alphabet: ``"aa"`` for the twenty amino acids, ``"nt"`` for the five
+            nucleotide residues ``ACGTN``. Nucleotide input is case-folded;
+            amino-acid input is not, since case carries no meaning for a base
+            and folding residues would silently widen what is accepted.
+            ``N`` is a residue rather than a wildcard, so a read carrying one
+            is data; the other IUPAC ambiguity codes are refused.
+        order: Context order of the wide expert, from 2 up to the alphabet's
+            own ceiling -- 4 for amino acids, 9 for nucleotides, because the
+            real bound is on ``radix ** order``. Defaults to the alphabet's
+            measured optimum: 4 and 6 respectively.
         depth_cap: Depth at which the wide expert stops resolving position
-            exactly and pools everything deeper into one bucket.
+            exactly and pools everything deeper into one bucket. Defaults to
+            15 for amino acids and to every depth for nucleotides, where the
+            table is small enough that the cap buys nothing.
         coefficients: Log-linear mixing weights for the wide, mid and
             length-conditioned experts. **They must sum to 1.** The sum is not
             a free parameter: it is a pure cross-length calibration knob, and
             moving it off 1 leaves within-length ranking untouched while
             wrecking global ranking.
-        max_length: Longest sequence the model represents.
+        max_length: Longest sequence the model represents. Defaults to 27 for
+            amino acids and 81 for nucleotides, three bases to the residue.
         strict: Closed-world support, and the default. The model holds what
             the training sequences and their abundances actually spell: the
             order-0 add-one and the probability floor are removed, the five
@@ -80,14 +115,15 @@ class BeamModel:
         sequences: Iterable[str],
         *,
         abundances: Iterable[float] | None = None,
-        order: int = 4,
-        depth_cap: int = 15,
+        alphabet: str = "aa",
+        order: int | None = None,
+        depth_cap: int | None = None,
         coefficients: tuple[float, float, float] = (0.60, 0.25, 0.15),
         kappa: tuple[float, float, float] | None = None,
         kappa_wide: float | None = None,
         kappa_len: float | None = None,
         weights: tuple[float, float] = (0.5, 0.5),
-        max_length: int = 27,
+        max_length: int | None = None,
         strict: bool = True,
         sparse: bool | None = None,
     ) -> None:
@@ -103,7 +139,8 @@ class BeamModel:
                     f"{len(seqs)}")
         kappa, kappa_wide, kappa_len = _smoothing_defaults(
             strict, kappa, kappa_wide, kappa_len)
-        cargs = _config_args(order=order, depth_cap=depth_cap,
+        cargs = _config_args(alphabet=alphabet, order=order,
+                             depth_cap=depth_cap,
                              max_length=max_length, coefficients=coefficients,
                              kappa=kappa, kappa_wide=kappa_wide,
                              kappa_len=kappa_len, weights=weights,
@@ -115,12 +152,12 @@ class BeamModel:
         except ValueError as exc:
             if "configuration" in str(exc):
                 raise                       # already says what is wrong
-            raise ValueError(self._build_failure_reason(seqs, abund,
-                                                        max_length, exc)) from None
+            raise ValueError(self._build_failure_reason(
+                seqs, abund, max_length, alphabet, exc)) from None
         self._compacted = False
 
     @staticmethod
-    def _build_failure_reason(seqs, abund, max_length, exc) -> str:
+    def _build_failure_reason(seqs, abund, max_length, alphabet, exc) -> str:
         """Turn the C layer's generic refusal into something actionable.
 
         The C entry points do not populate the library's error-message buffer,
@@ -133,17 +170,19 @@ class BeamModel:
         for i, s in enumerate(seqs):
             if not isinstance(s, str) or not s or len(s) > max_length:
                 continue
-            if any(c not in BEAM_ALPHABET for c in s):
+            if not alphabets.accepts(alphabet, s):
                 continue
             if abund is not None and not (abund[i] > 0 and np.isfinite(abund[i])):
                 continue
             usable += 1
             break
         if usable == 0:
+            syms = alphabets.symbols(alphabet)
             return (
                 f"no training sequence survived encoding: every one of "
                 f"{len(seqs)} is empty, longer than max_length={max_length}, "
-                f"contains a character outside {BEAM_ALPHABET!r}, or carries a "
+                f"contains a character the {alphabet!r} alphabet does not "
+                f"accept (its residues are {syms!r}), or carries a "
                 f"non-positive abundance")
         return f"BeamModel could not be built from this corpus ({exc})"
 
@@ -213,7 +252,7 @@ class BeamModel:
         cls,
         path: str | os.PathLike,
         *,
-        sequence_column: str = "cdr3_aa",
+        sequence_column: str | None = None,
         abundance_column: str | None = None,
         batch_size: int = 1_000_000,
         **config: Any,
@@ -233,6 +272,7 @@ class BeamModel:
         """
         # Local: constructed with the model, so a top-level import cycles.
         from .builder import Builder
+        sequence_column = _default_column(sequence_column, config)
         b = Builder(**config)
         for seqs, ab in _iter_parquet(path, sequence_column, abundance_column,
                                       batch_size):
@@ -244,7 +284,7 @@ class BeamModel:
         cls,
         data: Any,
         *,
-        sequence_column: str = "cdr3_aa",
+        sequence_column: str | None = None,
         abundance_column: str | None = None,
         **config: Any,
     ) -> BeamModel:
@@ -259,6 +299,7 @@ class BeamModel:
             abundance_column: Column holding the weight, or ``None`` for 1 each.
             **config: Passed to :class:`BeamModel`.
         """
+        sequence_column = _default_column(sequence_column, config)
         seqs = _column(data, sequence_column)
         ab = None if abundance_column is None else [
             float(x) for x in _column(data, abundance_column)]
@@ -325,13 +366,27 @@ class BeamModel:
         return _c.config(self._g)
 
     @property
+    def alphabet(self) -> str:
+        """The alphabet this model reads: ``"aa"`` or ``"nt"``.
+
+        It decides what the model accepts, the width of every table, and the
+        legal range of :attr:`config`'s ``order``.
+        """
+        return str(self.config["alphabet"])
+
+    @property
+    def n_residues(self) -> int:
+        """Residues this model's alphabet emits: 20 for ``aa``, 5 for ``nt``."""
+        return int(alphabets.info(self.alphabet)["residues"])
+
+    @property
     def n_observed(self) -> int:
         """Sequences accepted during training."""
         return int(_c.n_observed(self._g))
 
     @property
     def n_skipped(self) -> int:
-        """Sequences rejected as too long or not amino acids."""
+        """Sequences rejected as too long or outside the alphabet."""
         return int(_c.n_skipped(self._g))
 
     @property
@@ -655,7 +710,7 @@ class BeamModel:
         self,
         path: str | os.PathLike,
         *,
-        column: str = "cdr3_aa",
+        column: str | None = None,
         batch_size: int = 1_000_000,
         out: Any = None,
         dtype: Any = np.float64,
@@ -668,9 +723,13 @@ class BeamModel:
         be read.
 
         Args:
+            column: Column holding the sequences. Defaults to this model's
+                alphabet: ``cdr3_aa`` for amino acids, ``cdr3`` for
+                nucleotides.
             out: A preallocated array or memmap to fill, of the file's length.
             dtype: Element type when ``out`` is ``None``.
         """
+        column = _default_column(column, {"alphabet": self.alphabet})
         return self._collect(
             (self.log_pseq_batch(chunk)
              for chunk, _ in _iter_parquet(path, column, None, batch_size)),
@@ -723,7 +782,7 @@ class BeamModel:
 
         Raises:
             ValueError: if the sequence is empty, longer than ``max_length``,
-                or contains a character outside the twenty amino acids. Use
+                or contains a character outside the model's alphabet. Use
                 :meth:`log_pseq`, which returns ``-inf`` instead, when a
                 verdict rather than a decomposition is what is wanted.
         """
@@ -760,11 +819,12 @@ class BeamModel:
             raise ValueError(
                 f"sequence has length {len(sequence)}, longer than "
                 f"max_length={hi}")
-        bad = sorted({c for c in sequence if c not in BEAM_ALPHABET})
+        bad = alphabets.offenders(self.alphabet, sequence)
         if bad:
             raise ValueError(
-                f"sequence contains {bad!r}, outside the twenty amino acids "
-                f"{BEAM_ALPHABET!r}")
+                f"sequence contains {bad!r}, which the {self.alphabet!r} "
+                f"alphabet does not accept; its residues are "
+                f"{alphabets.symbols(self.alphabet)!r}")
 
     # ── Per-length quantities ───────────────────────────────────
 
@@ -1441,7 +1501,7 @@ class BeamModel:
             "nodes_by_layer": layers,
             "max_layer_nodes": int(layers.max()) if layers.size else 0,
             "mean_layer_nodes": float(layers.mean()) if layers.size else 0.0,
-            "density": float(edges / (nodes * BEAM_RESIDUES)) if nodes else 0.0,
+            "density": float(edges / (nodes * self.n_residues)) if nodes else 0.0,
         }
 
     # ── Generation ──────────────────────────────────────────────
@@ -1661,7 +1721,7 @@ class BeamModel:
         """Fold a prior model's belief into this model's counts, in place.
 
         A Dirichlet-multinomial update. Every row of every count table is one
-        categorical distribution — over the twenty residues for the three
+        categorical distribution — over the alphabet's residues for the three
         expert tables, over lengths for the length histogram — and this adds
         ``kappa * p_prior[row]`` to each of this model's rows, where
         ``p_prior`` is that row of ``prior`` NORMALISED. A row then reads::

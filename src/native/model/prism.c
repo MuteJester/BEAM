@@ -149,7 +149,10 @@ static double prism_transport(const BeamModel *m, uint8_t *buf, uint32_t len,
         if (out_sub) out_sub[i] = at_i;
         q_sub = lse2(q_sub, at_i);
     }
-    if (len > 0u) q_sub -= log((double)(19u * len));
+    /* One substitution channel per (site, other residue): A - 1 of them at
+     * each of `len` sites, where A is the alphabet's residue count. Twenty
+     * amino acids give 19; five bases give 4. */
+    if (len > 0u) q_sub -= log((double)((A - 1u) * len));
 
     if (len > 1u) {
         for (uint32_t i = 0; i < len; ++i) {
@@ -160,7 +163,8 @@ static double prism_transport(const BeamModel *m, uint8_t *buf, uint32_t len,
             if (out_ins) out_ins[i] = v;
             q_ins = lse2(q_ins, v);
         }
-        q_ins -= log((double)(20u * len));
+        /* An insertion can place any of the A residues before each site. */
+        q_ins -= log((double)(A * len));
     } else if (out_ins) {
         for (uint32_t i = 0; i < len; ++i) out_ins[i] = -INFINITY;
     }

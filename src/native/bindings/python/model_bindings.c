@@ -12,6 +12,7 @@
 
 #include "beam/common.h"
 #include "beam/model.h"
+#include "beam/alphabet.h"
 #include "beam/publicness.h"
 
 /* Capsule tag. Carried over verbatim so a model pickled or passed between the
@@ -142,7 +143,8 @@ PyObject *py_config(PyObject *self, PyObject *arg) {
     if (!m) return NULL;
     const BeamModelConfig *c = beam_model_config(m);
     return Py_BuildValue(
-        "{s:i,s:i,s:i,s:(ddd),s:(ddd),s:d,s:d,s:(dd),s:O,s:O}",
+        "{s:s,s:i,s:i,s:i,s:(ddd),s:(ddd),s:d,s:d,s:(dd),s:O,s:O}",
+        "alphabet", beam_alphabet_info(c->alphabet)->name,
         "order", (int)c->order,
         "depth_cap", (int)c->depth_cap,
         "max_length", (int)c->max_length,
@@ -154,6 +156,50 @@ PyObject *py_config(PyObject *self, PyObject *arg) {
         "strict", c->strict ? Py_True : Py_False,
         "sparse", c->sparse ? Py_True : Py_False);
 }
+/*
+ * The alphabet descriptor, verbatim.
+ *
+ * Python needs the per-alphabet defaults to resolve `order=None` and friends,
+ * and config.c records a real bug from the last time the two layers each kept
+ * their own copy of a default: they disagreed, silently, and both produced a
+ * model. Serving them from the descriptor means there is one place to change
+ * and nothing to keep in step.
+ */
+PyObject *py_alphabet_info(PyObject *self, PyObject *arg) {
+    (void)self;
+    const char *name = PyUnicode_AsUTF8(arg);
+    if (!name) return NULL;
+    const BeamAlphabetInfo *a = beam_alphabet_by_name(name);
+    if (!a) {
+        PyErr_Format(PyExc_ValueError, "unknown alphabet %R", arg);
+        return NULL;
+    }
+    return Py_BuildValue(
+        "{s:s,s:i,s:i,s:i,s:i,s:i,s:i,s:i,s:s#}",
+        "name", a->name,
+        "id", (int)a->id,
+        "residues", (int)a->residues,
+        "radix", (int)a->radix,
+        "default_order", (int)a->default_order,
+        "max_order", (int)a->max_order,
+        "default_max_length", (int)a->default_max_length,
+        "default_depth_cap", (int)a->default_depth_cap,
+        "symbols", a->idx_to_char, (Py_ssize_t)a->residues);
+}
+
+PyObject *py_alphabets(PyObject *self, PyObject *arg) {
+    (void)self; (void)arg;
+    PyObject *t = PyTuple_New(BEAM_ALPHABET_COUNT);
+    if (!t) return NULL;
+    for (unsigned i = 0; i < BEAM_ALPHABET_COUNT; ++i) {
+        PyObject *n = PyUnicode_FromString(
+            beam_alphabet_info((BeamAlphabet)i)->name);
+        if (!n) { Py_DECREF(t); return NULL; }
+        PyTuple_SET_ITEM(t, (Py_ssize_t)i, n);
+    }
+    return t;
+}
+
 PyObject *py_compact(PyObject *self, PyObject *arg) {
     (void)self;
     BeamModel *m = edge_from_capsule(arg);

@@ -163,7 +163,7 @@ def test_log_base_is_range_checked(small):
 def test_explain_reports_the_reason_it_refuses(small):
     """Three different refusals share one C error code, so the wrapper has to
     tell them apart or the caller gets "invalid argument" for all three."""
-    with pytest.raises(ValueError, match="outside the twenty amino acids"):
+    with pytest.raises(ValueError, match="alphabet does not accept"):
         small.explain("CASSXQYF")
     with pytest.raises(ValueError, match="empty"):
         small.explain("")

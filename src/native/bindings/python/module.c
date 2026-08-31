@@ -48,6 +48,8 @@ static PyMethodDef module_methods[] = {
     {"n_skipped",          py_n_skipped,                     METH_O, NULL},
     {"total_weight",       py_total_weight,                  METH_O, NULL},
     {"n_states",           py_n_states,                      METH_O, NULL},
+    {"alphabet_info",      py_alphabet_info,                 METH_O, NULL},
+    {"alphabets",          py_alphabets,                 METH_NOARGS, NULL},
     {"n_cells",            py_n_cells,                       METH_O, NULL},
     {"n_nonzero_cells",    py_n_nonzero_cells,               METH_O, NULL},
     {"memory_bytes",       py_memory_bytes,                  METH_O, NULL},

@@ -12,6 +12,7 @@
 
 #include "beam/common.h"
 #include "beam/model.h"
+#include "beam/alphabet.h"
 #include "beam/publicness.h"
 
 /* Capsule tag. Carried over verbatim so a model pickled or passed between the
@@ -126,19 +127,27 @@ int edge_parse_config(PyObject *args, BeamModelConfig *cfg,
                              PyObject **seqs, PyObject **abund) {
     int order, depth_cap, max_length, strict, sparse;
     double cw, cm, cl, k0, k1, k2, kw, kl, wf, wb;
-    const char *fmt = seqs ? "OOiii(ddd)(ddd)dd(dd)pp" :
-                             "iii(ddd)(ddd)dd(dd)pp";
+    /* The alphabet is appended rather than placed first, where it belongs,
+     * so every existing position in the tuple keeps its meaning. */
+    const char *alphabet = NULL;
+    const char *fmt = seqs ? "OOiii(ddd)(ddd)dd(dd)pps" :
+                             "iii(ddd)(ddd)dd(dd)pps";
     int ok;
     if (seqs)
         ok = PyArg_ParseTuple(args, fmt, seqs, abund, &order, &depth_cap,
                               &max_length, &cw, &cm, &cl, &k0, &k1, &k2,
-                              &kw, &kl, &wf, &wb, &strict, &sparse);
+                              &kw, &kl, &wf, &wb, &strict, &sparse, &alphabet);
     else
         ok = PyArg_ParseTuple(args, fmt, &order, &depth_cap, &max_length,
                               &cw, &cm, &cl, &k0, &k1, &k2, &kw, &kl, &wf, &wb,
-                              &strict, &sparse);
+                              &strict, &sparse, &alphabet);
     if (!ok) return 0;
-    beam_model_config_default(cfg);
+    const BeamAlphabetInfo *a = beam_alphabet_by_name(alphabet);
+    if (!a) {
+        PyErr_Format(PyExc_ValueError, "unknown alphabet '%s'", alphabet);
+        return 0;
+    }
+    beam_model_config_default_for(a->id, cfg);
     cfg->order = (uint8_t)order;
     cfg->depth_cap = (uint8_t)depth_cap;
     cfg->max_length = (uint8_t)max_length;

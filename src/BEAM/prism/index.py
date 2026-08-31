@@ -65,10 +65,15 @@ class Prism:
     """
 
     __slots__ = ("sequence", "log_b", "log_q", "log_p0",
-                 "substitution", "insertion", "deletion")
+                 "substitution", "insertion", "deletion", "n_residues")
 
     def __init__(self, *, sequence, log_b, log_q, log_p0,
-                 substitution, insertion, deletion):
+                 substitution, insertion, deletion, n_residues):
+        #: Residues the scoring model emits. The channel denominators below
+        #: are counts of possible edits, so they are alphabet-sized: there are
+        #: `n_residues - 1` substitutions at a site and `n_residues`
+        #: insertions before it.
+        self.n_residues = n_residues
         self.sequence = sequence
         self.log_b = log_b
         self.log_q = log_q
@@ -95,14 +100,16 @@ class Prism:
             return {"substitution": np.full(n, np.nan),
                     "insertion": np.full(n, np.nan),
                     "deletion": np.full(n + 1, np.nan)}
-        # THE PER-SITE ARRAYS CARRY NO CHANNEL DENOMINATOR. C applies 19L, 20L
-        # and L+1 to the aggregated channel totals only, so a posterior formed
+        # THE PER-SITE ARRAYS CARRY NO CHANNEL DENOMINATOR. C applies
+        # (R-1)L, RL and L+1 to the aggregated channel totals only, so a posterior formed
         # from the raw arrays does not sum to 1 -- it came out at 215 the first
         # time this was checked. Each site's contribution is its own log
         # evidence, less its channel's operation count, less the 1/3 type
         # prior; dividing by Q then normalises exactly.
-        denom = {"substitution": math.log(19.0 * n) if n else math.inf,
-                 "insertion": math.log(20.0 * n) if n else math.inf,
+        subs = float(self.n_residues - 1)     # every residue but this one
+        ins = float(self.n_residues)           # every residue, before this one
+        denom = {"substitution": math.log(subs * n) if n else math.inf,
+                 "insertion": math.log(ins * n) if n else math.inf,
                  "deletion": math.log(n + 1.0)}
         base = self.log_q + math.log(3.0)
         return {k: np.exp(np.asarray(v, dtype=np.float64) - denom[k] - base)
@@ -214,6 +221,7 @@ class PrismScorer:
         d = _c.prism_explain(self._g, sequence, int(omega))
         return Prism(
             sequence=sequence,
+            n_residues=self._model.n_residues,
             log_b=float(d["log_b"]), log_q=float(d["log_q"]),
             log_p0=float(d["log_p0"]),
             substitution=np.asarray(d["sub"], dtype=np.float64),

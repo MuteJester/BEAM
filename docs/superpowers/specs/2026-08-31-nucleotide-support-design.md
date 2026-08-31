@@ -167,7 +167,7 @@ either side differs by exactly eight bytes, the format word 2 -> 3, and the
 trailing CRC -- with the payload byte-identical. `numeric` and `thread
 independence` stayed green across it. See `verification/baseline/RERECORDED.md`.
 
-### Python surface
+### Python surface (done)
 
 `alphabet="aa"` is the default everywhere; `"nt"` is opt-in.
 
@@ -178,25 +178,49 @@ BeamModel(seqs, alphabet="nt", order=9)          # allowed, expensive
 BeamModel.builder(alphabet="nt")
 BeamModel.from_parquet(p, alphabet="nt")         # column defaults to "cdr3"
 m.alphabet                                       # -> "aa" | "nt"
+m.n_residues                                     # -> 20 | 5
 ```
 
-- `order`, `max_length` and `depth_cap` resolve their defaults from the
-  alphabet when not given, the same way `kappa` already resolves from
-  `strict`. The C layer and the Python layer must resolve them identically;
-  `config.c` records a past bug where those two disagreed silently, and a
-  second axis has exactly the same failure mode.
-- The config wire tuple gains `alphabet` as a trailing int, so existing
-  positional parsing is undisturbed.
-- `_check_scoreable` and `_build_failure_reason` become alphabet-aware, and
-  their messages name the actual alphabet instead of "the twenty amino acids".
-- `from_*` column defaults: `"cdr3_aa"` for amino acids as today, `"cdr3"`
-  (the AIRR nucleotide field) for nucleotides.
-- PRISM's `19 * L` and `20 * L` literals become `(R - 1) * L` and `R * L` in
-  both `src/native/model/prism.c` and `src/BEAM/prism/index.py`.
+`order`, `depth_cap` and `max_length` became `None`-defaulted and are resolved
+from the alphabet, so `BeamModel(seqs)` still produces exactly order 4,
+depth_cap 15, max_length 27.
+
+**Those defaults are read from the C descriptor, not restated.** A new binding
+`_cbeam.alphabet_info(name)` serves the descriptor verbatim, and
+`BEAM.model.alphabets` is a thin reader over it. This is the one design point
+worth insisting on: `config.c` records a real bug from the last time each
+layer kept its own copy of a default -- they disagreed, silently, and both
+produced a model. A second axis has the same failure mode, so there is nothing
+to keep in step. `test_python_and_c_resolve_the_same_defaults` checks it
+directly for both alphabets.
+
+Also here:
+
+- `config` now reports `alphabet`, so `_config_args_from_dict` round-trips it
+  and `merged`, `without`, `posterior` and the copy path all preserve it.
+- `_check_scoreable` and `_build_failure_reason` name the model's own
+  alphabet and list its residues.
+- The `from_*` sequence-column default follows the alphabet: `cdr3_aa` for
+  amino acids, `cdr3` for nucleotides, which are the AIRR fields for a
+  junction's translation and the junction itself. Reading the wrong one skips
+  every row -- not subtle, but silent until the corpus comes back empty.
+- PRISM's channel denominators became `(R-1)L` and `RL` in **both**
+  `prism.c` and `prism/index.py`. They were 19 and 20 in each, and fixing only
+  Python made the nucleotide posterior sum to 4.75 instead of 1, which is how
+  the second copy was found.
 
 There is deliberately **no** alphabet auto-detection. `ACGT` is a valid
 amino-acid sequence, so any heuristic silently mislabels short or
 low-complexity input.
+
+**End to end, with nothing but the alphabet given:**
+
+```
+BeamModel(3000 nt CDR3s, alphabet="nt")
+  -> order 6, max_length 81, 46,656 states, 64 MB
+     log_pseq == log_pseq(lower case), support 3,657, entropy 7.57 nats
+     generation reproduces the V and J motifs
+```
 
 ## File layout
 

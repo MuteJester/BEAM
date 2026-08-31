@@ -60,6 +60,8 @@ PyObject *py_n_nonzero_cells(PyObject *self, PyObject *arg);
 PyObject *py_n_observed(PyObject *self, PyObject *arg);
 PyObject *py_n_skipped(PyObject *self, PyObject *arg);
 PyObject *py_n_states(PyObject *self, PyObject *arg);
+PyObject *py_alphabet_info(PyObject *self, PyObject *arg);
+PyObject *py_alphabets(PyObject *self, PyObject *arg);
 PyObject *py_new(PyObject *self, PyObject *args);
 PyObject *py_observe(PyObject *self, PyObject *args);
 PyObject *py_path_count(PyObject *self, PyObject *args);
