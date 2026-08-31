@@ -454,29 +454,6 @@ static void test_a_model_reports_the_alphabet_it_was_built_with(void) {
     PASS();
 }
 
-/*
- * The safety gate of this step. The kernels still resolve the radix through
- * the preprocessor, so a nucleotide model would allocate radix-6 tables and
- * then be indexed at radix 21 -- reading off the end of the allocation rather
- * than merely giving a wrong answer. Construction must refuse until the
- * kernels read the model, and this test is what stops the refusal being
- * removed before then.
- */
-static void test_construction_refuses_an_alphabet_the_kernels_cannot_read(void)
-{
-    BeamModelConfig c = valid_for(BEAM_ALPHABET_NT);
-    ASSERT_MSG(beam_config_valid(&c),
-               "the nucleotide config is valid; it is the build that refuses");
-
-    BeamModel *m = beam_model_new(&c);
-    ASSERT_MSG(m == NULL, "a nucleotide model must not build yet");
-
-    const char *msg = beam_error_message();
-    ASSERT_MSG(msg && strstr(msg, "nt") != NULL,
-               "the refusal must name the alphabet it refused");
-    PASS();
-}
-
 static void test_construction_refuses_an_unknown_alphabet(void) {
     BeamModelConfig c = valid_for(BEAM_ALPHABET_AA);
     c.alphabet = (BeamAlphabet)42;
@@ -543,6 +520,297 @@ static void test_a_model_longer_than_the_old_ceiling_builds_and_scores(void) {
     PASS();
 }
 
+/* ── Nucleotide models ───────────────────────────────────────── */
+
+/* Small on purpose. A nucleotide model at its own defaults is order 6 over 81
+ * positions with every depth resolved, which is a 151 MB wide table per
+ * direction -- correct, and not something a unit test should allocate. */
+static BeamModel *nt_model(uint32_t order, uint32_t max_length,
+                           uint32_t depth_cap) {
+    BeamModelConfig c;
+    beam_model_config_default_for(BEAM_ALPHABET_NT, &c);
+    c.order = (uint8_t)order;
+    c.max_length = (uint8_t)max_length;
+    c.depth_cap = (uint8_t)depth_cap;
+    return beam_model_new(&c);
+}
+
+static void test_a_nucleotide_model_builds_and_scores(void) {
+    BeamModel *m = nt_model(3, 12, 6);
+    ASSERT_MSG(m != NULL, "a nucleotide model must build now");
+    ASSERT_MSG(beam_model_alphabet(m) == BEAM_ALPHABET_NT, "reports nt");
+    ASSERT_MSG(beam_model_n_residues(m) == 5, "five residues");
+    ASSERT_MSG(beam_model_radix(m) == 6, "radix six");
+    ASSERT_MSG(beam_model_n_states(m) == 6u * 6u * 6u, "6^3 states at order 3");
+
+    const char *seqs[] = { "TGTGCCAGCAGT", "TGTGCCAGCAGC", "TGTGCCAGTTCA" };
+    const double ab[] = { 4.0, 2.0, 1.0 };
+    ASSERT_MSG(beam_model_observe(m, seqs, ab, 3) == BEAM_OK, "observe");
+    ASSERT_MSG(beam_model_n_observed(m) == 3, "all three accepted");
+    ASSERT_MSG(beam_model_n_skipped(m) == 0, "none skipped");
+    ASSERT_MSG(beam_model_finalize(m) == BEAM_OK, "finalize");
+
+    const double lp = beam_model_log_pseq(m, "TGTGCCAGCAGT");
+    ASSERT_MSG(isfinite(lp) && lp < 0.0,
+               "an observed nucleotide sequence must score finitely");
+    beam_model_destroy(m);
+    PASS();
+}
+
+/*
+ * The strongest check available: sum P(s | L) over EVERY nucleotide sequence
+ * of length 3, all 125 of them. It exercises the context packing, the
+ * backward lag, the sink weights and the partition function at radix 6 in one
+ * assertion, and the amino-acid suite has had the same test at radix 21 all
+ * along. An error in any of the dimensions the migration made runtime shows
+ * up here and nowhere cheaper.
+ */
+static void test_the_partition_normalises_over_nucleotides(void) {
+    BeamModel *m = nt_model(3, 5, 3);
+    ASSERT_MSG(m != NULL, "new");
+    const char *tiny[] = { "TGT", "TGC", "GCC", "TCA", "TGT", "AGT" };
+    const double tw[] = { 5, 3, 2, 4, 1, 2 };
+    ASSERT_MSG(beam_model_observe(m, tiny, tw, 6) == BEAM_OK, "observe");
+    ASSERT_MSG(beam_model_finalize(m) == BEAM_OK, "finalize");
+
+    const double logpi = beam_model_log_length_prior(m, 3);
+    double total = 0.0;
+    char buf[4] = { 0, 0, 0, 0 };
+    for (int a = 0; a < 5; a++)
+      for (int b = 0; b < 5; b++)
+        for (int c = 0; c < 5; c++) {
+            buf[0] = NT_UPPER[a]; buf[1] = NT_UPPER[b]; buf[2] = NT_UPPER[c];
+            const double lp = beam_model_log_pseq(m, buf);
+            if (isfinite(lp)) total += exp(lp - logpi);
+        }
+    ASSERT_MSG(fabs(total - 1.0) < 1e-9,
+               "the 125 length-3 nucleotide sequences must sum to 1");
+    beam_model_destroy(m);
+    PASS();
+}
+
+/*
+ * The dynamic programs, checked against enumeration rather than against
+ * themselves. In the closed world a sequence is spellable exactly when it
+ * scores finitely, so counting the length-3 strings that do must equal what
+ * the path-count sweep reports -- and that sweep shares the trellis, the
+ * liveness frontier and the edge weights with every other analytic. Scoring
+ * alone would not catch a frontier that mis-decodes a state at radix 6.
+ */
+static void test_path_count_matches_enumeration_for_nucleotides(void) {
+    BeamModel *m = nt_model(3, 5, 3);
+    ASSERT_MSG(m != NULL, "new");
+    const char *tiny[] = { "TGT", "TGC", "GCC", "TCA", "TGT", "AGT" };
+    const double tw[] = { 5, 3, 2, 4, 1, 2 };
+    ASSERT_MSG(beam_model_observe(m, tiny, tw, 6) == BEAM_OK, "observe");
+    ASSERT_MSG(beam_model_finalize(m) == BEAM_OK, "finalize");
+
+    uint32_t spellable = 0;
+    char buf[4] = { 0, 0, 0, 0 };
+    for (int a = 0; a < 5; a++)
+      for (int b = 0; b < 5; b++)
+        for (int c = 0; c < 5; c++) {
+            buf[0] = NT_UPPER[a]; buf[1] = NT_UPPER[b]; buf[2] = NT_UPPER[c];
+            if (isfinite(beam_model_log_pseq(m, buf))) spellable++;
+        }
+    const double counted = beam_model_path_count(m, 3);
+    ASSERT_MSG(counted == (double)spellable,
+               "the path count must equal the sequences that actually score");
+    ASSERT_MSG(spellable > 0, "and the corpus must spell something");
+
+    /* The remaining analytics have to run and answer sanely on this trellis;
+     * an entropy outside [0, log(support)] would mean the sweep and the
+     * support disagree about which edges exist. */
+    double h = 0.0;
+    ASSERT_MSG(beam_model_entropy(m, &h) == BEAM_OK, "entropy");
+    ASSERT_MSG(isfinite(h) && h >= 0.0, "entropy must be finite and positive");
+    double d2 = 0.0;
+    ASSERT_MSG(beam_model_hill_number(m, 2.0, &d2) == BEAM_OK, "hill");
+    ASSERT_MSG(isfinite(d2) && d2 >= 1.0, "a Hill number is at least one");
+    beam_model_destroy(m);
+    PASS();
+}
+
+static void test_lower_case_scores_as_upper_case(void) {
+    BeamModel *m = nt_model(3, 12, 6);
+    ASSERT_MSG(m != NULL, "new");
+    const char *seqs[] = { "TGTGCCAGCAGT", "TGTGCCAGCAGC" };
+    const double ab[] = { 3.0, 1.0 };
+    ASSERT_MSG(beam_model_observe(m, seqs, ab, 2) == BEAM_OK, "observe");
+    ASSERT_MSG(beam_model_finalize(m) == BEAM_OK, "finalize");
+
+    const double upper = beam_model_log_pseq(m, "TGTGCCAGCAGT");
+    const double lower = beam_model_log_pseq(m, "tgtgccagcagt");
+    const double mixed = beam_model_log_pseq(m, "TgTgCcAgCaGt");
+    ASSERT_MSG(isfinite(upper), "the upper-case form must score");
+    /* Bit-identical, not merely close: case folding happens in the decode
+     * table, so the two encode to the same indices and take the same path. */
+    ASSERT_MSG(lower == upper, "lower case must be the same sequence");
+    ASSERT_MSG(mixed == upper, "mixed case too");
+    beam_model_destroy(m);
+    PASS();
+}
+
+/* Training on lower case and scoring upper must also agree, which is the
+ * direction that catches a fold applied at scoring but not at observation. */
+static void test_lower_case_trains_as_upper_case(void) {
+    const char *upper_seqs[] = { "TGTGCCAGCAGT", "TGTGCCAGCAGC" };
+    const char *lower_seqs[] = { "tgtgccagcagt", "tgtgccagcagc" };
+    const double ab[] = { 3.0, 1.0 };
+
+    BeamModel *u = nt_model(3, 12, 6);
+    BeamModel *l = nt_model(3, 12, 6);
+    ASSERT_MSG(u && l, "new");
+    ASSERT_MSG(beam_model_observe(u, upper_seqs, ab, 2) == BEAM_OK, "observe u");
+    ASSERT_MSG(beam_model_observe(l, lower_seqs, ab, 2) == BEAM_OK, "observe l");
+    ASSERT_MSG(beam_model_finalize(u) == BEAM_OK, "finalize u");
+    ASSERT_MSG(beam_model_finalize(l) == BEAM_OK, "finalize l");
+
+    ASSERT_MSG(beam_model_log_pseq(u, "TGTGCCAGCAGT")
+               == beam_model_log_pseq(l, "TGTGCCAGCAGT"),
+               "a corpus in lower case must build the same model");
+    beam_model_destroy(u);
+    beam_model_destroy(l);
+    PASS();
+}
+
+/* N is a residue, so a read carrying one is data rather than an error. The
+ * amino-acid alphabet has no equivalent: 'X' is rejected. */
+static void test_N_is_a_residue_and_other_codes_are_not(void) {
+    BeamModel *m = nt_model(3, 12, 6);
+    ASSERT_MSG(m != NULL, "new");
+    const char *seqs[] = { "TGTGCCAGCAGN", "TGTGCCAGCAGT" };
+    const double ab[] = { 2.0, 2.0 };
+    ASSERT_MSG(beam_model_observe(m, seqs, ab, 2) == BEAM_OK, "observe");
+    ASSERT_MSG(beam_model_n_observed(m) == 2, "the N-bearing read is data");
+    ASSERT_MSG(beam_model_n_skipped(m) == 0, "and is not skipped");
+    ASSERT_MSG(beam_model_finalize(m) == BEAM_OK, "finalize");
+    ASSERT_MSG(isfinite(beam_model_log_pseq(m, "TGTGCCAGCAGN")),
+               "and it scores");
+
+    /* R is 'A or G', which the model cannot represent, so it is refused. */
+    const char *bad[] = { "TGTGCCAGCAGR" };
+    const double one[] = { 1.0 };
+    ASSERT_MSG(beam_model_observe(m, bad, one, 1) == BEAM_OK, "observe returns");
+    ASSERT_MSG(beam_model_n_skipped(m) == 1, "an ambiguity code is skipped");
+    beam_model_destroy(m);
+    PASS();
+}
+
+static void test_generation_emits_only_this_alphabet(void) {
+    BeamModel *m = nt_model(3, 12, 6);
+    ASSERT_MSG(m != NULL, "new");
+    const char *seqs[] = { "TGTGCCAGCAGT", "TGTGCCAGCAGC", "TGTGCCAGTTCA" };
+    const double ab[] = { 4.0, 2.0, 1.0 };
+    ASSERT_MSG(beam_model_observe(m, seqs, ab, 3) == BEAM_OK, "observe");
+    ASSERT_MSG(beam_model_finalize(m) == BEAM_OK, "finalize");
+
+    const uint32_t n = 64, stride = 13;   /* max_length + 1 */
+    char *out = (char *)calloc(n, stride);
+    ASSERT_MSG(out != NULL, "alloc");
+    BeamRng rng;
+    beam_rng_seed(&rng, 7u);
+    ASSERT_MSG(beam_model_sample(m, n, 0u, &rng, out, NULL) == BEAM_OK,
+               "sample");
+    for (uint32_t k = 0; k < n; ++k)
+        for (const char *p = out + (size_t)k * stride; *p; ++p)
+            ASSERT_MSG(strchr(NT_UPPER, *p) != NULL,
+                       "generation must emit only this alphabet's residues");
+    free(out);
+    beam_model_destroy(m);
+    PASS();
+}
+
+/*
+ * The carried requirement from the bite that added the alphabet to the shape
+ * check: two models can agree on order, length and depth and still have rows
+ * of different widths, and before that check existed the loops would have
+ * walked the operand off the end of its allocation. It could not be tested
+ * until nucleotide models could be built.
+ */
+static void test_model_algebra_refuses_across_alphabets(void) {
+    BeamModelConfig ac;
+    beam_model_config_default(&ac);
+    ac.order = 3; ac.max_length = 12; ac.depth_cap = 6;
+    BeamModel *aa = beam_model_new(&ac);
+    BeamModel *nt = nt_model(3, 12, 6);
+    ASSERT_MSG(aa && nt, "both models must build");
+
+    /* Identical order, max_length and depth_cap -- everything the shape check
+     * compared before the alphabet joined it. */
+    ASSERT_MSG(beam_model_config(aa)->order == beam_model_config(nt)->order
+               && beam_model_config(aa)->max_length
+                  == beam_model_config(nt)->max_length,
+               "the two agree on every other shape field");
+
+    ASSERT_MSG(beam_model_add(aa, nt) != BEAM_OK, "add must refuse");
+    ASSERT_MSG(beam_model_add(nt, aa) != BEAM_OK, "and in both directions");
+    ASSERT_MSG(beam_model_subtract(aa, nt) != BEAM_OK, "subtract must refuse");
+    ASSERT_MSG(beam_model_posterior(aa, nt, 1.0) != BEAM_OK,
+               "posterior must refuse");
+    beam_model_destroy(aa);
+    beam_model_destroy(nt);
+    PASS();
+}
+
+/* Until the file format carries an alphabet, a nucleotide model must refuse
+ * to be written rather than produce a file that reads back as amino acids. */
+static void test_saving_a_nucleotide_model_is_refused_for_now(void) {
+    BeamModel *m = nt_model(3, 12, 6);
+    ASSERT_MSG(m != NULL, "new");
+    const char *seqs[] = { "TGTGCCAGCAGT" };
+    const double ab[] = { 1.0 };
+    ASSERT_MSG(beam_model_observe(m, seqs, ab, 1) == BEAM_OK, "observe");
+    ASSERT_MSG(beam_model_finalize(m) == BEAM_OK, "finalize");
+
+    ASSERT_MSG(beam_model_save(m, "/tmp/beam_nt_should_not_exist.beam")
+               != BEAM_OK,
+               "a nucleotide model must not be written into a format that "
+               "cannot record its alphabet");
+    remove("/tmp/beam_nt_should_not_exist.beam");
+    beam_model_destroy(m);
+    PASS();
+}
+
+/* The two alphabets must not share anything mutable. Building one after the
+ * other, and scoring both, is the cheapest check that no descriptor, table or
+ * cached dimension leaked between them. */
+static void test_the_two_alphabets_do_not_interfere(void) {
+    BeamModelConfig ac;
+    beam_model_config_default(&ac);
+    ac.order = 3; ac.max_length = 12; ac.depth_cap = 6;
+
+    BeamModel *aa1 = beam_model_new(&ac);
+    const char *aa_seqs[] = { "CASSLGQAYEQY", "CASSLGQAYEQF" };
+    const double ab[] = { 3.0, 1.0 };
+    ASSERT_MSG(aa1 && beam_model_observe(aa1, aa_seqs, ab, 2) == BEAM_OK
+               && beam_model_finalize(aa1) == BEAM_OK, "aa before");
+    const double before = beam_model_log_pseq(aa1, "CASSLGQAYEQY");
+
+    BeamModel *nt = nt_model(3, 12, 6);
+    const char *nt_seqs[] = { "TGTGCCAGCAGT", "TGTGCCAGCAGC" };
+    ASSERT_MSG(nt && beam_model_observe(nt, nt_seqs, ab, 2) == BEAM_OK
+               && beam_model_finalize(nt) == BEAM_OK, "nt in between");
+
+    BeamModel *aa2 = beam_model_new(&ac);
+    ASSERT_MSG(aa2 && beam_model_observe(aa2, aa_seqs, ab, 2) == BEAM_OK
+               && beam_model_finalize(aa2) == BEAM_OK, "aa after");
+    const double after = beam_model_log_pseq(aa2, "CASSLGQAYEQY");
+
+    ASSERT_MSG(before == after,
+               "an amino-acid model must score identically either side of a "
+               "nucleotide one");
+    /* And the amino-acid model must still refuse a nucleotide-only string's
+     * lower case, which its own alphabet does not accept. */
+    ASSERT_MSG(beam_model_log_pseq(aa1, "cassnpqayeqy") == -INFINITY,
+               "the amino-acid alphabet stays upper case only");
+
+    beam_model_destroy(aa1);
+    beam_model_destroy(aa2);
+    beam_model_destroy(nt);
+    PASS();
+}
+
 /* ── Runner ──────────────────────────────────────────────────── */
 
 int main(void) {
@@ -583,9 +851,20 @@ int main(void) {
 
     printf("\n[construction]\n");
     RUN_TEST(test_a_model_reports_the_alphabet_it_was_built_with);
-    RUN_TEST(test_construction_refuses_an_alphabet_the_kernels_cannot_read);
     RUN_TEST(test_construction_refuses_an_unknown_alphabet);
     RUN_TEST(test_a_model_longer_than_the_old_ceiling_builds_and_scores);
+
+    printf("\n[nucleotide models]\n");
+    RUN_TEST(test_a_nucleotide_model_builds_and_scores);
+    RUN_TEST(test_the_partition_normalises_over_nucleotides);
+    RUN_TEST(test_path_count_matches_enumeration_for_nucleotides);
+    RUN_TEST(test_lower_case_scores_as_upper_case);
+    RUN_TEST(test_lower_case_trains_as_upper_case);
+    RUN_TEST(test_N_is_a_residue_and_other_codes_are_not);
+    RUN_TEST(test_generation_emits_only_this_alphabet);
+    RUN_TEST(test_model_algebra_refuses_across_alphabets);
+    RUN_TEST(test_saving_a_nucleotide_model_is_refused_for_now);
+    RUN_TEST(test_the_two_alphabets_do_not_interfere);
 
     printf("\n==============================================================\n");
     printf("Results: %d passed, %d failed\n", pass_count, fail_count);

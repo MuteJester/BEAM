@@ -217,6 +217,20 @@ BeamError beam_model_save(const BeamModel *m, const char *path) {
     if (m->compacted)
         return BEAM_ECOMPACTED("there are no counts left to write; "
                                    "save before compacting");
+    /*
+     * Format 2's header has no field for the alphabet, and both spare words
+     * were spent long ago. Alphabet size fully determines the payload layout,
+     * so a nucleotide model written into it would come back either as CRC
+     * corruption or, worse, as an amino-acid model of the same shape. Refuse
+     * with a reason rather than write a file that cannot say what it is; the
+     * format bump that adds the field is what lifts this.
+     */
+    if (m->cfg.alphabet != BEAM_ALPHABET_AA)
+        return BEAM_FAIL(BEAM_ERR_VARIANT_MISMATCH,
+                        "%s: a %s model cannot be saved yet -- the file "
+                        "format has no field to record its alphabet, and a "
+                        "reader would take it for amino acids",
+                        __func__, m->alpha->name);
 
     FILE *f = fopen(path, "wb");
     if (!f) return BEAM_FAIL(BEAM_ERR_IO_OPEN,

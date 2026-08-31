@@ -225,30 +225,58 @@ the alphabet), and re-recording the two baselines that legitimately move.
 
 ## Carried requirements
 
-Found while implementing, and required of the bite that makes the kernels read
-the alphabet. Recorded here because each is a landmine that a passing test
-suite would not find.
+Found while implementing, and recorded because each is a landmine a passing
+test suite would not find. All five are now discharged.
 
-1. **`BEAM_MAX_ORDER` must rise to 9.** It sizes `slot[BEAM_MAX_ORDER + 1]` in
-   `indexing.h` and `edge_weights.c`, and `level_counts[BEAM_MAX_ORDER + 1]`
-   in `smoothing.c`. It is left at 4 while nucleotide models are refused,
-   because raising it early buys nothing and costs the byte-identical-object
-   evidence.
-2. **`indexing.h:78` clamps `order` to `BEAM_MAX_ORDER`.** A nucleotide model
-   at order 9 would have its backward context silently truncated to order 4 --
-   no crash, no error, just a quietly wrong model. The clamp must read the
-   alphabet's ceiling or go.
-3. **The cross-alphabet shape check is untested.** `add`, `subtract` and
-   `posterior` now include the alphabet, because two models can agree on
-   order, length and depth and still have different row widths. Testing it
-   needs two models of different alphabets, so it must be tested as soon as
-   nucleotide models build.
-4. **`beam_model_new` refuses every alphabet but amino acid.** Removing that
-   refusal is the last step of the kernel bite, and is the moment nucleotide
-   support actually exists. Until then it is what keeps a radix-6 table from
-   being indexed at radix 21.
-5. **Error messages still say "the 20 amino acids"** in `encoding.c`,
-   `scoring.c` and `prism.c`. They should name the model's own alphabet.
+1. ~~**`BEAM_MAX_ORDER` must rise to 9.**~~ Done: it sizes
+   `slot[BEAM_MAX_ORDER + 1]` and `level_counts[BEAM_MAX_ORDER + 1]`, and is
+   now the largest of the per-alphabet ceilings rather than the validation
+   limit.
+2. ~~**`indexing.h` clamps `order` to `BEAM_MAX_ORDER`.**~~ Correct now that
+   the bound is 9 and no alphabet's ceiling exceeds it, so the clamp cannot
+   fire for a legal config. Had it stayed at 4, a nucleotide model at order 9
+   would have had its backward context silently truncated -- no crash, no
+   error, a quietly wrong model.
+3. ~~**The cross-alphabet shape check is untested.**~~ Done:
+   `test_model_algebra_refuses_across_alphabets` builds two models agreeing on
+   order, length and depth and differing only in alphabet, and checks that
+   `add`, `subtract` and `posterior` all refuse.
+4. ~~**`beam_model_new` refuses every alphabet but amino acid.**~~ Lifted.
+   The test that guarded it had a stated lifetime and was removed with it.
+5. ~~**Error messages still say "the 20 amino acids".**~~ They now name the
+   model's own alphabet and list its residues.
+
+### New, from enabling nucleotides
+
+6. **A nucleotide model cannot be saved.** Format 2's header has no field for
+   the alphabet and no spare word, and alphabet size fully determines the
+   payload layout, so such a file would read back either as CRC corruption or
+   as an amino-acid model of the same shape. `beam_model_save` refuses with a
+   reason, and `test_saving_a_nucleotide_model_is_refused_for_now` pins that.
+   The format bump is what lifts it.
+
+## Nucleotide models, measured
+
+The default configuration -- order 6, `max_length` 81, every depth resolved --
+builds and scores:
+
+| | states | cells | build | peak RSS |
+|---|---|---|---|---|
+| sparse (what Python selects) | 46,656 | 40.4 M | 0.03 s | 67 MB |
+| dense (the C default) | 46,656 | 40.4 M | 0.14 s | 321 MB |
+
+Dense at the nucleotide defaults is 0.65 GB of tables against 2.36 GB for the
+amino-acid defaults, so the alphabet that needs three times the length still
+costs a third as much.
+
+The two strongest checks are enumerative rather than self-referential. The
+partition function is summed over all 125 length-3 nucleotide sequences and
+must reach 1, which exercises the context packing, the backward lag, the sink
+weights and the normalisation at radix 6 in one assertion. And `path_count` is
+compared against the count of sequences that actually score finitely, which
+crosses the trellis, the liveness frontier and the edge weights against
+enumeration. Corrupting the context packing to base `radix - 1` fails both,
+along with 45 of the amino-acid model tests.
 
 ## The measured cost of a runtime alphabet
 

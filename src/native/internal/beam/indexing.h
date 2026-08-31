@@ -73,11 +73,12 @@ static inline uint32_t beam_ctx_backward_from_state(uint32_t state,
                                                         uint32_t radix) {
     /* Slots of the state, oldest first: slot[0] = s[i-K] is the scored one.
      *
-     * `order` is validated to 2..BEAM_MAX_ORDER at construction, so
-     * slot[order] below is the last valid element and never past it. gcc
-     * cannot see that from this signature and warns about a 1-byte write into
-     * a region of size 0; clamping here is free at runtime and lets the
-     * compiler prove the bound instead of being told to ignore it. */
+     * `order` is validated at construction against its alphabet's own
+     * ceiling, and BEAM_MAX_ORDER is the largest of those, so slot[order]
+     * below is the last valid element and never past it. gcc cannot see that
+     * from this signature and warns about a 1-byte write into a region of
+     * size 0; clamping here is free at runtime and lets the compiler prove
+     * the bound instead of being told to ignore it. */
     uint8_t slot[BEAM_MAX_ORDER + 1];
     if (order > BEAM_MAX_ORDER) order = BEAM_MAX_ORDER;
     uint32_t q = state;

@@ -206,8 +206,10 @@ BeamError beam_prism_factor(const BeamModel *m, const char *seq,
     if (!beam_encode(m, seq, buf, &len))
         return BEAM_FAIL(BEAM_ERR_INVALID_SEQUENCE,
                         "%s: the sequence is empty, longer than max_length "
-                        "(%u), or contains a character outside the 20 amino "
-                        "acids", __func__, (unsigned)m->max_len);
+                        "(%u), or contains a character outside the %u %s "
+                        "residues (%s)", __func__, (unsigned)m->max_len,
+                        (unsigned)m->n_residues, m->alpha->name,
+                        m->alpha->idx_to_char);
 
     const double log_p0 = log_pseq_buf(m, buf, len);
     /* Site arrays describe SINGLE edits, so they are only filled at omega=1.

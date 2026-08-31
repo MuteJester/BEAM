@@ -73,25 +73,6 @@ BeamModel *beam_model_new(const BeamModelConfig *cfg) {
     }
 
     /*
-     * The alphabet is described everywhere and read nowhere yet.
-     *
-     * Every dynamic program still resolves the radix and the row stride
-     * through the preprocessor, so a nucleotide model would allocate tables
-     * sized at radix 6 and then be indexed as though they were radix 21 --
-     * not a wrong answer but a walk off the end of the allocation. Refusing
-     * here is what keeps that unreachable until the kernels read the model.
-     */
-    if (c.alphabet != BEAM_ALPHABET_AA) {
-        beam_set_error(BEAM_ERR_PARAM_OUT_OF_RANGE,
-                      "the %s alphabet is described but not yet buildable: "
-                      "the dynamic programs still read the alphabet from the "
-                      "preprocessor, so a %s model would be indexed as if it "
-                      "were amino acids",
-                      a->name, a->name);
-        return NULL;
-    }
-
-    /*
      * A guard rather than an expectation. Each alphabet's order ceiling is
      * chosen so this cannot fire, and test_alphabet.c pins that for every
      * descriptor. It is here so that raising a ceiling without rechecking
