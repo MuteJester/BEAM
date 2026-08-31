@@ -325,17 +325,53 @@ runtime load. Moving the dispatch *inside* the region did not help either,
 which suggests the outlining also blocks the `always_inline` that was supposed
 to carry the literal in.
 
-### What would work
+### What was done, and the four things that did not work
 
-Compile `edge_weights.c` per alphabet: the bodies move to an `.inc` included
-once with the radix fixed to the amino-acid dimensions and once to the
-nucleotide ones, with the exported functions dispatching to the right copy.
+`edge_weights.c` is now compiled once per alphabet. Its function bodies moved
+verbatim to `edge_weights_kernels.h`, which has no include guard and is
+included three times -- with the amino-acid dimensions, the nucleotide ones,
+and the model's own -- each inclusion defining a suffixed set of file-static
+functions. The five public entry points became dispatchers on the model's
+radix. Nothing about the code inside changed, including every OpenMP pragma.
 
-This is the "compile the core twice" option from the original design, scoped
-to the single file that turns out to need it, and it is guaranteed to work
-because it is exactly what the pinning experiment does. Fourteen of the
-fifteen migrated files stay as they are, so the runtime alphabet survives
-everywhere it costs nothing.
+| operation | before | after | ratio |
+|---|---|---|---|
+| `path_count` | 64.8 ms | 63.9 ms | 0.99x |
+| `spectrum` | 120.3 ms | 120.5 ms | 1.00x |
+| `entropy` | 83.3 ms | 85.1 ms | 1.02x |
+| `hill_number(2)` | 75.4 ms | 77.3 ms | 1.03x |
+
+Four attempts to recover the speed *without* duplicating the text were
+measured, and none of them moved the number:
+
+1. specialising the `t % A` / `t / A` state split across the analytics;
+2. dispatching the two leaf kernels at their call sites;
+3. dispatching the exported functions into `always_inline` bodies taking the
+   dimensions as parameters;
+4. extracting each parallel loop's body into a specialised slice called from
+   inside the region.
+
+Rebuilt without `-fopenmp`, attempt 3 recovers everything -- 29.3 ms against a
+pinned ceiling of 28.6. That is the tell: GCC lowers a parallel region into an
+outlined function early and passes its variables through a data struct, so a
+radix that is a literal at the call site arrives inside the loop as a runtime
+load. Only text that already contains the literal before that lowering keeps
+it, which is what including the file three times achieves and what no amount
+of dispatching does.
+
+Attempt 4 taught something separate and worth keeping: `beam_tail_weights`
+alone *did* recover under it, because its loop body is one self-contained call
+per state. That was enough to bring `path_count` back to 1.01x while entropy
+and the spectrum stayed 15% down -- which is how the remaining cost was
+localised to the two layer sweeps.
+
+The cost is object size: this file goes from 9.1 KB of text to 26.6 KB, and
+`libbeam.a` grows 11%. The pre-existing `-Wmaybe-uninitialized` on `slot` in
+`indexing.h` now appears 15 times rather than 5, being inlined into three
+copies; it is the same false positive, not a new one.
+
+The other fourteen migrated files keep the runtime alphabet, where it costs
+nothing measurable.
 
 ## Verification contract
 
