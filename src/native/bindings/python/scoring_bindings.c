@@ -68,8 +68,8 @@ PyObject *py_prism_explain(PyObject *self, PyObject *args) {
     BeamModel *m = edge_from_capsule(cap);
     if (!m) return NULL;
 
-    double sub[BEAM_MAX_LENGTH], ins[BEAM_MAX_LENGTH];
-    double del[BEAM_MAX_LENGTH + 1];
+    double sub[BEAM_MAX_LENGTH_CEILING], ins[BEAM_MAX_LENGTH_CEILING];
+    double del[BEAM_MAX_LENGTH_CEILING + 1];
     double lb = 0.0, lq = 0.0, lp = 0.0;
     uint32_t len = 0;
     BeamError err = beam_prism_factor(m, seq, (uint32_t)omega, &lb, &lq,
@@ -129,7 +129,7 @@ PyObject *py_explain(PyObject *self, PyObject *args) {
     BeamModel *m = edge_from_capsule(cap);
     if (!m) return NULL;
 
-    double fwd[BEAM_MAX_LENGTH], bwd[BEAM_MAX_LENGTH];
+    double fwd[BEAM_MAX_LENGTH_CEILING], bwd[BEAM_MAX_LENGTH_CEILING];
     uint32_t len = 0;
     BeamError err = beam_model_explain(m, seq, fwd, bwd, &len);
     if (err != BEAM_OK) return set_beam_error(err);

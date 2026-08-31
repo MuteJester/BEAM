@@ -56,7 +56,7 @@ double beam_raw_log_weight(const BeamModel *m, const uint8_t *s,
 
 double beam_model_log_pseq(const BeamModel *m, const char *seq) {
     if (!m || !m->finalized || !seq) return -INFINITY;
-    uint8_t buf[BEAM_MAX_LENGTH];
+    uint8_t buf[BEAM_MAX_LENGTH_CEILING];
     uint32_t len = 0;
     if (!beam_encode(m, seq, buf, &len)) return -INFINITY;
     if (!isfinite(m->log_pi[len]) || !isfinite(m->log_z[len])) return -INFINITY;
@@ -86,7 +86,7 @@ BeamError beam_model_explain(const BeamModel *m, const char *seq,
                                 uint32_t *out_len) {
     if (!m || !seq) return BEAM_ENULL(!m ? "model" : "sequence");
     if (!m->finalized) return BEAM_ENOTBUILT();
-    uint8_t buf[BEAM_MAX_LENGTH];
+    uint8_t buf[BEAM_MAX_LENGTH_CEILING];
     uint32_t len = 0;
     if (!beam_encode(m, seq, buf, &len))
         return BEAM_FAIL(BEAM_ERR_INVALID_SEQUENCE,

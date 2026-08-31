@@ -70,14 +70,17 @@ BeamError beam_model_posterior(BeamModel *m, const BeamModel *prior,
     if (!(kappa >= 0.0) || !isfinite(kappa))
         return BEAM_ERANGE("posterior: kappa must be finite and >= 0, "
                                "got %.17g", kappa);
-    if (m->order != prior->order || m->max_len != prior->max_len
+    if (m->cfg.alphabet != prior->cfg.alphabet
+        || m->order != prior->order || m->max_len != prior->max_len
         || m->n_depth_wide != prior->n_depth_wide)
         return BEAM_FAIL(BEAM_ERR_VARIANT_MISMATCH,
-                        "posterior: shape mismatch, target is order=%u "
+                        "posterior: shape mismatch, target is %s order=%u "
                         "max_length=%u depth_cap=%u and the prior is "
-                        "order=%u max_length=%u depth_cap=%u",
+                        "%s order=%u max_length=%u depth_cap=%u",
+                        m->alpha->name,
                         (unsigned)m->order, (unsigned)m->max_len,
                         (unsigned)m->n_depth_wide - 1u,
+                        prior->alpha->name,
                         (unsigned)prior->order, (unsigned)prior->max_len,
                         (unsigned)prior->n_depth_wide - 1u);
     if (kappa == 0.0) { m->finalized = false; return BEAM_OK; }

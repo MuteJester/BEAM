@@ -20,14 +20,20 @@ BeamError beam_model_subtract(BeamModel *m, const BeamModel *o) {
         return BEAM_FAIL(BEAM_ERR_NOT_BUILT,
                         "subtract: the %s model is compacted, so its counts "
                         "are gone", m->compacted ? "target" : "operand");
-    if (m->order != o->order || m->max_len != o->max_len
+    /* The alphabet belongs in the shape, not beside it: two models can agree
+     * on order, length and depth and still have tables of different widths,
+     * and the loops below would then read the operand off the end. */
+    if (m->cfg.alphabet != o->cfg.alphabet
+        || m->order != o->order || m->max_len != o->max_len
         || m->n_depth_wide != o->n_depth_wide)
         return BEAM_FAIL(BEAM_ERR_VARIANT_MISMATCH,
-                        "subtract: shape mismatch, target is "
+                        "subtract: shape mismatch, target is %s "
                         "order=%u max_length=%u depth_cap=%u and the operand "
-                        "is order=%u max_length=%u depth_cap=%u",
+                        "is %s order=%u max_length=%u depth_cap=%u",
+                        m->alpha->name,
                         (unsigned)m->order, (unsigned)m->max_len,
                         (unsigned)m->n_depth_wide - 1u,
+                        o->alpha->name,
                         (unsigned)o->order, (unsigned)o->max_len,
                         (unsigned)o->n_depth_wide - 1u);
 
@@ -104,14 +110,17 @@ BeamError beam_model_add(BeamModel *m, const BeamModel *o) {
     beam_live_cache_drop(m);
     if (m->compacted || o->compacted)
         return BEAM_ECOMPACTED("its counts are gone");
-    if (m->order != o->order || m->max_len != o->max_len
+    if (m->cfg.alphabet != o->cfg.alphabet
+        || m->order != o->order || m->max_len != o->max_len
         || m->n_depth_wide != o->n_depth_wide)
         return BEAM_FAIL(BEAM_ERR_VARIANT_MISMATCH,
-                        "add: shape mismatch, target is order=%u "
+                        "add: shape mismatch, target is %s order=%u "
                         "max_length=%u depth_cap=%u and the operand is "
-                        "order=%u max_length=%u depth_cap=%u",
+                        "%s order=%u max_length=%u depth_cap=%u",
+                        m->alpha->name,
                         (unsigned)m->order, (unsigned)m->max_len,
                         (unsigned)m->n_depth_wide - 1u,
+                        o->alpha->name,
                         (unsigned)o->order, (unsigned)o->max_len,
                         (unsigned)o->n_depth_wide - 1u);
 

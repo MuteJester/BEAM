@@ -135,7 +135,14 @@ typedef enum {
 #define BEAM_ALPHABET        BEAM_AA_RADIX
 #define BEAM_NONE            BEAM_AA_NONE
 
-/** Largest sequence length the model can represent. */
+/**
+ * The amino-acid default sequence length.
+ *
+ * This was the ceiling as well as the default while there was one alphabet.
+ * The ceiling is now BEAM_MAX_LENGTH_CEILING and the default comes from the
+ * alphabet descriptor, since nucleotides need three times the length to say
+ * the same thing.
+ */
 #define BEAM_MAX_LENGTH      27u
 
 /**
@@ -166,7 +173,26 @@ typedef enum {
  * measurement to justify it.
  */
 typedef struct {
-    /** Context order of the wide expert, 2..BEAM_MAX_ORDER. Default 4. */
+    /**
+     * Which alphabet the sequences are written in. Default BEAM_ALPHABET_AA.
+     *
+     * It comes first because it decides what the rest of this struct means:
+     * the legal range of `order`, the default `max_length`, and the size of
+     * every table those imply. Zero is the amino-acid alphabet, so a config
+     * that was zeroed rather than defaulted still asks for what it always
+     * asked for.
+     */
+    BeamAlphabet alphabet;
+
+    /**
+     * Context order of the wide expert, from 2 up to the alphabet's own
+     * ceiling: 4 for amino acids, 9 for nucleotides. Defaults to 4 and 6
+     * respectively.
+     *
+     * The ceiling is per-alphabet because it bounds `radix^order`, and the
+     * two radices are far apart: 21^9 does not fit in the `uint32_t` the
+     * context count is held in, while 6^9 fits comfortably.
+     */
     uint8_t order;
 
     /**
@@ -178,7 +204,15 @@ typedef struct {
      */
     uint8_t depth_cap;
 
-    /** Longest sequence the model will accept. Default BEAM_MAX_LENGTH. */
+    /**
+     * Longest sequence the model will accept, from 1 up to
+     * BEAM_MAX_LENGTH_CEILING. Defaults to the alphabet's own typical
+     * length: 27 for amino acids, 81 for the nucleotides encoding them.
+     *
+     * Free rather than fixed, and worth choosing deliberately: every table is
+     * sized by it, so a length far beyond the corpus buys nothing and costs
+     * proportionally.
+     */
     uint8_t max_length;
 
     /**
@@ -260,8 +294,23 @@ typedef struct {
     bool sparse;
 } BeamModelConfig;
 
-/** Fill `cfg` with the measured defaults. */
+/** Fill `cfg` with the measured defaults, for the amino-acid alphabet. */
 void beam_model_config_default(BeamModelConfig *cfg);
+
+/**
+ * Fill `cfg` with the measured defaults for `alphabet`.
+ *
+ * The mixing coefficients, backoff strengths and anchor weights are the same
+ * whichever alphabet is asked for: they were measured on amino acids, and
+ * re-tuning them for nucleotides needs its own measurement rather than a
+ * guess. What the alphabet decides is `order`, `max_length` and `depth_cap`,
+ * which follow from how much context it can afford and how long its
+ * sequences are.
+ *
+ * An unknown alphabet leaves `cfg` untouched.
+ */
+void beam_model_config_default_for(BeamAlphabet alphabet,
+                                   BeamModelConfig *cfg);
 
 /* ── Opaque model ────────────────────────────────────────────── */
 
@@ -807,10 +856,17 @@ double beam_model_total_weight(const BeamModel *m);
 /** Number of sequences accepted during training. */
 uint64_t beam_model_n_observed(const BeamModel *m);
 
-/** Number of sequences rejected as too long or non-amino-acid. */
+/** Number of sequences rejected as too long or outside the alphabet. */
 uint64_t beam_model_n_skipped(const BeamModel *m);
 
-/** Nodes per layer of the DAG, `BEAM_ALPHABET^order`. */
+/** The alphabet this model reads. Amino acid for a NULL model. */
+BeamAlphabet beam_model_alphabet(const BeamModel *m);
+
+/** Emitted residues, and that plus the context sentinel. */
+uint32_t beam_model_n_residues(const BeamModel *m);
+uint32_t beam_model_radix(const BeamModel *m);
+
+/** Nodes per layer of the DAG, `radix^state_order`. */
 uint32_t beam_model_n_states(const BeamModel *m);
 
 /** Total table cells, and how many carry a non-zero count. */

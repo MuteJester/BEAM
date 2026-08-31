@@ -11,6 +11,7 @@
 #define BEAM_INTERNAL_MODEL_STATE_H
 
 #include "beam/model.h"
+#include "beam/alphabet.h"
 #include "beam/sparse_rows.h"
 
 
@@ -49,6 +50,19 @@ typedef struct BeamLiveCache BeamLiveCache;
 
 struct BeamModel_ {
     BeamModelConfig cfg;
+
+    /**
+     * The alphabet, resolved once at construction.
+     *
+     * `alpha` is the descriptor; the three counts beside it are the only
+     * parts of it an inner loop needs, held as `uint32_t` so a kernel reads
+     * one word rather than chasing a pointer and widening a `uint8_t`. They
+     * are exactly `alpha->residues`, `alpha->radix` and `alpha->none`.
+     */
+    const BeamAlphabetInfo *alpha;
+    uint32_t n_residues;     /* R: emitted symbols, the stride of every row  */
+    uint32_t n_alphabet;     /* A: R + 1, the context-packing radix          */
+    uint32_t none_idx;       /* the context sentinel, == n_residues          */
 
     /* Derived dimensions, all fixed at construction. */
     uint32_t order;          /* the WIDE expert's context order               */

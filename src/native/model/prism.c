@@ -131,7 +131,7 @@ static double prism_transport(const BeamModel *m, uint8_t *buf, uint32_t len,
                               double *out_ins, double *out_del) {
     if (depth == 0u) return log_pseq_buf(m, buf, len);
 
-    uint8_t tmp[BEAM_MAX_LENGTH];
+    uint8_t tmp[BEAM_MAX_LENGTH_CEILING];
     const uint32_t A = BEAM_NONE;
     double q_sub = -INFINITY, q_ins = -INFINITY, q_del = -INFINITY;
 
@@ -201,7 +201,7 @@ BeamError beam_prism_factor(const BeamModel *m, const char *seq,
                         "about (40L+20) times the last",
                         __func__, (unsigned)BEAM_PRISM_MAX_OMEGA);
 
-    uint8_t buf[BEAM_MAX_LENGTH];
+    uint8_t buf[BEAM_MAX_LENGTH_CEILING];
     uint32_t len = 0;
     if (!beam_encode(m, seq, buf, &len))
         return BEAM_FAIL(BEAM_ERR_INVALID_SEQUENCE,

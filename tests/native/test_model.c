@@ -660,7 +660,7 @@ static void test_results_do_not_depend_on_the_thread_count(void) {
     ASSERT_MSG(m != NULL, "build");
 
     double h1 = 0.0, h4 = 0.0, d1 = 0.0, d4 = 0.0, s1 = 0.0, s4 = 0.0;
-    double dep1[BEAM_MAX_LENGTH] = {0}, dep4[BEAM_MAX_LENGTH] = {0};
+    double dep1[BEAM_MAX_LENGTH_CEILING] = {0}, dep4[BEAM_MAX_LENGTH_CEILING] = {0};
 
     beam_model_set_threads(1);
     ASSERT_MSG(beam_model_entropy(m, &h1) == BEAM_OK, "entropy at 1 thread");
@@ -679,7 +679,9 @@ static void test_results_do_not_depend_on_the_thread_count(void) {
     ASSERT_MSG(h1 == h4, "the entropy must not depend on the thread count");
     ASSERT_MSG(d1 == d4, "a Hill number must not depend on the thread count");
     ASSERT_MSG(s1 == s4, "the path count must not depend on the thread count");
-    for (uint32_t i = 0; i < BEAM_MAX_LENGTH; ++i)
+    /* Bounded by what the model actually writes, not by the buffer, which is
+     * now sized for the longest sequence any alphabet could ask for. */
+    for (uint32_t i = 0; i < beam_model_config(m)->max_length; ++i)
         ASSERT_MSG(dep1[i] == dep4[i],
                    "the depth profile must not depend on the thread count");
 
@@ -1015,7 +1017,7 @@ static void test_layer_weights_reproduce_the_scorer(void) {
     ASSERT_MSG(m != NULL, "build");
 
     const char *seq = "CASSLGEQYF";
-    uint8_t buf[BEAM_MAX_LENGTH];
+    uint8_t buf[BEAM_MAX_LENGTH_CEILING];
     uint32_t len = 0;
     ASSERT_MSG(beam_encode(m, seq, buf, &len), "encode");
 
@@ -1105,7 +1107,7 @@ static void test_explain_reconstructs_the_score(void) {
     BeamModel *m = build(4, 27);
     ASSERT_MSG(m != NULL, "build");
     const char *seq = "CASSLGEQYF";
-    double fwd[BEAM_MAX_LENGTH], bwd[BEAM_MAX_LENGTH];
+    double fwd[BEAM_MAX_LENGTH_CEILING], bwd[BEAM_MAX_LENGTH_CEILING];
     uint32_t len = 0;
     ASSERT_MSG(beam_model_explain(m, seq, fwd, bwd, &len) == BEAM_OK, "explain");
     ASSERT_MSG(len == strlen(seq), "length");

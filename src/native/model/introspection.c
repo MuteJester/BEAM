@@ -21,6 +21,17 @@ uint64_t beam_model_n_observed(const BeamModel *m) {
 uint64_t beam_model_n_skipped(const BeamModel *m) {
     return m ? m->n_skipped : 0;
 }
+BeamAlphabet beam_model_alphabet(const BeamModel *m) {
+    /* Amino acid for a NULL model, matching every other getter here, which
+     * reports the zero of its type rather than refusing. */
+    return m ? m->cfg.alphabet : BEAM_ALPHABET_AA;
+}
+uint32_t beam_model_n_residues(const BeamModel *m) {
+    return m ? m->n_residues : 0;
+}
+uint32_t beam_model_radix(const BeamModel *m) {
+    return m ? m->n_alphabet : 0;
+}
 uint32_t beam_model_n_states(const BeamModel *m) {
     return m ? m->n_states : 0;
 }

@@ -223,6 +223,33 @@ facade, alphabet-aware validation messages, PRISM, docs.
 in `tests/reference/beam_model.py` (which carries its own hardcoded copy of
 the alphabet), and re-recording the two baselines that legitimately move.
 
+## Carried requirements
+
+Found while implementing, and required of the bite that makes the kernels read
+the alphabet. Recorded here because each is a landmine that a passing test
+suite would not find.
+
+1. **`BEAM_MAX_ORDER` must rise to 9.** It sizes `slot[BEAM_MAX_ORDER + 1]` in
+   `indexing.h` and `edge_weights.c`, and `level_counts[BEAM_MAX_ORDER + 1]`
+   in `smoothing.c`. It is left at 4 while nucleotide models are refused,
+   because raising it early buys nothing and costs the byte-identical-object
+   evidence.
+2. **`indexing.h:78` clamps `order` to `BEAM_MAX_ORDER`.** A nucleotide model
+   at order 9 would have its backward context silently truncated to order 4 --
+   no crash, no error, just a quietly wrong model. The clamp must read the
+   alphabet's ceiling or go.
+3. **The cross-alphabet shape check is untested.** `add`, `subtract` and
+   `posterior` now include the alphabet, because two models can agree on
+   order, length and depth and still have different row widths. Testing it
+   needs two models of different alphabets, so it must be tested as soon as
+   nucleotide models build.
+4. **`beam_model_new` refuses every alphabet but amino acid.** Removing that
+   refusal is the last step of the kernel bite, and is the moment nucleotide
+   support actually exists. Until then it is what keeps a radix-6 table from
+   being indexed at radix 21.
+5. **Error messages still say "the 20 amino acids"** in `encoding.c`,
+   `scoring.c` and `prism.c`. They should name the model's own alphabet.
+
 ## Verification contract
 
 The gate at `verification/check.py` compares every quantity as a hex float, so
