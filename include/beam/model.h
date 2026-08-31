@@ -75,19 +75,80 @@
 extern "C" {
 #endif
 
+/* ── Alphabets ───────────────────────────────────────────────── */
+
+/**
+ * Which symbol alphabet a model is built over.
+ *
+ * The model is the same either way: two anchored experts, log-linear mixing,
+ * hierarchical backoff, exact dynamic programs. Only the symbols change.
+ *
+ * `BEAM_ALPHABET_AA` is zero deliberately. `beam_model_config_default()` opens
+ * with a `memset`, and a caller who zero-initialises a config has always meant
+ * "amino acid", so that keeps meaning what it meant.
+ */
+typedef enum {
+    BEAM_ALPHABET_AA = 0,   /**< 20 amino acids, radix 21. */
+    BEAM_ALPHABET_NT = 1    /**< A C G T N, radix 6.       */
+} BeamAlphabet;
+
+/** Number of alphabets, for sizing a table indexed by BeamAlphabet. */
+#define BEAM_ALPHABET_COUNT   2u
+
+/* Per-alphabet dimensions. `RADIX` is the emitted residues plus one sentinel
+ * used to pad contexts at the termini; `NONE` is that sentinel's index, never
+ * emitted and only ever appearing in a context slot. */
+
+#define BEAM_AA_RESIDUES     20u
+#define BEAM_AA_RADIX        21u
+#define BEAM_AA_NONE         20u
+
+/* N is an emitted residue, not a wildcard: a sequence containing it is
+ * scoreable, and the model learns a distribution over it. */
+#define BEAM_NT_RESIDUES      5u
+#define BEAM_NT_RADIX         6u
+#define BEAM_NT_NONE          5u
+
+/**
+ * Maxima over all alphabets. These size the few genuinely fixed-length arrays
+ * that a runtime alphabet cannot: per-row scratch buffers and the I/O record
+ * staging block. Sizing those by the largest alphabet costs bytes on the
+ * stack and keeps the code alphabet-agnostic.
+ */
+#define BEAM_MAX_RESIDUES    20u
+#define BEAM_MAX_RADIX       21u
+
+/** `char_to_idx` entry for a byte that is not a residue of its alphabet. */
+#define BEAM_RESIDUE_INVALID 0xFFu
+
 /* ── Fixed dimensions ────────────────────────────────────────── */
 
-/** Number of amino acids the model emits. */
-#define BEAM_RESIDUES        20u
-
-/** Emitted residues plus one sentinel used to pad contexts at the termini. */
-#define BEAM_ALPHABET        21u
-
-/** Sentinel index. Never emitted; only ever appears in a context slot. */
-#define BEAM_NONE            20u
+/**
+ * The amino-acid dimensions, under their historical names.
+ *
+ * Retained while the kernels still read the alphabet from the preprocessor
+ * rather than from the model. They are the amino-acid values and nothing
+ * else; new code wants `BEAM_AA_*`, or the model's own `n_residues` /
+ * `n_alphabet` once those exist.
+ */
+#define BEAM_RESIDUES        BEAM_AA_RESIDUES
+#define BEAM_ALPHABET        BEAM_AA_RADIX
+#define BEAM_NONE            BEAM_AA_NONE
 
 /** Largest sequence length the model can represent. */
 #define BEAM_MAX_LENGTH      27u
+
+/**
+ * The structural ceiling on `max_length`, as opposed to today's validation
+ * limit.
+ *
+ * `max_length` is a `uint8_t`, so 255 is the most any alphabet could ever ask
+ * for, and it is what the length-indexed stack buffers must be sized by once
+ * `max_length` becomes a genuinely free parameter. Nucleotide sequences are
+ * three times the length of the amino acids they encode, so 27 cannot remain
+ * the limit for both.
+ */
+#define BEAM_MAX_LENGTH_CEILING 255u
 
 /** Largest supported context order for the wide expert. */
 #define BEAM_MAX_ORDER       4u
