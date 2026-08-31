@@ -7,7 +7,7 @@
 ```python
 log_pseq(sequence) -> float
 ```
-Natural log of the sequence probability. Returns `-inf`, rather than raising, for a sequence the model cannot produce: empty, longer than `max_length`, containing a non-amino-acid character, or of a length never observed in training.
+Natural log of the sequence probability. Returns `-inf`, rather than raising, for a sequence the model cannot produce: empty, longer than `max_length`, containing a character outside the model's alphabet, or of a length never observed in training.
 
 ### log_pseq_batch
 
@@ -39,7 +39,7 @@ Scoring a corpus should not require a Python list of every sequence in it.
 log_pseq_chunks(sequences, *, chunk_size=1_000_000)   # generator of arrays
 log_pseq_file(path, *, sep="\t", column=0, has_header=False,
               chunk_size=1_000_000, out=None, dtype=np.float64) -> np.ndarray
-log_pseq_parquet(path, *, column="cdr3_aa", batch_size=1_000_000,
+log_pseq_parquet(path, *, column=None, batch_size=1_000_000,
                  out=None, dtype=np.float64) -> np.ndarray
 ```
 
@@ -64,7 +64,7 @@ explain(sequence) -> dict
 ```
 Per-residue decomposition: each residue's N-anchored and C-anchored **natural-log** probability, before the mixing weights are applied. This is what makes the model legible.
 
-Unlike `log_pseq`, this **raises** `ValueError` for a sequence it cannot encode, naming the rule that was hit — the empty string, over `max_length`, or a character outside the twenty amino acids. Use `log_pseq` when a verdict rather than a decomposition is what is wanted.
+Unlike `log_pseq`, this **raises** `ValueError` for a sequence it cannot encode, naming the rule that was hit — the empty string, over `max_length`, or a character the model's alphabet does not accept. Use `log_pseq` when a verdict rather than a decomposition is what is wanted.
 
 Returned keys: `sequence`, `residues`, `forward`, `backward`, `depth_from_n`, `depth_from_c`, `log_pseq`, `length_is_producible`.
 
@@ -239,7 +239,7 @@ The exact surprisal spectrum by forward grid transport.
     With `spacing=None` the transport reserves `max_length + 9` bins of headroom for that linear splitting, so `bins` must be at least `max_length + 10` — 37 for a default model. Pass an explicit `spacing` to use a smaller grid.
 
 !!! note "Cost"
-    Cost scales with the number of live states per layer, and without pruning every state is live at every layer: 194,481 of them at order 4, 9,261 at order 2 or 3. A pooled spectrum over a full-range order-4 model needs several GB and minutes. Ask for one length at a time, or build at a lower `order`, when that matters.
+    Cost scales with the number of live states per layer, and without pruning every state is live at every layer: for amino acids 194,481 of them at order 4 and 9,261 at order 2 or 3, and for nucleotides 46,656 at order 6. A pooled spectrum over a full-range order-4 model needs several GB and minutes. Ask for one length at a time, or build at a lower `order`, when that matters.
 
 ### spectrum_pair
 

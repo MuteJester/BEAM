@@ -2,16 +2,24 @@
  * @file model.h
  * @brief BEAM - Bidirectional Expert-Anchored Model.
  *
- * A probability model over CDR3 amino-acid sequences in which **every residue
- * is scored twice**: once by an N-anchored expert that indexes it by its
- * distance from the front of the sequence, and once by a C-anchored expert
- * that indexes it by its distance from the back. The two readings are combined
- * geometrically, and the result is normalised per length by an exact forward
- * dynamic program.
+ * A probability model over CDR3 sequences in which **every residue is scored
+ * twice**: once by an N-anchored expert that indexes it by its distance from
+ * the front of the sequence, and once by a C-anchored expert that indexes it
+ * by its distance from the back. The two readings are combined geometrically,
+ * and the result is normalised per length by an exact forward dynamic
+ * program.
  *
- * The model consumes **only** the amino-acid sequence and its observed
- * abundance. It never sees a V or J gene call, a donor identity, or a sharing
- * statistic.
+ * The model consumes **only** the sequence and its observed abundance. It
+ * never sees a V or J gene call, a donor identity, or a sharing statistic.
+ *
+ * ## Alphabets
+ *
+ * The model is the same over either alphabet -- two anchored experts,
+ * log-linear mixing, hierarchical backoff, exact dynamic programs. Only the
+ * symbols change, and with them the size of every table: twenty amino acids
+ * at radix 21, or the five nucleotide residues ACGTN at radix 6. See
+ * `BeamAlphabet` below, and `src/native/core/alphabet_*.c` for the
+ * descriptors that carry each one's defaults and ceilings.
  *
  * ## Why two anchors
  *

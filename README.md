@@ -1,7 +1,7 @@
 # BEAM
 
 **B**idirectional **E**xpert-**A**nchored **M**odel: a probability model over
-CDR3 amino-acid sequences in which every residue is scored twice.
+CDR3 sequences in which every residue is scored twice.
 
 One expert is **N-anchored**, indexing a residue by its distance from the front
 of the sequence. The other is **C-anchored**, indexing it by its distance from
@@ -28,6 +28,34 @@ model.log_pseq("CASSLGYEQYF")        # exact log probability
 model.save("foundation")             # -> foundation.beam
 ```
 
+### Amino acids or nucleotides
+
+The same model either way — two anchored experts, log-linear mixing,
+hierarchical backoff, exact dynamic programs. Only the symbols change, and
+with them the size of every table.
+
+```python
+BeamModel(seqs)                        # amino acids: ACDEFGHIKLMNPQRSTVWY
+BeamModel(seqs, alphabet="nt")         # nucleotides: ACGTN
+```
+
+`order`, `max_length` and `depth_cap` default to what the alphabet needs:
+order 4 over 27 residues, or order 6 over 81 bases, three bases to the
+residue. An amino acid is a compressed codon, so matching the amino-acid
+model's context *span* would need order 12 and is not buildable; order 6 is
+two codons and is cheaper than the amino-acid model already is.
+
+Nucleotide input is case-folded, so `acgt` and `ACGT` are one sequence. `N`
+is a residue rather than a wildcard — a read carrying one is data the model
+can represent — while the other IUPAC ambiguity codes are refused, since `R`
+means "A or G" and the model has nothing to say about that. Amino-acid input
+is not folded: case carries no meaning for a base, but folding residues would
+silently widen what is accepted.
+
+There is no auto-detection. `ACGT` is a perfectly good peptide, so a
+heuristic would quietly build the wrong model from short or low-complexity
+input; the alphabet is always named.
+
 ### Closed world by default
 
 The model holds what the sequences you gave it actually spell. A sequence no
@@ -50,8 +78,8 @@ open_world = BeamModel(seqs, abundances=ab, strict=False)
 
 That is a different model, and a useful one: it is what lets BEAM rank
 sequences the corpus never saw. It is no longer what you get without asking,
-because a support of `sum_L 20**L` describes the smoother rather than the
-data, and it should not arrive by default.
+because a support of `sum_L R**L`, for an alphabet of `R` residues, describes
+the smoother rather than the data, and it should not arrive by default.
 
 ## Testing
 
