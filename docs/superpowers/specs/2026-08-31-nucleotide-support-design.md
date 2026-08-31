@@ -126,24 +126,46 @@ order 9 asks for `21^9 = 794,280,046,581` states. So:
 - `BEAM_MAX_ORDER` survives only as the array-sizing bound for `slot[]` and
   `level_counts[]`, and rises to 9 for that purpose alone.
 
-### File format
+### File format (done)
 
-`BEAM_FORMAT` goes 2 -> 3. The header has no reserved space left -- both spare
-words were spent on `strict` and `storage_sparse` -- so `alphabet` is appended
-as a `uint32_t`, taking the header from 136 to 140 bytes.
+`BEAM_FORMAT` goes 2 -> 3. The header had no reserved space left -- both spare
+words were spent on `strict` and `storage_sparse` -- so the format-3 header
+**appends** two words, `alphabet` and a new `reserved`, taking it from 136 to
+144 bytes.
 
-- Format 3 reads the field.
-- Formats 1 and 2 load as amino acid, which is what they are.
-- Saving always writes format 3.
+Appending rather than grouping `alphabet` with the other `uint32`s where it
+belongs is deliberate, and it buys the whole compatibility story: an older
+header is then exactly a PREFIX of a newer one. The reader takes the 136
+common bytes, looks at `format`, and asks for the tail only when it is there.
+Grouping the field would have meant two layouts to parse and two chances to
+get an offset wrong. Reading `sizeof h` unconditionally would swallow the
+first eight bytes of a format-2 payload and report a corrupt file for a
+perfectly good one.
 
-This field is load-bearing rather than cosmetic: alphabet size fully
-determines the payload layout, so without it, opening a nucleotide model as an
-amino-acid one surfaces as CRC corruption instead of a typed error. The
-project's own format notes argue that a file which loads under the wrong
-identity is worse than one that refuses with a reason.
+- Format 3 reads the field; formats 1 and 2 leave it zero, which is
+  `BEAM_ALPHABET_AA`, which is what they are.
+- An alphabet the build does not know is refused rather than guessed at.
+- A format-3 file read by an older build fails its CRC and is refused, so the
+  incompatibility is safe in both directions.
+- `reserved` is written zero and ignored. Both earlier spare words were spent,
+  which is why this needed a format bump at all; leaving one costs eight bytes
+  a file and saves the next bump.
 
-`BEAM_SPARSE_RECORD_BYTES` becomes runtime (`4 + R * 8`); the `block[]` stack
-buffer is sized by `BEAM_MAX_RESIDUES`.
+The field is load-bearing rather than cosmetic: alphabet size fully determines
+the payload layout, so without it a nucleotide model reads back either as CRC
+corruption or, worse, as an amino-acid model of the same shape.
+`test_a_nucleotide_file_relabelled_as_amino_acid_is_rejected` repairs the CRC
+after relabelling on purpose, so what the loader is left to catch is the
+mislabelling itself and not a checksum.
+
+`BEAM_SPARSE_RECORD_BYTES` became runtime (`4 + R * 8`) in the kernel bite;
+the `block[]` staging buffer is sized by `BEAM_MAX_RESIDUES`.
+
+**The one baseline that moved.** `saved-model bytes` was re-recorded, and the
+change was proved rather than assumed: the same fixture saved by the commits
+either side differs by exactly eight bytes, the format word 2 -> 3, and the
+trailing CRC -- with the payload byte-identical. `numeric` and `thread
+independence` stayed green across it. See `verification/baseline/RERECORDED.md`.
 
 ### Python surface
 
@@ -248,12 +270,9 @@ test suite would not find. All five are now discharged.
 
 ### New, from enabling nucleotides
 
-6. **A nucleotide model cannot be saved.** Format 2's header has no field for
-   the alphabet and no spare word, and alphabet size fully determines the
-   payload layout, so such a file would read back either as CRC corruption or
-   as an amino-acid model of the same shape. `beam_model_save` refuses with a
-   reason, and `test_saving_a_nucleotide_model_is_refused_for_now` pins that.
-   The format bump is what lifts it.
+6. ~~**A nucleotide model cannot be saved.**~~ Done: format 3 appends the
+   alphabet to the header, nucleotide models round-trip bit-identically, and
+   the refusal and the test that pinned it are both gone.
 
 ## Nucleotide models, measured
 

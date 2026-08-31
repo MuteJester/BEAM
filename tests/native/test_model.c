@@ -1743,49 +1743,73 @@ static void test_save_load_round_trip(void) {
     PASS();
 }
 
-static void test_dense_v1_file_still_loads(void) {
-    /* Format 2 changed only the sparse payload. A dense format-2 body is the
-     * exact legacy layout, so relabel it as v1 and recompute the CRC to pin
-     * the backward-compatible reader without carrying a large binary fixture. */
+/*
+ * Rewrite a format-3 file as an older format, in place.
+ *
+ * The format-3 header appends eight bytes -- the alphabet and a reserved word
+ * -- to what formats 1 and 2 wrote, so an older header is exactly a prefix of
+ * a newer one and downgrading is a splice: drop those eight bytes, relabel
+ * the format, recompute the CRC. That is what lets the backward-compatible
+ * reader be pinned without carrying binary fixtures that nothing regenerates.
+ */
+static bool rewrite_as_legacy_format(const char *path, uint32_t format) {
+    FILE *f = fopen(path, "rb");
+    if (!f) return false;
+    if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return false; }
+    const long end = ftell(f);
+    rewind(f);
+    unsigned char *b = (unsigned char *)malloc((size_t)end);
+    if (!b || fread(b, 1, (size_t)end, f) != (size_t)end) {
+        free(b); fclose(f); return false;
+    }
+    fclose(f);
+
+    const size_t tail = 2u * sizeof(uint32_t);   /* alphabet + reserved */
+    const size_t v2_bytes = 136u;
+    memcpy(b + sizeof(uint32_t), &format, sizeof format);
+    memmove(b + v2_bytes, b + v2_bytes + tail,
+            (size_t)end - v2_bytes - tail);
+    const long shorter = end - (long)tail;
+
+    const uint32_t crc = beam_model_crc32c(0u, b,
+                                         (size_t)shorter - sizeof(uint32_t));
+    memcpy(b + shorter - (long)sizeof crc, &crc, sizeof crc);
+
+    f = fopen(path, "wb");
+    if (!f) { free(b); return false; }
+    const bool ok = fwrite(b, 1, (size_t)shorter, f) == (size_t)shorter;
+    fclose(f);
+    free(b);
+    return ok;
+}
+
+/* Both formats that predate the alphabet field must still load, and must load
+ * as amino acid -- which is what they are, and what a zeroed field says. */
+static void test_legacy_format_files_still_load(void) {
     BeamModel *m = build(2, 12);
     ASSERT_MSG(m != NULL, "build");
-    const char *path = "build/test_dense_v1.tmp";
-    ASSERT_MSG(beam_model_save(m, path) == BEAM_OK, "save dense v2");
 
-    FILE *f = fopen(path, "rb");
-    ASSERT_MSG(f != NULL, "open saved file");
-    ASSERT_MSG(fseek(f, 0, SEEK_END) == 0, "seek end");
-    const long end = ftell(f);
-    ASSERT_MSG(end > (long)(2u * sizeof(uint32_t)), "file has header and CRC");
-    rewind(f);
-    unsigned char *bytes = (unsigned char *)malloc((size_t)end);
-    ASSERT_MSG(bytes != NULL, "allocate file buffer");
-    ASSERT_MSG(fread(bytes, 1, (size_t)end, f) == (size_t)end, "read file");
-    fclose(f);
+    const uint32_t legacy[] = { 1u, 2u };
+    for (unsigned k = 0; k < 2u; ++k) {
+        const char *path = "build/test_legacy_format.tmp";
+        ASSERT_MSG(beam_model_save(m, path) == BEAM_OK, "save current format");
+        ASSERT_MSG(rewrite_as_legacy_format(path, legacy[k]),
+                   "rewrite as a legacy format");
 
-    const uint32_t v1 = 1u;
-    memcpy(bytes + sizeof(uint32_t), &v1, sizeof v1);
-    const uint32_t crc = beam_model_crc32c(0u, bytes,
-                                         (size_t)end - sizeof(uint32_t));
-    memcpy(bytes + (size_t)end - sizeof crc, &crc, sizeof crc);
-    f = fopen(path, "wb");
-    ASSERT_MSG(f != NULL, "rewrite legacy fixture");
-    ASSERT_MSG(fwrite(bytes, 1, (size_t)end, f) == (size_t)end,
-               "write legacy fixture");
-    fclose(f);
-    free(bytes);
-
-    BeamModel *back = beam_model_load(path);
-    ASSERT_MSG(back != NULL, "load dense v1");
-    ASSERT_MSG(!beam_model_config(back)->sparse,
-               "legacy dense storage stays dense");
-    for (uint32_t i = 0; i < 3u; ++i)
-        ASSERT_MSG(beam_model_log_pseq(back, STRICT_TRAIN[i])
-                   == beam_model_log_pseq(m, STRICT_TRAIN[i]),
-                   "legacy dense score must round-trip bit-identically");
-    beam_model_destroy(back);
+        BeamModel *back = beam_model_load(path);
+        ASSERT_MSG(back != NULL, "a legacy file must still load");
+        ASSERT_MSG(beam_model_alphabet(back) == BEAM_ALPHABET_AA,
+                   "a file written before the alphabet field is amino acid");
+        ASSERT_MSG(!beam_model_config(back)->sparse,
+                   "legacy dense storage stays dense");
+        for (uint32_t i = 0; i < 3u; ++i)
+            ASSERT_MSG(beam_model_log_pseq(back, STRICT_TRAIN[i])
+                       == beam_model_log_pseq(m, STRICT_TRAIN[i]),
+                       "a legacy score must round-trip bit-identically");
+        beam_model_destroy(back);
+        remove(path);
+    }
     beam_model_destroy(m);
-    remove(path);
     PASS();
 }
 
@@ -2177,7 +2201,7 @@ int main(void) {
     RUN_TEST(test_subtract_refuses_to_empty_the_model);
     RUN_TEST(test_failures_carry_a_message);
     RUN_TEST(test_save_load_round_trip);
-    RUN_TEST(test_dense_v1_file_still_loads);
+    RUN_TEST(test_legacy_format_files_still_load);
     RUN_TEST(test_corrupt_file_is_rejected);
     RUN_TEST(test_compact_keeps_scores);
 

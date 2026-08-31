@@ -753,22 +753,121 @@ static void test_model_algebra_refuses_across_alphabets(void) {
     PASS();
 }
 
-/* Until the file format carries an alphabet, a nucleotide model must refuse
- * to be written rather than produce a file that reads back as amino acids. */
-static void test_saving_a_nucleotide_model_is_refused_for_now(void) {
+/* The file has to carry the alphabet, because alphabet size determines every
+ * dimension of the payload behind it. A round trip that came back as amino
+ * acid would not merely score differently -- it would read the table at the
+ * wrong stride. */
+static void test_a_nucleotide_model_round_trips_through_a_file(void) {
     BeamModel *m = nt_model(3, 12, 6);
     ASSERT_MSG(m != NULL, "new");
-    const char *seqs[] = { "TGTGCCAGCAGT" };
-    const double ab[] = { 1.0 };
-    ASSERT_MSG(beam_model_observe(m, seqs, ab, 1) == BEAM_OK, "observe");
+    const char *seqs[] = { "TGTGCCAGCAGT", "TGTGCCAGCAGC", "TGTGCCAGTTCA" };
+    const double ab[] = { 4.0, 2.0, 1.0 };
+    ASSERT_MSG(beam_model_observe(m, seqs, ab, 3) == BEAM_OK, "observe");
     ASSERT_MSG(beam_model_finalize(m) == BEAM_OK, "finalize");
 
-    ASSERT_MSG(beam_model_save(m, "/tmp/beam_nt_should_not_exist.beam")
-               != BEAM_OK,
-               "a nucleotide model must not be written into a format that "
-               "cannot record its alphabet");
-    remove("/tmp/beam_nt_should_not_exist.beam");
+    const char *path = "build/test_nt_roundtrip.tmp";
+    ASSERT_MSG(beam_model_save(m, path) == BEAM_OK, "save");
+    BeamModel *back = beam_model_load(path);
+    ASSERT_MSG(back != NULL, "load");
+
+    ASSERT_MSG(beam_model_alphabet(back) == BEAM_ALPHABET_NT,
+               "the file must remember that it is nucleotide");
+    ASSERT_MSG(beam_model_n_residues(back) == 5 && beam_model_radix(back) == 6,
+               "and rebuild the dimensions that follow from it");
+    ASSERT_MSG(beam_model_n_states(back) == beam_model_n_states(m),
+               "the trellis must be the same size");
+    for (unsigned k = 0; k < 3u; ++k)
+        ASSERT_MSG(beam_model_log_pseq(back, seqs[k])
+                   == beam_model_log_pseq(m, seqs[k]),
+                   "every score must round-trip bit-identically");
+    beam_model_destroy(back);
     beam_model_destroy(m);
+    remove(path);
+    PASS();
+}
+
+/* Overwrite the alphabet field of a saved model and repair the CRC, so what
+ * the loader is left to catch is the mislabelling itself rather than a
+ * checksum that no longer matches. */
+static bool relabel_alphabet(const char *path, uint32_t alphabet) {
+    FILE *f = fopen(path, "rb");
+    if (!f) return false;
+    if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return false; }
+    const long end = ftell(f);
+    rewind(f);
+    unsigned char *b = (unsigned char *)malloc((size_t)end);
+    if (!b || fread(b, 1, (size_t)end, f) != (size_t)end) {
+        free(b); fclose(f); return false;
+    }
+    fclose(f);
+
+    memcpy(b + 136, &alphabet, sizeof alphabet);   /* the appended tail */
+    const uint32_t crc = beam_model_crc32c(0u, b,
+                                         (size_t)end - sizeof(uint32_t));
+    memcpy(b + end - (long)sizeof crc, &crc, sizeof crc);
+
+    f = fopen(path, "wb");
+    if (!f) { free(b); return false; }
+    const bool ok = fwrite(b, 1, (size_t)end, f) == (size_t)end;
+    fclose(f);
+    free(b);
+    return ok;
+}
+
+/*
+ * A nucleotide file must not be readable as an amino-acid one. The two agree
+ * on order, length and depth in the header, so before the alphabet field the
+ * loader had nothing to tell them apart and would have built a radix-21 model
+ * over a radix-6 payload.
+ *
+ * The CRC is repaired after the relabelling on purpose. Leaving it broken
+ * would have the checksum reject the file and prove nothing about the
+ * alphabet; repaired, the only thing left to notice is that the payload is
+ * the wrong size for the dimensions the header now claims.
+ */
+static void test_a_nucleotide_file_relabelled_as_amino_acid_is_rejected(void) {
+    BeamModel *m = nt_model(3, 12, 6);
+    ASSERT_MSG(m != NULL, "new");
+    const char *seqs[] = { "TGTGCCAGCAGT", "TGTGCCAGCAGC" };
+    const double ab[] = { 2.0, 1.0 };
+    ASSERT_MSG(beam_model_observe(m, seqs, ab, 2) == BEAM_OK, "observe");
+    ASSERT_MSG(beam_model_finalize(m) == BEAM_OK, "finalize");
+
+    const char *path = "build/test_nt_relabelled.tmp";
+    ASSERT_MSG(beam_model_save(m, path) == BEAM_OK, "save");
+    ASSERT_MSG(relabel_alphabet(path, (uint32_t)BEAM_ALPHABET_AA),
+               "relabel as amino acid and repair the checksum");
+
+    ASSERT_MSG(beam_model_load(path) == NULL,
+               "a nucleotide payload must not load as an amino-acid model "
+               "even when the checksum agrees");
+    beam_model_destroy(m);
+    remove(path);
+    PASS();
+}
+
+static void test_an_unknown_alphabet_in_a_file_is_refused(void) {
+    BeamModelConfig c;
+    beam_model_config_default(&c);
+    c.order = 3; c.max_length = 12; c.depth_cap = 6;
+    BeamModel *m = beam_model_new(&c);
+    const char *seqs[] = { "CASSLGQAYEQY" };
+    const double ab[] = { 1.0 };
+    ASSERT_MSG(m && beam_model_observe(m, seqs, ab, 1) == BEAM_OK
+               && beam_model_finalize(m) == BEAM_OK, "build");
+
+    const char *path = "build/test_unknown_alphabet.tmp";
+    ASSERT_MSG(beam_model_save(m, path) == BEAM_OK, "save");
+
+    /* An id no build knows, with the checksum repaired so the refusal has to
+     * come from the alphabet check rather than from the CRC. Every table
+     * dimension behind it is unreadable, so guessing is not an option. */
+    ASSERT_MSG(relabel_alphabet(path, 99u), "write a wild id");
+
+    ASSERT_MSG(beam_model_load(path) == NULL,
+               "an unknown alphabet must be refused, not guessed at");
+    beam_model_destroy(m);
+    remove(path);
     PASS();
 }
 
@@ -863,7 +962,9 @@ int main(void) {
     RUN_TEST(test_N_is_a_residue_and_other_codes_are_not);
     RUN_TEST(test_generation_emits_only_this_alphabet);
     RUN_TEST(test_model_algebra_refuses_across_alphabets);
-    RUN_TEST(test_saving_a_nucleotide_model_is_refused_for_now);
+    RUN_TEST(test_a_nucleotide_model_round_trips_through_a_file);
+    RUN_TEST(test_a_nucleotide_file_relabelled_as_amino_acid_is_rejected);
+    RUN_TEST(test_an_unknown_alphabet_in_a_file_is_refused);
     RUN_TEST(test_the_two_alphabets_do_not_interfere);
 
     printf("\n==============================================================\n");
