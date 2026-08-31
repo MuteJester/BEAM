@@ -286,14 +286,56 @@ regression; re-running the identical build three times gave a spread of 6% to
 750% on the same operations. Any benchmark of this codebase must pin threads
 to one and interleave the two builds, or it is measuring the machine.
 
-### The fix, if it is wanted
+### Where the cost actually is
 
-Give the compiler the constants back without giving up the runtime alphabet:
-make each kernel body a `static inline` taking `A` and `R` as parameters, and
-have the exported function dispatch on the model's radix into an amino-acid
-call, a nucleotide call, and a general fallback. Both alphabets then compile
-to fully specialised code and a third alphabet stays correct. The cost is a
-mechanical restructure of roughly fifteen kernels and a larger text segment.
+Narrowed by pinning the constants back one file at a time, rather than
+reasoned about:
+
+| pinned | cold path_count | warm path_count |
+|---|---|---|
+| nothing (as committed) | 97.6 ms | 44.7 ms |
+| `edge_weights.c` + `liveness.c` | 63.3 ms | 28.8 ms |
+| `liveness.c` alone | 98.9 ms | 44.5 ms |
+| **`edge_weights.c` alone** | **64.8 ms** | **27.7 ms** |
+| *pre-migration reference* | *64.9 ms* | *28.5 ms* |
+
+**The whole regression is in `edge_weights.c`.** Nothing else in the fifteen
+migrated files costs anything measurable, which is what one would expect: that
+file holds `state_weights_dense`, `state_weights_sparse` and the layer sweeps,
+and every dynamic program reaches its inner loop through them. The other
+files' `A` and `R` sit in loops that run once per layer, not once per edge.
+
+### Why the obvious fix does not work
+
+Three attempts, none of which moved the number:
+
+1. specialising the `t % A` / `t / A` split alone, across the analytics;
+2. dispatching `state_weights_dense` / `state_weights_sparse` at their call
+   sites;
+3. dispatching whole exported functions -- `beam_layer_weights_live`,
+   `beam_tail_weights`, `beam_layer_max` -- into `BEAM_INLINE` bodies taking
+   the dimensions as parameters.
+
+The cause is OpenMP. Rebuilt with `-fopenmp` removed, the same dispatch
+recovers the entire regression (29.3 ms against a pinned ceiling of 28.6 ms).
+With it, nothing. GCC lowers a parallel region into an outlined function early,
+and the region's variables reach that function through a data struct, so a
+radix that became a literal at the inlining site arrives inside the loop as a
+runtime load. Moving the dispatch *inside* the region did not help either,
+which suggests the outlining also blocks the `always_inline` that was supposed
+to carry the literal in.
+
+### What would work
+
+Compile `edge_weights.c` per alphabet: the bodies move to an `.inc` included
+once with the radix fixed to the amino-acid dimensions and once to the
+nucleotide ones, with the exported functions dispatching to the right copy.
+
+This is the "compile the core twice" option from the original design, scoped
+to the single file that turns out to need it, and it is guaranteed to work
+because it is exactly what the pinning experiment does. Fourteen of the
+fifteen migrated files stay as they are, so the runtime alphabet survives
+everywhere it costs nothing.
 
 ## Verification contract
 
