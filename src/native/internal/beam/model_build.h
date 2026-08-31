@@ -41,7 +41,8 @@ void beam_free_tables(BeamModel *m);
  * not reorder its accumulations.
  */
 BeamError beam_build_hierarchy(const double *counts, uint32_t n_depth,
-                               uint32_t order, const double *kappa,
+                               uint32_t order, uint32_t A, uint32_t R,
+                               const double *kappa,
                                double **out, bool strict);
 
 /** Convert probabilities to logs in place. Returns false on a dead table. */

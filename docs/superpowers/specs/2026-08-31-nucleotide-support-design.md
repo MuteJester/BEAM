@@ -250,6 +250,51 @@ suite would not find.
 5. **Error messages still say "the 20 amino acids"** in `encoding.c`,
    `scoring.c` and `prism.c`. They should name the model's own alphabet.
 
+## The measured cost of a runtime alphabet
+
+Recorded after the kernels were migrated, because it contradicts what the
+design assumed.
+
+The design chose a runtime alphabet over compiling the core twice, on the
+stated basis that the amino-acid path faced a "small perf risk in a few inner
+loops". Measured, the risk is not small. Single-threaded, interleaved A/B,
+min of nine runs each, on a quiesced machine:
+
+| operation | before | after | ratio |
+|---|---|---|---|
+| `path_count` | 64.2 ms | 96.7 ms | **1.51x** |
+| `spectrum` | 120.0 ms | 167.4 ms | **1.40x** |
+| `hill_number(2)` | 77.8 ms | 102.5 ms | **1.32x** |
+| `entropy` | 84.2 ms | 110.0 ms | **1.31x** |
+| `topology` | 0.17 ms | 0.18 ms | 1.06x |
+
+**The cause is confirmed, not guessed.** Temporarily pinning `A` and `R` back
+to compile-time constants in the fifteen kernel files restores every number to
+baseline (0.98-1.02x). Nothing structural changed; the compiler simply lost
+the constants it was folding. `for (x = 0; x < R; ++x)` with `R = 20` unrolls
+and vectorises and with a runtime `R` does neither, and `t % A` / `t / A` with
+`A = 21` is a multiply-shift and with a runtime `A` is two hardware divides.
+
+A first attempt to fix only the division -- a `beam_split_state` helper that
+branched on the two known radices -- was written, measured, and removed: it
+made no measurable difference, because the division is only part of what the
+constants were buying.
+
+**A first measurement of this was worthless and nearly misled the work.** It
+ran multi-threaded on a machine at load average 9.67 and reported a 20%
+regression; re-running the identical build three times gave a spread of 6% to
+750% on the same operations. Any benchmark of this codebase must pin threads
+to one and interleave the two builds, or it is measuring the machine.
+
+### The fix, if it is wanted
+
+Give the compiler the constants back without giving up the runtime alphabet:
+make each kernel body a `static inline` taking `A` and `R` as parameters, and
+have the exported function dispatch on the model's radix into an amino-acid
+call, a nucleotide call, and a general fallback. Both alphabets then compile
+to fully specialised code and a third alphabet stays correct. The cost is a
+mechanical restructure of roughly fifteen kernels and a larger text segment.
+
 ## Verification contract
 
 The gate at `verification/check.py` compares every quantity as a hex float, so

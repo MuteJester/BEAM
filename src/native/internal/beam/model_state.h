@@ -146,13 +146,13 @@ struct BeamModel_ {
 /* ── Element counts of each table ────────────────────────────── */
 
 static inline size_t beam_n_wide(const BeamModel *m) {
-    return (size_t)m->n_depth_wide * m->n_ctx_wide * BEAM_RESIDUES;
+    return (size_t)m->n_depth_wide * m->n_ctx_wide * m->n_residues;
 }
 static inline size_t beam_n_mid(const BeamModel *m) {
-    return (size_t)m->max_len * m->n_ctx_mid * BEAM_RESIDUES;
+    return (size_t)m->max_len * m->n_ctx_mid * m->n_residues;
 }
 static inline size_t beam_n_len(const BeamModel *m) {
-    return (size_t)m->n_len_slots * m->max_len * m->n_ctx_len * BEAM_RESIDUES;
+    return (size_t)m->n_len_slots * m->max_len * m->n_ctx_len * m->n_residues;
 }
 
 #endif /* BEAM_INTERNAL_MODEL_STATE_H */

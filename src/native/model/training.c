@@ -21,13 +21,13 @@ static bool observe_one_position(BeamModel *m, uint32_t dir,
                                  uint32_t depth, double w) {
     uint32_t cw_ix, cm_ix, cl_ix;
     if (dir == BEAM_FWD) {
-        cw_ix = beam_ctx_forward(s, (int32_t)p, m->order);
-        cm_ix = beam_ctx_forward(s, (int32_t)p, 3u);
-        cl_ix = beam_ctx_forward(s, (int32_t)p, 2u);
+        cw_ix = beam_ctx_forward(s, (int32_t)p, m->order, m->n_alphabet);
+        cm_ix = beam_ctx_forward(s, (int32_t)p, 3u, m->n_alphabet);
+        cl_ix = beam_ctx_forward(s, (int32_t)p, 2u, m->n_alphabet);
     } else {
-        cw_ix = beam_ctx_backward(s, (int32_t)p, len, m->order);
-        cm_ix = beam_ctx_backward(s, (int32_t)p, len, 3u);
-        cl_ix = beam_ctx_backward(s, (int32_t)p, len, 2u);
+        cw_ix = beam_ctx_backward(s, (int32_t)p, len, m->order, m->n_alphabet);
+        cm_ix = beam_ctx_backward(s, (int32_t)p, len, 3u, m->n_alphabet);
+        cl_ix = beam_ctx_backward(s, (int32_t)p, len, 2u, m->n_alphabet);
     }
     const uint32_t x = s[p];
     if (!m->cfg.sparse) {

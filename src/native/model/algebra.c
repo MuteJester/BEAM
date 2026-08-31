@@ -74,7 +74,7 @@ BeamError beam_model_subtract(BeamModel *m, const BeamModel *o) {
                 const double *src = beam_count_row(o, d, k, row);
                 if (!src) continue;
                 bool any = false;
-                for (uint32_t x = 0; x < BEAM_RESIDUES; ++x) {
+                for (uint32_t x = 0; x < m->n_residues; ++x) {
                     const double v = dst[x] - src[x];
                     dst[x] = v > 0.0 ? v : 0.0;
                     if (dst[x] > 0.0) any = true;
@@ -147,7 +147,7 @@ BeamError beam_model_add(BeamModel *m, const BeamModel *o) {
                     const double *src = beam_count_row(o, d, k, row);
                     if (!src) continue;
                     bool any = false;
-                    for (uint32_t x = 0; x < BEAM_RESIDUES; ++x)
+                    for (uint32_t x = 0; x < m->n_residues; ++x)
                         if (src[x] != 0.0) { any = true; break; }
                     if (!any) continue;
                     double *dst = beam_count_row_mut(m, d, k, row, true);
@@ -155,7 +155,7 @@ BeamError beam_model_add(BeamModel *m, const BeamModel *o) {
                         m->finalized = false;
                         return BEAM_EALLOC("a sparse count row during add");
                     }
-                    for (uint32_t x = 0; x < BEAM_RESIDUES; ++x)
+                    for (uint32_t x = 0; x < m->n_residues; ++x)
                         dst[x] += src[x];
                 }
             }

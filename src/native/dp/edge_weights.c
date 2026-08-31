@@ -37,7 +37,8 @@ static inline void state_weights_dense(const BeamModel *m, uint32_t i,
                                        uint32_t len, uint32_t s,
                                        bool settle_back, uint32_t r,
                                        double *row) {
-    const uint32_t R  = BEAM_RESIDUES;
+    const uint32_t R  = m->n_residues;
+    const uint32_t A  = m->n_alphabet;
     const uint32_t K  = m->state_order;
     const uint32_t n2 = m->n_ctx_len;
     const uint32_t n3 = m->n_ctx_mid;
@@ -81,9 +82,9 @@ static inline void state_weights_dense(const BeamModel *m, uint32_t i,
      */
     if (K > 3u && m->order == K) {
         const uint32_t cw0 = beam_ctx_backward_wide_from_state(
-            s, 0u, m->state_shift, K, m->order);
-        const uint32_t cm = beam_ctx_backward_from_state(s, 0u, K, 3u);
-        const uint32_t cl = beam_ctx_backward_from_state(s, 0u, K, 2u);
+            s, 0u, m->state_shift, K, m->order, A);
+        const uint32_t cm = beam_ctx_backward_from_state(s, 0u, K, 3u, A);
+        const uint32_t cl = beam_ctx_backward_from_state(s, 0u, K, 2u, A);
         for (uint32_t x = 0; x < R; ++x) {
             if (row[x] == -INFINITY) continue;
             const double b = mix_dense(m, BEAM_BWD, len, r,
@@ -99,9 +100,9 @@ static inline void state_weights_dense(const BeamModel *m, uint32_t i,
         const double b = mix_dense(
             m, BEAM_BWD, len, r,
             beam_ctx_backward_wide_from_state(s, x, m->state_shift, K,
-                                                  m->order),
-            beam_ctx_backward_from_state(s, x, K, 3u),
-            beam_ctx_backward_from_state(s, x, K, 2u), scored);
+                                                  m->order, A),
+            beam_ctx_backward_from_state(s, x, K, 3u, A),
+            beam_ctx_backward_from_state(s, x, K, 2u, A), scored);
         row[x] = (b == -INFINITY) ? -INFINITY
                                   : row[x] + m->cfg.weight_backward * b;
     }
@@ -112,7 +113,8 @@ static inline void state_weights_sparse(const BeamModel *m, uint32_t i,
                                         uint32_t len, uint32_t s,
                                         bool settle_back, uint32_t r,
                                         double *row) {
-    const uint32_t R  = BEAM_RESIDUES;
+    const uint32_t R  = m->n_residues;
+    const uint32_t A  = m->n_alphabet;
     const uint32_t K  = m->state_order;
     const uint32_t n2 = m->n_ctx_len;
     const uint32_t n3 = m->n_ctx_mid;
@@ -179,8 +181,8 @@ static inline void state_weights_sparse(const BeamModel *m, uint32_t i,
      * and correctness is not negotiable for a speedup.
      */
     if (K > 3u && m->order == K) {
-        const uint32_t cm = beam_ctx_backward_from_state(s, 0u, K, 3u);
-        const uint32_t cl = beam_ctx_backward_from_state(s, 0u, K, 2u);
+        const uint32_t cm = beam_ctx_backward_from_state(s, 0u, K, 3u, A);
+        const uint32_t cl = beam_ctx_backward_from_state(s, 0u, K, 2u, A);
         const double *bm = beam_lp_mid_row(m, BEAM_BWD, r, cm);
         const double *bl = beam_lp_len_row(m, BEAM_BWD, len, r, cl);
         if (!bm || !bl) {
@@ -188,7 +190,7 @@ static inline void state_weights_sparse(const BeamModel *m, uint32_t i,
             return;
         }
         const uint32_t cw0 = beam_ctx_backward_wide_from_state(
-            s, 0u, m->state_shift, K, m->order);
+            s, 0u, m->state_shift, K, m->order, A);
         for (uint32_t x = 0; x < R; ++x) {
             if (row[x] == -INFINITY) continue;
             const double *bw = beam_lp_wide_row(m, BEAM_BWD, r, cw0 + x);
@@ -203,9 +205,9 @@ static inline void state_weights_sparse(const BeamModel *m, uint32_t i,
     for (uint32_t x = 0; x < R; ++x) {
         if (row[x] == -INFINITY) continue;
         const uint32_t cw = beam_ctx_backward_wide_from_state(
-            s, x, m->state_shift, K, m->order);
-        const uint32_t cm = beam_ctx_backward_from_state(s, x, K, 3u);
-        const uint32_t cl = beam_ctx_backward_from_state(s, x, K, 2u);
+            s, x, m->state_shift, K, m->order, A);
+        const uint32_t cm = beam_ctx_backward_from_state(s, x, K, 3u, A);
+        const uint32_t cl = beam_ctx_backward_from_state(s, x, K, 2u, A);
         const double *bw = beam_lp_wide_row(m, BEAM_BWD, r, cw);
         const double *bm = beam_lp_mid_row(m, BEAM_BWD, r, cm);
         const double *bl = beam_lp_len_row(m, BEAM_BWD, len, r, cl);
@@ -252,7 +254,7 @@ void beam_state_weights(const BeamModel *m, uint32_t i, uint32_t len,
  * so there is nothing to skip and the row map does not exist.
  */
 double beam_layer_max(const BeamModel *m, uint32_t i, uint32_t len) {
-    const uint32_t R  = BEAM_RESIDUES;
+    const uint32_t R  = m->n_residues;
     const uint32_t K  = m->state_order;
     const uint32_t S  = m->n_states;
     const uint32_t nw = m->n_ctx_wide;
@@ -289,7 +291,7 @@ double beam_layer_max(const BeamModel *m, uint32_t i, uint32_t len) {
         const uint32_t row = rows[k];
         if (row / nw != want) continue;
         const uint32_t ctx = row % nw;
-        double buf[BEAM_RESIDUES];
+        double buf[BEAM_MAX_RESIDUES];
         /* One wide context can back several states when the state carries
          * more residues than the wide expert's order. */
         for (uint32_t rep = 0; rep < stride; ++rep) {
@@ -334,8 +336,8 @@ void beam_layer_weights(const BeamModel *m, uint32_t i, uint32_t len,
 void beam_layer_weights_live(const BeamModel *m, uint32_t i, uint32_t len,
                                  double *out, double *out_max,
                                  const uint8_t *alive) {
-    const uint32_t R  = BEAM_RESIDUES;
-    const uint32_t A  = BEAM_ALPHABET;
+    const uint32_t R  = m->n_residues;
+    const uint32_t A  = m->n_alphabet;
     const uint32_t K  = m->state_order;
     const uint32_t SK = m->state_shift;
 
@@ -440,8 +442,8 @@ void beam_layer_weights_live(const BeamModel *m, uint32_t i, uint32_t len,
  * remaining context slots are sentinels.
  */
 void beam_tail_weights(const BeamModel *m, uint32_t len, double *out) {
-    const uint32_t A = BEAM_ALPHABET;
-    const uint32_t R = BEAM_RESIDUES;
+    const uint32_t A = m->n_alphabet;
+    const uint32_t R = m->n_residues;
     const uint32_t K = m->state_order;
     const uint32_t n_tail = (K < len) ? K : len;
 
@@ -471,13 +473,13 @@ void beam_tail_weights(const BeamModel *m, uint32_t len, double *out) {
              * See edge_model_internal.h for why the wide one differs. */
             uint32_t cm = 0, cl = 0;
             for (uint32_t j = K; j >= 1; --j) {
-                uint32_t c = (j <= r) ? slot[pos + j] : BEAM_NONE;
+                uint32_t c = (j <= r) ? slot[pos + j] : m->none_idx;
                 if (j <= 3u) cm = cm * A + c;
                 if (j <= 2u) cl = cl * A + c;
             }
             uint32_t cw = 0;
             for (uint32_t j = 1; j <= m->order; ++j) {
-                cw = cw * A + ((j <= r) ? slot[pos + j] : BEAM_NONE);
+                cw = cw * A + ((j <= r) ? slot[pos + j] : m->none_idx);
             }
             const double b = beam_mix(m, BEAM_BWD, len, r,
                                           cw, cm, cl, scored);

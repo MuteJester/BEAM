@@ -23,8 +23,8 @@
  * past its own top. Both are covered here.
  */
 static double accumulator_max_at(const BeamModel *m, uint32_t len) {
-    const uint32_t A = BEAM_ALPHABET;
-    const uint32_t R = BEAM_RESIDUES;
+    const uint32_t A = m->n_alphabet;
+    const uint32_t R = m->n_residues;
     const uint32_t S = m->n_states;
     const uint32_t SK = m->state_shift;
 
@@ -126,8 +126,8 @@ double beam_model_accumulator_max(const BeamModel *m) {
  */
 static BeamError range_at(const BeamModel *m, uint32_t len,
                          double *out_min, double *out_max) {
-    const uint32_t A = BEAM_ALPHABET;
-    const uint32_t R = BEAM_RESIDUES;
+    const uint32_t A = m->n_alphabet;
+    const uint32_t R = m->n_residues;
     const uint32_t S = m->n_states;
     const uint32_t SK = m->state_shift;
 

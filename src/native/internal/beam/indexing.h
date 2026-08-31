@@ -22,12 +22,13 @@
  * `c_j = s[pos - j]`, sentinel-padded below zero.
  */
 static inline uint32_t beam_ctx_forward(const uint8_t *s, int32_t pos,
-                                            uint32_t k) {
+                                            uint32_t k, uint32_t radix) {
+    const uint32_t none = radix - 1u;
     uint32_t idx = 0;
     for (int32_t j = (int32_t)k; j >= 1; --j) {
         int32_t q = pos - j;
-        uint32_t c = (q >= 0) ? s[q] : BEAM_NONE;
-        idx = idx * BEAM_ALPHABET + c;
+        uint32_t c = (q >= 0) ? s[q] : none;
+        idx = idx * radix + c;
     }
     return idx;
 }
@@ -37,12 +38,14 @@ static inline uint32_t beam_ctx_forward(const uint8_t *s, int32_t pos,
  * most-distant-first with `c_j = s[pos + j]`, sentinel-padded past `len`.
  */
 static inline uint32_t beam_ctx_backward(const uint8_t *s, int32_t pos,
-                                             uint32_t len, uint32_t k) {
+                                             uint32_t len, uint32_t k,
+                                             uint32_t radix) {
+    const uint32_t none = radix - 1u;
     uint32_t idx = 0;
     for (int32_t j = (int32_t)k; j >= 1; --j) {
         int32_t q = pos + j;
-        uint32_t c = (q < (int32_t)len) ? s[q] : BEAM_NONE;
-        idx = idx * BEAM_ALPHABET + c;
+        uint32_t c = (q < (int32_t)len) ? s[q] : none;
+        idx = idx * radix + c;
     }
     return idx;
 }
@@ -66,7 +69,8 @@ static inline uint32_t beam_ctx_backward(const uint8_t *s, int32_t pos,
 static inline uint32_t beam_ctx_backward_from_state(uint32_t state,
                                                         uint32_t x,
                                                         uint32_t order,
-                                                        uint32_t k) {
+                                                        uint32_t k,
+                                                        uint32_t radix) {
     /* Slots of the state, oldest first: slot[0] = s[i-K] is the scored one.
      *
      * `order` is validated to 2..BEAM_MAX_ORDER at construction, so
@@ -78,15 +82,15 @@ static inline uint32_t beam_ctx_backward_from_state(uint32_t state,
     if (order > BEAM_MAX_ORDER) order = BEAM_MAX_ORDER;
     uint32_t q = state;
     for (int32_t t = (int32_t)order - 1; t >= 0; --t) {
-        slot[t] = (uint8_t)(q % BEAM_ALPHABET);
-        q /= BEAM_ALPHABET;
+        slot[t] = (uint8_t)(q % radix);
+        q /= radix;
     }
     slot[order] = (uint8_t)x;      /* c_K, the furthest right-context residue */
 
     /* c_j = slot[j]; pack c_k .. c_1 most-distant-first. */
     uint32_t idx = 0;
     for (uint32_t j = k; j >= 1; --j) {
-        idx = idx * BEAM_ALPHABET + slot[j];
+        idx = idx * radix + slot[j];
     }
     return idx;
 }
@@ -117,11 +121,12 @@ static inline uint32_t beam_ctx_backward_from_state(uint32_t state,
  */
 
 /** Reverse `order` base-A digits: most-distant-first index -> nearest-first. */
-static inline uint32_t beam_ctx_reverse(uint32_t ctx, uint32_t order) {
+static inline uint32_t beam_ctx_reverse(uint32_t ctx, uint32_t order,
+                                            uint32_t radix) {
     uint32_t out = 0;
     for (uint32_t j = 0; j < order; ++j) {
-        out = out * BEAM_ALPHABET + (ctx % BEAM_ALPHABET);
-        ctx /= BEAM_ALPHABET;
+        out = out * radix + (ctx % radix);
+        ctx /= radix;
     }
     return out;
 }
@@ -131,12 +136,14 @@ static inline uint32_t beam_ctx_reverse(uint32_t ctx, uint32_t order) {
  * `((c_1 * A + c_2) * A + ...) * A + c_order` with `c_j = s[pos + j]`.
  */
 static inline uint32_t beam_ctx_backward_wide(const uint8_t *s, int32_t pos,
-                                                  uint32_t len, uint32_t order) {
+                                                  uint32_t len, uint32_t order,
+                                                  uint32_t radix) {
+    const uint32_t none = radix - 1u;
     uint32_t idx = 0;
     for (uint32_t j = 1; j <= order; ++j) {
         const int32_t q = pos + (int32_t)j;
-        idx = idx * BEAM_ALPHABET
-            + ((q < (int32_t)len) ? s[q] : BEAM_NONE);
+        idx = idx * radix
+            + ((q < (int32_t)len) ? s[q] : none);
     }
     return idx;
 }
@@ -153,12 +160,13 @@ static inline uint32_t beam_ctx_backward_wide_from_state(uint32_t state,
                                                              uint32_t x,
                                                              uint32_t state_shift,
                                                              uint32_t state_order,
-                                                             uint32_t order) {
+                                                             uint32_t order,
+                                                             uint32_t radix) {
     const uint32_t t = state % state_shift;      /* c_1 .. c_(K-1), in order */
-    if (order >= state_order) return t * BEAM_ALPHABET + x;
+    if (order >= state_order) return t * radix + x;
     uint32_t drop = state_order - 1u - order;    /* digits past c_order      */
     uint32_t idx = t;
-    while (drop--) idx /= BEAM_ALPHABET;
+    while (drop--) idx /= radix;
     return idx;
 }
 
@@ -173,16 +181,16 @@ static inline uint32_t beam_state_oldest(uint32_t state,
 static inline size_t beam_ix_wide(const BeamModel *m, uint32_t depth,
                                       uint32_t ctx, uint32_t x) {
     uint32_t d = depth < m->cfg.depth_cap ? depth : m->cfg.depth_cap;
-    return ((size_t)d * m->n_ctx_wide + ctx) * BEAM_RESIDUES + x;
+    return ((size_t)d * m->n_ctx_wide + ctx) * m->n_residues + x;
 }
 static inline size_t beam_ix_mid(const BeamModel *m, uint32_t depth,
                                      uint32_t ctx, uint32_t x) {
-    return ((size_t)depth * m->n_ctx_mid + ctx) * BEAM_RESIDUES + x;
+    return ((size_t)depth * m->n_ctx_mid + ctx) * m->n_residues + x;
 }
 static inline size_t beam_ix_len(const BeamModel *m, uint32_t len,
                                      uint32_t depth, uint32_t ctx, uint32_t x) {
     return (((size_t)len * m->max_len + depth) * m->n_ctx_len + ctx)
-           * BEAM_RESIDUES + x;
+           * m->n_residues + x;
 }
 
 #endif /* BEAM_INTERNAL_INDEXING_H */

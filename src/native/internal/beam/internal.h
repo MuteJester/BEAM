@@ -18,8 +18,8 @@
  *     len  : [ L ][ d            ][ c_2 ][ c_1 ][ x ]
  *
  * where `c_1` is the context residue NEAREST the scored one and `c_k` the
- * furthest. Context slots that fall outside the sequence hold
- * `BEAM_NONE`.
+ * furthest. Context slots that fall outside the sequence hold the
+ * alphabet's sentinel, `m->none_idx`.
  *
  * ONE table breaks that rule: the finalized C-anchored WIDE table is packed
  * nearest-first, `[ min(d, depth_cap) ][ c_1 ]...[ c_k ][ x ]`. That is a

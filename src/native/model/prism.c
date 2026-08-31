@@ -132,7 +132,7 @@ static double prism_transport(const BeamModel *m, uint8_t *buf, uint32_t len,
     if (depth == 0u) return log_pseq_buf(m, buf, len);
 
     uint8_t tmp[BEAM_MAX_LENGTH_CEILING];
-    const uint32_t A = BEAM_NONE;
+    const uint32_t A = m->n_residues;
     double q_sub = -INFINITY, q_ins = -INFINITY, q_del = -INFINITY;
 
     memcpy(tmp, buf, len);

@@ -1,6 +1,6 @@
 /**
  * @file alphabet.h
- * @brief Alphabet tables and encoding.
+ * @brief Alphabet descriptors, the registry, and sequence encoding.
  *
  * Internal to src/native/. Not a public header and not installed.
  * Included through beam/internal.h, which is the umbrella every
@@ -60,9 +60,9 @@ typedef struct {
     /**
      * Byte → residue index, `BEAM_RESIDUE_INVALID` for anything else.
      *
-     * Unlike the legacy `beam_char_to_idx`, an invalid byte is marked as such
-     * rather than mapping to 0 and colliding with the first residue, so this
-     * table decides validity on its own and needs no separate predicate.
+     * An invalid byte is marked as such rather than mapping to 0 and
+     * colliding with the first residue, so this table decides validity on its
+     * own and needs no separate predicate beside it.
      */
     const uint8_t *char_to_idx;
 
@@ -106,42 +106,17 @@ _Static_assert(BEAM_MAX_RADIX >= BEAM_AA_RADIX
 _Static_assert(BEAM_RESIDUE_INVALID > BEAM_MAX_RADIX,
                "the invalid marker must not collide with a residue index");
 
-/* The kernels still resolve the alphabet through these three names. Until
- * they read it from the model instead, the names must keep the amino-acid
- * values exactly, or every table stride and context digit moves at once. */
-_Static_assert(BEAM_RESIDUES == 20u && BEAM_ALPHABET == 21u
-               && BEAM_NONE == 20u,
-               "the legacy names must still be the amino-acid dimensions");
-
-/* ── Legacy amino-acid tables ────────────────────────────────── */
-
-/** ASCII → residue index, or BEAM_NONE for anything not an amino acid. */
-extern const uint8_t beam_char_to_idx[256];
-
-/** Residue index → ASCII. Index BEAM_NONE maps to '.'. */
-extern const char beam_idx_to_char[BEAM_ALPHABET];
+/* ── Encoding ────────────────────────────────────────────────── */
 
 /**
- * Encode a NUL-terminated sequence into residue indices.
- * Returns false if the sequence is empty, longer than `max_len`, or contains
- * a character outside the 20 amino acids.
+ * Encode a NUL-terminated sequence into residue indices, using the model's
+ * own alphabet.
+ *
+ * Returns false if the sequence is empty, longer than the model's
+ * `max_length`, or contains a byte that is not a residue of its alphabet.
  */
 bool beam_encode(const BeamModel *m, const char *seq,
-                     uint8_t *out, uint32_t *out_len);
+                 uint8_t *out, uint32_t *out_len);
 
-/**
- * True for the twenty amino acids BEAM encodes.
- *
- * Kept here as `static inline` rather than exported: it sits in the
- * per-character loop of every encode, and it is what decides validity,
- * because the char-to-index table maps every unknown byte to 0, which
- * collides with 'A'.
- */
-static inline bool beam_is_residue(unsigned char c) {
-    return c == 'A' || c == 'C' || c == 'D' || c == 'E' || c == 'F'
-        || c == 'G' || c == 'H' || c == 'I' || c == 'K' || c == 'L'
-        || c == 'M' || c == 'N' || c == 'P' || c == 'Q' || c == 'R'
-        || c == 'S' || c == 'T' || c == 'V' || c == 'W' || c == 'Y';
-}
 
 #endif /* BEAM_INTERNAL_ALPHABET_H */

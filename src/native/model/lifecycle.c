@@ -140,16 +140,16 @@ BeamModel *beam_model_new(const BeamModelConfig *cfg) {
         if (m->cfg.sparse) {
             ok = beam_sparse_init(
                      &m->sp_cnt_wide[d],
-                     (uint32_t)(beam_n_wide(m) / BEAM_RESIDUES),
-                     m->n_depth_wide, true) == BEAM_OK
+                     (uint32_t)(beam_n_wide(m) / m->n_residues),
+                     m->n_depth_wide, m->n_residues, true) == BEAM_OK
               && beam_sparse_init(
                      &m->sp_cnt_mid[d],
-                     (uint32_t)(beam_n_mid(m) / BEAM_RESIDUES),
-                     m->n_depth_wide, true) == BEAM_OK
+                     (uint32_t)(beam_n_mid(m) / m->n_residues),
+                     m->n_depth_wide, m->n_residues, true) == BEAM_OK
               && beam_sparse_init(
                      &m->sp_cnt_len[d],
-                     (uint32_t)(beam_n_len(m) / BEAM_RESIDUES),
-                     m->n_depth_wide, true) == BEAM_OK;
+                     (uint32_t)(beam_n_len(m) / m->n_residues),
+                     m->n_depth_wide, m->n_residues, true) == BEAM_OK;
         } else {
             m->cnt_wide[d] = (double *)calloc(beam_n_wide(m), sizeof(double));
             m->cnt_mid[d]  = (double *)calloc(beam_n_mid(m),  sizeof(double));

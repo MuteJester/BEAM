@@ -20,18 +20,18 @@
  * would invent one.
  */
 static void posterior_table(double *dst, const double *src, size_t n_rows,
-                            double kappa) {
+                            uint32_t R, double kappa) {
 #ifdef _OPENMP
     #pragma omp parallel for schedule(static) num_threads(beam_threads())
 #endif
     for (int64_t r = 0; r < (int64_t)n_rows; ++r) {
-        const double *sr = src + (size_t)r * BEAM_RESIDUES;
-        double *dr = dst + (size_t)r * BEAM_RESIDUES;
+        const double *sr = src + (size_t)r * R;
+        double *dr = dst + (size_t)r * R;
         double tot = 0.0;
-        for (uint32_t x = 0; x < BEAM_RESIDUES; ++x) tot += sr[x];
+        for (uint32_t x = 0; x < R; ++x) tot += sr[x];
         if (!(tot > 0.0)) continue;
         const double scale = kappa / tot;
-        for (uint32_t x = 0; x < BEAM_RESIDUES; ++x) dr[x] += sr[x] * scale;
+        for (uint32_t x = 0; x < R; ++x) dr[x] += sr[x] * scale;
     }
 }
 
@@ -40,16 +40,17 @@ static bool posterior_rows(BeamModel *dst_m, const BeamModel *src_m,
                            uint32_t dir, BeamTableKind kind,
                            double kappa) {
     const uint32_t nr = beam_count_n_rows(dst_m, kind);
+    const uint32_t R = dst_m->n_residues;
     for (uint32_t row = 0; row < nr; ++row) {
         const double *src = beam_count_row(src_m, dir, kind, row);
         if (!src) continue;
         double tot = 0.0;
-        for (uint32_t x = 0; x < BEAM_RESIDUES; ++x) tot += src[x];
+        for (uint32_t x = 0; x < R; ++x) tot += src[x];
         if (!(tot > 0.0)) continue;
         double *dst = beam_count_row_mut(dst_m, dir, kind, row, true);
         if (!dst) return false;
         const double scale = kappa / tot;
-        for (uint32_t x = 0; x < BEAM_RESIDUES; ++x)
+        for (uint32_t x = 0; x < R; ++x)
             dst[x] += src[x] * scale;
     }
     return true;
@@ -89,11 +90,14 @@ BeamError beam_model_posterior(BeamModel *m, const BeamModel *prior,
         if (!m->cfg.sparse && !prior->cfg.sparse) {
             /* Preserve the original dense/open-world path byte for byte. */
             posterior_table(m->cnt_wide[d], prior->cnt_wide[d],
-                            beam_n_wide(m) / BEAM_RESIDUES, kappa);
+                            beam_n_wide(m) / m->n_residues,
+                            m->n_residues, kappa);
             posterior_table(m->cnt_mid[d], prior->cnt_mid[d],
-                            beam_n_mid(m) / BEAM_RESIDUES, kappa);
+                            beam_n_mid(m) / m->n_residues,
+                            m->n_residues, kappa);
             posterior_table(m->cnt_len[d], prior->cnt_len[d],
-                            beam_n_len(m) / BEAM_RESIDUES, kappa);
+                            beam_n_len(m) / m->n_residues,
+                            m->n_residues, kappa);
         } else if (!posterior_rows(m, prior, d, BEAM_TABLE_WIDE, kappa)
                    || !posterior_rows(m, prior, d, BEAM_TABLE_MID, kappa)
                    || !posterior_rows(m, prior, d, BEAM_TABLE_LEN, kappa)) {

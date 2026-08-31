@@ -44,7 +44,7 @@ static inline const double *beam_cnt_wide_row(const BeamModel *m,
     return m->cfg.sparse
         ? beam_sparse_row(&m->sp_cnt_wide[dir], row,
                               beam_wide_part_for_row(m, row))
-        : m->cnt_wide[dir] + (size_t)row * BEAM_RESIDUES;
+        : m->cnt_wide[dir] + (size_t)row * m->n_residues;
 }
 
 static inline const double *beam_cnt_mid_row(const BeamModel *m,
@@ -53,7 +53,7 @@ static inline const double *beam_cnt_mid_row(const BeamModel *m,
     return m->cfg.sparse
         ? beam_sparse_row(&m->sp_cnt_mid[dir], row,
                               beam_mid_part_for_row(m, row))
-        : m->cnt_mid[dir] + (size_t)row * BEAM_RESIDUES;
+        : m->cnt_mid[dir] + (size_t)row * m->n_residues;
 }
 
 static inline const double *beam_cnt_len_row(const BeamModel *m,
@@ -62,7 +62,7 @@ static inline const double *beam_cnt_len_row(const BeamModel *m,
     return m->cfg.sparse
         ? beam_sparse_row(&m->sp_cnt_len[dir], row,
                               beam_len_part_for_row(m, row))
-        : m->cnt_len[dir] + (size_t)row * BEAM_RESIDUES;
+        : m->cnt_len[dir] + (size_t)row * m->n_residues;
 }
 
 static inline double *beam_cnt_wide_row_mut(BeamModel *m, uint32_t dir,
@@ -70,7 +70,7 @@ static inline double *beam_cnt_wide_row_mut(BeamModel *m, uint32_t dir,
     return m->cfg.sparse
         ? beam_sparse_row_mut(&m->sp_cnt_wide[dir], row,
                                   beam_wide_part_for_row(m, row), create)
-        : m->cnt_wide[dir] + (size_t)row * BEAM_RESIDUES;
+        : m->cnt_wide[dir] + (size_t)row * m->n_residues;
 }
 
 static inline double *beam_cnt_mid_row_mut(BeamModel *m, uint32_t dir,
@@ -78,7 +78,7 @@ static inline double *beam_cnt_mid_row_mut(BeamModel *m, uint32_t dir,
     return m->cfg.sparse
         ? beam_sparse_row_mut(&m->sp_cnt_mid[dir], row,
                                   beam_mid_part_for_row(m, row), create)
-        : m->cnt_mid[dir] + (size_t)row * BEAM_RESIDUES;
+        : m->cnt_mid[dir] + (size_t)row * m->n_residues;
 }
 
 static inline double *beam_cnt_len_row_mut(BeamModel *m, uint32_t dir,
@@ -86,7 +86,7 @@ static inline double *beam_cnt_len_row_mut(BeamModel *m, uint32_t dir,
     return m->cfg.sparse
         ? beam_sparse_row_mut(&m->sp_cnt_len[dir], row,
                                   beam_len_part_for_row(m, row), create)
-        : m->cnt_len[dir] + (size_t)row * BEAM_RESIDUES;
+        : m->cnt_len[dir] + (size_t)row * m->n_residues;
 }
 
 typedef enum {
@@ -147,7 +147,7 @@ static inline const double *beam_count_row(const BeamModel *m,
                                                 uint32_t row) {
     if (!m->cfg.sparse)
         return beam_dense_count_table_const(m, dir, kind)
-             + (size_t)row * BEAM_RESIDUES;
+             + (size_t)row * m->n_residues;
     return beam_sparse_row(beam_sparse_count_table_const(m, dir, kind),
                                row, beam_count_part_for_row(m, kind, row));
 }
@@ -157,7 +157,7 @@ static inline double *beam_count_row_mut(BeamModel *m, uint32_t dir,
                                               uint32_t row, bool create) {
     if (!m->cfg.sparse)
         return beam_dense_count_table(m, dir, kind)
-             + (size_t)row * BEAM_RESIDUES;
+             + (size_t)row * m->n_residues;
     return beam_sparse_row_mut(beam_sparse_count_table(m, dir, kind),
                                    row,
                                    beam_count_part_for_row(m, kind, row),
@@ -180,7 +180,7 @@ static inline const double *beam_lp_wide_row(const BeamModel *m,
     const uint32_t row = d * m->n_ctx_wide + ctx;
     return m->cfg.sparse
         ? beam_sparse_row_final(&m->sp_lp_wide[dir], row)
-        : m->lp_wide[dir] + (size_t)row * BEAM_RESIDUES;
+        : m->lp_wide[dir] + (size_t)row * m->n_residues;
 }
 
 static inline const double *beam_lp_mid_row(const BeamModel *m,
@@ -190,7 +190,7 @@ static inline const double *beam_lp_mid_row(const BeamModel *m,
     const uint32_t row = depth * m->n_ctx_mid + ctx;
     return m->cfg.sparse
         ? beam_sparse_row_final(&m->sp_lp_mid[dir], row)
-        : m->lp_mid[dir] + (size_t)row * BEAM_RESIDUES;
+        : m->lp_mid[dir] + (size_t)row * m->n_residues;
 }
 
 static inline const double *beam_lp_len_row(const BeamModel *m,
@@ -200,7 +200,7 @@ static inline const double *beam_lp_len_row(const BeamModel *m,
     const uint32_t row = (len * m->max_len + depth) * m->n_ctx_len + ctx;
     return m->cfg.sparse
         ? beam_sparse_row_final(&m->sp_lp_len[dir], row)
-        : m->lp_len[dir] + (size_t)row * BEAM_RESIDUES;
+        : m->lp_len[dir] + (size_t)row * m->n_residues;
 }
 
 #endif /* BEAM_INTERNAL_TABLE_ACCESS_H */

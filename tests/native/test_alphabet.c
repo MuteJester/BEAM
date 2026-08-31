@@ -261,40 +261,6 @@ static void test_the_alphabets_overlap_with_different_indices(void) {
     PASS();
 }
 
-/* ── Equivalence with the table this replaces ────────────────── */
-
-/*
- * The load-bearing test of this change. The kernels still read the legacy
- * beam_char_to_idx, which reports 0 for an unknown byte and needs
- * beam_is_residue() alongside it to distinguish that from 'A'. The descriptor
- * table folds both into one lookup. Nothing may score differently when the
- * kernels switch over, so the two must agree on all 256 bytes.
- */
-static void test_the_descriptor_table_matches_the_legacy_pair(void) {
-    const BeamAlphabetInfo *aa = beam_alphabet_info(BEAM_ALPHABET_AA);
-
-    for (int c = 0; c < 256; ++c) {
-        unsigned ix = aa->char_to_idx[c];
-        if (beam_is_residue((unsigned char)c)) {
-            ASSERT_MSG(ix != BEAM_RESIDUE_INVALID,
-                       "a legacy residue must stay valid");
-            ASSERT_MSG(ix == beam_char_to_idx[c],
-                       "a legacy residue must keep its index");
-        } else {
-            ASSERT_MSG(ix == BEAM_RESIDUE_INVALID,
-                       "a byte the legacy pair rejects must stay rejected");
-        }
-    }
-    PASS();
-}
-
-static void test_the_descriptor_decode_matches_the_legacy_decode(void) {
-    const BeamAlphabetInfo *aa = beam_alphabet_info(BEAM_ALPHABET_AA);
-    for (unsigned i = 0; i < BEAM_ALPHABET; ++i)
-        ASSERT_MSG(aa->idx_to_char[i] == beam_idx_to_char[i],
-                   "the decode table must be unchanged, sentinel included");
-    PASS();
-}
 
 /* ── Registry ────────────────────────────────────────────────── */
 
@@ -598,10 +564,6 @@ int main(void) {
     RUN_TEST(test_nucleotides_fold_case_and_amino_acids_do_not);
     RUN_TEST(test_ambiguity_beyond_N_is_still_rejected);
     RUN_TEST(test_the_alphabets_overlap_with_different_indices);
-
-    printf("\n[equivalence with the legacy tables]\n");
-    RUN_TEST(test_the_descriptor_table_matches_the_legacy_pair);
-    RUN_TEST(test_the_descriptor_decode_matches_the_legacy_decode);
 
     printf("\n[registry]\n");
     RUN_TEST(test_the_registry_resolves_ids_and_names);

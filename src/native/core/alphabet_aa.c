@@ -1,6 +1,7 @@
 /**
  * @file alphabet_aa.c
- * @brief The amino-acid alphabet: tables, descriptor, and legacy bit mapping.
+ * @brief The amino-acid alphabet: 20 residues, plus the walk-dictionary
+ *        bit mapping that is unrelated to it.
  *
  * Twenty residues in the conventional single-letter order, plus one sentinel
  * at index 20 that pads contexts at the termini and is never emitted.
@@ -17,9 +18,8 @@ const uint8_t beam_aa_char_to_idx[256] = {
      *
      * Every unlisted byte is 0 by C's aggregate rules, and 0 is 'A', so the
      * table cannot be left to say that: each entry is set explicitly and
-     * BEAM_RESIDUE_INVALID marks a non-residue. That is the difference from
-     * the legacy table below, which reports 0 for an unknown byte and needs
-     * beam_is_residue() alongside it to tell the two cases apart.
+     * BEAM_RESIDUE_INVALID marks a non-residue, which is what lets one lookup
+     * decide both the index and the validity.
      *
      * Lower case is deliberately absent. An amino-acid sequence is upper case
      * by convention, and folding it here would be a silent widening of what
@@ -64,34 +64,6 @@ const BeamAlphabetInfo beam_alphabet_aa = {
     .idx_to_char        = aa_idx_to_char,
 };
 
-/* ── Legacy tables ───────────────────────────────────────────── */
-
-/*
- * Read by beam_encode() and by the samplers, which still resolve the alphabet
- * through the preprocessor. They are retained unchanged, rather than
- * reimplemented in terms of the descriptor, so that moving them between files
- * cannot alter a single score. The bite that makes the kernels read the
- * alphabet from the model is what removes them.
- */
-
-const uint8_t beam_char_to_idx[256] = {
-    /* Filled at first use by beam_alphabet_init via a const cast would be
-     * unclean; instead the table is spelled out so it is genuinely const and
-     * thread-safe with no initialisation order to get wrong. 0xFF marks
-     * "not an amino acid"; callers map that to BEAM_NONE. */
-    ['A'] = 0,  ['C'] = 1,  ['D'] = 2,  ['E'] = 3,  ['F'] = 4,
-    ['G'] = 5,  ['H'] = 6,  ['I'] = 7,  ['K'] = 8,  ['L'] = 9,
-    ['M'] = 10, ['N'] = 11, ['P'] = 12, ['Q'] = 13, ['R'] = 14,
-    ['S'] = 15, ['T'] = 16, ['V'] = 17, ['W'] = 18, ['Y'] = 19,
-    /* Every other byte is 0, which collides with 'A'. Validity is therefore
-     * decided by beam_is_residue(), not by the value alone. */
-};
-
-
-const char beam_idx_to_char[BEAM_ALPHABET] = {
-    'A','C','D','E','F','G','H','I','K','L',
-    'M','N','P','Q','R','S','T','V','W','Y','.'
-};
 
 /* ── Walk-dictionary bit mapping ─────────────────────────────── */
 

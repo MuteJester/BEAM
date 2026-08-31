@@ -37,9 +37,9 @@ static int pass_count = 0, fail_count = 0;
 
 #include "test_utils.h"
 
-#define A   BEAM_ALPHABET
-#define R   BEAM_RESIDUES
-#define NON BEAM_NONE
+#define A   BEAM_AA_RADIX
+#define R   BEAM_AA_RESIDUES
+#define NON BEAM_AA_NONE
 
 /* ── A small, CDR3-shaped training corpus ────────────────────── */
 
@@ -212,7 +212,7 @@ static void test_sparse_requires_strict_zero_backoff(void) {
 
 static void test_sparse_rows_boundaries_and_erase(void) {
     BeamSparseRows rows = {0};
-    ASSERT_MSG(beam_sparse_init(&rows, 8u, 2u, true) == BEAM_OK,
+    ASSERT_MSG(beam_sparse_init(&rows, 8u, 2u, R, true) == BEAM_OK,
                "initialise mutable sparse rows");
     ASSERT_MSG(beam_sparse_n_rows(&rows) == 0u, "the store starts empty");
     for (uint32_t row = 0; row < 8u; ++row)
@@ -265,7 +265,7 @@ static void test_sparse_rows_boundaries_and_erase(void) {
     beam_sparse_destroy(&rows);
 
     BeamSparseRows finalized = {0};
-    ASSERT_MSG(beam_sparse_init(&finalized, 8u, 1u, false) == BEAM_OK,
+    ASSERT_MSG(beam_sparse_init(&finalized, 8u, 1u, R, false) == BEAM_OK,
                "initialise immutable finalized rows");
     double *last = beam_sparse_row_mut(&finalized, 7u, 0u, true);
     ASSERT_MSG(last != NULL, "finalization may populate an immutable store");
@@ -280,7 +280,7 @@ static void test_sparse_rows_boundaries_and_erase(void) {
 
 static void test_sparse_growth_failure_is_atomic(void) {
     BeamSparseRows rows = {0};
-    ASSERT_MSG(beam_sparse_init(&rows, 16u, 1u, true) == BEAM_OK,
+    ASSERT_MSG(beam_sparse_init(&rows, 16u, 1u, R, true) == BEAM_OK,
                "initialise sparse rows");
     for (uint32_t row = 0; row < 8u; ++row) {
         double *values = beam_sparse_row_mut(&rows, row, 0u, true);
@@ -440,22 +440,22 @@ static void test_forward_context_packing(void) {
 
     /* pos 4 (L), order 3: c_3 = s[1] = A = 0, c_2 = s[2] = S = 15,
      *                     c_1 = s[3] = S = 15  ->  0*441 + 15*21 + 15 */
-    ASSERT_MSG(beam_ctx_forward(CASSL, 4, 3u) == 0u * 441u + 15u * 21u + 15u,
+    ASSERT_MSG(beam_ctx_forward(CASSL, 4, 3u, A) == 0u * 441u + 15u * 21u + 15u,
                "forward order-3 context at position 4");
 
     /* pos 1 (A), order 3: two slots fall off the front and pad with NONE.
      *   c_3 = NONE = 20, c_2 = NONE = 20, c_1 = s[0] = C = 1 */
-    ASSERT_MSG(beam_ctx_forward(CASSL, 1, 3u) == 20u * 441u + 20u * 21u + 1u,
+    ASSERT_MSG(beam_ctx_forward(CASSL, 1, 3u, A) == 20u * 441u + 20u * 21u + 1u,
                "forward order-3 context at position 1 is sentinel-padded");
 
     /* pos 0, order 2: nothing precedes it at all. */
-    ASSERT_MSG(beam_ctx_forward(CASSL, 0, 2u) == 20u * 21u + 20u,
+    ASSERT_MSG(beam_ctx_forward(CASSL, 0, 2u, A) == 20u * 21u + 20u,
                "forward order-2 context at position 0 is all sentinel");
 
     /* A shorter context is a SUFFIX of a longer one, which is the property the
      * DAG relies on when it reads every forward order out of one state. */
-    ASSERT_MSG(beam_ctx_forward(CASSL, 4, 2u)
-               == beam_ctx_forward(CASSL, 4, 3u) % 441u,
+    ASSERT_MSG(beam_ctx_forward(CASSL, 4, 2u, A)
+               == beam_ctx_forward(CASSL, 4, 3u, A) % 441u,
                "a shorter forward context must be a suffix of a longer one");
     PASS();
 }
@@ -465,17 +465,17 @@ static void test_backward_context_packing(void) {
 
     /* pos 0 (C), order 3: c_3 = s[3] = S = 15, c_2 = s[2] = S = 15,
      *                     c_1 = s[1] = A = 0  ->  15*441 + 15*21 + 0 */
-    ASSERT_MSG(beam_ctx_backward(CASSL, 0, 5u, 3u)
+    ASSERT_MSG(beam_ctx_backward(CASSL, 0, 5u, 3u, A)
                == 15u * 441u + 15u * 21u + 0u,
                "backward order-3 context at position 0");
 
     /* pos 4 (L) is the last residue: every right-context slot is off the end. */
-    ASSERT_MSG(beam_ctx_backward(CASSL, 4, 5u, 3u)
+    ASSERT_MSG(beam_ctx_backward(CASSL, 4, 5u, 3u, A)
                == 20u * 441u + 20u * 21u + 20u,
                "backward order-3 context at the C terminus is all sentinel");
 
     /* pos 3 (S), order 2: c_2 = off the end = 20, c_1 = s[4] = L = 9. */
-    ASSERT_MSG(beam_ctx_backward(CASSL, 3, 5u, 2u) == 20u * 21u + 9u,
+    ASSERT_MSG(beam_ctx_backward(CASSL, 3, 5u, 2u, A) == 20u * 21u + 9u,
                "backward order-2 context one in from the C terminus");
 
     /*
@@ -483,8 +483,8 @@ static void test_backward_context_packing(void) {
      * DIFFERENT residues, so they cannot be each other's mirror image. A model
      * that swapped them would still train and still normalise.
      */
-    ASSERT_MSG(beam_ctx_forward(CASSL, 1, 2u) == 20u * 21u + 1u
-               && beam_ctx_backward(CASSL, 1, 5u, 2u) == 15u * 21u + 15u,
+    ASSERT_MSG(beam_ctx_forward(CASSL, 1, 2u, A) == 20u * 21u + 1u
+               && beam_ctx_backward(CASSL, 1, 5u, 2u, A) == 15u * 21u + 15u,
                "the two directions must disagree at the same position");
     PASS();
 }
@@ -507,13 +507,13 @@ static void test_backward_context_from_state_matches_the_sequence(void) {
 
     /* slot[0]=C(scored) slot[1]=A slot[2]=S slot[3]=S slot[4]=x=L, and
      * c_j = slot[j] packed most-distant-first. */
-    ASSERT_MSG(beam_ctx_backward_from_state(state, x, K, 4u)
+    ASSERT_MSG(beam_ctx_backward_from_state(state, x, K, 4u, A)
                == 9u * 9261u + 15u * 441u + 15u * 21u + 0u,
                "order-4 backward context out of a state");
-    ASSERT_MSG(beam_ctx_backward_from_state(state, x, K, 3u)
+    ASSERT_MSG(beam_ctx_backward_from_state(state, x, K, 3u, A)
                == 15u * 441u + 15u * 21u + 0u,
                "order-3 backward context out of a state");
-    ASSERT_MSG(beam_ctx_backward_from_state(state, x, K, 2u)
+    ASSERT_MSG(beam_ctx_backward_from_state(state, x, K, 2u, A)
                == 15u * 21u + 0u,
                "order-2 backward context out of a state");
 
@@ -524,21 +524,21 @@ static void test_backward_context_from_state_matches_the_sequence(void) {
      * a modulo of their own longer form, and that is not what distinguishes
      * them; what does is which residue leaves.
      */
-    ASSERT_MSG(beam_ctx_backward_from_state(state, x, K, 3u)
-               == beam_ctx_backward_from_state(state, x, K, 4u) % 9261u,
+    ASSERT_MSG(beam_ctx_backward_from_state(state, x, K, 3u, A)
+               == beam_ctx_backward_from_state(state, x, K, 4u, A) % 9261u,
                "shortening a backward context must drop x, the most distant");
-    ASSERT_MSG(beam_ctx_backward_from_state(state, x, K, 3u)
-               == beam_ctx_backward_from_state(state, 0u, K, 3u),
+    ASSERT_MSG(beam_ctx_backward_from_state(state, x, K, 3u, A)
+               == beam_ctx_backward_from_state(state, 0u, K, 3u, A),
                "at order 3 the emitted residue is outside the context entirely");
-    ASSERT_MSG(beam_ctx_backward_from_state(state, x, K, 4u)
-               != beam_ctx_backward_from_state(state, 0u, K, 4u),
+    ASSERT_MSG(beam_ctx_backward_from_state(state, x, K, 4u, A)
+               != beam_ctx_backward_from_state(state, 0u, K, 4u, A),
                "at order 4 the emitted residue IS the most distant slot");
 
     /* The state is "CASS" and x is "L", so the scored residue is CASSL[0] and
      * its right context is exactly what the sequence form reports. */
     for (uint32_t k = 2u; k <= 3u; ++k) {
-        ASSERT_MSG(beam_ctx_backward_from_state(state, x, K, k)
-                   == beam_ctx_backward(CASSL, 0, 5u, k),
+        ASSERT_MSG(beam_ctx_backward_from_state(state, x, K, k, A)
+                   == beam_ctx_backward(CASSL, 0, 5u, k, A),
                    "the state form and the sequence form must agree");
     }
 
@@ -550,9 +550,9 @@ static void test_backward_context_from_state_matches_the_sequence(void) {
      * the forward trick here would produce a model that trains, normalises and
      * scores perfectly while reading its right-hand context backwards.
      */
-    ASSERT_MSG(beam_ctx_backward_from_state(state, x, K, 3u) != state % 9261u,
+    ASSERT_MSG(beam_ctx_backward_from_state(state, x, K, 3u, A) != state % 9261u,
                "a backward context must not be a suffix of the state index");
-    ASSERT_MSG(beam_ctx_backward_from_state(state, x, K, 2u) != state % 441u,
+    ASSERT_MSG(beam_ctx_backward_from_state(state, x, K, 2u, A) != state % 441u,
                "the order-2 backward context is not a suffix of the state either");
     PASS();
 }
@@ -577,38 +577,38 @@ static void test_backward_wide_context_matches_the_sequence(void) {
     const uint32_t state = 1u * 9261u + 0u * 441u + 15u * 21u + 15u;
     const uint32_t x = 9u;
 
-    ASSERT_MSG(beam_ctx_backward_wide_from_state(state, x, SK, K, 4u)
+    ASSERT_MSG(beam_ctx_backward_wide_from_state(state, x, SK, K, 4u, A)
                == ((0u * A + 15u) * A + 15u) * A + 9u,
                "order-4 nearest-first backward context out of a state");
     /* Nearest-first makes the full-width index plain arithmetic on the state's
      * low digits, which is the whole point of the packing. */
-    ASSERT_MSG(beam_ctx_backward_wide_from_state(state, x, SK, K, 4u)
+    ASSERT_MSG(beam_ctx_backward_wide_from_state(state, x, SK, K, 4u, A)
                == (state % SK) * A + x,
                "a full-width backward wide context is (state % shift) * A + x");
     /* A narrower context drops the MOST DISTANT residue, which here is x. */
-    ASSERT_MSG(beam_ctx_backward_wide_from_state(state, x, SK, K, 3u)
+    ASSERT_MSG(beam_ctx_backward_wide_from_state(state, x, SK, K, 3u, A)
                == (0u * A + 15u) * A + 15u,
                "order-3 nearest-first backward context out of a state");
-    ASSERT_MSG(beam_ctx_backward_wide_from_state(state, x, SK, K, 3u)
-               == beam_ctx_backward_wide_from_state(state, 0u, SK, K, 3u),
+    ASSERT_MSG(beam_ctx_backward_wide_from_state(state, x, SK, K, 3u, A)
+               == beam_ctx_backward_wide_from_state(state, 0u, SK, K, 3u, A),
                "below full width the emitted residue is outside the context");
 
     /* The state is "CASS" and x is "L", so this is CASSL scored at position 0. */
     for (uint32_t k = 2u; k <= 4u; ++k) {
-        ASSERT_MSG(beam_ctx_backward_wide_from_state(state, x, SK, K, k)
-                   == beam_ctx_backward_wide(CASSL, 0, 5u, k),
+        ASSERT_MSG(beam_ctx_backward_wide_from_state(state, x, SK, K, k, A)
+                   == beam_ctx_backward_wide(CASSL, 0, 5u, k, A),
                    "the state form and the sequence form must agree");
         /* And the packing is exactly the common one with its digits reversed,
          * which is the relabelling finalize applies to the table. */
-        ASSERT_MSG(beam_ctx_backward_wide(CASSL, 0, 5u, k)
-                   == beam_ctx_reverse(beam_ctx_backward(CASSL, 0, 5u, k), k),
+        ASSERT_MSG(beam_ctx_backward_wide(CASSL, 0, 5u, k, A)
+                   == beam_ctx_reverse(beam_ctx_backward(CASSL, 0, 5u, k, A), k, A),
                    "nearest-first is most-distant-first with the digits reversed");
     }
 
     /* Reversal must be an involution on every index a table can hold, or the
      * relocation in finalize would drop rows on the floor. */
     for (uint32_t c = 0; c < 21u * 21u * 21u; ++c)
-        ASSERT_MSG(beam_ctx_reverse(beam_ctx_reverse(c, 3u), 3u) == c,
+        ASSERT_MSG(beam_ctx_reverse(beam_ctx_reverse(c, 3u, A), 3u, A) == c,
                    "reversing an order-3 context twice must be the identity");
     PASS();
 }

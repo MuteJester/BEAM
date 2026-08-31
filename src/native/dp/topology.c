@@ -14,8 +14,8 @@ BeamError beam_model_topology(const BeamModel *m, uint32_t length,
     if (!m->finalized) return BEAM_ENOTBUILT();
     if (!beam_length_live(m, length)) return BEAM_EBADLEN(m, length);
 
-    const uint32_t A = BEAM_ALPHABET;
-    const uint32_t R = BEAM_RESIDUES;
+    const uint32_t A = m->n_alphabet;
+    const uint32_t R = m->n_residues;
     const uint32_t S = m->n_states;
     const uint32_t SK = m->state_shift;
 

@@ -36,17 +36,18 @@ double beam_raw_log_weight(const BeamModel *m, const uint8_t *s,
 
         const double f = beam_mix(
             m, BEAM_FWD, len, p,
-            beam_ctx_forward(s, (int32_t)p, m->order),
-            beam_ctx_forward(s, (int32_t)p, 3u),
-            beam_ctx_forward(s, (int32_t)p, 2u), x);
+            beam_ctx_forward(s, (int32_t)p, m->order, m->n_alphabet),
+            beam_ctx_forward(s, (int32_t)p, 3u, m->n_alphabet),
+            beam_ctx_forward(s, (int32_t)p, 2u, m->n_alphabet), x);
         if (f == -INFINITY) return -INFINITY;
 
         const uint32_t r = len - 1u - p;
         const double b = beam_mix(
             m, BEAM_BWD, len, r,
-            beam_ctx_backward_wide(s, (int32_t)p, len, m->order),
-            beam_ctx_backward(s, (int32_t)p, len, 3u),
-            beam_ctx_backward(s, (int32_t)p, len, 2u), x);
+            beam_ctx_backward_wide(s, (int32_t)p, len, m->order,
+                                   m->n_alphabet),
+            beam_ctx_backward(s, (int32_t)p, len, 3u, m->n_alphabet),
+            beam_ctx_backward(s, (int32_t)p, len, 2u, m->n_alphabet), x);
         if (b == -INFINITY) return -INFINITY;
 
         total += m->cfg.weight_forward * f + m->cfg.weight_backward * b;
@@ -99,17 +100,18 @@ BeamError beam_model_explain(const BeamModel *m, const char *seq,
         if (out_forward) {
             out_forward[p] = beam_mix(
                 m, BEAM_FWD, len, p,
-                beam_ctx_forward(buf, (int32_t)p, m->order),
-                beam_ctx_forward(buf, (int32_t)p, 3u),
-                beam_ctx_forward(buf, (int32_t)p, 2u), x);
+                beam_ctx_forward(buf, (int32_t)p, m->order, m->n_alphabet),
+                beam_ctx_forward(buf, (int32_t)p, 3u, m->n_alphabet),
+                beam_ctx_forward(buf, (int32_t)p, 2u, m->n_alphabet), x);
         }
         if (out_backward) {
             const uint32_t r = len - 1u - p;
             out_backward[p] = beam_mix(
                 m, BEAM_BWD, len, r,
-                beam_ctx_backward_wide(buf, (int32_t)p, len, m->order),
-                beam_ctx_backward(buf, (int32_t)p, len, 3u),
-                beam_ctx_backward(buf, (int32_t)p, len, 2u), x);
+                beam_ctx_backward_wide(buf, (int32_t)p, len, m->order,
+                                   m->n_alphabet),
+                beam_ctx_backward(buf, (int32_t)p, len, 3u, m->n_alphabet),
+                beam_ctx_backward(buf, (int32_t)p, len, 2u, m->n_alphabet), x);
         }
     }
     if (out_len) *out_len = len;

@@ -26,7 +26,7 @@
  * For a fixed length `L` the model is a layered directed acyclic graph:
  *
  *   - a **node** is a position `i` plus the last `K` residues emitted,
- *     sentinel-padded at the start, so there are `BEAM_ALPHABET^K` nodes
+ *     sentinel-padded at the start, so there are `radix^K` nodes
  *     per layer. `K = max(order, 3)`, not `order`: the mid expert is always
  *     order 3, so a narrower state could not supply its context;
  *   - an **edge** emits the next residue and carries a weight fixed at build
@@ -124,18 +124,6 @@ typedef enum {
 /* ── Fixed dimensions ────────────────────────────────────────── */
 
 /**
- * The amino-acid dimensions, under their historical names.
- *
- * Retained while the kernels still read the alphabet from the preprocessor
- * rather than from the model. They are the amino-acid values and nothing
- * else; new code wants `BEAM_AA_*`, or the model's own `n_residues` /
- * `n_alphabet` once those exist.
- */
-#define BEAM_RESIDUES        BEAM_AA_RESIDUES
-#define BEAM_ALPHABET        BEAM_AA_RADIX
-#define BEAM_NONE            BEAM_AA_NONE
-
-/**
  * The amino-acid default sequence length.
  *
  * This was the ceiling as well as the default while there was one alphabet.
@@ -161,8 +149,16 @@ typedef enum {
  *  about 40L+20, so omega=3 would be ~2e8 scorings for one sequence. */
 #define BEAM_PRISM_MAX_OMEGA 2u
 
-/** Largest supported context order for the wide expert. */
-#define BEAM_MAX_ORDER       4u
+/**
+ * Largest order any alphabet permits, and therefore the size of the
+ * order-indexed scratch arrays: `slot[]` in the context packers, and
+ * `level_counts[]` in the backoff hierarchy.
+ *
+ * It is a sizing bound, not the validation limit. What a given config may ask
+ * for comes from its alphabet's own ceiling, because the real constraint is
+ * on `radix^order` and the radices are far apart.
+ */
+#define BEAM_MAX_ORDER       9u
 
 /* ── Configuration ───────────────────────────────────────────── */
 
@@ -543,7 +539,7 @@ double beam_model_log_length_prior(const BeamModel *m, uint32_t length);
  * path counting over the trellis.
  *
  * In the default open-world configuration it will be
- * `BEAM_RESIDUES^L`, and that is not a bug. Hierarchical backoff leaves
+ * `R^L` for R residues, and that is not a bug. Hierarchical backoff leaves
  * every table cell strictly positive, so the number describes the smoother,
  * not the grammar. With `strict` and zero backoff, dead transitions remain
  * dead and this instead reports the exact support of the observed-transition

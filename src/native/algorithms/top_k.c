@@ -120,11 +120,12 @@ static uint32_t arena_add(Arena *ar, uint32_t parent, uint8_t residue) {
     return ar->n++;
 }
 
-static void arena_write(const Arena *ar, uint32_t leaf, uint32_t len, char *out) {
+static void arena_write(const Arena *ar, const char *idx_to_char,
+                        uint32_t leaf, uint32_t len, char *out) {
     out[len] = '\0';
     uint32_t node = leaf;
     for (uint32_t i = len; i-- > 0; ) {
-        out[i] = beam_idx_to_char[ar->residue[node]];
+        out[i] = idx_to_char[ar->residue[node]];
         node = ar->parent[node];
     }
 }
@@ -150,8 +151,8 @@ static void arena_write(const Arena *ar, uint32_t leaf, uint32_t len, char *out)
  */
 static BeamError best_completions(const BeamModel *m, uint32_t len,
                                  double **best) {
-    const uint32_t A = BEAM_ALPHABET;
-    const uint32_t R = BEAM_RESIDUES;
+    const uint32_t A = m->n_alphabet;
+    const uint32_t R = m->n_residues;
     const uint32_t S = m->n_states;
     const uint32_t SK = m->state_shift;
 
@@ -222,8 +223,8 @@ static int cmp_found(const void *a, const void *b) {
 
 static BeamError top_k_one(const BeamModel *m, uint32_t len, uint32_t k,
                           Arena *ar, Found *found, uint32_t *n_found) {
-    const uint32_t A = BEAM_ALPHABET;
-    const uint32_t R = BEAM_RESIDUES;
+    const uint32_t A = m->n_alphabet;
+    const uint32_t R = m->n_residues;
     const uint32_t S = m->n_states;
     const uint32_t SK = m->state_shift;
 
@@ -351,7 +352,8 @@ BeamError beam_model_top_k(const BeamModel *m, uint32_t k,
     qsort(found, total, sizeof(Found), cmp_found);
     const uint32_t n = total < k ? total : k;
     for (uint32_t i = 0; i < n; ++i) {
-        arena_write(&ar, found[i].leaf, found[i].length, out + (size_t)i * stride);
+        arena_write(&ar, m->alpha->idx_to_char, found[i].leaf,
+                    found[i].length, out + (size_t)i * stride);
         if (out_log_p) out_log_p[i] = found[i].log_p;
     }
     if (out_n) *out_n = n;

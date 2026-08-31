@@ -21,14 +21,14 @@
  * zero cannot be produced at all and is written as exactly zero, which the
  * caller turns into -inf; that only happens when kappa is 0.
  *
- * @param counts   [n_depth][n_ctx][20] counts at this order.
- * @param parent   [n_depth][n_ctx / A][20] probabilities at the order below.
- * @param out      [n_depth][n_ctx][20] probabilities at this order.
+ * @param counts   [n_depth][n_ctx][R] counts at this order.
+ * @param parent   [n_depth][n_ctx / A][R] probabilities at the order below.
+ * @param out      [n_depth][n_ctx][R] probabilities at this order.
  */
 static void backoff_level(const double *counts, const double *parent,
                           double kappa, uint32_t n_depth, uint32_t n_ctx,
-                          double *out) {
-    const uint32_t n_parent_ctx = n_ctx / BEAM_ALPHABET;
+                          uint32_t A, uint32_t R, double *out) {
+    const uint32_t n_parent_ctx = n_ctx / A;
     const int64_t n_rows = (int64_t)n_depth * n_ctx;
     /* Every row is independent of every other, so the only thing the loop
      * order decides is speed. Flattening depth and context into one index
@@ -40,27 +40,27 @@ static void backoff_level(const double *counts, const double *parent,
     for (int64_t row = 0; row < n_rows; ++row) {
         const uint32_t d = (uint32_t)(row / n_ctx);
         const uint32_t c = (uint32_t)(row % n_ctx);
-        const double *cr = counts + (size_t)row * BEAM_RESIDUES;
+        const double *cr = counts + (size_t)row * R;
         const double *pr = parent + ((size_t)d * n_parent_ctx
-                                     + (c % n_parent_ctx)) * BEAM_RESIDUES;
-        double *orow = out + (size_t)row * BEAM_RESIDUES;
+                                     + (c % n_parent_ctx)) * R;
+        double *orow = out + (size_t)row * R;
         double tot = 0.0;
-        for (uint32_t x = 0; x < BEAM_RESIDUES; ++x) {
+        for (uint32_t x = 0; x < R; ++x) {
             orow[x] = cr[x] + kappa * pr[x];
             tot += orow[x];
         }
         if (tot > 0.0) {
-            for (uint32_t x = 0; x < BEAM_RESIDUES; ++x) orow[x] /= tot;
+            for (uint32_t x = 0; x < R; ++x) orow[x] /= tot;
         } else {
-            for (uint32_t x = 0; x < BEAM_RESIDUES; ++x) orow[x] = 0.0;
+            for (uint32_t x = 0; x < R; ++x) orow[x] = 0.0;
         }
     }
 }
 
 /** Sum out the most distant context residue: [n_ctx] -> [n_ctx / A]. */
 static void marginalise(const double *in, uint32_t n_depth, uint32_t n_ctx,
-                        double *out) {
-    const uint32_t n_out = n_ctx / BEAM_ALPHABET;
+                        uint32_t A, uint32_t R, double *out) {
+    const uint32_t n_out = n_ctx / A;
     const int64_t n_rows = (int64_t)n_depth * n_out;
     /* Inverted to accumulate BY TARGET: the source form scatters `A` rows onto
      * every output row, so parallelising it would race. Gathering instead
@@ -73,24 +73,24 @@ static void marginalise(const double *in, uint32_t n_depth, uint32_t n_ctx,
     for (int64_t row = 0; row < n_rows; ++row) {
         const uint32_t d = (uint32_t)(row / n_out);
         const uint32_t c = (uint32_t)(row % n_out);
-        double *orow = out + (size_t)row * BEAM_RESIDUES;
-        for (uint32_t x = 0; x < BEAM_RESIDUES; ++x) orow[x] = 0.0;
-        for (uint32_t a = 0; a < BEAM_ALPHABET; ++a) {
+        double *orow = out + (size_t)row * R;
+        for (uint32_t x = 0; x < R; ++x) orow[x] = 0.0;
+        for (uint32_t a = 0; a < A; ++a) {
             const double *ir = in + ((size_t)d * n_ctx + a * n_out + c)
-                                    * BEAM_RESIDUES;
-            for (uint32_t x = 0; x < BEAM_RESIDUES; ++x) orow[x] += ir[x];
+                                    * R;
+            for (uint32_t x = 0; x < R; ++x) orow[x] += ir[x];
         }
     }
 }
 
-/** Order-0 level: Laplace alpha = 1 over the 20 residues, per depth. */
-static void base_level(const double *c0, uint32_t n_depth, double *out,
-                       bool strict) {
+/** Order-0 level: Laplace alpha = 1 over the R residues, per depth. */
+static void base_level(const double *c0, uint32_t n_depth, uint32_t R,
+                       double *out, bool strict) {
     for (uint32_t d = 0; d < n_depth; ++d) {
-        const double *cr = c0 + (size_t)d * BEAM_RESIDUES;
-        double *orow = out + (size_t)d * BEAM_RESIDUES;
+        const double *cr = c0 + (size_t)d * R;
+        double *orow = out + (size_t)d * R;
         double tot = 0.0;
-        for (uint32_t x = 0; x < BEAM_RESIDUES; ++x) {
+        for (uint32_t x = 0; x < R; ++x) {
             /*
              * The add-one is what makes zero unreachable: it is the last rung
              * of the backoff ladder, so a residue unseen everywhere still
@@ -111,17 +111,18 @@ static void base_level(const double *c0, uint32_t n_depth, double *out,
              */
             continue;
         }
-        for (uint32_t x = 0; x < BEAM_RESIDUES; ++x) orow[x] /= tot;
+        for (uint32_t x = 0; x < R; ++x) orow[x] /= tot;
     }
 }
 
 /**
  * Full hierarchy over an order-`k` count table, returning probabilities at
- * every order 0..k. `out[j]` must have room for `n_depth * A^j * 20` doubles.
+ * every order 0..k. `out[j]` must have room for `n_depth * A^j * R` doubles.
  * Caller owns the buffers.
  */
 BeamError beam_build_hierarchy(const double *counts, uint32_t n_depth,
-                                uint32_t order, const double *kappa,
+                                uint32_t order, uint32_t A, uint32_t R,
+                                const double *kappa,
                                 double **out, bool strict) {
     /* Marginals, computed top down into scratch. */
     const double *level_counts[BEAM_MAX_ORDER + 1];
@@ -130,22 +131,22 @@ BeamError beam_build_hierarchy(const double *counts, uint32_t n_depth,
 
     level_counts[order] = counts;
     for (int32_t j = (int32_t)order - 1; j >= 0; --j) {
-        uint32_t n_out = beam_ipow_u32(BEAM_ALPHABET, (uint32_t)j);
+        uint32_t n_out = beam_ipow_u32(A, (uint32_t)j);
         scratch[j] = (double *)malloc((size_t)n_depth * n_out
-                                      * BEAM_RESIDUES * sizeof(double));
+                                      * R * sizeof(double));
         if (!scratch[j]) {
             for (uint32_t t = 0; t <= order; ++t) free(scratch[t]);
             return BEAM_EALLOC("a backoff-hierarchy marginal");
         }
         marginalise(level_counts[j + 1], n_depth,
-                    beam_ipow_u32(BEAM_ALPHABET, (uint32_t)j + 1u), scratch[j]);
+                    beam_ipow_u32(A, (uint32_t)j + 1u), A, R, scratch[j]);
         level_counts[j] = scratch[j];
     }
 
-    base_level(level_counts[0], n_depth, out[0], strict);
+    base_level(level_counts[0], n_depth, R, out[0], strict);
     for (uint32_t j = 1; j <= order; ++j) {
         backoff_level(level_counts[j], out[j - 1], kappa[j - 1], n_depth,
-                      beam_ipow_u32(BEAM_ALPHABET, j), out[j]);
+                      beam_ipow_u32(A, j), A, R, out[j]);
     }
     for (uint32_t t = 0; t <= order; ++t) free(scratch[t]);
     return BEAM_OK;

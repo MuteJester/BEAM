@@ -123,42 +123,50 @@ static bool read_all(FILE *f, void *p, size_t n, uint32_t *crc) {
 }
 
 #define BEAM_SPARSE_IO_ROWS 256u
-#define BEAM_SPARSE_RECORD_BYTES \
-    (sizeof(uint32_t) + BEAM_RESIDUES * sizeof(double))
+
+/*
+ * A record is a row index plus one double per emitted residue, so its size is
+ * the alphabet's and only known at run time. The staging block is sized by the
+ * widest alphabet instead, which is why every length below is computed rather
+ * than taken with sizeof: `sizeof block` is now the capacity, not the payload,
+ * and using it would write the tail of an amino-acid-sized buffer into a
+ * nucleotide file.
+ */
+#define BEAM_SPARSE_RECORD_MAX \
+    (sizeof(uint32_t) + BEAM_MAX_RESIDUES * sizeof(double))
 
 static bool write_count_table(FILE *f, const BeamModel *m, uint32_t dir,
                               BeamTableKind kind, uint32_t *crc) {
     const uint32_t nr = beam_count_n_rows(m, kind);
+    const size_t row_bytes = (size_t)m->n_residues * sizeof(double);
+    const size_t rec = sizeof(uint32_t) + row_bytes;
     if (!m->cfg.sparse) {
         const double *p = beam_dense_count_table_const(m, dir, kind);
-        return write_all(f, p,
-                         (size_t)nr * BEAM_RESIDUES * sizeof(double), crc);
+        return write_all(f, p, (size_t)nr * row_bytes, crc);
     }
 
     const BeamSparseRows *t = beam_sparse_count_table_const(m, dir, kind);
     const uint64_t occupied = beam_sparse_n_rows(t);
     if (!write_all(f, &occupied, sizeof occupied, crc)) return false;
     uint64_t written = 0;
-    unsigned char block[BEAM_SPARSE_IO_ROWS * BEAM_SPARSE_RECORD_BYTES];
+    unsigned char block[BEAM_SPARSE_IO_ROWS * BEAM_SPARSE_RECORD_MAX];
     uint32_t buffered = 0;
     for (uint32_t row = 0; row < nr; ++row) {
         const double *values = beam_count_row(m, dir, kind, row);
         if (!values) continue;
-        unsigned char *record = block
-                              + (size_t)buffered * BEAM_SPARSE_RECORD_BYTES;
+        unsigned char *record = block + (size_t)buffered * rec;
         memcpy(record, &row, sizeof row);
-        memcpy(record + sizeof row, values,
-               BEAM_RESIDUES * sizeof(double));
+        memcpy(record + sizeof row, values, row_bytes);
         buffered++;
         written++;
         if (buffered == BEAM_SPARSE_IO_ROWS) {
-            if (!write_all(f, block, sizeof block, crc)) return false;
+            if (!write_all(f, block, (size_t)BEAM_SPARSE_IO_ROWS * rec, crc))
+                return false;
             buffered = 0;
         }
     }
     if (buffered > 0
-        && !write_all(f, block,
-                      (size_t)buffered * BEAM_SPARSE_RECORD_BYTES, crc))
+        && !write_all(f, block, (size_t)buffered * rec, crc))
         return false;
     return written == occupied;
 }
@@ -166,37 +174,37 @@ static bool write_count_table(FILE *f, const BeamModel *m, uint32_t dir,
 static bool read_sparse_count_table(FILE *f, BeamModel *m, uint32_t dir,
                                     BeamTableKind kind, uint32_t *crc) {
     const uint32_t nr = beam_count_n_rows(m, kind);
+    const size_t row_bytes = (size_t)m->n_residues * sizeof(double);
+    const size_t rec = sizeof(uint32_t) + row_bytes;
     uint64_t occupied = 0;
     if (!read_all(f, &occupied, sizeof occupied, crc) || occupied > nr)
         return false;
     uint32_t previous = 0;
-    unsigned char block[BEAM_SPARSE_IO_ROWS * BEAM_SPARSE_RECORD_BYTES];
+    unsigned char block[BEAM_SPARSE_IO_ROWS * BEAM_SPARSE_RECORD_MAX];
     uint64_t consumed = 0;
     while (consumed < occupied) {
         const uint32_t take = (occupied - consumed) < BEAM_SPARSE_IO_ROWS
                             ? (uint32_t)(occupied - consumed)
                             : BEAM_SPARSE_IO_ROWS;
-        if (!read_all(f, block, (size_t)take * BEAM_SPARSE_RECORD_BYTES,
-                      crc))
+        if (!read_all(f, block, (size_t)take * rec, crc))
             return false;
         for (uint32_t j = 0; j < take; ++j) {
             const uint64_t i = consumed + j;
-            const unsigned char *record = block
-                                        + (size_t)j * BEAM_SPARSE_RECORD_BYTES;
+            const unsigned char *record = block + (size_t)j * rec;
             uint32_t row = 0;
-            double values[BEAM_RESIDUES];
+            double values[BEAM_MAX_RESIDUES];
             memcpy(&row, record, sizeof row);
-            memcpy(values, record + sizeof row, sizeof values);
+            memcpy(values, record + sizeof row, row_bytes);
             if (row >= nr || (i > 0 && row <= previous)) return false;
             bool any = false;
-            for (uint32_t x = 0; x < BEAM_RESIDUES; ++x) {
+            for (uint32_t x = 0; x < m->n_residues; ++x) {
                 if (!(values[x] >= 0.0) || !isfinite(values[x])) return false;
                 if (values[x] > 0.0) any = true;
             }
             if (!any) return false;
             double *dst = beam_count_row_mut(m, dir, kind, row, true);
             if (!dst) return false;
-            memcpy(dst, values, sizeof values);
+            memcpy(dst, values, row_bytes);
             previous = row;
         }
         consumed += take;

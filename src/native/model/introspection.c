@@ -51,7 +51,7 @@ uint64_t beam_model_n_nonzero_cells(const BeamModel *m) {
                     m, d, (BeamTableKind)kind);
                 for (uint32_t p = 0; p < t->n_parts; ++p) {
                     const double *v = t->values[p];
-                    const size_t nc = (size_t)t->size[p] * BEAM_RESIDUES;
+                    const size_t nc = (size_t)t->size[p] * m->n_residues;
                     for (size_t i = 0; i < nc; ++i) if (v[i] > 0.0) n++;
                 }
             }

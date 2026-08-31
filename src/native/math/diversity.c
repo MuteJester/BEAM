@@ -16,8 +16,8 @@
  */
 static BeamError tilted_log_z(const BeamModel *m, uint32_t len, double alpha,
                              double *out) {
-    const uint32_t A = BEAM_ALPHABET;
-    const uint32_t R = BEAM_RESIDUES;
+    const uint32_t A = m->n_alphabet;
+    const uint32_t R = m->n_residues;
     const uint32_t S = m->n_states;
     const uint32_t SK = m->state_shift;
 
@@ -162,8 +162,8 @@ dead:
  * accumulated weight, and divide at the sink. Exact, one forward sweep.
  */
 static BeamError expected_raw(const BeamModel *m, uint32_t len, double *out) {
-    const uint32_t A = BEAM_ALPHABET;
-    const uint32_t R = BEAM_RESIDUES;
+    const uint32_t A = m->n_alphabet;
+    const uint32_t R = m->n_residues;
     const uint32_t S = m->n_states;
     const uint32_t SK = m->state_shift;
 
