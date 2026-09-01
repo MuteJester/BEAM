@@ -51,3 +51,74 @@ re-recorded here. They carry the in-progress PRISM work as well as the
 nucleotide work, and re-recording them now would fuse two changes into one
 unauditable diff. They are re-recorded once, deliberately, when the branch is
 finished.
+
+# Why the four surface baselines were re-recorded
+
+Re-recorded 2026-09-01, once, at the end of the nucleotide-alphabet branch.
+They were deliberately left failing through every step of it: they carry the
+in-progress PRISM work as well, and re-recording them per commit would have
+fused two unrelated changes into one diff that nobody could audit. The
+previous files are kept beside them as `*.prealphabet.txt`.
+
+Every line that moved was attributed by rebuilding the surfaces at four
+commits and diffing pairwise, rather than by reading names and guessing:
+
+| baseline | pre-branch | nt: descriptor | PRISM | nt: the rest |
+|---|---|---|---|---|
+| `cbeam_methods.txt` | 52 | — | +2 | +2 |
+| `c_symbols.txt` | 103 | +2 | +3 | +4 |
+| `python_api.txt` | 351 | — | +12 −1 | +6 −4 |
+| `pytest_cases.txt` | 295 | — | +15 | +24 |
+| `c_cases.txt` | 66 | +15 | — | +23 −3 |
+
+`c_symbols.txt` also grows from 90 recorded entries to 112. The old file was a
+subset: file splits since it was written gave internal helpers external
+linkage, which `check.py` reported as a standing note rather than a failure.
+Recording the full symbol table restores the file's original meaning, and the
+note is now empty — so any future note means a genuinely new internal symbol
+escaped, which is what it was for.
+
+## The removals, which are what to scrutinise
+
+Additions are self-evidently the new work. Three things were REMOVED, and none
+of them is a loss of coverage:
+
+1. `test_dense_v1_file_still_loads` → `test_legacy_format_files_still_load`.
+   A rename with more in it: the old test synthesised a format-1 file, the new
+   one synthesises both format 1 and format 2 and checks each loads as amino
+   acid. Coverage strictly increased.
+2. `test_the_descriptor_table_matches_the_legacy_pair` and
+   `test_the_descriptor_decode_matches_the_legacy_decode`. Added and removed
+   within this branch, so they appear in neither file. They existed to pin the
+   new decode table against the one it replaced, on all 256 bytes, until the
+   switch-over happened. The legacy tables are gone; what they checked is now
+   covered by `test_every_byte_maps_exactly_as_specified`, which hardcodes its
+   expectations independently.
+3. `test_scale_score_is_centred_on_the_model_s_own_output`. **Not from this
+   branch.** Removed on main by 54c3569, "Redefine SCALE as a p-value", which
+   made a centred score meaningless and replaced it with seven tests including
+   `test_scale_score_is_a_false_positive_rate`. The baseline had been stale
+   against main since that commit.
+
+Two more disappeared without ever reaching a baseline, and are recorded here
+because both had a stated lifetime:
+`test_construction_refuses_an_alphabet_the_kernels_cannot_read` guarded the
+refusal that kept nucleotide models unbuildable until the kernels could read
+the alphabet, and went when the refusal did;
+`test_saving_a_nucleotide_model_is_refused_for_now` did the same for the file
+format.
+
+## A ghost the re-record nearly baked in
+
+`c_symbols.txt` was about to gain `beam_repair_factor` and
+`beam_repair_factor_batch`, which no source in the tree defines. `ar rcs` ADDS
+to an existing archive rather than replacing it, so `build/libbeam.a` had been
+carrying a `repair.o` from some earlier state of the tree across every
+incremental rebuild, exporting symbols from a file that no longer exists. It
+was invisible to everything except the archive's symbol table — which is
+exactly what this baseline is.
+
+The Makefile now removes the archive before creating it, and the surfaces were
+re-dumped from a clean build. The lesson is narrow but worth keeping: a
+baseline taken from build output has to be taken from a build that cannot
+carry anything the sources do not.
