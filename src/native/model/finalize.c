@@ -49,9 +49,14 @@ static BeamError finalize_direction(BeamModel *m, uint32_t dir) {
     const uint32_t dc = m->cfg.depth_cap;
     BeamError err = BEAM_OK;
 
-    /* Declared together and freed on one path, so every early exit is safe. */
-    double *mid_p[4]     = {0};
-    double *agg_p[4]     = {0};
+    /* Declared together and freed on one path, so every early exit is safe.
+     *
+     * Sized by the largest order any alphabet allows rather than by the mid
+     * expert's own 3, because they are indexed by a value derived from
+     * `m->order` below. They were [4] while no order could exceed 4, and a
+     * nucleotide model at its default order 6 read two slots past the end. */
+    double *mid_p[BEAM_MAX_ORDER + 1] = {0};
+    double *agg_p[BEAM_MAX_ORDER + 1] = {0};
     double *agg_counts   = NULL;
 
     /* Every backoff term is multiplied by a kappa. With all of them zero the
@@ -162,7 +167,22 @@ static BeamError finalize_direction(BeamModel *m, uint32_t dir) {
      *    table at the matching depth bucket, shared across the most distant
      *    context residue ── */
     {
-        const uint32_t k1     = m->order - 1u;
+        /*
+         * The base is the order below, capped at 3.
+         *
+         * The wide expert takes ONE backoff step, weighted by `kappa_wide`,
+         * onto a lower-order table. That table comes from the mid hierarchy,
+         * which is built over the order-3 mid counts and therefore stops at
+         * order 3 -- and cannot go further, because `kappa` has three entries
+         * and there is no measured strength for a fourth level. No count
+         * table in the model holds order-4 context at full depth either.
+         *
+         * For every amino-acid order this changes nothing: the ceiling there
+         * is 4, so `order - 1` is already at most 3. It is what makes a
+         * nucleotide model above order 4 back off one bigger step rather than
+         * index a level that was never built.
+         */
+        const uint32_t k1     = m->order - 1u > 3u ? 3u : m->order - 1u;
         const uint32_t n_ctx1 = beam_ipow_u32(A, k1);
         const uint32_t nw     = m->n_ctx_wide;
         const int64_t  n_rows = (int64_t)m->n_depth_wide * nw;
@@ -208,7 +228,9 @@ static BeamError finalize_direction(BeamModel *m, uint32_t dir) {
 
 done:
     free(agg_counts);
-    for (uint32_t j = 0; j <= 3; ++j) { free(agg_p[j]); free(mid_p[j]); }
+    for (uint32_t j = 0; j <= BEAM_MAX_ORDER; ++j) {
+        free(agg_p[j]); free(mid_p[j]);
+    }
     return err;
 }
 

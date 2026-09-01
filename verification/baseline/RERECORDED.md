@@ -122,3 +122,27 @@ The Makefile now removes the archive before creating it, and the surfaces were
 re-dumped from a clean build. The lesson is narrow but worth keeping: a
 baseline taken from build output has to be taken from a build that cannot
 carry anything the sources do not.
+
+## Addendum, same day: two inventories re-recorded again
+
+An independent review of the finished branch found a segfault, and the tests
+written to pin it moved these two files a second time. Six cases added, none
+removed:
+
+    c_cases.txt      test_every_nucleotide_order_finalizes_with_backoff
+                     test_the_partition_normalises_with_backoff_above_order_four
+    pytest_cases.txt test_the_open_world_builds_at_the_default_order
+                     test_every_order_survives_backoff[4,5,6,7]
+                     test_a_smoothed_nucleotide_model_is_still_a_distribution
+
+The defect: the wide expert's backoff base was indexed at `order - 1` into
+arrays holding the mid hierarchy's orders 0..3. Amino acids cap at order 4, so
+that index was always in range; a nucleotide model at its default order 6 read
+two slots past the end of a stack array. `BeamModel(seqs, alphabet="nt",
+strict=False)` — the documented open world at the documented default — crashed
+the process.
+
+Nothing in the suite had built a nucleotide model with backoff switched on:
+every one was order 3, or the closed-world default where all five strengths
+are zero and the branch is skipped. The gap was in the tests, not in the gate,
+which is why every baseline was green over a segfaulting configuration.

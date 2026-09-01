@@ -253,3 +253,58 @@ def test_prism_channel_counts_follow_the_alphabet(nt):
     post = p.posterior()
     total = sum(float(np.nansum(v)) for v in post.values())
     assert total == pytest.approx(1.0, abs=1e-9)
+
+
+# ═══════════════════════════════════════════════════════════════
+# the open world, at the alphabet's own default order
+# ═══════════════════════════════════════════════════════════════
+
+def test_the_open_world_builds_at_the_default_order():
+    """The exact configuration that segfaulted.
+
+    `strict=False` turns on every backoff strength, and the nucleotide default
+    order is 6. The wide expert's backoff base was indexed at `order - 1` into
+    an array holding the mid hierarchy's orders 0 to 3 -- in range for every
+    amino-acid order, two past the end here. Nothing in the suite built a
+    nucleotide model with backoff on, so nothing saw it.
+    """
+    m = BEAM.BeamModel(NT_SEQS, abundances=NT_AB, alphabet="nt", strict=False)
+    assert m.config["order"] == 6
+    for s in NT_SEQS:
+        assert math.isfinite(m.log_pseq(s))
+    # The open world gives mass to sequences the corpus never spelled; that is
+    # what it is for, and it is the property the backoff base carries. The
+    # probe has to be of an OBSERVED length, or the length prior rules it out
+    # before any residue is looked at and the test proves nothing.
+    unseen = "A" * len(NT_SEQS[0])
+    assert unseen not in NT_SEQS
+    assert math.isfinite(m.log_pseq(unseen))
+    # And the closed world must still refuse it, or "open" means nothing.
+    closed = BEAM.BeamModel(NT_SEQS, abundances=NT_AB, alphabet="nt")
+    assert closed.log_pseq(unseen) == -math.inf
+
+
+@pytest.mark.parametrize("order", [4, 5, 6, 7])
+def test_every_order_survives_backoff(order):
+    """Order 4 is the boundary the base cap leaves alone; 5 upward exercise it."""
+    m = BEAM.BeamModel(NT_SEQS, abundances=NT_AB, alphabet="nt", order=order,
+                       max_length=42, depth_cap=6, strict=False)
+    assert math.isfinite(m.log_pseq(NT_SEQS[0]))
+    assert m.path_count() > 0
+
+
+def test_a_smoothed_nucleotide_model_is_still_a_distribution():
+    """Changing which table the wide expert backs off to could leave a model
+    that builds and scores but no longer sums to 1."""
+    m = BEAM.BeamModel(["TGT", "TGC", "GCC", "TCA"], abundances=[5, 3, 2, 4],
+                       alphabet="nt", order=5, max_length=5, depth_cap=3,
+                       strict=False)
+    logpi = m.log_length_prior(3)
+    total = 0.0
+    for a in "ACGTN":
+        for b in "ACGTN":
+            for c in "ACGTN":
+                lp = m.log_pseq(a + b + c)
+                if math.isfinite(lp):
+                    total += math.exp(lp - logpi)
+    assert total == pytest.approx(1.0, abs=1e-9)

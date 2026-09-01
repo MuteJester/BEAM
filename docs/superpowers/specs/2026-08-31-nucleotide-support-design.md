@@ -479,6 +479,48 @@ The nucleotide corpus generator deliberately does not build sequences on codon
 boundaries. The model knows nothing about reading frame, and a corpus that
 respected frame could hide a packing error that happens to respect it too.
 
+## What the independent review found
+
+Two reviewers were run over the finished branch, one static and one
+adversarial, and both found the same defect independently.
+
+**`BeamModel(seqs, alphabet="nt", strict=False)` segfaulted** — the documented
+open world at the alphabet's own default order. `finalize.c` indexed the wide
+expert's backoff base at `order - 1` into `double *mid_p[4]`, holding the mid
+hierarchy's orders 0 to 3. Amino acids cap at order 4, so that index was always
+in range and always a level that had been built; a nucleotide model at order 6
+read two slots past the end of a stack array.
+
+Enlarging the array would only have moved the failure: `beam_build_hierarchy`
+builds the mid levels from `cnt_mid`, an order-3 count table, so `mid_p[5]`
+would have been NULL. There is no order-4 context anywhere in the model to
+build it from, and `kappa` has three entries — the smoothing hierarchy is
+*specified* only to order 3.
+
+The fix is therefore not a bigger array. The wide expert takes one backoff
+step, and its base is now the order below **capped at 3**: the deepest level
+the hierarchy provides. For every amino-acid order this changes nothing, since
+the ceiling there is 4. A nucleotide model above order 4 now backs off one
+bigger step rather than indexing a level that was never built. The arrays are
+also sized by `BEAM_MAX_ORDER + 1`, matching what `smoothing.c` and
+`indexing.h` already did — that sweep missed this file.
+
+**Why nothing caught it.** Every nucleotide model in either suite was order 3,
+or used the closed-world default where all five backoff strengths are zero and
+the branch is skipped entirely. The C tests asserted that `beam_config_valid`
+*accepts* order 5 and 9 without ever building one. The gap was in the tests,
+not in the gate, which is why every baseline was green over a configuration
+that crashed the process.
+
+Everything else the reviewers attacked held. The bit-for-bit claim was verified
+beyond the gate: 1304 of 1335 quantities compared as hex floats across 31
+configurations were identical, and every one of the 31 differences was the
+`config` dict gaining an `alphabet` key — zero numeric differences anywhere.
+The partition function was enumerated over 270 nucleotide configurations the
+suite does not cover, worst error 5.7e-14. Real format-2 files written by the
+pre-branch build load bit-identically. The performance claim was reproduced at
+0.98-1.03x.
+
 ## Verification contract
 
 The gate at `verification/check.py` compares every quantity as a hex float, so

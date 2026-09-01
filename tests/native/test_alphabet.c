@@ -910,6 +910,91 @@ static void test_the_two_alphabets_do_not_interfere(void) {
     PASS();
 }
 
+/*
+ * Every order the nucleotide alphabet allows, with backoff switched ON.
+ *
+ * This is the configuration the suite had no coverage of, and it segfaulted:
+ * the wide expert's backoff base was indexed at `order - 1`, into arrays of
+ * four pointers holding the mid hierarchy's orders 0..3. Amino acids cap at
+ * order 4, so `order - 1` was always in range and always a level that had been
+ * built; a nucleotide model at its own default order 6 read two slots past the
+ * end. Only the all-kappas-zero path escaped, which is exactly what every
+ * other nucleotide test here uses.
+ *
+ * The base is now the order below capped at 3, since `kappa` has three entries
+ * and no count table holds order-4 context at full depth. Orders 2 to 4 are
+ * kept in the loop because they must be unaffected by that cap.
+ */
+static void test_every_nucleotide_order_finalizes_with_backoff(void) {
+    const char *seqs[] = { "TGTGCCAGCAGTGATAGC", "TGTGCCAGCAGTGATAGG",
+                           "TGTGCCAGCAGCCCGGAC" };
+    const double ab[] = { 4.0, 2.0, 1.0 };
+
+    for (uint32_t order = 2; order <= 6; ++order) {
+        BeamModelConfig c;
+        beam_model_config_default_for(BEAM_ALPHABET_NT, &c);
+        c.order = (uint8_t)order;
+        c.max_length = 20;
+        c.depth_cap = 5;
+        /* Open world: every backoff strength positive, which is what puts the
+         * wide expert's base lookup on the path at all. */
+        c.strict = false;
+        c.kappa[0] = c.kappa[1] = c.kappa[2] = 20.0;
+        c.kappa_wide = 20.0;
+        c.kappa_len = 200.0;
+
+        BeamModel *m = beam_model_new(&c);
+        ASSERT_MSG(m != NULL, "a nucleotide model must build at every order");
+        ASSERT_MSG(beam_model_observe(m, seqs, ab, 3) == BEAM_OK, "observe");
+        ASSERT_MSG(beam_model_finalize(m) == BEAM_OK,
+                   "finalize must not walk off the backoff level array");
+        const double lp = beam_model_log_pseq(m, seqs[0]);
+        ASSERT_MSG(isfinite(lp),
+                   "the open world gives every readable sequence mass");
+        beam_model_destroy(m);
+    }
+    PASS();
+}
+
+/*
+ * And the model that comes out is still a distribution. Changing which table
+ * the wide expert backs off to could leave a perfectly buildable model whose
+ * probabilities no longer sum to 1, which nothing above would notice.
+ */
+static void test_the_partition_normalises_with_backoff_above_order_four(void) {
+    BeamModelConfig c;
+    beam_model_config_default_for(BEAM_ALPHABET_NT, &c);
+    c.order = 5;                       /* base capped from 4 down to 3 */
+    c.max_length = 5;
+    c.depth_cap = 3;
+    c.strict = false;
+    c.kappa[0] = c.kappa[1] = c.kappa[2] = 20.0;
+    c.kappa_wide = 20.0;
+    c.kappa_len = 200.0;
+
+    BeamModel *m = beam_model_new(&c);
+    ASSERT_MSG(m != NULL, "new");
+    const char *tiny[] = { "TGT", "TGC", "GCC", "TCA" };
+    const double tw[] = { 5, 3, 2, 4 };
+    ASSERT_MSG(beam_model_observe(m, tiny, tw, 4) == BEAM_OK, "observe");
+    ASSERT_MSG(beam_model_finalize(m) == BEAM_OK, "finalize");
+
+    const double logpi = beam_model_log_length_prior(m, 3);
+    double total = 0.0;
+    char buf[4] = { 0, 0, 0, 0 };
+    for (int a = 0; a < 5; a++)
+      for (int b = 0; b < 5; b++)
+        for (int d = 0; d < 5; d++) {
+            buf[0] = NT_UPPER[a]; buf[1] = NT_UPPER[b]; buf[2] = NT_UPPER[d];
+            const double lp = beam_model_log_pseq(m, buf);
+            if (isfinite(lp)) total += exp(lp - logpi);
+        }
+    ASSERT_MSG(fabs(total - 1.0) < 1e-9,
+               "a smoothed order-5 nucleotide model must still normalise");
+    beam_model_destroy(m);
+    PASS();
+}
+
 /* ── Runner ──────────────────────────────────────────────────── */
 
 int main(void) {
@@ -966,6 +1051,8 @@ int main(void) {
     RUN_TEST(test_a_nucleotide_file_relabelled_as_amino_acid_is_rejected);
     RUN_TEST(test_an_unknown_alphabet_in_a_file_is_refused);
     RUN_TEST(test_the_two_alphabets_do_not_interfere);
+    RUN_TEST(test_every_nucleotide_order_finalizes_with_backoff);
+    RUN_TEST(test_the_partition_normalises_with_backoff_above_order_four);
 
     printf("\n==============================================================\n");
     printf("Results: %d passed, %d failed\n", pass_count, fail_count);
