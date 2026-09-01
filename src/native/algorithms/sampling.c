@@ -31,8 +31,8 @@ static uint32_t draw_length(const BeamModel *m, BeamRng *rng) {
 static BeamError sample_fixed(const BeamModel *m, uint32_t len, uint32_t n,
                              BeamRng *rng, char *out, uint32_t *out_lengths,
                              const uint32_t *slots) {
-    const uint32_t A  = BEAM_ALPHABET;
-    const uint32_t R  = BEAM_RESIDUES;
+    const uint32_t A  = m->n_alphabet;
+    const uint32_t R  = m->n_residues;
     const uint32_t S  = m->n_states;
     const uint32_t SK = m->state_shift;
     const uint32_t stride = m->max_len + 1u;
@@ -91,7 +91,7 @@ static BeamError sample_fixed(const BeamModel *m, uint32_t len, uint32_t n,
             }
             while (pick > 0 && p[pick] == 0.0) pick--;   /* never emit a dead x */
 
-            out[(size_t)slots[k] * stride + i] = beam_idx_to_char[pick];
+            out[(size_t)slots[k] * stride + i] = m->alpha->idx_to_char[pick];
             state[k] = base + pick;
         }
     }

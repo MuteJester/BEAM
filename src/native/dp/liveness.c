@@ -127,8 +127,8 @@ static void sort_low_digit(const uint32_t *in, uint32_t n, uint32_t sk,
 }
 
 static BeamError trim_frontier(const BeamModel *m, uint32_t len, BeamLive *L) {
-    const uint32_t A  = BEAM_ALPHABET;
-    const uint32_t R  = BEAM_RESIDUES;
+    const uint32_t A  = m->n_alphabet;
+    const uint32_t R  = m->n_residues;
     const uint32_t S  = m->n_states;
     const uint32_t SK = m->state_shift;
     const size_t   BW = BEAM_LIVE_BITWORDS(S) + 1u;
@@ -453,7 +453,7 @@ BeamError beam_live_acquire(const BeamModel *m, uint32_t len,
  */
 int beam_live_selfcheck(const BeamModel *m, uint32_t len) {
     if (!m || !m->finalized) return BEAM_LIVE_SELFCHECK_BUILD;
-    const uint32_t R  = BEAM_RESIDUES;
+    const uint32_t R  = m->n_residues;
     const uint32_t S  = m->n_states;
     const uint32_t SK = m->state_shift;
 

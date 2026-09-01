@@ -1,6 +1,5 @@
-__all__: ['Atoms', 'BeamModel', 'Builder', 'Calibration', 'Histogram', 'PseqAnalysis', 'PublicnessModel', 'effective_threads', 'memory_budget', 'set_memory_budget', 'set_threads', 'threads']
+__all__: ['Atoms', 'Attribution', 'BeamModel', 'Builder', 'Calibration', 'Histogram', 'Prism', 'PrismScorer', 'PseqAnalysis', 'PublicnessModel', 'ScaleIndex', 'attribute', 'effective_threads', 'memory_budget', 'set_memory_budget', 'set_threads', 'threads']
 __version__: 0.1.0
-
 class Atoms:
   def __delattr__(self, name, /)
   def __dir__(self, /)
@@ -33,7 +32,29 @@ class Atoms:
   property mass
   def novelty(self, n: 'float') -> 'float'
   property support_size
-
+class Attribution:
+  def __delattr__(self, name, /)
+  def __dir__(self, /)
+  def __eq__(self, value, /)
+  def __format__(self, format_spec, /)
+  def __ge__(self, value, /)
+  def __getattribute__(self, name, /)
+  def __getstate__(self, /)
+  def __gt__(self, value, /)
+  def __hash__(self, /)
+  def __init__(self, *, sequence, residue, gap, site, gap_site, bracket, spellable)
+  def __init_subclass__(?)
+  def __le__(self, value, /)
+  def __lt__(self, value, /)
+  def __ne__(self, value, /)
+  def __new__(*args, **kwargs)
+  def __reduce__(self, /)
+  def __reduce_ex__(self, protocol, /)
+  def __repr__(self) -> 'str'
+  def __setattr__(self, name, value, /)
+  def __sizeof__(self, /)
+  def __str__(self, /)
+  def __subclasshook__(?)
 class BeamModel:
   def __contains__(self, sequence: 'str') -> 'bool'
   def __delattr__(self, name, /)
@@ -45,7 +66,7 @@ class BeamModel:
   def __getstate__(self, /)
   def __gt__(self, value, /)
   def __hash__(self, /)
-  def __init__(self, sequences: 'Iterable[str]', *, abundances: 'Iterable[float] | None' = None, order: 'int' = 4, depth_cap: 'int' = 15, coefficients: 'tuple[float, float, float]' = (0.6, 0.25, 0.15), kappa: 'tuple[float, float, float] | None' = None, kappa_wide: 'float | None' = None, kappa_len: 'float | None' = None, weights: 'tuple[float, float]' = (0.5, 0.5), max_length: 'int' = 27, strict: 'bool' = True, sparse: 'bool | None' = None) -> 'None'
+  def __init__(self, sequences: 'Iterable[str]', *, abundances: 'Iterable[float] | None' = None, alphabet: 'str' = 'aa', order: 'int | None' = None, depth_cap: 'int | None' = None, coefficients: 'tuple[float, float, float]' = (0.6, 0.25, 0.15), kappa: 'tuple[float, float, float] | None' = None, kappa_wide: 'float | None' = None, kappa_len: 'float | None' = None, weights: 'tuple[float, float]' = (0.5, 0.5), max_length: 'int | None' = None, strict: 'bool' = True, sparse: 'bool | None' = None) -> 'None'
   def __init_subclass__(?)
   def __le__(self, value, /)
   def __len__(self) -> 'int'
@@ -61,6 +82,7 @@ class BeamModel:
   def __subclasshook__(?)
   def accumulator_max(self) -> 'float'
   def add(self, other: 'BeamModel') -> 'None'
+  property alphabet
   def calibrate(self, *, bins: 'int' = 512) -> 'Calibration'
   def cgf(self, t: 'float') -> 'float'
   def cgf_jet(self, t: 'float') -> 'dict[str, float]'
@@ -88,12 +110,13 @@ class BeamModel:
   def log_pseq_batch(self, sequences: 'Sequence[str]') -> 'np.ndarray'
   def log_pseq_chunks(self, sequences: 'Iterable[str]', *, chunk_size: 'int' = 1000000)
   def log_pseq_file(self, path: 'str | os.PathLike', *, sep: 'str' = '\t', column: 'int' = 0, has_header: 'bool' = False, chunk_size: 'int' = 1000000, out: 'Any' = None, dtype: 'Any' = <class 'numpy.float64'>) -> 'np.ndarray'
-  def log_pseq_parquet(self, path: 'str | os.PathLike', *, column: 'str' = 'cdr3_aa', batch_size: 'int' = 1000000, out: 'Any' = None, dtype: 'Any' = <class 'numpy.float64'>) -> 'np.ndarray'
+  def log_pseq_parquet(self, path: 'str | os.PathLike', *, column: 'str | None' = None, batch_size: 'int' = 1000000, out: 'Any' = None, dtype: 'Any' = <class 'numpy.float64'>) -> 'np.ndarray'
   property memory_bytes
   def merged(self, other: 'BeamModel') -> 'BeamModel'
   property n_cells
   property n_nonzero_cells
   property n_observed
+  property n_residues
   property n_sequences
   property n_skipped
   property n_states
@@ -107,7 +130,7 @@ class BeamModel:
   def saddlepoint(self, x, *, tol: 'float' = 1e-09, max_iter: 'int' = 80) -> 'dict'
   def sample(self, n: 'int', *, length: 'int | None' = None, seed: 'int | None' = None) -> 'list[str]'
   def save(self, path: 'str | os.PathLike') -> 'None'
-  def scale_score(self, sequence, calibration: 'Calibration')
+  def scale_score(self, sequence, calibration: 'Calibration', *, method: 'str' = 'pvalue')
   def simulate(self, n: 'int', *, length: 'int | None' = None, seed: 'int | None' = None) -> 'SimulationResult'
   def spectra_by_length(self, *, measure: 'str' = 'generated', max_length: 'int | None' = None, bins: 'int' = 1024, spacing: 'float | None' = None) -> 'dict[str, Any]'
   def spectrum(self, *, measure: 'str' = 'generated', length: 'int | None' = None, bins: 'int' = 1024, spacing: 'float | None' = None) -> 'dict[str, Any]'
@@ -128,7 +151,6 @@ class BeamModel:
   property variant
   def with_prior(self, prior: 'BeamModel', kappa: 'float' = 100.0) -> 'BeamModel'
   def without(self, other: 'Any', *, abundances: 'Iterable[float] | None' = None) -> 'BeamModel'
-
 class Builder:
   def __delattr__(self, name, /)
   def __dir__(self, /)
@@ -139,7 +161,7 @@ class Builder:
   def __getstate__(self, /)
   def __gt__(self, value, /)
   def __hash__(self, /)
-  def __init__(self, *, order: 'int' = 4, depth_cap: 'int' = 15, coefficients: 'tuple[float, float, float]' = (0.6, 0.25, 0.15), kappa: 'tuple[float, float, float] | None' = None, kappa_wide: 'float | None' = None, kappa_len: 'float | None' = None, weights: 'tuple[float, float]' = (0.5, 0.5), max_length: 'int' = 27, strict: 'bool' = True, sparse: 'bool | None' = None) -> 'None'
+  def __init__(self, *, alphabet: 'str' = 'aa', order: 'int | None' = None, depth_cap: 'int | None' = None, coefficients: 'tuple[float, float, float]' = (0.6, 0.25, 0.15), kappa: 'tuple[float, float, float] | None' = None, kappa_wide: 'float | None' = None, kappa_len: 'float | None' = None, weights: 'tuple[float, float]' = (0.5, 0.5), max_length: 'int | None' = None, strict: 'bool' = True, sparse: 'bool | None' = None) -> 'None'
   def __init_subclass__(?)
   def __le__(self, value, /)
   def __lt__(self, value, /)
@@ -160,7 +182,6 @@ class Builder:
   def observe(self, sequences: 'Iterable[str]', abundances: 'Iterable[float] | None' = None) -> 'Builder'
   def snapshot(self) -> 'BeamModel'
   property total_weight
-
 class Calibration:
   def __delattr__(self, name, /)
   def __dir__(self, /)
@@ -191,8 +212,7 @@ class Calibration:
   def pvalue(self, length: 'int', surprisal) -> 'float | np.ndarray'
   def quantile(self, length: 'int | None', probability)
   property resolution_floor
-  def scale(self, length: 'int', surprisal)
-
+  def scale(self, length: 'int', surprisal, *, method: 'str' = 'pvalue')
 class Histogram:
   def __delattr__(self, name, /)
   def __dir__(self, /)
@@ -224,7 +244,59 @@ class Histogram:
   property std
   property total_mass
   property variance
-
+class Prism:
+  def __delattr__(self, name, /)
+  def __dir__(self, /)
+  def __eq__(self, value, /)
+  def __format__(self, format_spec, /)
+  def __ge__(self, value, /)
+  def __getattribute__(self, name, /)
+  def __getstate__(self, /)
+  def __gt__(self, value, /)
+  def __hash__(self, /)
+  def __init__(self, *, sequence, log_b, log_q, log_p0, substitution, insertion, deletion, n_residues)
+  def __init_subclass__(?)
+  def __le__(self, value, /)
+  def __lt__(self, value, /)
+  def __ne__(self, value, /)
+  def __new__(*args, **kwargs)
+  def __reduce__(self, /)
+  def __reduce_ex__(self, protocol, /)
+  def __repr__(self) -> 'str'
+  def __setattr__(self, name, value, /)
+  def __sizeof__(self, /)
+  def __str__(self, /)
+  def __subclasshook__(?)
+  def posterior(self) -> 'dict[str, np.ndarray]'
+  def site(self) -> 'tuple[str, int, float]'
+  property spellable
+class PrismScorer:
+  def __delattr__(self, name, /)
+  def __dir__(self, /)
+  def __eq__(self, value, /)
+  def __format__(self, format_spec, /)
+  def __ge__(self, value, /)
+  def __getattribute__(self, name, /)
+  def __getstate__(self, /)
+  def __gt__(self, value, /)
+  def __hash__(self, /)
+  def __init__(self, model)
+  def __init_subclass__(?)
+  def __le__(self, value, /)
+  def __lt__(self, value, /)
+  def __ne__(self, value, /)
+  def __new__(*args, **kwargs)
+  def __reduce__(self, /)
+  def __reduce_ex__(self, protocol, /)
+  def __repr__(self) -> 'str'
+  def __setattr__(self, name, value, /)
+  def __sizeof__(self, /)
+  def __str__(self, /)
+  def __subclasshook__(?)
+  def explain(self, sequence: 'str', omega: 'int' = 1) -> 'Prism'
+  def factor(self, sequences, omega: 'int' = 1)
+  def flag(self, sequences, threshold: 'float' = 1.0, omega: 'int' = 1)
+  property model
 class PseqAnalysis:
   def __delattr__(self, name, /)
   def __dir__(self, /)
@@ -267,7 +339,6 @@ class PseqAnalysis:
   def novelty(self, n: 'float', *, bins: 'int' = 2048) -> 'float'
   property true_max_surprisal
   property true_min_surprisal
-
 class PublicnessModel:
   def __delattr__(self, name, /)
   def __dir__(self, /)
@@ -301,13 +372,35 @@ class PublicnessModel:
   property n_depth_groups
   property n_repertoires
   def pmf(self, p: 'float') -> 'np.ndarray'
-
+class ScaleIndex:
+  def __delattr__(self, name, /)
+  def __dir__(self, /)
+  def __eq__(self, value, /)
+  def __format__(self, format_spec, /)
+  def __ge__(self, value, /)
+  def __getattribute__(self, name, /)
+  def __getstate__(self, /)
+  def __gt__(self, value, /)
+  def __hash__(self, /)
+  def __init__(self, *, calibration, n_sim, seed, x, lam, t)
+  def __init_subclass__(?)
+  def __le__(self, value, /)
+  def __lt__(self, value, /)
+  def __ne__(self, value, /)
+  def __new__(*args, **kwargs)
+  def __reduce__(self, /)
+  def __reduce_ex__(self, protocol, /)
+  def __repr__(self) -> 'str'
+  def __setattr__(self, name, value, /)
+  def __sizeof__(self, /)
+  def __str__(self, /)
+  def __subclasshook__(?)
+  def channels(self, model, sequences) -> 'dict'
+  property lengths
+  def score(self, model, sequences)
+def attribute(model, sequence) -> 'Attribution'
 def effective_threads() -> 'int'
-
 def memory_budget() -> 'int'
-
 def set_memory_budget(nbytes: 'int') -> 'None'
-
 def set_threads(n: 'int') -> 'None'
-
 def threads() -> 'int'

@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# Run a command under a hard address-space ceiling and a wall-clock timeout.
+#
+# BEAM can be asked for a configuration whose tables run to hundreds of
+# gigabytes. calloc() on Linux grants that lazily, so the process does not fail
+# where it asked -- it fails later, when the pages are first written, by which
+# point the OOM killer is choosing which process on the machine dies. Twice
+# during this work that was the user's editor.
+#
+# `ulimit -v` turns that into a clean allocation failure inside the process
+# that asked for it. Nothing that builds or scores a BEAM model should be run
+# any other way, and that includes one-line sanity checks.
+#
+#   .dev/bounded [-m GB] [-t SECONDS] -- command...
+set -u
+MEM_GB=${BEAM_BOUND_GB:-12}
+SECS=${BEAM_BOUND_SECS:-900}
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -m) MEM_GB=$2; shift 2 ;;
+    -t) SECS=$2; shift 2 ;;
+    --) shift; break ;;
+    *)  break ;;
+  esac
+done
+[ $# -gt 0 ] || { echo "usage: .dev/bounded [-m GB] [-t SECS] -- cmd..." >&2; exit 2; }
+ulimit -v $((MEM_GB * 1024 * 1024)) 2>/dev/null || {
+  echo "bounded: could not set an address-space limit; refusing to run" >&2
+  exit 3
+}
+exec timeout --signal=TERM --kill-after=30 "$SECS" "$@"

@@ -8,7 +8,7 @@
 /* ── Shared scratch for a forward sweep ──────────────────────── */
 
 typedef struct {
-    double *w;      /* [n_states * 20] edge weights of the current layer */
+    double *w;      /* [n_states * R] edge weights of the current layer  */
     double *tail;   /* [n_states]      sink weights                      */
     double *cur;    /* [(order+1) * n_states] jet, moment-major          */
     double *next;
@@ -18,9 +18,10 @@ static void sweep_free(Sweep *s) {
     free(s->w); free(s->tail); free(s->cur); free(s->next);
 }
 
-static bool sweep_alloc(Sweep *s, uint32_t n_states, uint32_t n_moments) {
+static bool sweep_alloc(Sweep *s, uint32_t n_states, uint32_t n_residues,
+                        uint32_t n_moments) {
     const size_t jet = (size_t)n_moments * n_states;
-    s->w    = (double *)malloc((size_t)n_states * BEAM_RESIDUES * sizeof(double));
+    s->w    = (double *)malloc((size_t)n_states * n_residues * sizeof(double));
     s->tail = (double *)malloc((size_t)n_states * sizeof(double));
     s->cur  = (double *)calloc(jet, sizeof(double));
     s->next = (double *)calloc(jet, sizeof(double));
@@ -56,8 +57,8 @@ void beam_binomials(double c[][BEAM_MAX_MOMENT + 1], uint32_t n) {
 BeamError jet_sweep(const BeamModel *m, uint32_t len, double q,
                           uint32_t order, double *out_moments,
                           double *out_log_z) {
-    const uint32_t A = BEAM_ALPHABET;
-    const uint32_t R = BEAM_RESIDUES;
+    const uint32_t A = m->n_alphabet;
+    const uint32_t R = m->n_residues;
     const uint32_t S = m->n_states;
     const uint32_t SK = m->state_shift;
     const uint32_t NM = order + 1u;
@@ -66,7 +67,7 @@ BeamError jet_sweep(const BeamModel *m, uint32_t len, double q,
     beam_binomials(bc, order);
 
     Sweep sw = {0};
-    if (!sweep_alloc(&sw, S, NM))
+    if (!sweep_alloc(&sw, S, R, NM))
         return BEAM_EALLOC("the jet-sweep scratch buffers");
 
     /* Sweep the reached set, not the state space. This asks for no layer

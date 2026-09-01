@@ -37,9 +37,9 @@ static int pass_count = 0, fail_count = 0;
 
 #include "test_utils.h"
 
-#define A   BEAM_ALPHABET
-#define R   BEAM_RESIDUES
-#define NON BEAM_NONE
+#define A   BEAM_AA_RADIX
+#define R   BEAM_AA_RESIDUES
+#define NON BEAM_AA_NONE
 
 /* ── A small, CDR3-shaped training corpus ────────────────────── */
 
@@ -212,7 +212,7 @@ static void test_sparse_requires_strict_zero_backoff(void) {
 
 static void test_sparse_rows_boundaries_and_erase(void) {
     BeamSparseRows rows = {0};
-    ASSERT_MSG(beam_sparse_init(&rows, 8u, 2u, true) == BEAM_OK,
+    ASSERT_MSG(beam_sparse_init(&rows, 8u, 2u, R, true) == BEAM_OK,
                "initialise mutable sparse rows");
     ASSERT_MSG(beam_sparse_n_rows(&rows) == 0u, "the store starts empty");
     for (uint32_t row = 0; row < 8u; ++row)
@@ -265,7 +265,7 @@ static void test_sparse_rows_boundaries_and_erase(void) {
     beam_sparse_destroy(&rows);
 
     BeamSparseRows finalized = {0};
-    ASSERT_MSG(beam_sparse_init(&finalized, 8u, 1u, false) == BEAM_OK,
+    ASSERT_MSG(beam_sparse_init(&finalized, 8u, 1u, R, false) == BEAM_OK,
                "initialise immutable finalized rows");
     double *last = beam_sparse_row_mut(&finalized, 7u, 0u, true);
     ASSERT_MSG(last != NULL, "finalization may populate an immutable store");
@@ -280,7 +280,7 @@ static void test_sparse_rows_boundaries_and_erase(void) {
 
 static void test_sparse_growth_failure_is_atomic(void) {
     BeamSparseRows rows = {0};
-    ASSERT_MSG(beam_sparse_init(&rows, 16u, 1u, true) == BEAM_OK,
+    ASSERT_MSG(beam_sparse_init(&rows, 16u, 1u, R, true) == BEAM_OK,
                "initialise sparse rows");
     for (uint32_t row = 0; row < 8u; ++row) {
         double *values = beam_sparse_row_mut(&rows, row, 0u, true);
@@ -440,22 +440,22 @@ static void test_forward_context_packing(void) {
 
     /* pos 4 (L), order 3: c_3 = s[1] = A = 0, c_2 = s[2] = S = 15,
      *                     c_1 = s[3] = S = 15  ->  0*441 + 15*21 + 15 */
-    ASSERT_MSG(beam_ctx_forward(CASSL, 4, 3u) == 0u * 441u + 15u * 21u + 15u,
+    ASSERT_MSG(beam_ctx_forward(CASSL, 4, 3u, A) == 0u * 441u + 15u * 21u + 15u,
                "forward order-3 context at position 4");
 
     /* pos 1 (A), order 3: two slots fall off the front and pad with NONE.
      *   c_3 = NONE = 20, c_2 = NONE = 20, c_1 = s[0] = C = 1 */
-    ASSERT_MSG(beam_ctx_forward(CASSL, 1, 3u) == 20u * 441u + 20u * 21u + 1u,
+    ASSERT_MSG(beam_ctx_forward(CASSL, 1, 3u, A) == 20u * 441u + 20u * 21u + 1u,
                "forward order-3 context at position 1 is sentinel-padded");
 
     /* pos 0, order 2: nothing precedes it at all. */
-    ASSERT_MSG(beam_ctx_forward(CASSL, 0, 2u) == 20u * 21u + 20u,
+    ASSERT_MSG(beam_ctx_forward(CASSL, 0, 2u, A) == 20u * 21u + 20u,
                "forward order-2 context at position 0 is all sentinel");
 
     /* A shorter context is a SUFFIX of a longer one, which is the property the
      * DAG relies on when it reads every forward order out of one state. */
-    ASSERT_MSG(beam_ctx_forward(CASSL, 4, 2u)
-               == beam_ctx_forward(CASSL, 4, 3u) % 441u,
+    ASSERT_MSG(beam_ctx_forward(CASSL, 4, 2u, A)
+               == beam_ctx_forward(CASSL, 4, 3u, A) % 441u,
                "a shorter forward context must be a suffix of a longer one");
     PASS();
 }
@@ -465,17 +465,17 @@ static void test_backward_context_packing(void) {
 
     /* pos 0 (C), order 3: c_3 = s[3] = S = 15, c_2 = s[2] = S = 15,
      *                     c_1 = s[1] = A = 0  ->  15*441 + 15*21 + 0 */
-    ASSERT_MSG(beam_ctx_backward(CASSL, 0, 5u, 3u)
+    ASSERT_MSG(beam_ctx_backward(CASSL, 0, 5u, 3u, A)
                == 15u * 441u + 15u * 21u + 0u,
                "backward order-3 context at position 0");
 
     /* pos 4 (L) is the last residue: every right-context slot is off the end. */
-    ASSERT_MSG(beam_ctx_backward(CASSL, 4, 5u, 3u)
+    ASSERT_MSG(beam_ctx_backward(CASSL, 4, 5u, 3u, A)
                == 20u * 441u + 20u * 21u + 20u,
                "backward order-3 context at the C terminus is all sentinel");
 
     /* pos 3 (S), order 2: c_2 = off the end = 20, c_1 = s[4] = L = 9. */
-    ASSERT_MSG(beam_ctx_backward(CASSL, 3, 5u, 2u) == 20u * 21u + 9u,
+    ASSERT_MSG(beam_ctx_backward(CASSL, 3, 5u, 2u, A) == 20u * 21u + 9u,
                "backward order-2 context one in from the C terminus");
 
     /*
@@ -483,8 +483,8 @@ static void test_backward_context_packing(void) {
      * DIFFERENT residues, so they cannot be each other's mirror image. A model
      * that swapped them would still train and still normalise.
      */
-    ASSERT_MSG(beam_ctx_forward(CASSL, 1, 2u) == 20u * 21u + 1u
-               && beam_ctx_backward(CASSL, 1, 5u, 2u) == 15u * 21u + 15u,
+    ASSERT_MSG(beam_ctx_forward(CASSL, 1, 2u, A) == 20u * 21u + 1u
+               && beam_ctx_backward(CASSL, 1, 5u, 2u, A) == 15u * 21u + 15u,
                "the two directions must disagree at the same position");
     PASS();
 }
@@ -507,13 +507,13 @@ static void test_backward_context_from_state_matches_the_sequence(void) {
 
     /* slot[0]=C(scored) slot[1]=A slot[2]=S slot[3]=S slot[4]=x=L, and
      * c_j = slot[j] packed most-distant-first. */
-    ASSERT_MSG(beam_ctx_backward_from_state(state, x, K, 4u)
+    ASSERT_MSG(beam_ctx_backward_from_state(state, x, K, 4u, A)
                == 9u * 9261u + 15u * 441u + 15u * 21u + 0u,
                "order-4 backward context out of a state");
-    ASSERT_MSG(beam_ctx_backward_from_state(state, x, K, 3u)
+    ASSERT_MSG(beam_ctx_backward_from_state(state, x, K, 3u, A)
                == 15u * 441u + 15u * 21u + 0u,
                "order-3 backward context out of a state");
-    ASSERT_MSG(beam_ctx_backward_from_state(state, x, K, 2u)
+    ASSERT_MSG(beam_ctx_backward_from_state(state, x, K, 2u, A)
                == 15u * 21u + 0u,
                "order-2 backward context out of a state");
 
@@ -524,21 +524,21 @@ static void test_backward_context_from_state_matches_the_sequence(void) {
      * a modulo of their own longer form, and that is not what distinguishes
      * them; what does is which residue leaves.
      */
-    ASSERT_MSG(beam_ctx_backward_from_state(state, x, K, 3u)
-               == beam_ctx_backward_from_state(state, x, K, 4u) % 9261u,
+    ASSERT_MSG(beam_ctx_backward_from_state(state, x, K, 3u, A)
+               == beam_ctx_backward_from_state(state, x, K, 4u, A) % 9261u,
                "shortening a backward context must drop x, the most distant");
-    ASSERT_MSG(beam_ctx_backward_from_state(state, x, K, 3u)
-               == beam_ctx_backward_from_state(state, 0u, K, 3u),
+    ASSERT_MSG(beam_ctx_backward_from_state(state, x, K, 3u, A)
+               == beam_ctx_backward_from_state(state, 0u, K, 3u, A),
                "at order 3 the emitted residue is outside the context entirely");
-    ASSERT_MSG(beam_ctx_backward_from_state(state, x, K, 4u)
-               != beam_ctx_backward_from_state(state, 0u, K, 4u),
+    ASSERT_MSG(beam_ctx_backward_from_state(state, x, K, 4u, A)
+               != beam_ctx_backward_from_state(state, 0u, K, 4u, A),
                "at order 4 the emitted residue IS the most distant slot");
 
     /* The state is "CASS" and x is "L", so the scored residue is CASSL[0] and
      * its right context is exactly what the sequence form reports. */
     for (uint32_t k = 2u; k <= 3u; ++k) {
-        ASSERT_MSG(beam_ctx_backward_from_state(state, x, K, k)
-                   == beam_ctx_backward(CASSL, 0, 5u, k),
+        ASSERT_MSG(beam_ctx_backward_from_state(state, x, K, k, A)
+                   == beam_ctx_backward(CASSL, 0, 5u, k, A),
                    "the state form and the sequence form must agree");
     }
 
@@ -550,9 +550,9 @@ static void test_backward_context_from_state_matches_the_sequence(void) {
      * the forward trick here would produce a model that trains, normalises and
      * scores perfectly while reading its right-hand context backwards.
      */
-    ASSERT_MSG(beam_ctx_backward_from_state(state, x, K, 3u) != state % 9261u,
+    ASSERT_MSG(beam_ctx_backward_from_state(state, x, K, 3u, A) != state % 9261u,
                "a backward context must not be a suffix of the state index");
-    ASSERT_MSG(beam_ctx_backward_from_state(state, x, K, 2u) != state % 441u,
+    ASSERT_MSG(beam_ctx_backward_from_state(state, x, K, 2u, A) != state % 441u,
                "the order-2 backward context is not a suffix of the state either");
     PASS();
 }
@@ -577,38 +577,38 @@ static void test_backward_wide_context_matches_the_sequence(void) {
     const uint32_t state = 1u * 9261u + 0u * 441u + 15u * 21u + 15u;
     const uint32_t x = 9u;
 
-    ASSERT_MSG(beam_ctx_backward_wide_from_state(state, x, SK, K, 4u)
+    ASSERT_MSG(beam_ctx_backward_wide_from_state(state, x, SK, K, 4u, A)
                == ((0u * A + 15u) * A + 15u) * A + 9u,
                "order-4 nearest-first backward context out of a state");
     /* Nearest-first makes the full-width index plain arithmetic on the state's
      * low digits, which is the whole point of the packing. */
-    ASSERT_MSG(beam_ctx_backward_wide_from_state(state, x, SK, K, 4u)
+    ASSERT_MSG(beam_ctx_backward_wide_from_state(state, x, SK, K, 4u, A)
                == (state % SK) * A + x,
                "a full-width backward wide context is (state % shift) * A + x");
     /* A narrower context drops the MOST DISTANT residue, which here is x. */
-    ASSERT_MSG(beam_ctx_backward_wide_from_state(state, x, SK, K, 3u)
+    ASSERT_MSG(beam_ctx_backward_wide_from_state(state, x, SK, K, 3u, A)
                == (0u * A + 15u) * A + 15u,
                "order-3 nearest-first backward context out of a state");
-    ASSERT_MSG(beam_ctx_backward_wide_from_state(state, x, SK, K, 3u)
-               == beam_ctx_backward_wide_from_state(state, 0u, SK, K, 3u),
+    ASSERT_MSG(beam_ctx_backward_wide_from_state(state, x, SK, K, 3u, A)
+               == beam_ctx_backward_wide_from_state(state, 0u, SK, K, 3u, A),
                "below full width the emitted residue is outside the context");
 
     /* The state is "CASS" and x is "L", so this is CASSL scored at position 0. */
     for (uint32_t k = 2u; k <= 4u; ++k) {
-        ASSERT_MSG(beam_ctx_backward_wide_from_state(state, x, SK, K, k)
-                   == beam_ctx_backward_wide(CASSL, 0, 5u, k),
+        ASSERT_MSG(beam_ctx_backward_wide_from_state(state, x, SK, K, k, A)
+                   == beam_ctx_backward_wide(CASSL, 0, 5u, k, A),
                    "the state form and the sequence form must agree");
         /* And the packing is exactly the common one with its digits reversed,
          * which is the relabelling finalize applies to the table. */
-        ASSERT_MSG(beam_ctx_backward_wide(CASSL, 0, 5u, k)
-                   == beam_ctx_reverse(beam_ctx_backward(CASSL, 0, 5u, k), k),
+        ASSERT_MSG(beam_ctx_backward_wide(CASSL, 0, 5u, k, A)
+                   == beam_ctx_reverse(beam_ctx_backward(CASSL, 0, 5u, k, A), k, A),
                    "nearest-first is most-distant-first with the digits reversed");
     }
 
     /* Reversal must be an involution on every index a table can hold, or the
      * relocation in finalize would drop rows on the floor. */
     for (uint32_t c = 0; c < 21u * 21u * 21u; ++c)
-        ASSERT_MSG(beam_ctx_reverse(beam_ctx_reverse(c, 3u), 3u) == c,
+        ASSERT_MSG(beam_ctx_reverse(beam_ctx_reverse(c, 3u, A), 3u, A) == c,
                    "reversing an order-3 context twice must be the identity");
     PASS();
 }
@@ -660,7 +660,7 @@ static void test_results_do_not_depend_on_the_thread_count(void) {
     ASSERT_MSG(m != NULL, "build");
 
     double h1 = 0.0, h4 = 0.0, d1 = 0.0, d4 = 0.0, s1 = 0.0, s4 = 0.0;
-    double dep1[BEAM_MAX_LENGTH] = {0}, dep4[BEAM_MAX_LENGTH] = {0};
+    double dep1[BEAM_MAX_LENGTH_CEILING] = {0}, dep4[BEAM_MAX_LENGTH_CEILING] = {0};
 
     beam_model_set_threads(1);
     ASSERT_MSG(beam_model_entropy(m, &h1) == BEAM_OK, "entropy at 1 thread");
@@ -679,7 +679,9 @@ static void test_results_do_not_depend_on_the_thread_count(void) {
     ASSERT_MSG(h1 == h4, "the entropy must not depend on the thread count");
     ASSERT_MSG(d1 == d4, "a Hill number must not depend on the thread count");
     ASSERT_MSG(s1 == s4, "the path count must not depend on the thread count");
-    for (uint32_t i = 0; i < BEAM_MAX_LENGTH; ++i)
+    /* Bounded by what the model actually writes, not by the buffer, which is
+     * now sized for the longest sequence any alphabet could ask for. */
+    for (uint32_t i = 0; i < beam_model_config(m)->max_length; ++i)
         ASSERT_MSG(dep1[i] == dep4[i],
                    "the depth profile must not depend on the thread count");
 
@@ -1015,7 +1017,7 @@ static void test_layer_weights_reproduce_the_scorer(void) {
     ASSERT_MSG(m != NULL, "build");
 
     const char *seq = "CASSLGEQYF";
-    uint8_t buf[BEAM_MAX_LENGTH];
+    uint8_t buf[BEAM_MAX_LENGTH_CEILING];
     uint32_t len = 0;
     ASSERT_MSG(beam_encode(m, seq, buf, &len), "encode");
 
@@ -1105,7 +1107,7 @@ static void test_explain_reconstructs_the_score(void) {
     BeamModel *m = build(4, 27);
     ASSERT_MSG(m != NULL, "build");
     const char *seq = "CASSLGEQYF";
-    double fwd[BEAM_MAX_LENGTH], bwd[BEAM_MAX_LENGTH];
+    double fwd[BEAM_MAX_LENGTH_CEILING], bwd[BEAM_MAX_LENGTH_CEILING];
     uint32_t len = 0;
     ASSERT_MSG(beam_model_explain(m, seq, fwd, bwd, &len) == BEAM_OK, "explain");
     ASSERT_MSG(len == strlen(seq), "length");
@@ -1741,49 +1743,73 @@ static void test_save_load_round_trip(void) {
     PASS();
 }
 
-static void test_dense_v1_file_still_loads(void) {
-    /* Format 2 changed only the sparse payload. A dense format-2 body is the
-     * exact legacy layout, so relabel it as v1 and recompute the CRC to pin
-     * the backward-compatible reader without carrying a large binary fixture. */
+/*
+ * Rewrite a format-3 file as an older format, in place.
+ *
+ * The format-3 header appends eight bytes -- the alphabet and a reserved word
+ * -- to what formats 1 and 2 wrote, so an older header is exactly a prefix of
+ * a newer one and downgrading is a splice: drop those eight bytes, relabel
+ * the format, recompute the CRC. That is what lets the backward-compatible
+ * reader be pinned without carrying binary fixtures that nothing regenerates.
+ */
+static bool rewrite_as_legacy_format(const char *path, uint32_t format) {
+    FILE *f = fopen(path, "rb");
+    if (!f) return false;
+    if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return false; }
+    const long end = ftell(f);
+    rewind(f);
+    unsigned char *b = (unsigned char *)malloc((size_t)end);
+    if (!b || fread(b, 1, (size_t)end, f) != (size_t)end) {
+        free(b); fclose(f); return false;
+    }
+    fclose(f);
+
+    const size_t tail = 2u * sizeof(uint32_t);   /* alphabet + reserved */
+    const size_t v2_bytes = 136u;
+    memcpy(b + sizeof(uint32_t), &format, sizeof format);
+    memmove(b + v2_bytes, b + v2_bytes + tail,
+            (size_t)end - v2_bytes - tail);
+    const long shorter = end - (long)tail;
+
+    const uint32_t crc = beam_model_crc32c(0u, b,
+                                         (size_t)shorter - sizeof(uint32_t));
+    memcpy(b + shorter - (long)sizeof crc, &crc, sizeof crc);
+
+    f = fopen(path, "wb");
+    if (!f) { free(b); return false; }
+    const bool ok = fwrite(b, 1, (size_t)shorter, f) == (size_t)shorter;
+    fclose(f);
+    free(b);
+    return ok;
+}
+
+/* Both formats that predate the alphabet field must still load, and must load
+ * as amino acid -- which is what they are, and what a zeroed field says. */
+static void test_legacy_format_files_still_load(void) {
     BeamModel *m = build(2, 12);
     ASSERT_MSG(m != NULL, "build");
-    const char *path = "build/test_dense_v1.tmp";
-    ASSERT_MSG(beam_model_save(m, path) == BEAM_OK, "save dense v2");
 
-    FILE *f = fopen(path, "rb");
-    ASSERT_MSG(f != NULL, "open saved file");
-    ASSERT_MSG(fseek(f, 0, SEEK_END) == 0, "seek end");
-    const long end = ftell(f);
-    ASSERT_MSG(end > (long)(2u * sizeof(uint32_t)), "file has header and CRC");
-    rewind(f);
-    unsigned char *bytes = (unsigned char *)malloc((size_t)end);
-    ASSERT_MSG(bytes != NULL, "allocate file buffer");
-    ASSERT_MSG(fread(bytes, 1, (size_t)end, f) == (size_t)end, "read file");
-    fclose(f);
+    const uint32_t legacy[] = { 1u, 2u };
+    for (unsigned k = 0; k < 2u; ++k) {
+        const char *path = "build/test_legacy_format.tmp";
+        ASSERT_MSG(beam_model_save(m, path) == BEAM_OK, "save current format");
+        ASSERT_MSG(rewrite_as_legacy_format(path, legacy[k]),
+                   "rewrite as a legacy format");
 
-    const uint32_t v1 = 1u;
-    memcpy(bytes + sizeof(uint32_t), &v1, sizeof v1);
-    const uint32_t crc = beam_model_crc32c(0u, bytes,
-                                         (size_t)end - sizeof(uint32_t));
-    memcpy(bytes + (size_t)end - sizeof crc, &crc, sizeof crc);
-    f = fopen(path, "wb");
-    ASSERT_MSG(f != NULL, "rewrite legacy fixture");
-    ASSERT_MSG(fwrite(bytes, 1, (size_t)end, f) == (size_t)end,
-               "write legacy fixture");
-    fclose(f);
-    free(bytes);
-
-    BeamModel *back = beam_model_load(path);
-    ASSERT_MSG(back != NULL, "load dense v1");
-    ASSERT_MSG(!beam_model_config(back)->sparse,
-               "legacy dense storage stays dense");
-    for (uint32_t i = 0; i < 3u; ++i)
-        ASSERT_MSG(beam_model_log_pseq(back, STRICT_TRAIN[i])
-                   == beam_model_log_pseq(m, STRICT_TRAIN[i]),
-                   "legacy dense score must round-trip bit-identically");
-    beam_model_destroy(back);
+        BeamModel *back = beam_model_load(path);
+        ASSERT_MSG(back != NULL, "a legacy file must still load");
+        ASSERT_MSG(beam_model_alphabet(back) == BEAM_ALPHABET_AA,
+                   "a file written before the alphabet field is amino acid");
+        ASSERT_MSG(!beam_model_config(back)->sparse,
+                   "legacy dense storage stays dense");
+        for (uint32_t i = 0; i < 3u; ++i)
+            ASSERT_MSG(beam_model_log_pseq(back, STRICT_TRAIN[i])
+                       == beam_model_log_pseq(m, STRICT_TRAIN[i]),
+                       "a legacy score must round-trip bit-identically");
+        beam_model_destroy(back);
+        remove(path);
+    }
     beam_model_destroy(m);
-    remove(path);
     PASS();
 }
 
@@ -2175,7 +2201,7 @@ int main(void) {
     RUN_TEST(test_subtract_refuses_to_empty_the_model);
     RUN_TEST(test_failures_carry_a_message);
     RUN_TEST(test_save_load_round_trip);
-    RUN_TEST(test_dense_v1_file_still_loads);
+    RUN_TEST(test_legacy_format_files_still_load);
     RUN_TEST(test_corrupt_file_is_rejected);
     RUN_TEST(test_compact_keeps_scores);
 

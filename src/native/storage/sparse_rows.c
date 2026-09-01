@@ -16,8 +16,8 @@ static bool sparse_array_bytes(size_t count, size_t element_size,
     return true;
 }
 
-static bool sparse_value_bytes(uint32_t rows, size_t *out) {
-    const size_t row_bytes = (size_t)BEAM_RESIDUES * sizeof(double);
+static bool sparse_value_bytes(uint32_t rows, uint32_t stride, size_t *out) {
+    const size_t row_bytes = (size_t)stride * sizeof(double);
     return sparse_array_bytes((size_t)rows, row_bytes, out);
 }
 
@@ -59,7 +59,7 @@ static bool sparse_grow_partition(BeamSparseRows *t, uint32_t part,
     if (new_capacity < needed) return false;
 
     size_t value_bytes;
-    if (!sparse_value_bytes(new_capacity, &value_bytes)) return false;
+    if (!sparse_value_bytes(new_capacity, t->stride, &value_bytes)) return false;
 
     double *new_values = (double *)malloc(value_bytes);
     if (!new_values) return false;
@@ -86,7 +86,7 @@ static bool sparse_grow_partition(BeamSparseRows *t, uint32_t part,
 
     if (occupied != 0u) {
         size_t occupied_bytes;
-        if (!sparse_value_bytes(occupied, &occupied_bytes)) {
+        if (!sparse_value_bytes(occupied, t->stride, &occupied_bytes)) {
             free(new_row_ids);
             free(new_values);
             return false;
@@ -109,7 +109,8 @@ static bool sparse_grow_partition(BeamSparseRows *t, uint32_t part,
 }
 
 BeamError beam_sparse_init(BeamSparseRows *t, uint32_t n_dense_rows,
-                              uint32_t n_parts, bool mutable_rows) {
+                              uint32_t n_parts, uint32_t stride,
+                              bool mutable_rows) {
     if (!t) return BEAM_ENULL("sparse table");
 
     memset(t, 0, sizeof(*t));
@@ -125,8 +126,13 @@ BeamError beam_sparse_init(BeamSparseRows *t, uint32_t n_dense_rows,
             __func__);
     }
 
+    if (stride == 0u) {
+        return BEAM_ERANGE("%s: stride must be at least one", __func__);
+    }
+
     t->n_dense_rows = n_dense_rows;
     t->n_parts = n_parts;
+    t->stride = stride;
     t->mutable_rows = mutable_rows;
 
     if (n_dense_rows != 0u) {
@@ -207,7 +213,7 @@ const double *beam_sparse_row(const BeamSparseRows *t, uint32_t row,
         return NULL;
     }
 
-    return t->values[part] + (size_t)slot * BEAM_RESIDUES;
+    return t->values[part] + (size_t)slot * t->stride;
 }
 
 double *beam_sparse_row_mut(BeamSparseRows *t, uint32_t row,
@@ -225,7 +231,7 @@ double *beam_sparse_row_mut(BeamSparseRows *t, uint32_t row,
         if (t->mutable_rows &&
             (!t->row_ids[part] || t->row_ids[part][old_slot] != row))
             return NULL;
-        return t->values[part] + (size_t)old_slot * BEAM_RESIDUES;
+        return t->values[part] + (size_t)old_slot * t->stride;
     }
     if (!create) return NULL;
 
@@ -238,8 +244,8 @@ double *beam_sparse_row_mut(BeamSparseRows *t, uint32_t row,
         return NULL;
     }
 
-    double *result = t->values[part] + (size_t)slot * BEAM_RESIDUES;
-    memset(result, 0, (size_t)BEAM_RESIDUES * sizeof(*result));
+    double *result = t->values[part] + (size_t)slot * t->stride;
+    memset(result, 0, (size_t)t->stride * sizeof(*result));
     if (t->row_ids && t->row_ids[part]) t->row_ids[part][slot] = row;
     t->size[part] = slot + 1u;
     t->index[row] = slot;
@@ -265,15 +271,15 @@ bool beam_sparse_erase(BeamSparseRows *t, uint32_t row, uint32_t part) {
         if (moved_row >= t->n_dense_rows || moved_row == row ||
             t->index[moved_row] != last)
             return false;
-        memcpy(t->values[part] + (size_t)slot * BEAM_RESIDUES,
-               t->values[part] + (size_t)last * BEAM_RESIDUES,
-               (size_t)BEAM_RESIDUES * sizeof(double));
+        memcpy(t->values[part] + (size_t)slot * t->stride,
+               t->values[part] + (size_t)last * t->stride,
+               (size_t)t->stride * sizeof(double));
         t->row_ids[part][slot] = moved_row;
         t->index[moved_row] = slot;
     }
 
-    memset(t->values[part] + (size_t)last * BEAM_RESIDUES, 0,
-           (size_t)BEAM_RESIDUES * sizeof(double));
+    memset(t->values[part] + (size_t)last * t->stride, 0,
+           (size_t)t->stride * sizeof(double));
     t->row_ids[part][last] = BEAM_ROW_MISSING;
     t->index[row] = BEAM_ROW_MISSING;
     t->size[part] = last;
@@ -301,7 +307,7 @@ void beam_sparse_shrink(BeamSparseRows *t) {
         if (t->mutable_rows && (!t->row_ids || !t->row_ids[part])) continue;
 
         size_t value_bytes;
-        if (!sparse_value_bytes(occupied, &value_bytes)) continue;
+        if (!sparse_value_bytes(occupied, t->stride, &value_bytes)) continue;
         double *new_values = (double *)malloc(value_bytes);
         if (!new_values) continue;
 
@@ -372,7 +378,7 @@ uint64_t beam_sparse_memory_bytes(const BeamSparseRows *t) {
                 bytes = sparse_add_saturating(
                     bytes, sparse_mul_saturating(
                                capacity,
-                               (uint64_t)BEAM_RESIDUES * sizeof(double)));
+                               (uint64_t)t->stride * sizeof(double)));
             }
             if (t->row_ids && t->row_ids[part]) {
                 bytes = sparse_add_saturating(

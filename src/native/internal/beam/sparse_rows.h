@@ -1,6 +1,6 @@
 /**
  * @file sparse_rows.h
- * @brief Sparse 20-value row storage.
+ * @brief Sparse per-residue row storage.
  *
  * Internal to src/native/. Not a public header and not installed.
  * Included through beam/internal.h, which is the umbrella every
@@ -12,12 +12,13 @@
 
 #include "beam/model.h"
 
-/* ── Sparse 20-value row storage ────────────────────────────── */
+/* ── Sparse per-residue row storage ─────────────────────────── */
 
 #define BEAM_ROW_MISSING UINT32_MAX
 
 /**
- * Dense row directory with sparse 20-double payloads.
+ * Dense row directory with sparse per-row payloads, one double per
+ * emitted residue.
  *
  * Count tables are partitioned by the depth task that owns their rows. That
  * lets the existing parallel observation loop grow each payload without a
@@ -34,7 +35,7 @@ typedef struct {
      * step by hand.
      */
     double    *values0;
-    double   **values;      /* [n_parts][capacity[p] * 20]                   */
+    double   **values;      /* [n_parts][capacity[p] * stride]               */
     uint32_t **row_ids;     /* slot -> dense row, for every table.  Finalized
                              * tables fill ascending so theirs is sorted;
                              * mutable count tables fill in observation order
@@ -43,11 +44,21 @@ typedef struct {
     uint32_t  *capacity;    /* allocated rows per partition                  */
     uint32_t   n_dense_rows;
     uint32_t   n_parts;
+    /**
+     * Doubles per row: the emitting alphabet's residue count.
+     *
+     * Held here rather than read from the model, because the innermost
+     * lookup below has no model to read it from, and threading one through
+     * would cost a pointer chase in the hottest loop in the library to
+     * recover a number that cannot change for the life of the table.
+     */
+    uint32_t   stride;
     bool       mutable_rows;
 } BeamSparseRows;
 
 BeamError beam_sparse_init(BeamSparseRows *t, uint32_t n_dense_rows,
-                              uint32_t n_parts, bool mutable_rows);
+                              uint32_t n_parts, uint32_t stride,
+                              bool mutable_rows);
 void beam_sparse_destroy(BeamSparseRows *t);
 const uint32_t *beam_sparse_rows(const BeamSparseRows *t, uint32_t part,
                                      uint32_t *n);
@@ -88,7 +99,7 @@ static inline const double *beam_sparse_row_final(const BeamSparseRows *t,
     if (!t->values0) return beam_sparse_row(t, row, 0u);
     const uint32_t slot = t->index[row];
     if (slot == BEAM_ROW_MISSING) return NULL;
-    return t->values0 + (size_t)slot * BEAM_RESIDUES;
+    return t->values0 + (size_t)slot * t->stride;
 }
 
 #endif /* BEAM_INTERNAL_SPARSE_ROWS_H */

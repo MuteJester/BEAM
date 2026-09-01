@@ -15,6 +15,7 @@
  * platform this library targets.
  */
 #include <stdio.h>
+#include <stddef.h>
 
 #include "beam/crc32c.h"
 #include "beam/internal.h"
@@ -31,7 +32,8 @@
  * rebuilt. */
 #define BEAM_MAGIC        0x4245414Du   /* "BEAM" */
 #define BEAM_MAGIC_LEGACY 0x45444745u   /* "EDGE", pre-split; rejected */
-#define BEAM_FORMAT   2u
+#define BEAM_FORMAT   3u
+#define BEAM_FORMAT_V2       2u
 #define BEAM_FORMAT_DENSE_V1 1u
 
 /* ── Checksum ────────────────────────────────────────────────── */
@@ -108,7 +110,38 @@ typedef struct {
     double   total_weight;
     uint64_t n_observed;
     uint64_t n_skipped;
+
+    /*
+     * Format 3. APPENDED, rather than grouped with the other uint32s where it
+     * belongs, and the awkwardness buys the whole compatibility story: a
+     * format-1 or -2 header is then exactly a PREFIX of this one, so the
+     * reader takes the common bytes and asks for the rest only when the
+     * format says they are there. Grouping it would have made two layouts to
+     * parse and two chances to get an offset wrong.
+     *
+     * This field is not cosmetic. Alphabet size fully determines the payload
+     * layout -- row width, record size, every table's extent -- so without it
+     * a nucleotide model reads back either as CRC corruption or, worse, as an
+     * amino-acid model of the same shape. BEAM_ALPHABET_AA is 0, so the
+     * formats written before this field existed read back as what they are.
+     *
+     * `reserved` is written zero and ignored. Both of this header's earlier
+     * spare words were spent -- one on `strict`, one on `storage_sparse` --
+     * which is why adding the alphabet needed a format bump at all. Leaving
+     * one costs eight bytes a file and saves the next bump.
+     */
+    uint32_t alphabet;
+    uint32_t reserved;
 } BeamHeader;
+
+/* The bytes formats 1 and 2 wrote: everything up to the appended tail. */
+#define BEAM_HEADER_V2_BYTES offsetof(BeamHeader, alphabet)
+
+/* Pinned because these numbers are the file format. Trailing padding would be
+ * written to disk uninitialised-looking and could move with the compiler, so
+ * the tail is two explicit words rather than one word and a hole. */
+_Static_assert(sizeof(BeamHeader) == 144, "the format-3 header is 144 bytes");
+_Static_assert(BEAM_HEADER_V2_BYTES == 136, "formats 1 and 2 wrote 136 bytes");
 
 static bool write_all(FILE *f, const void *p, size_t n, uint32_t *crc) {
     if (n && fwrite(p, 1, n, f) != n) return false;
@@ -123,42 +156,50 @@ static bool read_all(FILE *f, void *p, size_t n, uint32_t *crc) {
 }
 
 #define BEAM_SPARSE_IO_ROWS 256u
-#define BEAM_SPARSE_RECORD_BYTES \
-    (sizeof(uint32_t) + BEAM_RESIDUES * sizeof(double))
+
+/*
+ * A record is a row index plus one double per emitted residue, so its size is
+ * the alphabet's and only known at run time. The staging block is sized by the
+ * widest alphabet instead, which is why every length below is computed rather
+ * than taken with sizeof: `sizeof block` is now the capacity, not the payload,
+ * and using it would write the tail of an amino-acid-sized buffer into a
+ * nucleotide file.
+ */
+#define BEAM_SPARSE_RECORD_MAX \
+    (sizeof(uint32_t) + BEAM_MAX_RESIDUES * sizeof(double))
 
 static bool write_count_table(FILE *f, const BeamModel *m, uint32_t dir,
                               BeamTableKind kind, uint32_t *crc) {
     const uint32_t nr = beam_count_n_rows(m, kind);
+    const size_t row_bytes = (size_t)m->n_residues * sizeof(double);
+    const size_t rec = sizeof(uint32_t) + row_bytes;
     if (!m->cfg.sparse) {
         const double *p = beam_dense_count_table_const(m, dir, kind);
-        return write_all(f, p,
-                         (size_t)nr * BEAM_RESIDUES * sizeof(double), crc);
+        return write_all(f, p, (size_t)nr * row_bytes, crc);
     }
 
     const BeamSparseRows *t = beam_sparse_count_table_const(m, dir, kind);
     const uint64_t occupied = beam_sparse_n_rows(t);
     if (!write_all(f, &occupied, sizeof occupied, crc)) return false;
     uint64_t written = 0;
-    unsigned char block[BEAM_SPARSE_IO_ROWS * BEAM_SPARSE_RECORD_BYTES];
+    unsigned char block[BEAM_SPARSE_IO_ROWS * BEAM_SPARSE_RECORD_MAX];
     uint32_t buffered = 0;
     for (uint32_t row = 0; row < nr; ++row) {
         const double *values = beam_count_row(m, dir, kind, row);
         if (!values) continue;
-        unsigned char *record = block
-                              + (size_t)buffered * BEAM_SPARSE_RECORD_BYTES;
+        unsigned char *record = block + (size_t)buffered * rec;
         memcpy(record, &row, sizeof row);
-        memcpy(record + sizeof row, values,
-               BEAM_RESIDUES * sizeof(double));
+        memcpy(record + sizeof row, values, row_bytes);
         buffered++;
         written++;
         if (buffered == BEAM_SPARSE_IO_ROWS) {
-            if (!write_all(f, block, sizeof block, crc)) return false;
+            if (!write_all(f, block, (size_t)BEAM_SPARSE_IO_ROWS * rec, crc))
+                return false;
             buffered = 0;
         }
     }
     if (buffered > 0
-        && !write_all(f, block,
-                      (size_t)buffered * BEAM_SPARSE_RECORD_BYTES, crc))
+        && !write_all(f, block, (size_t)buffered * rec, crc))
         return false;
     return written == occupied;
 }
@@ -166,37 +207,37 @@ static bool write_count_table(FILE *f, const BeamModel *m, uint32_t dir,
 static bool read_sparse_count_table(FILE *f, BeamModel *m, uint32_t dir,
                                     BeamTableKind kind, uint32_t *crc) {
     const uint32_t nr = beam_count_n_rows(m, kind);
+    const size_t row_bytes = (size_t)m->n_residues * sizeof(double);
+    const size_t rec = sizeof(uint32_t) + row_bytes;
     uint64_t occupied = 0;
     if (!read_all(f, &occupied, sizeof occupied, crc) || occupied > nr)
         return false;
     uint32_t previous = 0;
-    unsigned char block[BEAM_SPARSE_IO_ROWS * BEAM_SPARSE_RECORD_BYTES];
+    unsigned char block[BEAM_SPARSE_IO_ROWS * BEAM_SPARSE_RECORD_MAX];
     uint64_t consumed = 0;
     while (consumed < occupied) {
         const uint32_t take = (occupied - consumed) < BEAM_SPARSE_IO_ROWS
                             ? (uint32_t)(occupied - consumed)
                             : BEAM_SPARSE_IO_ROWS;
-        if (!read_all(f, block, (size_t)take * BEAM_SPARSE_RECORD_BYTES,
-                      crc))
+        if (!read_all(f, block, (size_t)take * rec, crc))
             return false;
         for (uint32_t j = 0; j < take; ++j) {
             const uint64_t i = consumed + j;
-            const unsigned char *record = block
-                                        + (size_t)j * BEAM_SPARSE_RECORD_BYTES;
+            const unsigned char *record = block + (size_t)j * rec;
             uint32_t row = 0;
-            double values[BEAM_RESIDUES];
+            double values[BEAM_MAX_RESIDUES];
             memcpy(&row, record, sizeof row);
-            memcpy(values, record + sizeof row, sizeof values);
+            memcpy(values, record + sizeof row, row_bytes);
             if (row >= nr || (i > 0 && row <= previous)) return false;
             bool any = false;
-            for (uint32_t x = 0; x < BEAM_RESIDUES; ++x) {
+            for (uint32_t x = 0; x < m->n_residues; ++x) {
                 if (!(values[x] >= 0.0) || !isfinite(values[x])) return false;
                 if (values[x] > 0.0) any = true;
             }
             if (!any) return false;
             double *dst = beam_count_row_mut(m, dir, kind, row, true);
             if (!dst) return false;
-            memcpy(dst, values, sizeof values);
+            memcpy(dst, values, row_bytes);
             previous = row;
         }
         consumed += take;
@@ -234,6 +275,8 @@ BeamError beam_model_save(const BeamModel *m, const char *path) {
     h.weight_forward  = m->cfg.weight_forward;
     h.weight_backward = m->cfg.weight_backward;
     h.storage_sparse  = m->cfg.sparse ? 1.0 : 0.0;
+    h.alphabet        = (uint32_t)m->cfg.alphabet;
+    h.reserved        = 0u;
     h.total_weight    = m->total_weight;
     h.n_observed      = m->n_observed;
     h.n_skipped       = m->n_skipped;
@@ -268,25 +311,49 @@ BeamModel *beam_model_load(const char *path) {
     FILE *f = fopen(path, "rb");
     if (!f) return NULL;
 
+    /*
+     * Read the bytes every format wrote, decide from `format` whether there
+     * is a tail, and only then read it. Reading `sizeof h` unconditionally
+     * would swallow the first eight bytes of a format-2 payload and then
+     * disagree with its CRC -- a corrupt-file report for a perfectly good
+     * file. Zeroed first, so an older format leaves `alphabet` at
+     * BEAM_ALPHABET_AA, which is what it is.
+     */
     BeamHeader h;
+    memset(&h, 0, sizeof h);
     uint32_t crc = 0;
-    if (!read_all(f, &h, sizeof h, &crc)
+    if (!read_all(f, &h, BEAM_HEADER_V2_BYTES, &crc)
         || h.magic != BEAM_MAGIC
         || (h.format != BEAM_FORMAT
+            && h.format != BEAM_FORMAT_V2
             && h.format != BEAM_FORMAT_DENSE_V1)) {
+        fclose(f);
+        return NULL;
+    }
+    if (h.format >= BEAM_FORMAT
+        && !read_all(f, (unsigned char *)&h + BEAM_HEADER_V2_BYTES,
+                     sizeof h - BEAM_HEADER_V2_BYTES, &crc)) {
+        fclose(f);
+        return NULL;
+    }
+    /* An alphabet this build does not know makes every table dimension in the
+     * payload unreadable, so it is refused here rather than misinterpreted. */
+    if (!beam_alphabet_info((BeamAlphabet)h.alphabet)) {
         fclose(f);
         return NULL;
     }
 
     BeamModelConfig cfg;
-    beam_model_config_default(&cfg);
+    beam_model_config_default_for((BeamAlphabet)h.alphabet, &cfg);
     cfg.order           = (uint8_t)h.order;
     cfg.depth_cap       = (uint8_t)h.depth_cap;
     cfg.max_length      = (uint8_t)h.max_length;
     cfg.strict          = (h.strict != 0u);
-    cfg.sparse          = h.format >= BEAM_FORMAT
+    /* Format 1 predates sparse storage entirely; from format 2 the word is
+     * meaningful and must be exactly 0 or 1. */
+    cfg.sparse          = h.format >= BEAM_FORMAT_V2
                         && h.storage_sparse == 1.0;
-    if (h.format >= BEAM_FORMAT
+    if (h.format >= BEAM_FORMAT_V2
         && h.storage_sparse != 0.0 && h.storage_sparse != 1.0) {
         fclose(f);
         return NULL;

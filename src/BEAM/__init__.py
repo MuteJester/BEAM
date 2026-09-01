@@ -21,6 +21,7 @@ from ._model import (
 )
 from ._publicness import PublicnessModel
 from .analytics.scale import Attribution, ScaleIndex, attribute
+from .prism import Prism, PrismScorer
 
 __all__ = [
     "BeamModel", "Atoms", "Builder", "Calibration", "Histogram",
@@ -28,5 +29,6 @@ __all__ = [
     "threads", "set_memory_budget", "set_threads",
     "PublicnessModel",
     "Attribution", "ScaleIndex", "attribute",
+    "Prism", "PrismScorer",
 ]
 __version__ = "0.1.0"

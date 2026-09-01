@@ -19,8 +19,8 @@
  */
 static BeamError by_depth_one(const BeamModel *m, uint32_t L, double q,
                              double *out) {
-    const uint32_t A = BEAM_ALPHABET;
-    const uint32_t R = BEAM_RESIDUES;
+    const uint32_t A = m->n_alphabet;
+    const uint32_t R = m->n_residues;
     const uint32_t S = m->n_states;
     const uint32_t SK = m->state_shift;
 

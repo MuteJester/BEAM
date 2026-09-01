@@ -32,6 +32,14 @@ all: build/libbeam.a
 
 build/libbeam.a: $(OBJS)
 	@mkdir -p $(@D)
+# Deleted before it is created, because `ar rcs` ADDS to an existing archive
+# rather than replacing it. A source removed from the manifest leaves its
+# object behind in the .a indefinitely, exporting symbols no source defines --
+# which is invisible until something reads the archive's symbol table, as
+# verification/check.py does. One such ghost was found in a working tree that
+# had not been `make clean`ed, and would have been recorded into the baseline
+# as public API.
+	@rm -f $@
 	ar rcs $@ $^
 
 # The target directory is created per object, so nested source layouts need no

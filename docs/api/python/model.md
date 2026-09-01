@@ -7,14 +7,15 @@ BeamModel(
     sequences,
     *,
     abundances=None,
-    order=4,
-    depth_cap=15,
+    alphabet="aa",
+    order=None,
+    depth_cap=None,
     coefficients=(0.60, 0.25, 0.15),
     kappa=None,
     kappa_wide=None,
     kappa_len=None,
     weights=(0.5, 0.5),
-    max_length=27,
+    max_length=None,
     strict=True,
     sparse=None,
 )
@@ -24,17 +25,62 @@ BeamModel(
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `sequences` | `list[str]` | Training CDR3 strings. Anything empty, longer than `max_length`, or containing a non-amino-acid character is skipped; see `n_skipped`. |
+| `sequences` | `list[str]` | Training CDR3 strings. Anything empty, longer than `max_length`, or containing a character outside the model's alphabet is skipped; see `n_skipped`. |
 | `abundances` | `list[float]` | Per-sequence observed counts (default: all 1). A non-positive or non-finite weight skips the sequence. |
-| `order` | `int` | Context order of the wide expert, **2 to 4**. Order 4 is the measured optimum. |
-| `depth_cap` | `int` | Depth at which the wide expert stops resolving position exactly, **1 to 26**. Clamped to `max_length - 1`. |
+| `alphabet` | `str` | `"aa"` for the twenty amino acids or `"nt"` for the five nucleotide residues `ACGTN`. Decides what the model accepts, the width of every table, and the legal range of `order`. See [Alphabets](#alphabets). |
+| `order` | `int \| None` | Context order of the wide expert, from 2 up to the alphabet's ceiling: **4** for `aa`, **9** for `nt`. `None` takes the alphabet's default, 4 and 6 respectively. |
+| `depth_cap` | `int \| None` | Depth at which the wide expert stops resolving position exactly. Clamped to `max_length - 1`. `None` takes the alphabet's default: 15 for `aa`, and every depth for `nt`, where the table is small enough that the cap buys nothing. |
 | `coefficients` | `tuple` | Log-linear mixing weights for the wide, mid and length-conditioned experts. **Must sum to 1.** |
 | `kappa` | `tuple \| None` | Hierarchical backoff strengths for orders 1-3. All zero by default; `(20, 20, 20)` under `strict=False`. |
 | `kappa_wide`, `kappa_len` | `float \| None` | Backoff strength for the wide and length-conditioned experts. Zero by default; 20 and 200 under `strict=False`. |
 | `weights` | `tuple` | Weight on the N-anchored and C-anchored readings. Both must be non-negative. |
-| `max_length` | `int` | Longest sequence the model represents, **2 to 27**. The floor is 2, not 1, because `depth_cap` must be at least 1 and strictly below `max_length`. |
+| `max_length` | `int \| None` | Longest sequence the model represents, **2 to 255**. `None` takes the alphabet's default: 27 for `aa`, 81 for `nt`, three bases to the residue. The floor is 2, not 1, because `depth_cap` must be at least 1 and strictly below `max_length`. |
 | `strict` | `bool` | Closed-world scoring, and the **default**. Removes the order-0 add-one and probability floor, and defaults all backoff strengths to zero, so the model holds only what the training sequences spell. `strict=False` selects the open world. |
 | `sparse` | `bool \| None` | Storage selection. `None` automatically uses sparse storage exactly when `strict` is true and all five backoff strengths are zero, which is the default; `False` forces dense storage. |
+
+### Alphabets
+
+The model is the same whichever alphabet it is built over — two anchored experts, log-linear mixing, hierarchical backoff, exact dynamic programs. Only the symbols change, and with them the size of every table.
+
+| | symbols | residues `R` | radix `A` | default `order` | max `order` | default `max_length` | default `depth_cap` |
+|---|---|---|---|---|---|---|---|
+| `aa` | `ACDEFGHIKLMNPQRSTVWY` | 20 | 21 | 4 | 4 | 27 | 15 |
+| `nt` | `ACGTN` | 5 | 6 | 6 | 9 | 81 | every depth |
+
+The radix is the residues plus one sentinel that pads contexts at the termini and is never emitted, and it is the base every context index is packed in. The order ceiling is per-alphabet because the real bound is on `A**order`: `21**9` does not fit the 32 bits a context count lives in, while `6**9` fits comfortably.
+
+**Why order 6 for nucleotides.** An amino acid is a compressed codon — 21 values where three bases need `6**3 = 216`. Matching the amino-acid model's context *span* would need order 12, which is not buildable. Order 6 is two codons and is *cheaper* than the amino-acid model already is: 46,656 states against 194,481. Order 9 is three codons and remains available, at roughly 114x the finalize work.
+
+**Case and ambiguity.** Nucleotide input is case-folded, so `acgt` and `ACGT` are one sequence. `N` is a residue rather than a wildcard: a read carrying one is data the model can represent, it is scoreable, and generation may emit it. The other IUPAC codes are refused — `R` means "A or G", which the model has nothing to say about. Amino-acid input is **not** folded, because case carries no meaning for a base but folding residues would silently widen what is accepted.
+
+**There is no auto-detection.** `ACGT` is a perfectly good peptide, so any heuristic would quietly build the wrong model from short or low-complexity input. The alphabet is always named.
+
+```python
+BeamModel(seqs)                                   # aa
+BeamModel(seqs, alphabet="nt")                    # order 6, max_length 81
+BeamModel.from_parquet(p, alphabet="nt")          # column defaults to "cdr3"
+model.alphabet                                    # -> "aa" | "nt"
+model.n_residues                                  # -> 20 | 5
+```
+
+Models of different alphabets cannot be combined: `add`, `subtract` and `posterior` refuse them, because two models can agree on order, length and depth and still have rows of different widths.
+
+!!! warning "Table size is bounded by the memory budget"
+    A configuration is refused with `MemoryError` if its tables would exceed
+    `BEAM.memory_budget()`, which defaults to 4 GiB. The message says what the
+    configuration needs and what the budget is.
+
+    This is a guard against a failure mode the library used to have rather than
+    a limit for its own sake: `calloc` on Linux grants an absurd size lazily, so
+    a model asking for hundreds of gigabytes did not fail where it asked — it
+    failed later, when the tables were first written, with the OOM killer
+    choosing which process on the machine died. High orders reach that quickly
+    on the nucleotide alphabet, where a dense wide table is
+    `(depth_cap + 1) * 6**order * 5` doubles per direction: 0.3 GB at order 7
+    and 11 GB at order 9.
+
+    Raise it with `BEAM.set_memory_budget(bytes)` if you have the memory, or
+    use the closed-world default, whose sparse storage is far smaller.
 
 !!! warning "The coefficient sum is not a free parameter"
     It is a pure cross-length calibration knob. Moving it off 1 leaves *within-length* ranking untouched while wrecking *global* ranking: at sum 1.15 average precision falls from 0.847 to 0.830, and at 1.45 to 0.739. A sum other than 1 is rejected at construction rather than silently mis-calibrating.
@@ -118,9 +164,9 @@ Trains from the `sequence<TAB>abundance` file the graph builders in this library
 ### BeamModel.from_parquet and BeamModel.from_dataframe
 
 ```python
-BeamModel.from_parquet(path, *, sequence_column="cdr3_aa", abundance_column=None,
+BeamModel.from_parquet(path, *, sequence_column=None, abundance_column=None,
                   batch_size=1_000_000, **config) -> BeamModel
-BeamModel.from_dataframe(data, *, sequence_column="cdr3_aa",
+BeamModel.from_dataframe(data, *, sequence_column=None,
                     abundance_column=None, **config) -> BeamModel
 ```
 
@@ -164,7 +210,7 @@ posterior(prior, kappa=100.0) -> None      # in place
 with_prior(prior, kappa=100.0) -> BeamModel     # a new model
 ```
 
-A Dirichlet-multinomial update. Every row of every count table is one categorical distribution — over the twenty residues for the three expert tables, over lengths for the length histogram — and this adds `kappa * p_prior[row]` to each of this model's rows, where `p_prior` is that row of the prior **normalised**. A row then reads
+A Dirichlet-multinomial update. Every row of every count table is one categorical distribution — over the alphabet's residues for the three expert tables, over lengths for the length histogram — and this adds `kappa * p_prior[row]` to each of this model's rows, where `p_prior` is that row of the prior **normalised**. A row then reads
 
 ```
 p_post = (c_own + kappa * p_prior) / (n_own + kappa)

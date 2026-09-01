@@ -111,8 +111,8 @@ static void transport2(const double *src_a, const double *src_b,
 static BeamError spectrum_one(const BeamModel *m, bool counting,
                              uint32_t len, uint32_t bins, double ds,
                              double *out_a, double *out_b) {
-    const uint32_t A = BEAM_ALPHABET;
-    const uint32_t R = BEAM_RESIDUES;
+    const uint32_t A = m->n_alphabet;
+    const uint32_t R = m->n_residues;
     const uint32_t S = m->n_states;
     const uint32_t SK = m->state_shift;
     const uint32_t nm = out_b ? 2u : 1u;      /* measures carried per state */
@@ -394,7 +394,7 @@ static uint64_t spectrum_bytes(const BeamModel *m, uint32_t bins,
     if (maxlive == 0u || maxlive > S) maxlive = (uint32_t)S;
     return 2ull * maxlive * nm * bins * sizeof(double)  /* cur + next   */
          + 2ull * maxlive * sizeof(BinRange)
-         + S * BEAM_RESIDUES * sizeof(double)           /* edge weights */
+         + S * m->n_residues * sizeof(double)           /* edge weights */
          + S * sizeof(double)                           /* tail         */
          + 2ull * S * sizeof(uint32_t)                  /* slot maps    */
          + S;                                           /* byte mask    */

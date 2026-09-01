@@ -25,32 +25,38 @@
  * Bit-identical, not approximately: `cr[x] + 0.0 * pr[x]` is `cr[x]` exactly
  * for any finite `pr[x]`, and the parents are probabilities in [0, 1].
  */
-static void normalise_rows(const double *counts, int64_t n_rows, double *out) {
+static void normalise_rows(const double *counts, int64_t n_rows,
+                           uint32_t R, double *out) {
 #ifdef _OPENMP
     #pragma omp parallel for schedule(static) num_threads(beam_threads())
 #endif
     for (int64_t row = 0; row < n_rows; ++row) {
-        const double *cr = counts + (size_t)row * BEAM_RESIDUES;
-        double *orow = out + (size_t)row * BEAM_RESIDUES;
+        const double *cr = counts + (size_t)row * R;
+        double *orow = out + (size_t)row * R;
         double tot = 0.0;
-        for (uint32_t x = 0; x < BEAM_RESIDUES; ++x) tot += cr[x];
+        for (uint32_t x = 0; x < R; ++x) tot += cr[x];
         if (tot > 0.0)
-            for (uint32_t x = 0; x < BEAM_RESIDUES; ++x) orow[x] = cr[x] / tot;
+            for (uint32_t x = 0; x < R; ++x) orow[x] = cr[x] / tot;
         else
-            for (uint32_t x = 0; x < BEAM_RESIDUES; ++x) orow[x] = 0.0;
+            for (uint32_t x = 0; x < R; ++x) orow[x] = 0.0;
     }
 }
 
 static BeamError finalize_direction(BeamModel *m, uint32_t dir) {
     const uint32_t W  = m->max_len;
-    const uint32_t A  = BEAM_ALPHABET;
-    const uint32_t R  = BEAM_RESIDUES;
+    const uint32_t A  = m->n_alphabet;
+    const uint32_t R  = m->n_residues;
     const uint32_t dc = m->cfg.depth_cap;
     BeamError err = BEAM_OK;
 
-    /* Declared together and freed on one path, so every early exit is safe. */
-    double *mid_p[4]     = {0};
-    double *agg_p[4]     = {0};
+    /* Declared together and freed on one path, so every early exit is safe.
+     *
+     * Sized by the largest order any alphabet allows rather than by the mid
+     * expert's own 3, because they are indexed by a value derived from
+     * `m->order` below. They were [4] while no order could exceed 4, and a
+     * nucleotide model at its default order 6 read two slots past the end. */
+    double *mid_p[BEAM_MAX_ORDER + 1] = {0};
+    double *agg_p[BEAM_MAX_ORDER + 1] = {0};
     double *agg_counts   = NULL;
 
     /* Every backoff term is multiplied by a kappa. With all of them zero the
@@ -70,7 +76,8 @@ static BeamError finalize_direction(BeamModel *m, uint32_t dir) {
         if (!mid_p[3]) {
             err = BEAM_EALLOC("a mid-expert backoff level"); goto done;
         }
-        normalise_rows(m->cnt_mid[dir], (int64_t)W * beam_ipow_u32(A, 3u), mid_p[3]);
+        normalise_rows(m->cnt_mid[dir], (int64_t)W * beam_ipow_u32(A, 3u), R,
+                       mid_p[3]);
     } else {
         /* Order 0..3 probabilities over the mid counts, at full depth. */
         for (uint32_t j = 0; j <= 3; ++j) {
@@ -79,7 +86,7 @@ static BeamError finalize_direction(BeamModel *m, uint32_t dir) {
                 err = BEAM_EALLOC("a mid-expert backoff level"); goto done;
             }
         }
-        err = beam_build_hierarchy(m->cnt_mid[dir], W, 3u, m->cfg.kappa, mid_p,
+        err = beam_build_hierarchy(m->cnt_mid[dir], W, 3u, A, R, m->cfg.kappa, mid_p,
                               m->cfg.strict);
         if (err != BEAM_OK) goto done;
     }
@@ -114,7 +121,7 @@ static BeamError finalize_direction(BeamModel *m, uint32_t dir) {
                 err = BEAM_EALLOC("an aggregated backoff level"); goto done;
             }
         }
-        err = beam_build_hierarchy(agg_counts, 1u, 3u, m->cfg.kappa, agg_p,
+        err = beam_build_hierarchy(agg_counts, 1u, 3u, A, R, m->cfg.kappa, agg_p,
                               m->cfg.strict);
         if (err != BEAM_OK) goto done;
     }
@@ -160,7 +167,22 @@ static BeamError finalize_direction(BeamModel *m, uint32_t dir) {
      *    table at the matching depth bucket, shared across the most distant
      *    context residue ── */
     {
-        const uint32_t k1     = m->order - 1u;
+        /*
+         * The base is the order below, capped at 3.
+         *
+         * The wide expert takes ONE backoff step, weighted by `kappa_wide`,
+         * onto a lower-order table. That table comes from the mid hierarchy,
+         * which is built over the order-3 mid counts and therefore stops at
+         * order 3 -- and cannot go further, because `kappa` has three entries
+         * and there is no measured strength for a fourth level. No count
+         * table in the model holds order-4 context at full depth either.
+         *
+         * For every amino-acid order this changes nothing: the ceiling there
+         * is 4, so `order - 1` is already at most 3. It is what makes a
+         * nucleotide model above order 4 back off one bigger step rather than
+         * index a level that was never built.
+         */
+        const uint32_t k1     = m->order - 1u > 3u ? 3u : m->order - 1u;
         const uint32_t n_ctx1 = beam_ipow_u32(A, k1);
         const uint32_t nw     = m->n_ctx_wide;
         const int64_t  n_rows = (int64_t)m->n_depth_wide * nw;
@@ -181,7 +203,7 @@ static BeamError finalize_direction(BeamModel *m, uint32_t dir) {
             const uint32_t d = (uint32_t)(row / nw);
             const uint32_t c = (uint32_t)(row % nw);
             const double *cr = m->cnt_wide[dir] + (size_t)row * R;
-            const uint32_t dst = reverse ? beam_ctx_reverse(c, m->order) : c;
+            const uint32_t dst = reverse ? beam_ctx_reverse(c, m->order, m->n_alphabet) : c;
             double *orow = m->lp_wide[dir] + ((size_t)d * nw + dst) * R;
             double tot = 0.0;
             if (no_backoff) {
@@ -190,7 +212,9 @@ static BeamError finalize_direction(BeamModel *m, uint32_t dir) {
                 const double *base_tab = (d < dc)
                     ? mid_p[k1] + (size_t)d * n_ctx1 * R
                     : agg_p[k1];
-                /* Drop the most distant residue to reach the base row. */
+                /* Keep the k1 residues nearest the scored one, dropping
+                 * the rest. That is one residue at every amino-acid order,
+                 * and `order - 3` of them once the base is capped. */
                 const double *base = base_tab + (size_t)(c % n_ctx1) * R;
                 for (uint32_t x = 0; x < R; ++x) {
                     orow[x] = cr[x] + m->cfg.kappa_wide * base[x];
@@ -206,7 +230,9 @@ static BeamError finalize_direction(BeamModel *m, uint32_t dir) {
 
 done:
     free(agg_counts);
-    for (uint32_t j = 0; j <= 3; ++j) { free(agg_p[j]); free(mid_p[j]); }
+    for (uint32_t j = 0; j <= BEAM_MAX_ORDER; ++j) {
+        free(agg_p[j]); free(mid_p[j]);
+    }
     return err;
 }
 
@@ -245,7 +271,7 @@ static BeamError finalize_sparse_table(BeamModel *m, uint32_t dir,
                                       bool reverse_wide) {
     const uint32_t nr = beam_count_n_rows(m, kind);
     BeamSparseRows *out = sparse_log_table(m, dir, kind);
-    BeamError err = beam_sparse_init(out, nr, 1u, false);
+    BeamError err = beam_sparse_init(out, nr, 1u, m->n_residues, false);
     if (err != BEAM_OK) return err;
 
     /*
@@ -279,7 +305,7 @@ static BeamError finalize_sparse_table(BeamModel *m, uint32_t dir,
                     if (reverse_wide) {
                         const uint32_t d = src / m->n_ctx_wide;
                         const uint32_t c = src % m->n_ctx_wide;
-                        dst = d * m->n_ctx_wide + beam_ctx_reverse(c, m->order);
+                        dst = d * m->n_ctx_wide + beam_ctx_reverse(c, m->order, m->n_alphabet);
                     }
                     rows[n_rows++] = dst;
                 }
@@ -294,16 +320,16 @@ static BeamError finalize_sparse_table(BeamModel *m, uint32_t dir,
         if (reverse_wide) {
             const uint32_t d = dst_row / m->n_ctx_wide;
             const uint32_t c = dst_row % m->n_ctx_wide;
-            src_row = d * m->n_ctx_wide + beam_ctx_reverse(c, m->order);
+            src_row = d * m->n_ctx_wide + beam_ctx_reverse(c, m->order, m->n_alphabet);
         }
         const double *counts = beam_count_row(m, dir, kind, src_row);
         if (!counts) continue;
         double tot = 0.0;
-        for (uint32_t x = 0; x < BEAM_RESIDUES; ++x) tot += counts[x];
+        for (uint32_t x = 0; x < m->n_residues; ++x) tot += counts[x];
         if (!(tot > 0.0)) continue;
         double *logp = beam_sparse_row_mut(out, dst_row, 0u, true);
         if (!logp) return BEAM_EALLOC("a sparse probability row");
-        for (uint32_t x = 0; x < BEAM_RESIDUES; ++x)
+        for (uint32_t x = 0; x < m->n_residues; ++x)
             logp[x] = log(counts[x] / tot);
     }
     free(rows);

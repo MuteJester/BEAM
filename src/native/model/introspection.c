@@ -21,6 +21,17 @@ uint64_t beam_model_n_observed(const BeamModel *m) {
 uint64_t beam_model_n_skipped(const BeamModel *m) {
     return m ? m->n_skipped : 0;
 }
+BeamAlphabet beam_model_alphabet(const BeamModel *m) {
+    /* Amino acid for a NULL model, matching every other getter here, which
+     * reports the zero of its type rather than refusing. */
+    return m ? m->cfg.alphabet : BEAM_ALPHABET_AA;
+}
+uint32_t beam_model_n_residues(const BeamModel *m) {
+    return m ? m->n_residues : 0;
+}
+uint32_t beam_model_radix(const BeamModel *m) {
+    return m ? m->n_alphabet : 0;
+}
 uint32_t beam_model_n_states(const BeamModel *m) {
     return m ? m->n_states : 0;
 }
@@ -40,7 +51,7 @@ uint64_t beam_model_n_nonzero_cells(const BeamModel *m) {
                     m, d, (BeamTableKind)kind);
                 for (uint32_t p = 0; p < t->n_parts; ++p) {
                     const double *v = t->values[p];
-                    const size_t nc = (size_t)t->size[p] * BEAM_RESIDUES;
+                    const size_t nc = (size_t)t->size[p] * m->n_residues;
                     for (size_t i = 0; i < nc; ++i) if (v[i] > 0.0) n++;
                 }
             }

@@ -14,6 +14,8 @@ src/native/algorithms/sampling.c
 src/native/algorithms/top_k.c
 
 src/native/core/alphabet.c
+src/native/core/alphabet_aa.c
+src/native/core/alphabet_nt.c
 src/native/core/crc32c.c
 src/native/core/errors.c
 src/native/core/logging.c
@@ -47,6 +49,7 @@ src/native/model/finalize.c
 src/native/model/introspection.c
 src/native/model/lifecycle.c
 src/native/model/posterior.c
+src/native/model/prism.c
 src/native/model/scoring.c
 src/native/model/smoothing.c
 src/native/model/training.c

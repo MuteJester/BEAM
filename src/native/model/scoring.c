@@ -2,6 +2,8 @@
  * @file scoring.c
  * @brief Direct sequence scoring and the mixed per-residue weight.
  */
+#include <string.h>
+
 #include "beam/internal.h"
 #include "beam/mixing.h"
 
@@ -26,25 +28,26 @@ double beam_mix(const BeamModel *m, uint32_t dir, uint32_t len,
  * prior and the partition function. This is the quantity the DAG's edge
  * weights plus its tail weight also sum to.
  */
-static double raw_log_weight(const BeamModel *m, const uint8_t *s,
-                             uint32_t len) {
+double beam_raw_log_weight(const BeamModel *m, const uint8_t *s,
+                           uint32_t len) {
     double total = 0.0;
     for (uint32_t p = 0; p < len; ++p) {
         const uint32_t x = s[p];
 
         const double f = beam_mix(
             m, BEAM_FWD, len, p,
-            beam_ctx_forward(s, (int32_t)p, m->order),
-            beam_ctx_forward(s, (int32_t)p, 3u),
-            beam_ctx_forward(s, (int32_t)p, 2u), x);
+            beam_ctx_forward(s, (int32_t)p, m->order, m->n_alphabet),
+            beam_ctx_forward(s, (int32_t)p, 3u, m->n_alphabet),
+            beam_ctx_forward(s, (int32_t)p, 2u, m->n_alphabet), x);
         if (f == -INFINITY) return -INFINITY;
 
         const uint32_t r = len - 1u - p;
         const double b = beam_mix(
             m, BEAM_BWD, len, r,
-            beam_ctx_backward_wide(s, (int32_t)p, len, m->order),
-            beam_ctx_backward(s, (int32_t)p, len, 3u),
-            beam_ctx_backward(s, (int32_t)p, len, 2u), x);
+            beam_ctx_backward_wide(s, (int32_t)p, len, m->order,
+                                   m->n_alphabet),
+            beam_ctx_backward(s, (int32_t)p, len, 3u, m->n_alphabet),
+            beam_ctx_backward(s, (int32_t)p, len, 2u, m->n_alphabet), x);
         if (b == -INFINITY) return -INFINITY;
 
         total += m->cfg.weight_forward * f + m->cfg.weight_backward * b;
@@ -54,12 +57,12 @@ static double raw_log_weight(const BeamModel *m, const uint8_t *s,
 
 double beam_model_log_pseq(const BeamModel *m, const char *seq) {
     if (!m || !m->finalized || !seq) return -INFINITY;
-    uint8_t buf[BEAM_MAX_LENGTH];
+    uint8_t buf[BEAM_MAX_LENGTH_CEILING];
     uint32_t len = 0;
     if (!beam_encode(m, seq, buf, &len)) return -INFINITY;
     if (!isfinite(m->log_pi[len]) || !isfinite(m->log_z[len])) return -INFINITY;
 
-    const double raw = raw_log_weight(m, buf, len);
+    const double raw = beam_raw_log_weight(m, buf, len);
     if (raw == -INFINITY) return -INFINITY;
     return raw + m->log_pi[len] - m->log_z[len];
 }
@@ -84,30 +87,33 @@ BeamError beam_model_explain(const BeamModel *m, const char *seq,
                                 uint32_t *out_len) {
     if (!m || !seq) return BEAM_ENULL(!m ? "model" : "sequence");
     if (!m->finalized) return BEAM_ENOTBUILT();
-    uint8_t buf[BEAM_MAX_LENGTH];
+    uint8_t buf[BEAM_MAX_LENGTH_CEILING];
     uint32_t len = 0;
     if (!beam_encode(m, seq, buf, &len))
         return BEAM_FAIL(BEAM_ERR_INVALID_SEQUENCE,
                         "%s: the sequence is empty, longer than max_length "
-                        "(%u), or contains a character outside the 20 amino "
-                        "acids", __func__, (unsigned)m->max_len);
+                        "(%u), or contains a character outside the %u %s "
+                        "residues (%s)", __func__, (unsigned)m->max_len,
+                        (unsigned)m->n_residues, m->alpha->name,
+                        m->alpha->idx_to_char);
 
     for (uint32_t p = 0; p < len; ++p) {
         const uint32_t x = buf[p];
         if (out_forward) {
             out_forward[p] = beam_mix(
                 m, BEAM_FWD, len, p,
-                beam_ctx_forward(buf, (int32_t)p, m->order),
-                beam_ctx_forward(buf, (int32_t)p, 3u),
-                beam_ctx_forward(buf, (int32_t)p, 2u), x);
+                beam_ctx_forward(buf, (int32_t)p, m->order, m->n_alphabet),
+                beam_ctx_forward(buf, (int32_t)p, 3u, m->n_alphabet),
+                beam_ctx_forward(buf, (int32_t)p, 2u, m->n_alphabet), x);
         }
         if (out_backward) {
             const uint32_t r = len - 1u - p;
             out_backward[p] = beam_mix(
                 m, BEAM_BWD, len, r,
-                beam_ctx_backward_wide(buf, (int32_t)p, len, m->order),
-                beam_ctx_backward(buf, (int32_t)p, len, 3u),
-                beam_ctx_backward(buf, (int32_t)p, len, 2u), x);
+                beam_ctx_backward_wide(buf, (int32_t)p, len, m->order,
+                                   m->n_alphabet),
+                beam_ctx_backward(buf, (int32_t)p, len, 3u, m->n_alphabet),
+                beam_ctx_backward(buf, (int32_t)p, len, 2u, m->n_alphabet), x);
         }
     }
     if (out_len) *out_len = len;

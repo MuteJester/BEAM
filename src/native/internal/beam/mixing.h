@@ -48,4 +48,18 @@ static inline double mix_sparse(const BeamModel *m, uint32_t dir,
     return mix_values(m, a[x], b[x], c[x]);
 }
 
+
+/**
+ * Sum of the mixed per-residue log terms for an ENCODED sequence, before the
+ * length prior and the partition function are applied. `-INFINITY` as soon as
+ * any residue is unreachable, which is what makes the closed world cheap: a
+ * sequence the model cannot spell costs one position, not the whole length.
+ *
+ * Shared between scoring.c and repair.c. The repair factor scores 40L+20
+ * one-edit neighbours of every sequence, so it must compute exactly the same
+ * quantity as `beam_model_log_pseq`; two copies of this would eventually
+ * disagree and the Bayes factor would stop being a ratio of like for like.
+ */
+double beam_raw_log_weight(const BeamModel *m, const uint8_t *s, uint32_t len);
+
 #endif /* BEAM_INTERNAL_MIXING_H */

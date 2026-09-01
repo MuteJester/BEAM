@@ -2,16 +2,24 @@
  * @file model.h
  * @brief BEAM - Bidirectional Expert-Anchored Model.
  *
- * A probability model over CDR3 amino-acid sequences in which **every residue
- * is scored twice**: once by an N-anchored expert that indexes it by its
- * distance from the front of the sequence, and once by a C-anchored expert
- * that indexes it by its distance from the back. The two readings are combined
- * geometrically, and the result is normalised per length by an exact forward
- * dynamic program.
+ * A probability model over CDR3 sequences in which **every residue is scored
+ * twice**: once by an N-anchored expert that indexes it by its distance from
+ * the front of the sequence, and once by a C-anchored expert that indexes it
+ * by its distance from the back. The two readings are combined geometrically,
+ * and the result is normalised per length by an exact forward dynamic
+ * program.
  *
- * The model consumes **only** the amino-acid sequence and its observed
- * abundance. It never sees a V or J gene call, a donor identity, or a sharing
- * statistic.
+ * The model consumes **only** the sequence and its observed abundance. It
+ * never sees a V or J gene call, a donor identity, or a sharing statistic.
+ *
+ * ## Alphabets
+ *
+ * The model is the same over either alphabet -- two anchored experts,
+ * log-linear mixing, hierarchical backoff, exact dynamic programs. Only the
+ * symbols change, and with them the size of every table: twenty amino acids
+ * at radix 21, or the five nucleotide residues ACGTN at radix 6. See
+ * `BeamAlphabet` below, and `src/native/core/alphabet_*.c` for the
+ * descriptors that carry each one's defaults and ceilings.
  *
  * ## Why two anchors
  *
@@ -26,7 +34,7 @@
  * For a fixed length `L` the model is a layered directed acyclic graph:
  *
  *   - a **node** is a position `i` plus the last `K` residues emitted,
- *     sentinel-padded at the start, so there are `BEAM_ALPHABET^K` nodes
+ *     sentinel-padded at the start, so there are `radix^K` nodes
  *     per layer. `K = max(order, 3)`, not `order`: the mid expert is always
  *     order 3, so a narrower state could not supply its context;
  *   - an **edge** emits the next residue and carries a weight fixed at build
@@ -75,22 +83,90 @@
 extern "C" {
 #endif
 
+/* ── Alphabets ───────────────────────────────────────────────── */
+
+/**
+ * Which symbol alphabet a model is built over.
+ *
+ * The model is the same either way: two anchored experts, log-linear mixing,
+ * hierarchical backoff, exact dynamic programs. Only the symbols change.
+ *
+ * `BEAM_ALPHABET_AA` is zero deliberately. `beam_model_config_default()` opens
+ * with a `memset`, and a caller who zero-initialises a config has always meant
+ * "amino acid", so that keeps meaning what it meant.
+ */
+typedef enum {
+    BEAM_ALPHABET_AA = 0,   /**< 20 amino acids, radix 21. */
+    BEAM_ALPHABET_NT = 1    /**< A C G T N, radix 6.       */
+} BeamAlphabet;
+
+/** Number of alphabets, for sizing a table indexed by BeamAlphabet. */
+#define BEAM_ALPHABET_COUNT   2u
+
+/* Per-alphabet dimensions. `RADIX` is the emitted residues plus one sentinel
+ * used to pad contexts at the termini; `NONE` is that sentinel's index, never
+ * emitted and only ever appearing in a context slot. */
+
+#define BEAM_AA_RESIDUES     20u
+#define BEAM_AA_RADIX        21u
+#define BEAM_AA_NONE         20u
+
+/* N is an emitted residue, not a wildcard: a sequence containing it is
+ * scoreable, and the model learns a distribution over it. */
+#define BEAM_NT_RESIDUES      5u
+#define BEAM_NT_RADIX         6u
+#define BEAM_NT_NONE          5u
+
+/**
+ * Maxima over all alphabets. These size the few genuinely fixed-length arrays
+ * that a runtime alphabet cannot: per-row scratch buffers and the I/O record
+ * staging block. Sizing those by the largest alphabet costs bytes on the
+ * stack and keeps the code alphabet-agnostic.
+ */
+#define BEAM_MAX_RESIDUES    20u
+#define BEAM_MAX_RADIX       21u
+
+/** `char_to_idx` entry for a byte that is not a residue of its alphabet. */
+#define BEAM_RESIDUE_INVALID 0xFFu
+
 /* ── Fixed dimensions ────────────────────────────────────────── */
 
-/** Number of amino acids the model emits. */
-#define BEAM_RESIDUES        20u
-
-/** Emitted residues plus one sentinel used to pad contexts at the termini. */
-#define BEAM_ALPHABET        21u
-
-/** Sentinel index. Never emitted; only ever appears in a context slot. */
-#define BEAM_NONE            20u
-
-/** Largest sequence length the model can represent. */
+/**
+ * The amino-acid default sequence length.
+ *
+ * This was the ceiling as well as the default while there was one alphabet.
+ * The ceiling is now BEAM_MAX_LENGTH_CEILING and the default comes from the
+ * alphabet descriptor, since nucleotides need three times the length to say
+ * the same thing.
+ */
 #define BEAM_MAX_LENGTH      27u
 
-/** Largest supported context order for the wide expert. */
-#define BEAM_MAX_ORDER       4u
+/**
+ * The structural ceiling on `max_length`, as opposed to today's validation
+ * limit.
+ *
+ * `max_length` is a `uint8_t`, so 255 is the most any alphabet could ever ask
+ * for, and it is what the length-indexed stack buffers must be sized by once
+ * `max_length` becomes a genuinely free parameter. Nucleotide sequences are
+ * three times the length of the amino acids they encode, so 27 cannot remain
+ * the limit for both.
+ */
+#define BEAM_MAX_LENGTH_CEILING 255u
+
+/** Largest edit radius PRISM will accept. Each level multiplies the work by
+ *  about 40L+20, so omega=3 would be ~2e8 scorings for one sequence. */
+#define BEAM_PRISM_MAX_OMEGA 2u
+
+/**
+ * Largest order any alphabet permits, and therefore the size of the
+ * order-indexed scratch arrays: `slot[]` in the context packers, and
+ * `level_counts[]` in the backoff hierarchy.
+ *
+ * It is a sizing bound, not the validation limit. What a given config may ask
+ * for comes from its alphabet's own ceiling, because the real constraint is
+ * on `radix^order` and the radices are far apart.
+ */
+#define BEAM_MAX_ORDER       9u
 
 /* ── Configuration ───────────────────────────────────────────── */
 
@@ -101,7 +177,26 @@ extern "C" {
  * measurement to justify it.
  */
 typedef struct {
-    /** Context order of the wide expert, 2..BEAM_MAX_ORDER. Default 4. */
+    /**
+     * Which alphabet the sequences are written in. Default BEAM_ALPHABET_AA.
+     *
+     * It comes first because it decides what the rest of this struct means:
+     * the legal range of `order`, the default `max_length`, and the size of
+     * every table those imply. Zero is the amino-acid alphabet, so a config
+     * that was zeroed rather than defaulted still asks for what it always
+     * asked for.
+     */
+    BeamAlphabet alphabet;
+
+    /**
+     * Context order of the wide expert, from 2 up to the alphabet's own
+     * ceiling: 4 for amino acids, 9 for nucleotides. Defaults to 4 and 6
+     * respectively.
+     *
+     * The ceiling is per-alphabet because it bounds `radix^order`, and the
+     * two radices are far apart: 21^9 does not fit in the `uint32_t` the
+     * context count is held in, while 6^9 fits comfortably.
+     */
     uint8_t order;
 
     /**
@@ -113,7 +208,15 @@ typedef struct {
      */
     uint8_t depth_cap;
 
-    /** Longest sequence the model will accept. Default BEAM_MAX_LENGTH. */
+    /**
+     * Longest sequence the model will accept, from 1 up to
+     * BEAM_MAX_LENGTH_CEILING. Defaults to the alphabet's own typical
+     * length: 27 for amino acids, 81 for the nucleotides encoding them.
+     *
+     * Free rather than fixed, and worth choosing deliberately: every table is
+     * sized by it, so a length far beyond the corpus buys nothing and costs
+     * proportionally.
+     */
     uint8_t max_length;
 
     /**
@@ -132,7 +235,18 @@ typedef struct {
     /**
      * Hierarchical backoff strengths (pseudo-counts) for orders 1, 2 and 3 of
      * the mid expert, the wide expert, and the length-conditioned expert.
-     * Defaults 20 / 20 / 20, 20, 200.
+     *
+     * All five default to ZERO, because the closed world is the default and
+     * backoff from a shorter context is exactly what would give an unobserved
+     * transition mass. The measured open-world values are 20 / 20 / 20, 20
+     * and 200; the Python layer resolves those whenever `strict` is cleared
+     * and the caller named none. See `strict` below, and `_smoothing_defaults`
+     * in src/BEAM/model/config.py, which must agree with this.
+     *
+     * The hierarchy `kappa` parameterises stops at order 3, which is what
+     * bounds the wide expert's backoff base: it steps onto the order below
+     * capped at 3, since there is no measured strength for a fourth level and
+     * no count table holding that much context.
      */
     double kappa[3];
     double kappa_wide;
@@ -195,8 +309,23 @@ typedef struct {
     bool sparse;
 } BeamModelConfig;
 
-/** Fill `cfg` with the measured defaults. */
+/** Fill `cfg` with the measured defaults, for the amino-acid alphabet. */
 void beam_model_config_default(BeamModelConfig *cfg);
+
+/**
+ * Fill `cfg` with the measured defaults for `alphabet`.
+ *
+ * The mixing coefficients, backoff strengths and anchor weights are the same
+ * whichever alphabet is asked for: they were measured on amino acids, and
+ * re-tuning them for nucleotides needs its own measurement rather than a
+ * guess. What the alphabet decides is `order`, `max_length` and `depth_cap`,
+ * which follow from how much context it can afford and how long its
+ * sequences are.
+ *
+ * An unknown alphabet leaves `cfg` untouched.
+ */
+void beam_model_config_default_for(BeamAlphabet alphabet,
+                                   BeamModelConfig *cfg);
 
 /* ── Opaque model ────────────────────────────────────────────── */
 
@@ -372,6 +501,42 @@ BeamError beam_model_log_pseq_batch(const BeamModel *m,
  * confident at the start, the C-anchored expert at the end, and both are
  * surprised across the junction.
  */
+/**
+ * The one-edit Bayes factor: is `s` better explained as a model draw, or as a
+ * model draw with one edit applied to it?
+ *
+ * `B = Q/P`, where `P` is the model's probability for `s` and `Q` is the
+ * probability of observing `s` under a channel that draws a clean sequence
+ * from the model, picks one of substitution/insertion/deletion with
+ * probability 1/3, picks a legal site and residue uniformly, and applies a
+ * single edit. Because `B` is a likelihood ratio, `E[B] <= 1` under the model,
+ * so it is an e-value: `P(B >= t) <= 1/t` with no calibration table and no
+ * simulated null.
+ *
+ * `*out_log_b` is `log B`, and is `+INFINITY` when the model cannot spell `s`
+ * but can spell a repair, `-INFINITY` when no single edit reaches the model's
+ * support, and `NaN` when neither `s` nor any one-edit repair is in it.
+ *
+ * The optional per-site arrays are the unnormalised localisation posterior;
+ * dividing by `Q` gives `P(edit history | s, H1)`. They need room for `L`,
+ * `L` and `L+1` doubles respectively. Costs `40L+20` scorings.
+ */
+BeamError beam_prism_factor(const BeamModel *m, const char *seq,
+                            uint32_t omega,
+                            double *out_log_b, double *out_log_q,
+                            double *out_log_p0, double *out_sub,
+                            double *out_ins, double *out_del,
+                            uint32_t *out_len);
+
+/**
+ * Batch form of `beam_prism_factor`, parallelised when the build has
+ * OpenMP. A sequence the encoder rejects scores NaN rather than failing the
+ * batch. `out_log_b` must have room for `n` doubles.
+ */
+BeamError beam_prism_factor_batch(const BeamModel *m,
+                                  const char *const *seqs, uint32_t n,
+                                  uint32_t omega, double *out_log_b);
+
 BeamError beam_model_explain(const BeamModel *m,
                                 const char *seq,
                                 double *out_forward,
@@ -393,7 +558,7 @@ double beam_model_log_length_prior(const BeamModel *m, uint32_t length);
  * path counting over the trellis.
  *
  * In the default open-world configuration it will be
- * `BEAM_RESIDUES^L`, and that is not a bug. Hierarchical backoff leaves
+ * `R^L` for R residues, and that is not a bug. Hierarchical backoff leaves
  * every table cell strictly positive, so the number describes the smoother,
  * not the grammar. With `strict` and zero backoff, dead transitions remain
  * dead and this instead reports the exact support of the observed-transition
@@ -706,10 +871,17 @@ double beam_model_total_weight(const BeamModel *m);
 /** Number of sequences accepted during training. */
 uint64_t beam_model_n_observed(const BeamModel *m);
 
-/** Number of sequences rejected as too long or non-amino-acid. */
+/** Number of sequences rejected as too long or outside the alphabet. */
 uint64_t beam_model_n_skipped(const BeamModel *m);
 
-/** Nodes per layer of the DAG, `BEAM_ALPHABET^order`. */
+/** The alphabet this model reads. Amino acid for a NULL model. */
+BeamAlphabet beam_model_alphabet(const BeamModel *m);
+
+/** Emitted residues, and that plus the context sentinel. */
+uint32_t beam_model_n_residues(const BeamModel *m);
+uint32_t beam_model_radix(const BeamModel *m);
+
+/** Nodes per layer of the DAG, `radix^state_order`. */
 uint32_t beam_model_n_states(const BeamModel *m);
 
 /** Total table cells, and how many carry a non-zero count. */
