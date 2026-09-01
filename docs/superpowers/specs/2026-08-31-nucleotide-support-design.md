@@ -512,6 +512,26 @@ the branch is skipped entirely. The C tests asserted that `beam_config_valid`
 not in the gate, which is why every baseline was green over a configuration
 that crashed the process.
 
+Three lesser findings were also raised, and all three are closed:
+
+- The three sparse row counts are cast to `uint32_t` without a guard. The
+  widest reaches 2.57e9 against a 4.29e9 limit at the largest configuration
+  today's ceilings allow -- inside it, but by less than a factor of two.
+  `beam_model_new` now checks all three, and
+  `test_the_widest_table_still_fits_a_uint32_row_index` pins the headroom that
+  makes the check unreachable, so raising a ceiling breaks a test rather than
+  quietly relying on the margin.
+- `model.h` documented the backoff strengths as defaulting to 20 / 20 / 20, 20
+  and 200 while `config.c` set all five to zero. Stale since the closed world
+  became the default, and pre-existing rather than introduced here. The comment
+  now says what the code does and where the open-world values come from.
+- The `_gen` copy of the edge-weight kernels is unreachable, since the dispatch
+  picks `_aa` or `_nt` for every alphabet that exists, so nothing checks it
+  agrees with them bit for bit. Left in place -- it is what keeps a third
+  alphabet correct -- but the header now says out loud that it is unverified
+  until that day, rather than letting a reader assume the triple compilation is
+  covered three times over.
+
 Everything else the reviewers attacked held. The bit-for-bit claim was verified
 beyond the gate: 1304 of 1335 quantities compared as hex floats across 31
 configurations were identical, and every one of the 31 differences was the

@@ -135,6 +135,10 @@ removed:
                      test_every_order_survives_backoff[4,5,6,7]
                      test_a_smoothed_nucleotide_model_is_still_a_distribution
 
+and one more from the same review, closing its remaining findings:
+
+    c_cases.txt      test_the_widest_table_still_fits_a_uint32_row_index
+
 The defect: the wide expert's backoff base was indexed at `order - 1` into
 arrays holding the mid hierarchy's orders 0..3. Amino acids cap at order 4, so
 that index was always in range; a nucleotide model at its default order 6 read

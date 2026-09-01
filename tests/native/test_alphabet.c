@@ -130,6 +130,37 @@ static void test_the_order_ceiling_keeps_context_counts_in_range(void) {
     PASS();
 }
 
+/*
+ * A sparse table addresses its rows with a uint32, and the row counts are
+ * cast to one at construction. `beam_model_new` guards that cast, but the
+ * guard cannot fire at today's ceilings -- the widest count reaches 2.57e9
+ * against a limit of 4.29e9. This pins the headroom rather than the guard, so
+ * that raising BEAM_MAX_ORDER or BEAM_MAX_LENGTH_CEILING far enough breaks a
+ * test and makes someone decide, instead of quietly relying on a factor of
+ * less than two.
+ */
+static void test_the_widest_table_still_fits_a_uint32_row_index(void) {
+    const uint32_t max_buckets = BEAM_MAX_LENGTH_CEILING;   /* depth_cap + 1 */
+    for (unsigned k = 0; k < BEAM_ALPHABET_COUNT; ++k) {
+        const BeamAlphabetInfo *a = beam_alphabet_info((BeamAlphabet)k);
+
+        uint64_t n_ctx = 1;
+        for (unsigned i = 0; i < a->max_order; ++i) n_ctx *= a->radix;
+        const uint64_t rows_wide = (uint64_t)max_buckets * n_ctx;
+
+        const uint64_t rows_len = (uint64_t)(BEAM_MAX_LENGTH_CEILING + 1u)
+                                * BEAM_MAX_LENGTH_CEILING
+                                * (uint64_t)a->radix * a->radix;
+
+        ASSERT_MSG(rows_wide <= UINT32_MAX,
+                   "the wide table's row count must fit a uint32 at every "
+                   "configuration the ceilings allow");
+        ASSERT_MSG(rows_len <= UINT32_MAX,
+                   "and so must the length-conditioned table's");
+    }
+    PASS();
+}
+
 /* ── Character mapping ───────────────────────────────────────── */
 
 /* Every one of the 256 byte values, not a sampled few: an accidental extra
@@ -1005,6 +1036,7 @@ int main(void) {
     RUN_TEST(test_descriptors_are_internally_consistent);
     RUN_TEST(test_defaults_sit_inside_their_own_ceilings);
     RUN_TEST(test_the_order_ceiling_keeps_context_counts_in_range);
+    RUN_TEST(test_the_widest_table_still_fits_a_uint32_row_index);
 
     printf("\n[mapping]\n");
     RUN_TEST(test_every_byte_maps_exactly_as_specified);

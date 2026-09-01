@@ -235,7 +235,18 @@ typedef struct {
     /**
      * Hierarchical backoff strengths (pseudo-counts) for orders 1, 2 and 3 of
      * the mid expert, the wide expert, and the length-conditioned expert.
-     * Defaults 20 / 20 / 20, 20, 200.
+     *
+     * All five default to ZERO, because the closed world is the default and
+     * backoff from a shorter context is exactly what would give an unobserved
+     * transition mass. The measured open-world values are 20 / 20 / 20, 20
+     * and 200; the Python layer resolves those whenever `strict` is cleared
+     * and the caller named none. See `strict` below, and `_smoothing_defaults`
+     * in src/BEAM/model/config.py, which must agree with this.
+     *
+     * The hierarchy `kappa` parameterises stops at order 3, which is what
+     * bounds the wide expert's backoff base: it steps onto the order below
+     * capped at 3, since there is no measured strength for a fourth level and
+     * no count table holding that much context.
      */
     double kappa[3];
     double kappa_wide;

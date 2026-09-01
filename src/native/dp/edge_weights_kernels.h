@@ -29,6 +29,14 @@
  * is the only thing measured to work. The cost is roughly three times the
  * object code for this one file, and the general copy means an alphabet that
  * is neither of the two stays correct.
+ *
+ * THAT GENERAL COPY IS UNREACHABLE TODAY, AND THEREFORE UNTESTED. The
+ * dispatch in edge_weights.c picks `_aa` or `_nt` for every alphabet that
+ * exists, so nothing exercises `_gen` and nothing checks that it agrees with
+ * them bit for bit. That is a known state rather than an oversight: it is
+ * insurance whose premium is being unverified until a third alphabet makes it
+ * live. Whoever adds that alphabet should compare `_gen` against its
+ * specialised copy before trusting either.
  */
 
 /* Forward declarations: layer_max calls layer_weights, which is defined

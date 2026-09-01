@@ -116,6 +116,39 @@ BeamModel *beam_model_new(const BeamModelConfig *cfg) {
     m->n_ctx_len    = beam_ipow_u32(m->n_alphabet, 2u);
     m->n_depth_wide = (uint32_t)c.depth_cap + 1u;
 
+    /*
+     * A sparse table addresses its rows with a uint32, and the three row
+     * counts below are cast to one. The widest, `n_depth_wide * n_ctx_wide`,
+     * reaches 2.57e9 at the largest configuration the ceilings currently
+     * allow -- inside the 4.29e9 a uint32 holds, but by less than a factor of
+     * two. That margin is not a thing to rely on silently: a truncating cast
+     * would size the row directory from the wrapped value and every lookup
+     * past the wrap would alias another row's counts.
+     *
+     * Checked here rather than in beam_config_valid because it needs the
+     * derived dimensions, and checked for every model rather than only sparse
+     * ones so that raising a ceiling cannot make the dense path the only one
+     * that still works.
+     */
+    {
+        const uint64_t rows_wide = (uint64_t)m->n_depth_wide * m->n_ctx_wide;
+        const uint64_t rows_mid  = (uint64_t)m->max_len * m->n_ctx_mid;
+        const uint64_t rows_len  = (uint64_t)m->n_len_slots * m->max_len
+                                 * m->n_ctx_len;
+        const uint64_t widest = rows_wide > rows_mid ? rows_wide : rows_mid;
+        if ((widest > rows_len ? widest : rows_len) > UINT32_MAX) {
+            beam_set_error(BEAM_ERR_PARAM_OUT_OF_RANGE,
+                          "the %s alphabet at order %u with max_length %u "
+                          "needs %llu table rows, which does not fit the 32 "
+                          "bits a row index is held in",
+                          a->name, (unsigned)c.order, (unsigned)c.max_length,
+                          (unsigned long long)(rows_wide > rows_len
+                                               ? rows_wide : rows_len));
+            free(m);
+            return NULL;
+        }
+    }
+
     bool ok = true;
     for (uint32_t d = 0; d < BEAM_DIRS && ok; ++d) {
         if (m->cfg.sparse) {
