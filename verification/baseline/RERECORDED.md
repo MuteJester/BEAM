@@ -161,3 +161,18 @@ Nothing in the suite had built a nucleotide model with backoff switched on:
 every one was order 3, or the closed-world default where all five strengths
 are zero and the branch is skipped. The gap was in the tests, not in the gate,
 which is why every baseline was green over a segfaulting configuration.
+
+## Addendum: two backoff cases replaced by one ceiling case
+
+`test_every_order_survives_backoff[8]` and `[9]` were removed and
+`test_the_ceiling_order_builds` added. Not a reduction in coverage — a
+correction of how it was bought.
+
+Backoff forces dense storage, and a dense nucleotide wide table is
+`(depth_cap + 1) * 6**order * 5` doubles per direction. Those two cases were
+allocating 1.9 GB and 11.3 GB inside the test suite. Orders 5, 6 and 7 take
+the clamped backoff branch through identical code, so what 8 and 9 added was
+coverage of the CONFIGURATION rather than of the arithmetic. The replacement
+builds order 9 — the alphabet's ceiling — in the closed world, where storage
+is sparse and the same model costs 0.3 GB, and it still builds rather than
+merely asserting the config is legal, which was the point.

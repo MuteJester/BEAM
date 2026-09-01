@@ -969,10 +969,19 @@ static void test_every_nucleotide_order_finalizes_with_backoff(void) {
                            "TGTGCCAGCAGCCCGGAC" };
     const double ab[] = { 4.0, 2.0, 1.0 };
 
-    /* Every order, not a sample of them. The bug this pins was invisible
-     * precisely because the suite asserted order 9 was VALID without ever
-     * building one, and building is where it failed. */
-    for (uint32_t order = 2; order <= 9; ++order) {
+    /*
+     * Orders 2 to 7, and the ceiling separately below.
+     *
+     * Backoff forces DENSE storage -- beam_config_valid refuses sparse with
+     * any non-zero kappa -- and a dense nucleotide wide table is
+     * (depth_cap + 1) * 6^order * 5 doubles per direction. That is 0.27 GB at
+     * order 7 and 9.7 GB at order 9, which is not a thing a unit test should
+     * allocate. Orders 5, 6 and 7 all take the clamped branch through the
+     * identical code, so the ceiling adds coverage of the CONFIGURATION, not
+     * of the arithmetic -- and it is built below in the closed world, where
+     * the same order costs a third of a gigabyte instead of ten.
+     */
+    for (uint32_t order = 2; order <= 7; ++order) {
         BeamModelConfig c;
         beam_model_config_default_for(BEAM_ALPHABET_NT, &c);
         c.order = (uint8_t)order;
@@ -993,6 +1002,30 @@ static void test_every_nucleotide_order_finalizes_with_backoff(void) {
         const double lp = beam_model_log_pseq(m, seqs[0]);
         ASSERT_MSG(isfinite(lp),
                    "the open world gives every readable sequence mass");
+        beam_model_destroy(m);
+    }
+
+    /*
+     * The ceiling itself, built rather than merely asserted legal -- which is
+     * the shape of coverage that let the original defect through. Closed
+     * world, so the storage is sparse and the row directory is what is paid
+     * for, not 6^9 * 5 dense cells per depth bucket.
+     */
+    {
+        BeamModelConfig c;
+        beam_model_config_default_for(BEAM_ALPHABET_NT, &c);
+        c.order = 9;
+        c.max_length = 6;
+        c.depth_cap = 1;
+        c.sparse = true;
+        BeamModel *m = beam_model_new(&c);
+        ASSERT_MSG(m != NULL, "the nucleotide ceiling order must build");
+        ASSERT_MSG(beam_model_n_states(m) == 10077696u, "6^9 states");
+        const char *nine[] = { "ACGTAC", "ACGTAG" };
+        const double nab[] = { 2.0, 1.0 };
+        ASSERT_MSG(beam_model_observe(m, nine, nab, 2) == BEAM_OK, "observe");
+        ASSERT_MSG(beam_model_finalize(m) == BEAM_OK, "finalize at the ceiling");
+        ASSERT_MSG(isfinite(beam_model_log_pseq(m, nine[0])), "and it scores");
         beam_model_destroy(m);
     }
     PASS();

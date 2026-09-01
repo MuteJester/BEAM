@@ -217,8 +217,6 @@ tests/python/model/test_nucleotide.py::test_every_order_survives_backoff[4]
 tests/python/model/test_nucleotide.py::test_every_order_survives_backoff[5]
 tests/python/model/test_nucleotide.py::test_every_order_survives_backoff[6]
 tests/python/model/test_nucleotide.py::test_every_order_survives_backoff[7]
-tests/python/model/test_nucleotide.py::test_every_order_survives_backoff[8]
-tests/python/model/test_nucleotide.py::test_every_order_survives_backoff[9]
 tests/python/model/test_nucleotide.py::test_generation_emits_only_nucleotides
 tests/python/model/test_nucleotide.py::test_N_is_a_residue_and_other_iupac_codes_are_not
 tests/python/model/test_nucleotide.py::test_prism_channel_counts_follow_the_alphabet
@@ -227,6 +225,7 @@ tests/python/model/test_nucleotide.py::test_python_and_c_resolve_the_same_defaul
 tests/python/model/test_nucleotide.py::test_the_amino_acid_defaults_did_not_move
 tests/python/model/test_nucleotide.py::test_the_analytics_run_and_agree_with_each_other
 tests/python/model/test_nucleotide.py::test_the_builder_takes_the_alphabet_too
+tests/python/model/test_nucleotide.py::test_the_ceiling_order_builds
 tests/python/model/test_nucleotide.py::test_the_open_world_builds_at_the_default_order
 tests/python/model/test_nucleotide.py::test_the_refusal_names_the_alphabet_it_belongs_to
 tests/python/model/test_nucleotide.py::test_the_registry_is_served_from_the_c_descriptor

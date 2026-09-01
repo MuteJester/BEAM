@@ -37,6 +37,16 @@ PyObject *set_beam_error(BeamError err) {
 
     switch (err) {
         case BEAM_ERR_ALLOC:
+            /* PyErr_NoMemory() sets MemoryError with no message, which is
+             * right for a bare allocation failure and wrong for a refusal
+             * that has something to say -- "this configuration needs 41 GB
+             * and the budget is 4" tells a caller what to change, and losing
+             * it leaves them a blank MemoryError to guess at. Keep the type,
+             * keep the detail. */
+            if (has_msg) {
+                PyErr_SetString(PyExc_MemoryError, msg);
+                return NULL;
+            }
             return PyErr_NoMemory();
 
         case BEAM_ERR_NULL_ARG:

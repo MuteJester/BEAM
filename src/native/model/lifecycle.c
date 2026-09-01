@@ -135,6 +135,48 @@ BeamModel *beam_model_new(const BeamModelConfig *cfg) {
         const uint64_t rows_mid  = (uint64_t)m->max_len * m->n_ctx_mid;
         const uint64_t rows_len  = (uint64_t)m->n_len_slots * m->max_len
                                  * m->n_ctx_len;
+        /*
+         * And refuse a configuration that cannot fit before allocating for
+         * it, rather than after.
+         *
+         * calloc() on Linux succeeds for an absurd size and hands back lazily
+         * mapped pages, so a model asking for hundreds of gigabytes does not
+         * fail here -- it fails much later, when the tables are first
+         * written, by which time the OOM killer is choosing which process on
+         * the machine dies. That is not a failure mode a library gets to have:
+         * a configuration this build cannot serve has to be refused while
+         * refusing is still cheap.
+         *
+         * The estimate is what construction and finalize allocate together:
+         * the count tables now and the finalized log tables later, both
+         * directions. Sparse storage grows its payloads with the data instead,
+         * so what a sparse config commits to up front is the row directory.
+         *
+         * The bound is beam_model_memory_budget(), which is already the
+         * library's answer to "how much may BEAM use" and is settable from
+         * Python. A caller with the memory raises it and proceeds.
+         */
+        const uint64_t rows_total = rows_wide + rows_mid + rows_len;
+        const uint64_t need = c.sparse
+            ? rows_total * BEAM_DIRS * 2ull * sizeof(uint32_t)
+            : rows_total * m->n_residues * BEAM_DIRS * 2ull * sizeof(double);
+        const uint64_t budget = beam_model_memory_budget();
+        if (need > budget) {
+            beam_set_error(BEAM_ERR_ALLOC,
+                          "this %s configuration needs about %.1f GB for its "
+                          "tables (order %u, max_length %u, depth_cap %u, %s) "
+                          "and the memory budget is %.1f GB; raise it with "
+                          "beam_model_set_memory_budget / "
+                          "BEAM.set_memory_budget, or build a smaller model",
+                          a->name, (double)need / 1e9,
+                          (unsigned)c.order, (unsigned)c.max_length,
+                          (unsigned)c.depth_cap,
+                          c.sparse ? "sparse" : "dense",
+                          (double)budget / 1e9);
+            free(m);
+            return NULL;
+        }
+
         const uint64_t w1 = rows_wide > rows_mid ? rows_wide : rows_mid;
         const uint64_t widest = w1 > rows_len ? w1 : rows_len;
         if (widest > UINT32_MAX) {

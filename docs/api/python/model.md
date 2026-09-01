@@ -65,6 +65,23 @@ model.n_residues                                  # -> 20 | 5
 
 Models of different alphabets cannot be combined: `add`, `subtract` and `posterior` refuse them, because two models can agree on order, length and depth and still have rows of different widths.
 
+!!! warning "Table size is bounded by the memory budget"
+    A configuration is refused with `MemoryError` if its tables would exceed
+    `BEAM.memory_budget()`, which defaults to 4 GiB. The message says what the
+    configuration needs and what the budget is.
+
+    This is a guard against a failure mode the library used to have rather than
+    a limit for its own sake: `calloc` on Linux grants an absurd size lazily, so
+    a model asking for hundreds of gigabytes did not fail where it asked — it
+    failed later, when the tables were first written, with the OOM killer
+    choosing which process on the machine died. High orders reach that quickly
+    on the nucleotide alphabet, where a dense wide table is
+    `(depth_cap + 1) * 6**order * 5` doubles per direction: 0.3 GB at order 7
+    and 11 GB at order 9.
+
+    Raise it with `BEAM.set_memory_budget(bytes)` if you have the memory, or
+    use the closed-world default, whose sparse storage is far smaller.
+
 !!! warning "The coefficient sum is not a free parameter"
     It is a pure cross-length calibration knob. Moving it off 1 leaves *within-length* ranking untouched while wrecking *global* ranking: at sum 1.15 average precision falls from 0.847 to 0.830, and at 1.45 to 0.739. A sum other than 1 is rejected at construction rather than silently mis-calibrating.
 

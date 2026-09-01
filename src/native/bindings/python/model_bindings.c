@@ -25,18 +25,12 @@ PyObject *py_new(PyObject *self, PyObject *args) {
     BeamModelConfig cfg;
     if (!edge_parse_config(args, &cfg, NULL, NULL)) return NULL;
     BeamModel *m = beam_model_new(&cfg);
-    if (!m) {
-        /* beam_model_new always sets a message saying which rule was hit --
-         * an unknown alphabet, an order past its ceiling, a table whose row
-         * count will not fit a uint32, an allocation that failed. Replacing
-         * all of them with "invalid configuration" threw that away and left
-         * a caller to guess, and made every carefully worded refusal in
-         * lifecycle.c unreachable from Python. */
-        const char *why = beam_error_message();
-        PyErr_SetString(PyExc_ValueError,
-                        (why && why[0]) ? why : "invalid BeamModel configuration");
-        return NULL;
-    }
+    /* set_beam_error carries the message AND the right exception type: a
+     * model too large for the budget is a MemoryError, not a ValueError, and
+     * a caller retrying at a smaller order needs to be able to tell those
+     * apart. Hard-coding ValueError here made every refusal look like a bad
+     * argument and every refusal message unreachable. */
+    if (!m) return set_beam_error(beam_last_error());
     return PyCapsule_New(m, BEAM_CAPSULE_NAME, capsule_destructor);
 }
 PyObject *py_observe(PyObject *self, PyObject *args) {
@@ -94,10 +88,7 @@ PyObject *py_build(PyObject *self, PyObject *args) {
     BeamModel *m = beam_model_new(&cfg);
     if (!m) {
         PyMem_Free(v); PyMem_Free(w);
-        const char *why = beam_error_message();
-        PyErr_SetString(PyExc_ValueError,
-                        (why && why[0]) ? why : "invalid BeamModel configuration");
-        return NULL;
+        return set_beam_error(beam_last_error());
     }
 
     BeamError err;

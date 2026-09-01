@@ -4,6 +4,28 @@ Evidence for the reorganization, tracked in the repository rather than left in
 an ignored directory. It was in `.private/` until a reviewer pointed out that
 `git clean -fdx` would have destroyed the only copies.
 
+## Run anything that builds a model under `verification/bounded`
+
+```bash
+verification/bounded -m 12 -t 900 -- python -m pytest tests -q
+PYTHONPATH=src verification/bounded -- python verification/check.py
+```
+
+Not optional, and not only for sweeps. BEAM can be asked for a configuration
+whose tables run to hundreds of gigabytes, and `calloc` on Linux grants that
+lazily: the process does not fail where it asked, it fails much later when the
+pages are first written, by which point the OOM killer is picking a victim
+from the whole machine. During this work that victim was twice the developer's
+editor -- once from a review agent sweeping configurations, once from a
+one-line sanity check typed by hand.
+
+`beam_model_new` now refuses a configuration larger than
+`beam_model_memory_budget()` before allocating, which closes the common case.
+`bounded` is the belt to that braces: it sets a hard address-space ceiling, so
+anything the guard does not anticipate fails inside the process that asked
+rather than on the machine around it. Use it for one-liners too. That is where
+it went wrong both times.
+
 ## Running the gate
 
 ```bash

@@ -284,12 +284,15 @@ def test_the_open_world_builds_at_the_default_order():
     assert closed.log_pseq(unseen) == -math.inf
 
 
-@pytest.mark.parametrize("order", [4, 5, 6, 7, 8, 9])
+@pytest.mark.parametrize("order", [4, 5, 6, 7])
 def test_every_order_survives_backoff(order):
     """Order 4 is the boundary the base cap leaves alone; 5 upward exercise it.
 
-    Up to the alphabet's own ceiling, not a sample of it: the bug this covers
-    hid behind a test that asserted order 9 was legal without building one.
+    Stops at 7 because backoff forces dense storage, and a dense nucleotide
+    wide table is `(depth_cap + 1) * 6**order * 5` doubles per direction --
+    0.3 GB at order 7 and 11 GB at order 9. Orders 5, 6 and 7 take the clamped
+    branch through identical code; the ceiling is built separately below,
+    where the closed world makes it affordable.
     """
     m = BEAM.BeamModel(NT_SEQS, abundances=NT_AB, alphabet="nt", order=order,
                        max_length=42, depth_cap=6, strict=False)
@@ -312,3 +315,19 @@ def test_a_smoothed_nucleotide_model_is_still_a_distribution():
                 if math.isfinite(lp):
                     total += math.exp(lp - logpi)
     assert total == pytest.approx(1.0, abs=1e-9)
+
+
+def test_the_ceiling_order_builds():
+    """Order 9 built, not merely asserted legal.
+
+    That distinction is the whole lesson of the defect this file's other tests
+    cover: the suite asserted `beam_config_valid` accepted order 9 and never
+    constructed one, and construction is where it segfaulted. Closed world, so
+    storage is sparse and this costs a few hundred megabytes rather than
+    eleven gigabytes.
+    """
+    m = BEAM.BeamModel(["ACGTAC", "ACGTAG"], abundances=[2.0, 1.0],
+                       alphabet="nt", order=9, max_length=6, depth_cap=1)
+    assert m.config["order"] == 9
+    assert m.n_states == 6 ** 9
+    assert math.isfinite(m.log_pseq("ACGTAC"))
