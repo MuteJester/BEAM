@@ -78,6 +78,14 @@ static void test_defaults_sit_inside_their_own_ceilings(void) {
         /* The state is max(order, 3), so an alphabet whose ceiling is below 3
          * would build a state too narrow to feed the order-3 mid expert. */
         ASSERT_MSG(a->max_order >= 3, "the state can never be narrower than 3");
+        /* BEAM_MAX_ORDER sizes every order-indexed scratch array -- `slot[]`
+         * in the context packers, `level_counts[]` and `scratch[]` in the
+         * backoff hierarchy, `mid_p[]`/`agg_p[]` in finalize. It is only a
+         * safe bound while no alphabet lets a caller ask for more, and
+         * `indexing.h` would silently CLAMP rather than fail if one did. */
+        ASSERT_MSG(a->max_order <= BEAM_MAX_ORDER,
+                   "an alphabet cannot allow an order past the bound that "
+                   "sizes the arrays indexed by it");
 
         ASSERT_MSG(a->default_max_length >= 2,
                    "depth_cap must be at least 1 and below max_length");
@@ -961,7 +969,10 @@ static void test_every_nucleotide_order_finalizes_with_backoff(void) {
                            "TGTGCCAGCAGCCCGGAC" };
     const double ab[] = { 4.0, 2.0, 1.0 };
 
-    for (uint32_t order = 2; order <= 6; ++order) {
+    /* Every order, not a sample of them. The bug this pins was invisible
+     * precisely because the suite asserted order 9 was VALID without ever
+     * building one, and building is where it failed. */
+    for (uint32_t order = 2; order <= 9; ++order) {
         BeamModelConfig c;
         beam_model_config_default_for(BEAM_ALPHABET_NT, &c);
         c.order = (uint8_t)order;
@@ -997,7 +1008,13 @@ static void test_the_partition_normalises_with_backoff_above_order_four(void) {
     beam_model_config_default_for(BEAM_ALPHABET_NT, &c);
     c.order = 5;                       /* base capped from 4 down to 3 */
     c.max_length = 5;
-    c.depth_cap = 3;
+    /*
+     * One, so that every position past the first takes the DEPTH-AGGREGATED
+     * backoff base rather than the per-depth one. With a cap at or above the
+     * length being enumerated, `d < depth_cap` holds everywhere and the
+     * `agg_p[k1]` branch -- the other half of the fix -- is never reached.
+     */
+    c.depth_cap = 1;
     c.strict = false;
     c.kappa[0] = c.kappa[1] = c.kappa[2] = 20.0;
     c.kappa_wide = 20.0;
@@ -1005,23 +1022,38 @@ static void test_the_partition_normalises_with_backoff_above_order_four(void) {
 
     BeamModel *m = beam_model_new(&c);
     ASSERT_MSG(m != NULL, "new");
-    const char *tiny[] = { "TGT", "TGC", "GCC", "TCA" };
-    const double tw[] = { 5, 3, 2, 4 };
-    ASSERT_MSG(beam_model_observe(m, tiny, tw, 4) == BEAM_OK, "observe");
+    /* Both lengths observed, so both have a length prior and both can be
+     * enumerated. A length the corpus never spelled sums to zero, correctly,
+     * and would say nothing about the backoff. */
+    const char *tiny[] = { "TGT", "TGC", "GCC", "TCA", "TGTA", "GCCT" };
+    const double tw[] = { 5, 3, 2, 4, 3, 2 };
+    ASSERT_MSG(beam_model_observe(m, tiny, tw, 6) == BEAM_OK, "observe");
     ASSERT_MSG(beam_model_finalize(m) == BEAM_OK, "finalize");
 
-    const double logpi = beam_model_log_length_prior(m, 3);
-    double total = 0.0;
-    char buf[4] = { 0, 0, 0, 0 };
-    for (int a = 0; a < 5; a++)
-      for (int b = 0; b < 5; b++)
-        for (int d = 0; d < 5; d++) {
-            buf[0] = NT_UPPER[a]; buf[1] = NT_UPPER[b]; buf[2] = NT_UPPER[d];
-            const double lp = beam_model_log_pseq(m, buf);
-            if (isfinite(lp)) total += exp(lp - logpi);
-        }
-    ASSERT_MSG(fabs(total - 1.0) < 1e-9,
-               "a smoothed order-5 nucleotide model must still normalise");
+    /* With the cap at 1 there are two buckets, and bucket 1 is the
+     * depth-AGGREGATED one, so every position past the first reaches the
+     * `agg_p` half of the backoff rather than the per-depth half. */
+    char buf[5] = { 0, 0, 0, 0, 0 };
+    for (uint32_t len = 3; len <= 4; ++len) {
+        const double logpi = beam_model_log_length_prior(m, len);
+        ASSERT_MSG(isfinite(logpi), "both lengths must have a prior");
+        double total = 0.0;
+        for (int a = 0; a < 5; a++)
+          for (int b = 0; b < 5; b++)
+            for (int d = 0; d < 5; d++)
+              for (int e = 0; e < 5; e++) {
+                if (len == 3 && e != 0) continue;   /* enumerate once */
+                buf[0] = NT_UPPER[a]; buf[1] = NT_UPPER[b];
+                buf[2] = NT_UPPER[d];
+                buf[3] = (len == 4) ? NT_UPPER[e] : '\0';
+                buf[len] = '\0';
+                const double lp = beam_model_log_pseq(m, buf);
+                if (isfinite(lp)) total += exp(lp - logpi);
+            }
+        ASSERT_MSG(fabs(total - 1.0) < 1e-9,
+                   "a smoothed order-5 nucleotide model must still normalise, "
+                   "including where the backoff base is the aggregated one");
+    }
     beam_model_destroy(m);
     PASS();
 }

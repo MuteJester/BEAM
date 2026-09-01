@@ -284,9 +284,13 @@ def test_the_open_world_builds_at_the_default_order():
     assert closed.log_pseq(unseen) == -math.inf
 
 
-@pytest.mark.parametrize("order", [4, 5, 6, 7])
+@pytest.mark.parametrize("order", [4, 5, 6, 7, 8, 9])
 def test_every_order_survives_backoff(order):
-    """Order 4 is the boundary the base cap leaves alone; 5 upward exercise it."""
+    """Order 4 is the boundary the base cap leaves alone; 5 upward exercise it.
+
+    Up to the alphabet's own ceiling, not a sample of it: the bug this covers
+    hid behind a test that asserted order 9 was legal without building one.
+    """
     m = BEAM.BeamModel(NT_SEQS, abundances=NT_AB, alphabet="nt", order=order,
                        max_length=42, depth_cap=6, strict=False)
     assert math.isfinite(m.log_pseq(NT_SEQS[0]))

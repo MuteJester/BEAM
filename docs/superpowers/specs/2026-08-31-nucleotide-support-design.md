@@ -541,6 +541,45 @@ suite does not cover, worst error 5.7e-14. Real format-2 files written by the
 pre-branch build load bit-identically. The performance claim was reproduced at
 0.98-1.03x.
 
+## The second review round
+
+The fix above was reviewed again, by two more agents pointed at it rather than
+at the branch. Both confirmed it — one deriving the index arithmetic from the
+packing invariants rather than from the test, the other proving it positively
+with a C probe: for every wide row whose count row is empty, the finalized row
+must equal the order-3 base row, and it does at every order 2 to 9, worst
+difference 4.4e-16. That probe also discriminates, since a deliberately wrong
+reduction differs from order 4 up. And keeping the enlarged arrays while
+restoring the unclamped index still segfaults, which confirms the clamp rather
+than the array size is what was load-bearing.
+
+Five things attributable to those two commits were found and closed:
+
+1. **The tripwire claim was wrong on one of its two knobs.** Raising
+   `BEAM_MAX_ORDER` from 9 to 20 left the suite green, because the headroom
+   test reads the descriptor's `max_order`, not the global bound. The real
+   missing invariant was that the two cannot diverge: an alphabet allowing an
+   order past `BEAM_MAX_ORDER` would have `indexing.h` silently CLAMP rather
+   than fail. That assertion now exists, and raising a descriptor's ceiling
+   past the bound fails two tests.
+2. **The guard's message could contradict its own condition** — it tested the
+   maximum of three row counts and reported the maximum of two.
+3. **The guard's message was unreachable from Python.** The bindings replaced
+   every `beam_model_new` failure with "invalid BeamModel configuration",
+   discarding the reason. They now pass it through, and the facade no longer
+   blames the corpus for a failure the corpus did not cause: an out-of-memory
+   build used to surface as "no training sequence survived encoding".
+4. **The coverage was still thin where it mattered.** The C test built orders
+   2 to 6 and the Python one 4 to 7, while the alphabet allows 9 — the same
+   shape of gap that hid the original defect, one layer down. Both now go to
+   the ceiling.
+5. **The normalisation test never reached the aggregated backoff branch.** Its
+   `depth_cap` was at or above the length being enumerated, so every position
+   took the per-depth base and `agg_p` was untouched. Writing the fix for that
+   surfaced a bug in the test rather than the code: enumerating a length the
+   corpus never spelled sums to zero, correctly, because that length has no
+   prior. It now observes two lengths, caps depth at 1, and enumerates both.
+
 ## Verification contract
 
 The gate at `verification/check.py` compares every quantity as a hex float, so

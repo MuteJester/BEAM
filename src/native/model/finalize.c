@@ -212,7 +212,9 @@ static BeamError finalize_direction(BeamModel *m, uint32_t dir) {
                 const double *base_tab = (d < dc)
                     ? mid_p[k1] + (size_t)d * n_ctx1 * R
                     : agg_p[k1];
-                /* Drop the most distant residue to reach the base row. */
+                /* Keep the k1 residues nearest the scored one, dropping
+                 * the rest. That is one residue at every amino-acid order,
+                 * and `order - 3` of them once the base is capped. */
                 const double *base = base_tab + (size_t)(c % n_ctx1) * R;
                 for (uint32_t x = 0; x < R; ++x) {
                     orow[x] = cr[x] + m->cfg.kappa_wide * base[x];

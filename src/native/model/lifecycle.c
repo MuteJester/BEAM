@@ -135,15 +135,15 @@ BeamModel *beam_model_new(const BeamModelConfig *cfg) {
         const uint64_t rows_mid  = (uint64_t)m->max_len * m->n_ctx_mid;
         const uint64_t rows_len  = (uint64_t)m->n_len_slots * m->max_len
                                  * m->n_ctx_len;
-        const uint64_t widest = rows_wide > rows_mid ? rows_wide : rows_mid;
-        if ((widest > rows_len ? widest : rows_len) > UINT32_MAX) {
+        const uint64_t w1 = rows_wide > rows_mid ? rows_wide : rows_mid;
+        const uint64_t widest = w1 > rows_len ? w1 : rows_len;
+        if (widest > UINT32_MAX) {
             beam_set_error(BEAM_ERR_PARAM_OUT_OF_RANGE,
                           "the %s alphabet at order %u with max_length %u "
                           "needs %llu table rows, which does not fit the 32 "
                           "bits a row index is held in",
                           a->name, (unsigned)c.order, (unsigned)c.max_length,
-                          (unsigned long long)(rows_wide > rows_len
-                                               ? rows_wide : rows_len));
+                          (unsigned long long)widest);
             free(m);
             return NULL;
         }

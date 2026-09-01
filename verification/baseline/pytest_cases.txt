@@ -217,6 +217,8 @@ tests/python/model/test_nucleotide.py::test_every_order_survives_backoff[4]
 tests/python/model/test_nucleotide.py::test_every_order_survives_backoff[5]
 tests/python/model/test_nucleotide.py::test_every_order_survives_backoff[6]
 tests/python/model/test_nucleotide.py::test_every_order_survives_backoff[7]
+tests/python/model/test_nucleotide.py::test_every_order_survives_backoff[8]
+tests/python/model/test_nucleotide.py::test_every_order_survives_backoff[9]
 tests/python/model/test_nucleotide.py::test_generation_emits_only_nucleotides
 tests/python/model/test_nucleotide.py::test_N_is_a_residue_and_other_iupac_codes_are_not
 tests/python/model/test_nucleotide.py::test_prism_channel_counts_follow_the_alphabet

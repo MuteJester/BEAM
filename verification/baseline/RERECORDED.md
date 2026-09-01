@@ -139,6 +139,17 @@ and one more from the same review, closing its remaining findings:
 
     c_cases.txt      test_the_widest_table_still_fits_a_uint32_row_index
 
+and two more from a second review round, which checked the fix rather than
+the branch and found the coverage behind it still thin:
+
+    pytest_cases.txt test_every_order_survives_backoff[8]
+                     test_every_order_survives_backoff[9]
+
+The C loop over orders was widened from 2..6 to 2..9 at the same time. The
+point of both: the original defect hid behind a test that asserted order 9 was
+VALID without ever building one, and the tests written to close it stopped at
+6 and 7 — the same shape of gap, one layer down.
+
 The defect: the wide expert's backoff base was indexed at `order - 1` into
 arrays holding the mid hierarchy's orders 0..3. Amino acids cap at order 4, so
 that index was always in range; a nucleotide model at its default order 6 read

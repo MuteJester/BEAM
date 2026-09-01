@@ -176,6 +176,12 @@ class BeamModel:
                 continue
             usable += 1
             break
+        # The corpus is not always the problem. Now that the C layer's own
+        # message reaches here -- an order past its ceiling, a table too large
+        # to address, an allocation that failed -- blaming the sequences for it
+        # would bury the real reason under a guess.
+        if usable > 0:
+            return str(exc)
         if usable == 0:
             syms = alphabets.symbols(alphabet)
             return (
