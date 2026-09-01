@@ -206,6 +206,7 @@ tests/python/model/test_generation.py::test_sample_is_reproducible
 tests/python/model/test_generation.py::test_sample_respects_the_model
 tests/python/model/test_generation.py::test_simulate_is_reproducible
 tests/python/model/test_generation.py::test_simulate_returns_a_simulation_result
+tests/python/model/test_nucleotide.py::test_a_configuration_larger_than_the_budget_is_refused
 tests/python/model/test_nucleotide.py::test_an_amino_acid_model_is_unaffected_by_a_nucleotide_one
 tests/python/model/test_nucleotide.py::test_an_amino_acid_sequence_is_refused_by_a_nucleotide_model
 tests/python/model/test_nucleotide.py::test_a_nucleotide_model_round_trips_through_a_file
@@ -228,6 +229,7 @@ tests/python/model/test_nucleotide.py::test_the_builder_takes_the_alphabet_too
 tests/python/model/test_nucleotide.py::test_the_ceiling_order_builds
 tests/python/model/test_nucleotide.py::test_the_open_world_builds_at_the_default_order
 tests/python/model/test_nucleotide.py::test_the_refusal_names_the_alphabet_it_belongs_to
+tests/python/model/test_nucleotide.py::test_the_refusal_says_what_it_needs_and_what_it_has
 tests/python/model/test_nucleotide.py::test_the_registry_is_served_from_the_c_descriptor
 tests/python/model/test_nucleotide.py::test_the_sequence_column_defaults_to_the_alphabets_own
 tests/python/model/test_nucleotide.py::test_the_two_alphabets_cannot_be_combined

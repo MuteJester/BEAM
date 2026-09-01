@@ -331,3 +331,45 @@ def test_the_ceiling_order_builds():
     assert m.config["order"] == 9
     assert m.n_states == 6 ** 9
     assert math.isfinite(m.log_pseq("ACGTAC"))
+
+
+# ═══════════════════════════════════════════════════════════════
+# the memory guard
+# ═══════════════════════════════════════════════════════════════
+
+def test_a_configuration_larger_than_the_budget_is_refused():
+    """Refused before allocating, not after.
+
+    calloc grants an absurd size lazily on Linux, so without this guard the
+    process does not fail where it asked -- it fails when the tables are first
+    written, with the OOM killer choosing a victim from the whole machine.
+    Lowering the budget is how the refusal is reached without allocating
+    anything large to reach it.
+    """
+    before = BEAM.memory_budget()
+    try:
+        BEAM.set_memory_budget(1_000_000)          # 1 MB
+        with pytest.raises(MemoryError, match="memory budget"):
+            BEAM.BeamModel(NT_SEQS, abundances=NT_AB, alphabet="nt",
+                           order=6, max_length=42, depth_cap=8, strict=False)
+    finally:
+        BEAM.set_memory_budget(before)
+    assert BEAM.memory_budget() == before
+    # and the same model builds once the budget allows it
+    m = BEAM.BeamModel(NT_SEQS, abundances=NT_AB, alphabet="nt",
+                       order=6, max_length=42, depth_cap=8, strict=False)
+    assert m.alphabet == "nt"
+
+
+def test_the_refusal_says_what_it_needs_and_what_it_has():
+    """A bare MemoryError leaves a caller nothing to act on."""
+    before = BEAM.memory_budget()
+    try:
+        BEAM.set_memory_budget(1_000_000)
+        with pytest.raises(MemoryError) as exc:
+            BEAM.BeamModel(NT_SEQS, alphabet="nt", strict=False)
+    finally:
+        BEAM.set_memory_budget(before)
+    text = str(exc.value)
+    assert "needs about" in text and "memory budget is" in text
+    assert "set_memory_budget" in text        # names the way out
