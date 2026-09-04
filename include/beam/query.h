@@ -234,6 +234,75 @@ BeamError beam_query_constrain_automaton(BeamConstraint *c, BeamAutomaton *a);
 /** The automaton a constraint carries, or NULL. Borrowed, not owned. */
 const BeamAutomaton *beam_query_constraint_automaton(const BeamConstraint *c);
 
+/* ── Additive functionals and their moments ────────────────── */
+
+/**
+ * What a functional adds up.
+ *
+ * Only functionals that DECOMPOSE OVER POSITIONS are exactly computable, and
+ * that is the whole vocabulary: `f(s) = sum_i g(i, x_i)`. An arbitrary
+ * function of a whole sequence is not here and will not be, because computing
+ * its expectation means enumerating the support or sampling it, and this
+ * library does neither.
+ */
+typedef enum {
+    /** `g(i, x)` read from a table. Indicators, residue counts and any
+        weighted positional score are this, with a different table. */
+    BEAM_FUNCTIONAL_TABLE = 0,
+    /** `g` is the edge's own log weight, including the sink term. The path
+        total is then `ln w(s)`, which is what makes entropy fall out of the
+        same sweep rather than needing an algebra of its own. */
+    BEAM_FUNCTIONAL_LOG_WEIGHT = 1
+} BeamFunctionalKind;
+
+typedef struct {
+    BeamFunctionalKind kind;
+    /** `[length * n_residues]`, row-major `table[i * n_residues + x]`.
+        Required for BEAM_FUNCTIONAL_TABLE, ignored otherwise. */
+    const double *table;
+} BeamFunctional;
+
+/** Exact first two moments of a functional, and the mass they are taken over. */
+typedef struct {
+    double mean;      /**< `E[f | length, C]`                        */
+    double variance;  /**< `Var[f | length, C]`, never negative      */
+    double log_z;     /**< `ln Z` of the constrained trellis         */
+} BeamQueryMoments;
+
+/**
+ * `E[f]` and `Var[f]` under `P(. | length, C)`, exactly.
+ *
+ * One FORWARD pass, with no backward field at all: the moments of an additive
+ * functional propagate along the trellis, so unlike `beam_query_marginals`
+ * this does not have to hold `length + 1` layers of anything. It is therefore
+ * much the cheaper of the two, and much the more likely to fit.
+ *
+ * The variance is accumulated in centred form -- a running mean and a running
+ * sum of squared deviations, merged pairwise -- rather than as
+ * `E[f^2] - E[f]^2`. The uncentred form cancels catastrophically exactly where
+ * variances are interesting, when the spread is small beside the mean.
+ *
+ * @return BEAM_ERR_NO_LIVE_PATHS if the constraint admits nothing, since
+ *         moments of a distribution with no support do not exist.
+ */
+BeamError beam_query_expect(const BeamModel *m, const BeamConstraint *c,
+                            const BeamFunctional *f, BeamQueryMoments *out);
+
+/**
+ * `H(X | length, C)` in nats, and optionally the variance of the surprisal.
+ *
+ * Entropy needs no algebra of its own. `ln P(s) = ln w(s) - ln Z` and
+ * `ln w(s)` is additive over edges, so
+ *
+ *   H = -sum P ln P = ln Z - E[ln w],
+ *
+ * which is `beam_query_expect` with BEAM_FUNCTIONAL_LOG_WEIGHT and one
+ * subtraction. `out_variance` receives `Var[-ln P]`, the spread of the
+ * surprisal, which is the same sweep's second moment.
+ */
+BeamError beam_query_entropy(const BeamModel *m, const BeamConstraint *c,
+                             double *out_entropy, double *out_variance);
+
 /* ── Cost ──────────────────────────────────────────────────── */
 
 /**

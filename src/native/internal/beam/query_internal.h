@@ -85,6 +85,24 @@ static inline uint64_t beam_query_sweep_bytes(uint32_t n_states,
     return n;
 }
 
+/**
+ * Peak bytes one moment sweep needs.
+ *
+ * Far below `beam_query_sweep_bytes`: moments of an additive functional
+ * propagate forwards, so there is no backward field and nothing scales with
+ * the length. Three quantities per product state, double-buffered, plus one
+ * layer of weights and the sink.
+ */
+static inline uint64_t beam_query_moment_bytes(uint32_t n_states,
+                                               uint32_t n_aut,
+                                               uint32_t n_residues) {
+    const uint64_t S = n_states;
+    const uint64_t P = (uint64_t)n_states * n_aut;
+    return 6u * P * sizeof(double)            /* weight, mean, m2; two copies */
+         + S * (uint64_t)n_residues * sizeof(double)
+         + S * sizeof(double);
+}
+
 /** True when `position` is inside the constraint and `residue` is an index. */
 BeamError beam_query_check_site(const BeamConstraint *c, uint32_t position,
                                 uint32_t residue, const char *what);
