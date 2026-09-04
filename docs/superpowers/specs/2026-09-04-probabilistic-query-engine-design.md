@@ -211,23 +211,38 @@ that node*:
 No signed-log machinery, no negative carriers, and the `-inf` (zero-weight)
 case falls out of `sigma = 0`.
 
-## Pairwise joints: the optimization is a constraint
+## Pairwise joints: measured, not argued
 
-All-pairs joints look like they need a hand-written kernel that propagates `R`
-tagged forward messages. They do not.
+All-pairs joints look like they need a hand-written kernel propagating `R`
+tagged forward messages. An automaton with `R + 1` states -- "before position
+`i`", then one state per value observed at `i` -- records `x_i` in the product
+state and yields `P(x_j = b, x_i = a)` for every `j` from one sweep, so the
+optimization would be a constraint rather than a kernel.
 
-An automaton with `R+1` states -- "before position `i`", then one state per
-value observed at `i` -- records `x_i` in the product state. Running edge
-posteriors on that product yields `P(x_j = b, x_i = a)` for **every** `j` and
-every `a`, from one sweep at cost `x(R+1)`.
+**That is true and it is not what to do.** The saving it claimed does not
+exist. One tagged sweep replaces `R` clamped ones, but its backward field is
+`(R + 1)` times taller, and the two cancel:
 
-So all pairwise joints cost `L` product sweeps, sharing one backward pass,
-with no code outside `automaton.c`. The measured alternative -- `L*R` separate
-clamped sweeps -- was 0.54 s at order 3 and about 19 s at order 4 for a
-length-14 model.
+| approach | peak memory | edge relaxations |
+|---|---|---|
+| tagging automaton, `L` sweeps | 490 MB | 16.0 G |
+| clamped masks, `L * R` sweeps | 23 MB | 15.2 G |
 
-This is the design's own argument for itself: the optimization that would have
-been a special-purpose kernel is instead an eight-line automaton builder.
+*(order-4 amino acid, `S = 194,481`, `L = 14`, `R = 20`.)*
+
+Same work to within 5%, twenty-one times the memory. At nucleotide order 9 it
+is the difference between 3.7 GB, which fits the default budget, and 22 GB,
+which is refused outright.
+
+So the joints come from **clamped mask sweeps**: for each `(i, a)` whose
+marginal is non-zero, one free-tier sweep gives `P(x_j | x_i = a)` for every
+`j` at once, and multiplying by `P(x_i = a)` gives the joint. `L * R` sweeps,
+each costing exactly what an unconstrained sweep costs.
+
+This is asymptotically the best available. The output alone is `L^2 R^2`
+numbers and this costs `L^2 S R^2`, a factor `S` above it; carrying every
+position's distribution through one sweep instead costs the same, so there is
+no arrangement that wins.
 
 ## Aggregation across lengths
 
