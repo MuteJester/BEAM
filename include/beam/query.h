@@ -328,6 +328,67 @@ typedef struct {
 BeamError beam_query_estimate(const BeamModel *m, const BeamConstraint *c,
                               BeamQueryCost *out);
 
+/* ── Information ───────────────────────────────────────────── */
+
+/**
+ * `H(X_i | length, C)` in nats, for every position.
+ *
+ * The Shannon entropy of each position's own marginal, which is not the
+ * entropy of the sequence: summing these would double-count everything the
+ * positions share. `beam_query_entropy` gives the sequence entropy, and the
+ * gap between the two is exactly what the information matrix measures.
+ *
+ * @param out  [length] nats.
+ */
+BeamError beam_query_position_entropy(const BeamModel *m,
+                                      const BeamConstraint *c, double *out);
+
+/**
+ * `P(x_i = a, x_j = b | length, C)` for one pair of positions.
+ *
+ * @param out  [n_residues * n_residues], row-major `out[a * n_residues + b]`,
+ *             summing to 1. With `i == j` it is diagonal, which is the
+ *             correct joint of a position with itself.
+ *
+ * Costs one free-tier sweep per residue that position `i` can take.
+ */
+BeamError beam_query_pair_joint(const BeamModel *m, const BeamConstraint *c,
+                                uint32_t i, uint32_t j, double *out);
+
+/**
+ * Mutual information between every pair of positions, in nats.
+ *
+ * `out[i * length + j]` is `I(X_i ; X_j) = H(X_i) + H(X_j) - H(X_i, X_j)`,
+ * the reduction in uncertainty about one position from learning the other.
+ * The diagonal is `H(X_i)`, since a position tells you everything about
+ * itself, and it falls out of the same arithmetic rather than being written
+ * in afterwards.
+ *
+ * Conditional entropy is a subtraction away: `H(X_i | X_j)` is
+ * `out[i * length + i] - out[i * length + j]`.
+ *
+ * Costs one sweep per `(position, residue)` pair carrying mass -- up to
+ * `length * n_residues` of them, so this is much the most expensive query
+ * here. `beam_query_information_cost` reports the total beforehand.
+ *
+ * @param out  [length * length] nats, symmetric and non-negative.
+ */
+BeamError beam_query_information_matrix(const BeamModel *m,
+                                        const BeamConstraint *c, double *out);
+
+/**
+ * What `beam_query_information_matrix` will cost, as an upper bound.
+ *
+ * The bound assumes every `(position, residue)` pair carries mass; the real
+ * count is lower wherever the model cannot spell a residue at a position, and
+ * in a closed-world model it is dramatically lower. Reported without running
+ * any sweep, so a caller can find out that a matrix is a twenty-second
+ * question before waiting twenty seconds for it.
+ */
+BeamError beam_query_information_cost(const BeamModel *m,
+                                      const BeamConstraint *c,
+                                      BeamQueryCost *out);
+
 /* ── Queries ───────────────────────────────────────────────── */
 
 /**

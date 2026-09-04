@@ -43,6 +43,12 @@ struct BeamAutomaton_ {
     uint8_t  *accept;     /**< [n_states], 0 or 1                         */
 };
 
+/** An independent copy of `a`, owned by the caller. NULL on failure. */
+BeamAutomaton *beam_query_automaton_clone(const BeamAutomaton *a);
+
+/** An independent copy of `c`, automaton included. NULL on failure. */
+BeamConstraint *beam_query_constraint_clone(const BeamConstraint *c);
+
 /** `delta[i](q, x)`, reading the shared layer when the automaton is uniform. */
 uint32_t beam_query_automaton_step(const BeamAutomaton *a, uint32_t i,
                                    uint32_t q, uint32_t x);

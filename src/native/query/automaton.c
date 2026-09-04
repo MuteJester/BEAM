@@ -307,6 +307,18 @@ BeamAutomaton *beam_query_automaton_or(const BeamAutomaton *a,
     return aut_product(a, b, false, "beam_query_automaton_or");
 }
 
+BeamAutomaton *beam_query_automaton_clone(const BeamAutomaton *a) {
+    if (!a) return NULL;
+    BeamAutomaton *r = aut_new(a->length, a->n_residues, a->n_states,
+                               a->uniform, "beam_query_automaton_clone");
+    if (!r) return NULL;
+    memcpy(r->delta, a->delta,
+           (size_t)delta_layers(a) * a->n_states * a->n_residues
+           * sizeof(uint32_t));
+    memcpy(r->accept, a->accept, a->n_states * sizeof(uint8_t));
+    return r;
+}
+
 BeamAutomaton *beam_query_automaton_not(const BeamAutomaton *a) {
     static const char *WHAT = "beam_query_automaton_not";
     if (!a) { beam_set_error(BEAM_ERR_NULL_ARG, "%s: automaton must not be "

@@ -60,6 +60,18 @@ void beam_query_constraint_free(BeamConstraint *c) {
     free(c);
 }
 
+BeamConstraint *beam_query_constraint_clone(const BeamConstraint *c) {
+    if (!c) return NULL;
+    BeamConstraint *d = beam_query_constraint_new(c->length, c->n_residues);
+    if (!d) return NULL;
+    for (uint32_t i = 0; i < c->length; ++i) d->mask[i] = c->mask[i];
+    if (c->automaton) {
+        d->automaton = beam_query_automaton_clone(c->automaton);
+        if (!d->automaton) { beam_query_constraint_free(d); return NULL; }
+    }
+    return d;
+}
+
 /* ── Inspection ──────────────────────────────────────────────── */
 
 uint32_t beam_query_constraint_length(const BeamConstraint *c) {
