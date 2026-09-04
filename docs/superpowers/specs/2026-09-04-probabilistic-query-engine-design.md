@@ -329,8 +329,18 @@ computed there, the layering has failed.
 
 ## Staging
 
-Each stage ships its C, its native tests, its Python binding and its Python
-tests, and must leave the verification gate green before the next begins.
+Each stage ships its C and its native tests, and must leave the numeric half
+of the verification gate green before the next begins.
+
+**Python bindings are deferred to one stage at the end**, rather than shipped
+per stage. Two reasons, and the second is the stronger one. The goal is a C
+foundation that Python later exposes, so a binding written beside each stage
+would be designing the Python surface six times from six partial views of it.
+And `RERECORDED.md` is explicit that baselines are re-recorded once at the end
+of a branch, not per commit -- "re-recording them per commit would have fused
+two unrelated changes into one diff that nobody could audit" -- and every
+binding touches three of the eight baselines. Deferring them keeps each C
+stage a diff whose numeric consequences are readable.
 
 | stage | contents | anchor |
 |---|---|---|
@@ -340,6 +350,7 @@ tests, and must leave the verification gate green before the next begins.
 | 4 | `information.c`: MI, conditional entropy, matrices | joints via the tagging automaton, checked against clamped sweeps |
 | 5 | `indel.c` | neighbourhood scores checked against direct `log_pseq` |
 | 6 | `maxplus`, constrained MAP | checked against `top_k_sequences` under a clamp |
+| 7 | Python bindings and `src/BEAM/query/` | the Python surface checked against the C one, baselines re-recorded once |
 
 ## Testing
 
