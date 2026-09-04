@@ -303,6 +303,66 @@ BeamError beam_query_expect(const BeamModel *m, const BeamConstraint *c,
 BeamError beam_query_entropy(const BeamModel *m, const BeamConstraint *c,
                              double *out_entropy, double *out_variance);
 
+/* ── Cross-length algebra: insertions and deletions ────────── */
+
+/**
+ * The single-edit neighbours of one sequence, with what the model makes of
+ * them.
+ *
+ * Each entry is a distinct string, so `n` is below the number of candidate
+ * edits wherever the source has a repeated residue: inserting `S` at gaps 2,
+ * 3 and 4 of `CASSF` all give `CASSSF`, and that string appears once,
+ * attributed to the leftmost gap that produces it.
+ */
+typedef struct {
+    uint32_t  n;           /**< distinct neighbours                        */
+    uint32_t  length;      /**< their common length                        */
+    char     *sequences;   /**< [n * (length + 1)] NUL-terminated, in order */
+    uint32_t *site;        /**< [n] gap inserted at, or position deleted    */
+    uint32_t *residue;     /**< [n] residue inserted; UINT32_MAX for a
+                                deletion, which removes rather than adds    */
+    double   *log_odds;    /**< [n] `ln P(neighbour) - ln P(source)`        */
+    double   *posterior;   /**< [n] normalised over the neighbourhood       */
+    double    log_source;  /**< `ln P(source)`                              */
+} BeamNeighbourhood;
+
+/** Release a neighbourhood and zero it. Safe on an already-freed one. */
+void beam_query_neighbourhood_free(BeamNeighbourhood *nb);
+
+/**
+ * Every sequence one insertion away from `sequence`, scored.
+ *
+ * `log_odds` answers "how much more or less likely is this than what I have",
+ * as a joint probability: `log_pseq` carries the length prior, so the
+ * comparison across two lengths is well posed and the prior does not cancel.
+ * `posterior` answers the other half -- "given that ONE residue was inserted,
+ * where and which" -- and there the prior is a common factor and does cancel.
+ * Both are exposed because they are different questions.
+ *
+ * **This is not an inferred edit.** The model has no alignment and no indel
+ * process; nothing here says a sequence was edited. The quantity is a ratio
+ * between what the model assigns to two strings that happen to differ by one
+ * residue, and it describes where a REPERTOIRE tolerates insertions. The
+ * per-sequence question -- given this observed sequence, where was it edited
+ * -- is what PRISM answers, and the two must not be confused.
+ *
+ * @return BEAM_ERR_INVALID_SEQUENCE if the source is not scoreable;
+ *         BEAM_ERR_NO_LIVE_PATHS if the source has probability zero, since
+ *         the odds are then a ratio to nothing.
+ */
+BeamError beam_query_insertions(const BeamModel *m, const char *sequence,
+                                BeamNeighbourhood *out);
+
+/**
+ * Every sequence one deletion away from `sequence`, scored.
+ *
+ * The mirror of `beam_query_insertions`, with `site` naming the position
+ * removed and `residue` left as `UINT32_MAX`. Deleting either `S` of `CASSF`
+ * gives `CASF`, which appears once, attributed to the leftmost position.
+ */
+BeamError beam_query_deletions(const BeamModel *m, const char *sequence,
+                               BeamNeighbourhood *out);
+
 /* ── Cost ──────────────────────────────────────────────────── */
 
 /**

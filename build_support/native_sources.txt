@@ -64,6 +64,7 @@ src/native/query/automaton.c
 src/native/query/constraint.c
 src/native/query/engine.c
 src/native/query/expectation.c
+src/native/query/indel.c
 src/native/query/information.c
 src/native/query/plan.c
 src/native/query/posterior.c

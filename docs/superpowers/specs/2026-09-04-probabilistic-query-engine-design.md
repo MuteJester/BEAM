@@ -269,9 +269,13 @@ length prior cancels in the posterior and does not in the odds, so both are
 exposed.
 
 **Degeneracy.** Inserting `S` at gap 2, 3 or 4 of `CASSF` yields the same
-string. Candidates are deduplicated by string, and the `(gap, residue)` grid
-attributes each distinct string to its **leftmost** gap, with aliased cells
-zeroed so the grid sums to one.
+string. Each distinct string is attributed to its **leftmost** gap, and that
+needs no deduplication pass at all: `(g, a)` is the leftmost representative
+exactly when `g == 0 or s[g - 1] != a`, since aliases arise only inside a run
+of the inserted residue. Deletions mirror it -- position `p` is canonical when
+`p == 0 or s[p - 1] != s[p]`. Verified against brute-force enumeration: for
+`CASSF` both the count (115 of 120 candidates) and the chosen representatives
+agree exactly.
 
 **This is not an inferred edit.** The model has no alignment and no indel
 process. The quantity is a ratio of what the model assigns to two strings that
@@ -279,12 +283,14 @@ happen to differ by one residue. PRISM answers the different, sequence-
 conditioned question -- "given this observed sequence, where was it edited" --
 and the documentation must point at it by name so the two are never confused.
 
-**Cost.** `log_pseq` measures 0.66 us, so `k=1` is 320 scorings (0.2 ms),
-`k=2` is 54,400 (0.04 s), `k=3` is 5.4M (3.6 s). `k=1` gets the incremental
-optimization -- for a fixed gap only `O(k)` context terms vary with the
-inserted residue, so prefix and suffix scores are reused. `k>=2` enumerates
-directly under the cost guard; optimizing it before anyone has asked would be
-premature.
+**Cost.** `log_pseq` measures 0.66 us, so the whole `k=1` insertion
+neighbourhood of a length-15 sequence is 320 scorings -- 0.21 ms -- and the
+deletion neighbourhood is 10 us. An earlier draft specified an incremental
+optimization reusing prefix and suffix scores across the residues at one gap;
+it is not built, because there is nothing to optimize. `k >= 2` is a
+composition of these and is not in this stage: the neighbourhood is
+well-defined but the ATTRIBUTION is not, since two insertions have no
+leftmost representative in any single sense, and no use has asked for it.
 
 ## Cost model and refusal
 
