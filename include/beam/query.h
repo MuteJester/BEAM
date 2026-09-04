@@ -135,6 +135,105 @@ BeamError beam_query_constrain_exclude(BeamConstraint *c, uint32_t position,
 BeamError beam_query_constrain_run(BeamConstraint *c, uint32_t start,
                                    const uint8_t *residues, uint32_t n);
 
+/* ── Automata ──────────────────────────────────────────────── */
+
+/**
+ * A deterministic automaton over residue indices: the general tier of the
+ * constraint ladder, for anything that relates two positions to each other.
+ *
+ * The transition function is LAYER-INDEXED, `delta[i](q, x)`, with a uniform
+ * fast path when every layer agrees. Motifs and counters are uniform; a
+ * disjunction of two position-specific masks is not, and without layer
+ * indexing that whole class would be inexpressible. The cost is `L * Q * R`
+ * words, which is nothing.
+ *
+ * Transitions are TOTAL: every `(q, x)` lands somewhere, and a builder that
+ * needs to reject routes to a non-accepting sink of its own making. That is
+ * what makes complementation a matter of flipping the accepting set rather
+ * than a construction.
+ */
+typedef struct BeamAutomaton_ BeamAutomaton;
+
+/**
+ * Structural ceiling on `|Q|`.
+ *
+ * Not the real limit, which is the memory budget: the product graph is
+ * `n_states * |Q|`, so a 1024-state automaton over an order-4 model is 200
+ * million product states and is refused long before this. This exists so that
+ * a runaway composition fails while building a table rather than while
+ * allocating a sweep.
+ */
+#define BEAM_QUERY_MAX_AUTOMATON_STATES 1024u
+
+/**
+ * Accepts the sequences containing `motif` at any position.
+ *
+ * The Knuth-Morris-Pratt automaton: `n + 1` states, the last absorbing, so a
+ * sequence that has already matched cannot un-match.
+ *
+ * @param motif  Residue indices [n], each below `n_residues`.
+ */
+BeamAutomaton *beam_query_automaton_motif(uint32_t length, uint32_t n_residues,
+                                          const uint8_t *motif, uint32_t n);
+
+/**
+ * Accepts the sequences with between `lo` and `hi` positions drawn from `of`.
+ *
+ * A counter capped one above `hi`, so the cap is absorbing and non-accepting.
+ * `lo = hi` asks for an exact count; `hi >= length` asks for "at least `lo`".
+ */
+BeamAutomaton *beam_query_automaton_count(uint32_t length, uint32_t n_residues,
+                                          BeamResidueMask of,
+                                          uint32_t lo, uint32_t hi);
+
+/**
+ * The same language as a constraint's masks, as an automaton.
+ *
+ * Two states, alive and a dead sink. Needed because a mask cannot be
+ * complemented or disjoined in place: the union of two per-position
+ * restrictions is not a per-position restriction.
+ */
+BeamAutomaton *beam_query_automaton_from_masks(const BeamConstraint *c);
+
+/** Accepts what both accept. `|Q|` is the product of the two. */
+BeamAutomaton *beam_query_automaton_and(const BeamAutomaton *a,
+                                        const BeamAutomaton *b);
+
+/** Accepts what either accepts. */
+BeamAutomaton *beam_query_automaton_or(const BeamAutomaton *a,
+                                       const BeamAutomaton *b);
+
+/** Accepts exactly what `a` rejects. */
+BeamAutomaton *beam_query_automaton_not(const BeamAutomaton *a);
+
+/** Release an automaton. Safe on NULL. */
+void beam_query_automaton_free(BeamAutomaton *a);
+
+/** `|Q|`. Zero if `a` is NULL. */
+uint32_t beam_query_automaton_states(const BeamAutomaton *a);
+
+/**
+ * Whether `a` accepts this residue string, by running it directly.
+ *
+ * The engine never calls this -- it exists so that a test can compare the
+ * automaton's language against a naive matcher over an enumerated support,
+ * which is how the builders below are actually gated.
+ */
+bool beam_query_automaton_accepts(const BeamAutomaton *a,
+                                  const uint8_t *residues, uint32_t n);
+
+/**
+ * Narrow a constraint by an automaton, INTERSECTING as every builder does.
+ *
+ * Takes ownership of `a` on every path, success or failure, so a caller never
+ * has to decide whether it still owns what it passed. A constraint that
+ * already carries an automaton ends up carrying the conjunction of the two.
+ */
+BeamError beam_query_constrain_automaton(BeamConstraint *c, BeamAutomaton *a);
+
+/** The automaton a constraint carries, or NULL. Borrowed, not owned. */
+const BeamAutomaton *beam_query_constraint_automaton(const BeamConstraint *c);
+
 /* ── Cost ──────────────────────────────────────────────────── */
 
 /**

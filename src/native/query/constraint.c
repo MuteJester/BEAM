@@ -48,12 +48,15 @@ BeamConstraint *beam_query_constraint_new(uint32_t length,
     }
     c->length     = length;
     c->n_residues = n_residues;
+    c->automaton  = NULL;
     const BeamResidueMask all = BEAM_RESIDUES_ALL(n_residues);
     for (uint32_t i = 0; i < length; ++i) c->mask[i] = all;
     return c;
 }
 
 void beam_query_constraint_free(BeamConstraint *c) {
+    if (!c) return;
+    beam_query_automaton_free(c->automaton);
     free(c);
 }
 
@@ -74,7 +77,10 @@ BeamResidueMask beam_query_constraint_mask(const BeamConstraint *c,
 }
 
 bool beam_query_constraint_is_free(const BeamConstraint *c) {
-    return beam_query_all_free(c);
+    /* An automaton narrows even when every mask is still full, so the two
+     * questions are not the same one: `beam_query_all_free` asks whether the
+     * MASKS restrict anything, which is what selects the engine's fast path. */
+    return c && !c->automaton && beam_query_all_free(c);
 }
 
 bool beam_query_all_free(const BeamConstraint *c) {

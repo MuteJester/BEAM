@@ -60,6 +60,7 @@ src/native/occupancy/poisson_binomial/common.c
 src/native/occupancy/poisson_binomial/moments.c
 src/native/occupancy/poisson_binomial/pgf.c
 
+src/native/query/automaton.c
 src/native/query/constraint.c
 src/native/query/engine.c
 src/native/query/plan.c

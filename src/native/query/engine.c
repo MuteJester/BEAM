@@ -108,6 +108,20 @@ BeamError beam_query_resolve(const BeamModel *m, const BeamConstraint *c,
     return BEAM_OK;
 }
 
+BeamError beam_query_resolve_masks_only(const BeamModel *m,
+                                        const BeamConstraint *c,
+                                        const BeamResidueMask **out_mask,
+                                        uint32_t *out_length) {
+    BeamError e = beam_query_resolve(m, c, out_mask, out_length);
+    if (e != BEAM_OK) return e;
+    if (c->automaton)
+        return BEAM_ERANGE("beam_query: this constraint carries an automaton, "
+                          "which relates positions to each other and needs "
+                          "the product graph; the mask engine would answer as "
+                          "though the automaton were not there");
+    return BEAM_OK;
+}
+
 /**
  * The residues layer `i` may emit, as a set.
  *
@@ -228,7 +242,7 @@ BeamError beam_query_log_probability(const BeamModel *m,
 
     const BeamResidueMask *mask = NULL;
     uint32_t length = 0u;
-    BeamError err = beam_query_resolve(m, c, &mask, &length);
+    BeamError err = beam_query_resolve_masks_only(m, c, &mask, &length);
     if (err != BEAM_OK) return err;
 
     /*

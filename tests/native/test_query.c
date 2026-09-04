@@ -639,6 +639,42 @@ static void test_a_length_the_model_never_generates_is_refused(void) {
     PASS();
 }
 
+static void test_the_mask_engine_refuses_an_automaton_it_cannot_honour(void) {
+    BeamModel *m = build(TRAIN, WEIGHT, N_TRAIN, 3u, 14u, false);
+    ASSERT_MSG(m != NULL, "model built");
+    const uint32_t L = 10u;
+    double *out = (double *)malloc((size_t)L * R * sizeof(double));
+    ASSERT_MSG(out != NULL, "alloc");
+
+    const uint8_t motif[2] = {AA_L, AA_Q};
+    BeamConstraint *c = beam_query_constraint_new(L, R);
+    ASSERT_MSG(beam_query_constrain_automaton(
+                   c, beam_query_automaton_motif(L, R, motif, 2u)) == BEAM_OK,
+               "attached");
+
+    /*
+     * Until the product graph lands, an engine that reads only the masks would
+     * answer this as though the motif were not there -- a confidently wrong
+     * probability, which is worse than no answer. All three entry points must
+     * refuse it rather than one.
+     */
+    double p = 0.0;
+    BeamQueryCost cost;
+    ASSERT_MSG(beam_query_marginals(m, c, out, NULL)
+               == BEAM_ERR_PARAM_OUT_OF_RANGE, "marginals refuse");
+    ASSERT_MSG(strstr(beam_error_message(), "product graph") != NULL,
+               "and say what is missing");
+    ASSERT_MSG(beam_query_log_probability(m, c, &p)
+               == BEAM_ERR_PARAM_OUT_OF_RANGE, "probability refuses");
+    ASSERT_MSG(beam_query_estimate(m, c, &cost)
+               == BEAM_ERR_PARAM_OUT_OF_RANGE, "estimate refuses");
+
+    beam_query_constraint_free(c);
+    free(out);
+    beam_model_destroy(m);
+    PASS();
+}
+
 /* ── Cost estimation ─────────────────────────────────────────── */
 
 static void test_the_estimate_matches_what_the_sweep_allocates(void) {
@@ -716,6 +752,8 @@ int main(void) {
     RUN_TEST(test_conditioning_on_the_impossible_is_refused);
     RUN_TEST(test_a_constraint_over_the_wrong_alphabet_is_refused);
     RUN_TEST(test_a_length_the_model_never_generates_is_refused);
+
+    RUN_TEST(test_the_mask_engine_refuses_an_automaton_it_cannot_honour);
 
     printf("\n[cost]\n");
     RUN_TEST(test_the_estimate_matches_what_the_sweep_allocates);

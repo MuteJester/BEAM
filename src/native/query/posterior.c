@@ -27,7 +27,7 @@ BeamError beam_query_marginals(const BeamModel *m, const BeamConstraint *c,
 
     const BeamResidueMask *mask = NULL;
     uint32_t length = 0u;
-    BeamError err = beam_query_resolve(m, c, &mask, &length);
+    BeamError err = beam_query_resolve_masks_only(m, c, &mask, &length);
     if (err != BEAM_OK) return err;
 
     const uint32_t A = m->n_alphabet;

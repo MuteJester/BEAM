@@ -22,8 +22,30 @@
 struct BeamConstraint_ {
     uint32_t        length;
     uint32_t        n_residues;
-    BeamResidueMask mask[];   /**< [length], bit `a` = residue `a` permitted */
+    BeamAutomaton  *automaton;  /**< owned; NULL when the masks are the whole
+                                     constraint, which is the free tier    */
+    BeamResidueMask mask[];     /**< [length], bit `a` = residue `a` permitted */
 };
+
+/**
+ * A total, deterministic automaton over residue indices.
+ *
+ * `delta` is `[layers][n_states][n_residues]`, with `layers` equal to 1 when
+ * `uniform` and to `length` otherwise. State 0 is always the start state, so
+ * no field records it and no construction may renumber it away.
+ */
+struct BeamAutomaton_ {
+    uint32_t  n_states;
+    uint32_t  n_residues;
+    uint32_t  length;
+    bool      uniform;    /**< one transition table shared by every layer */
+    uint32_t *delta;      /**< [layers * n_states * n_residues]           */
+    uint8_t  *accept;     /**< [n_states], 0 or 1                         */
+};
+
+/** `delta[i](q, x)`, reading the shared layer when the automaton is uniform. */
+uint32_t beam_query_automaton_step(const BeamAutomaton *a, uint32_t i,
+                                   uint32_t q, uint32_t x);
 
 /**
  * Peak bytes one constrained sweep needs at this length.
@@ -144,5 +166,20 @@ bool beam_query_advance(const BeamModel *m, const double *w, double wmax,
 BeamError beam_query_resolve(const BeamModel *m, const BeamConstraint *c,
                              const BeamResidueMask **out_mask,
                              uint32_t *out_length);
+
+/**
+ * As `beam_query_resolve`, and additionally refuses a constraint carrying an
+ * automaton.
+ *
+ * The mask engine cannot answer one: an automaton relates positions to each
+ * other and needs the product graph. Refusing is the only honest thing an
+ * engine that would otherwise ignore the automaton entirely can do, and
+ * returning a confidently wrong probability is what the alternative looks
+ * like.
+ */
+BeamError beam_query_resolve_masks_only(const BeamModel *m,
+                                        const BeamConstraint *c,
+                                        const BeamResidueMask **out_mask,
+                                        uint32_t *out_length);
 
 #endif /* BEAM_INTERNAL_QUERY_H */
