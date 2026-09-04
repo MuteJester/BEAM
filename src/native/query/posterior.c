@@ -1,0 +1,165 @@
+/**
+ * @file posterior.c
+ * @brief Per-position marginals under a constraint, from the edge posterior.
+ *
+ * `gamma_i(s, x) = alpha_i(s) w_i(s, x) beta_{i+1}(s -> x) / Z`, summed over
+ * states to give `P(x_i = a | length, C)`. The constraint enters twice, in the
+ * backward values and in the residues each layer is allowed to emit, and
+ * nowhere else: conditioning is edge deletion, so the same recursion that
+ * computes a marginal computes a conditional.
+ *
+ * Partials are accumulated in a fixed number of chunks and combined in chunk
+ * order, so the answer does not depend on how many threads happened to be
+ * free. That is the same discipline the unconstrained sweep uses and it is why
+ * the two agree bit for bit rather than merely closely.
+ */
+#include <math.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "beam/internal.h"
+#include "beam/query.h"
+#include "beam/query_internal.h"
+
+BeamError beam_query_marginals(const BeamModel *m, const BeamConstraint *c,
+                               double *out, double *out_log_z) {
+    if (!out) return BEAM_ENULL("output buffer");
+
+    const BeamResidueMask *mask = NULL;
+    uint32_t length = 0u;
+    BeamError err = beam_query_resolve(m, c, &mask, &length);
+    if (err != BEAM_OK) return err;
+
+    const uint32_t A = m->n_alphabet;
+    const uint32_t R = m->n_residues;
+    const uint32_t S = m->n_states;
+    const uint32_t SK = m->state_shift;
+
+    for (uint32_t i = 0; i < length; ++i)
+        for (uint32_t x = 0; x < R; ++x) out[(size_t)i * R + x] = 0.0;
+    if (out_log_z) *out_log_z = -INFINITY;
+
+    /* An empty mask admits nothing, so the conditional does not exist. Said
+     * here rather than after a sweep that would find the same thing slower. */
+    const uint32_t dead = beam_query_empty_position(c);
+    if (dead < length)
+        return BEAM_ENOPATHS("the constraint permits no residue at a "
+                            "position, so it admits no sequence and the "
+                            "conditional it asks for does not exist");
+
+    BeamQueryWork k;
+    err = beam_query_work_alloc(m, length, true, &k);
+    if (err != BEAM_OK) return err;
+
+    double *chunk = (double *)malloc((size_t)BEAM_SUM_CHUNKS * R
+                                     * sizeof(double));
+    if (!chunk) {
+        beam_query_work_free(&k);
+        return BEAM_EALLOC("the marginal partials");
+    }
+
+    err = beam_query_betas(m, length, mask, k.w, k.beta);
+    if (err != BEAM_OK) goto done;
+
+    {
+    /*
+     * Z from the backward pass rather than from `m->log_z`. Under a constraint
+     * `m->log_z` is the wrong normaliser, and even unconstrained, taking Z from
+     * the sweep the numerator came from is what makes each row sum to one to
+     * the last bits rather than to within the difference between a forward and
+     * a backward evaluation of the same quantity.
+     */
+    const double logz = k.beta[0][S - 1u];
+    if (!isfinite(logz)) {
+        err = mask
+            ? BEAM_ENOPATHS("the constraint describes a configuration this "
+                           "model cannot produce at this length, so the "
+                           "conditional it asks for does not exist")
+            : BEAM_ENOPATHS("the trellis carries no path at this length");
+        goto done;
+    }
+    if (out_log_z) *out_log_z = logz;
+
+    k.cur[S - 1u] = 1.0;                  /* the all-sentinel start state */
+    double log_scale = 0.0;
+
+    for (uint32_t i = 0; i < length; ++i) {
+        const BeamResidueMask allowed =
+            mask ? mask[i] : BEAM_RESIDUES_ALL(R);
+        double wmax = -INFINITY;
+        beam_layer_weights(m, i, length, k.w, &wmax);
+        /*
+         * A finite `logz` says a complete path exists, so the forward sweep
+         * must still carry mass at every layer. Reaching here with none would
+         * leave the remaining rows as zeros that read like a flat
+         * distribution, so it is guarded rather than assumed.
+         */
+        if (wmax == -INFINITY) {
+            err = BEAM_ENOPATHS("the layer has no live edge although the "
+                               "trellis has a path; the forward sweep lost "
+                               "the mass to underflow");
+            goto done;
+        }
+        /* A narrowed layer rescales by the maximum over what it actually
+         * sums; rescaling by the whole layer's maximum underflows it. */
+        if (allowed != BEAM_RESIDUES_ALL(R)) {
+            wmax = beam_query_layer_max(k.w, k.cur, S, R, allowed);
+            if (wmax == -INFINITY) {
+                err = BEAM_ENOPATHS("the constrained mass underflowed the "
+                                   "forward sweep although the backward "
+                                   "sweep found it; "
+                                   "beam_query_log_probability still answers "
+                                   "in log space");
+                goto done;
+            }
+        }
+
+        const double *bn = k.beta[i + 1];
+#ifdef _OPENMP
+        #pragma omp parallel for schedule(dynamic, 1) num_threads(beam_threads())
+#endif
+        for (int64_t ch = 0; ch < (int64_t)BEAM_SUM_CHUNKS; ++ch) {
+            double *part = chunk + (size_t)ch * R;
+            for (uint32_t x = 0; x < R; ++x) part[x] = 0.0;
+            const uint32_t slo =
+                (uint32_t)(((uint64_t)S * ch) / BEAM_SUM_CHUNKS);
+            const uint32_t shi =
+                (uint32_t)(((uint64_t)S * (ch + 1)) / BEAM_SUM_CHUNKS);
+            for (uint32_t s = slo; s < shi; ++s) {
+                if (k.cur[s] == 0.0) continue;
+                const double la = log(k.cur[s]) + log_scale - logz;
+                const double *row = k.w + (size_t)s * R;
+                const uint32_t base = (s % SK) * A;
+                for (BeamResidueMask mm = allowed; mm; mm &= mm - 1u) {
+                    const uint32_t x = (uint32_t)__builtin_ctz(mm);
+                    if (row[x] == -INFINITY) continue;
+                    const double nb = bn[base + x];
+                    if (nb == -INFINITY) continue;
+                    part[x] += exp(la + row[x] + nb);
+                }
+            }
+        }
+        double *row_out = out + (size_t)i * R;
+        for (uint32_t ch = 0; ch < BEAM_SUM_CHUNKS; ++ch) {
+            const double *part = chunk + (size_t)ch * R;
+            for (BeamResidueMask mm = allowed; mm; mm &= mm - 1u) {
+                const uint32_t x = (uint32_t)__builtin_ctz(mm);
+                row_out[x] += part[x];
+            }
+        }
+
+        if (!beam_query_advance(m, k.w, wmax, k.cur, k.next, allowed,
+                                &log_scale)) {
+            err = BEAM_ENOPATHS("the forward sweep reached a layer with no "
+                               "mass although the trellis has a path");
+            goto done;
+        }
+        double *tmp = k.cur; k.cur = k.next; k.next = tmp;
+    }
+    }
+
+done:
+    free(chunk);
+    beam_query_work_free(&k);
+    return err;
+}
