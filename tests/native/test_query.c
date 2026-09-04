@@ -44,12 +44,19 @@ static int pass_count = 0, fail_count = 0;
 
 /* Indices into "ACDEFGHIKLMNPQRSTVWY", for constraints that have to name
  * residues the corpus below actually spells. */
+#define AA_A_ 0u
+#define AA_C  1u
 #define AA_D  2u
 #define AA_F  4u
+#define AA_E  3u
+#define AA_G  5u
 #define AA_L  9u
 #define AA_P 12u
 #define AA_Q 13u
+#define AA_S_ 15u
+#define AA_T 16u
 #define AA_V 17u
+#define AA_W 18u
 #define AA_Y 19u
 
 /* ── Corpora ─────────────────────────────────────────────────── */
@@ -639,38 +646,493 @@ static void test_a_length_the_model_never_generates_is_refused(void) {
     PASS();
 }
 
-static void test_the_mask_engine_refuses_an_automaton_it_cannot_honour(void) {
+/* ── The product engine ──────────────────────────────────────── */
+
+/** True when `motif` occurs anywhere in `s`. Independent of the automaton. */
+static bool naive_contains(const uint8_t *s, uint32_t n,
+                           const uint8_t *motif, uint32_t m) {
+    if (m > n) return false;
+    for (uint32_t i = 0; i + m <= n; ++i) {
+        uint32_t k = 0;
+        while (k < m && s[i + k] == motif[k]) ++k;
+        if (k == m) return true;
+    }
+    return false;
+}
+
+/** `P(C | length)` by enumeration, with the predicate supplied by the caller. */
+static double enumerate_predicate(const BeamModel *m, uint32_t length,
+                                  bool (*keep)(const uint8_t *, uint32_t,
+                                               const void *),
+                                  const void *ctx) {
+    const BeamAlphabetInfo *a = beam_alphabet_info(BEAM_ALPHABET_AA);
+    char buf[16];
+    uint8_t idx[16];
+    if (length >= sizeof(buf)) return -1.0;
+    for (uint32_t i = 0; i < length; ++i) idx[i] = 0u;
+    buf[length] = '\0';
+
+    double kept = 0.0, total = 0.0;
+    for (;;) {
+        for (uint32_t i = 0; i < length; ++i) buf[i] = a->idx_to_char[idx[i]];
+        const double p = exp(beam_model_log_pseq(m, buf));
+        total += p;
+        if (keep(idx, length, ctx)) kept += p;
+
+        uint32_t k = length;
+        while (k-- > 0u) {
+            if (++idx[k] < R) break;
+            idx[k] = 0u;
+            if (k == 0u) goto done;
+        }
+    }
+done:
+    return total > 0.0 ? kept / total : -1.0;
+}
+
+struct motif_ctx { const uint8_t *motif; uint32_t n; };
+static bool keep_contains(const uint8_t *s, uint32_t n, const void *ctx) {
+    const struct motif_ctx *c = (const struct motif_ctx *)ctx;
+    return naive_contains(s, n, c->motif, c->n);
+}
+
+struct count_ctx { BeamResidueMask of; uint32_t lo, hi; };
+static bool keep_count(const uint8_t *s, uint32_t n, const void *ctx) {
+    const struct count_ctx *c = (const struct count_ctx *)ctx;
+    uint32_t k = 0;
+    for (uint32_t i = 0; i < n; ++i) if ((c->of >> s[i]) & 1u) ++k;
+    return k >= c->lo && k <= c->hi;
+}
+
+/**
+ * An automaton that accepts everything, with one state the run never enters.
+ *
+ * Counting members of the empty set gives zero everywhere, and zero is in
+ * range, so the language is universal -- but `|Q|` is 2, so the product
+ * machinery is genuinely exercised rather than degenerating to the mask sweep.
+ */
+static BeamAutomaton *accept_all(uint32_t length) {
+    return beam_query_automaton_count(length, R, 0u, 0u, 0u);
+}
+
+static void test_a_universal_automaton_reproduces_the_mask_sweep(void) {
+    BeamModel *m = build(TRAIN, WEIGHT, N_TRAIN, 3u, 14u, false);
+    ASSERT_MSG(m != NULL, "model built");
+    const uint32_t L = 10u;
+    double *want = (double *)malloc((size_t)L * R * sizeof(double));
+    double *got  = (double *)malloc((size_t)L * R * sizeof(double));
+    ASSERT_MSG(want && got, "alloc");
+
+    /*
+     * Two independent implementations of one recursion, required to agree to
+     * the last bit. The product path carries an automaton dimension the mask
+     * path has never heard of, and at a universal automaton every term of the
+     * sum but one is zero -- so if the two ever diverge, the product path has
+     * started doing different arithmetic rather than more of it.
+     */
+    for (uint32_t trial = 0; trial < 2u; ++trial) {
+        BeamConstraint *plain = beam_query_constraint_new(L, R);
+        BeamConstraint *prod  = beam_query_constraint_new(L, R);
+        if (trial == 1u) {           /* and again with the masks narrowed */
+            beam_query_constrain_set(plain, 4u,
+                                     (1u << AA_L) | (1u << AA_Q));
+            beam_query_constrain_set(prod, 4u,
+                                     (1u << AA_L) | (1u << AA_Q));
+        }
+        ASSERT_MSG(beam_query_constrain_automaton(prod, accept_all(L))
+                   == BEAM_OK, "attached");
+
+        double zw = 0.0, zg = 0.0;
+        ASSERT_MSG(beam_query_marginals(m, plain, want, &zw) == BEAM_OK,
+                   "mask sweep");
+        ASSERT_MSG(beam_query_marginals(m, prod, got, &zg) == BEAM_OK,
+                   "product sweep");
+        ASSERT_MSG(zw == zg, "log Z identical across the two engines");
+        for (uint32_t k = 0; k < L * R; ++k)
+            ASSERT_MSG(want[k] == got[k], "every cell identical, not close");
+
+        double pw = 0.0, pg = 0.0;
+        ASSERT_MSG(beam_query_log_probability(m, plain, &pw) == BEAM_OK, "p");
+        ASSERT_MSG(beam_query_log_probability(m, prod, &pg) == BEAM_OK, "p");
+        if (trial == 0u) {
+            /*
+             * Not bit-for-bit here, and that is right. An unnarrowed
+             * constraint short-circuits to `ln 1 = 0.0` exactly, but a
+             * UNIVERSAL AUTOMATON is not recognised as unnarrowed -- doing so
+             * means deciding whether a DFA accepts everything, which is
+             * decidable and pointless. So the product path takes the sweep and
+             * lands within the difference between a forward and a backward
+             * evaluation of the same partition function.
+             */
+            ASSERT_MSG(pw == 0.0, "the free constraint still short-circuits");
+            ASSERT_MSG(fabs(pg) < 1e-12,
+                       "and the sweep route agrees to floating point");
+        } else {
+            /* Both took the sweep, from log Z values already shown identical,
+             * so here anything but equality would be a defect. */
+            ASSERT_MSG(pw == pg, "two sweep routes agree to the last bit");
+        }
+
+        beam_query_constraint_free(plain);
+        beam_query_constraint_free(prod);
+    }
+    free(want); free(got);
+    beam_model_destroy(m);
+    PASS();
+}
+
+static void test_a_motif_probability_matches_enumeration(void) {
+    BeamModel *m = build(SHORT_TRAIN, SHORT_WEIGHT, N_SHORT, 2u, 6u, true);
+    ASSERT_MSG(m != NULL, "model built");
+    const uint32_t L = 4u;
+
+    const uint8_t motifs[3][2] = {{AA_A_, AA_S_}, {AA_S_, AA_F}, {AA_C, AA_A_}};
+    const uint32_t lens[3] = {2u, 2u, 2u};
+    for (uint32_t t = 0; t < 3u; ++t) {
+        BeamConstraint *c = beam_query_constraint_new(L, R);
+        ASSERT_MSG(beam_query_constrain_automaton(
+                       c, beam_query_automaton_motif(L, R, motifs[t], lens[t]))
+                   == BEAM_OK, "attached");
+        double got = 0.0;
+        ASSERT_MSG(beam_query_log_probability(m, c, &got) == BEAM_OK, "query");
+        beam_query_constraint_free(c);
+
+        struct motif_ctx ctx = {motifs[t], lens[t]};
+        const double want = enumerate_predicate(m, L, keep_contains, &ctx);
+        ASSERT_MSG(want > 0.0 && want < 1.0,
+                   "the reference found a non-trivial fraction");
+        ASSERT_MSG(fabs(exp(got) - want) < 1e-12,
+                   "P(contains motif) matches the enumerated sum");
+    }
+    beam_model_destroy(m);
+    PASS();
+}
+
+static void test_a_count_probability_matches_enumeration(void) {
+    BeamModel *m = build(SHORT_TRAIN, SHORT_WEIGHT, N_SHORT, 2u, 6u, true);
+    ASSERT_MSG(m != NULL, "model built");
+    const uint32_t L = 4u;
+
+    struct count_ctx cases[3] = {
+        {(1u << AA_S_), 1u, 1u},
+        {(1u << AA_S_) | (1u << AA_A_), 2u, 3u},
+        {(1u << AA_F), 0u, 0u},
+    };
+    for (uint32_t t = 0; t < 3u; ++t) {
+        BeamConstraint *c = beam_query_constraint_new(L, R);
+        ASSERT_MSG(beam_query_constrain_automaton(
+                       c, beam_query_automaton_count(L, R, cases[t].of,
+                                                     cases[t].lo, cases[t].hi))
+                   == BEAM_OK, "attached");
+        double got = 0.0;
+        ASSERT_MSG(beam_query_log_probability(m, c, &got) == BEAM_OK, "query");
+        beam_query_constraint_free(c);
+
+        const double want = enumerate_predicate(m, L, keep_count, &cases[t]);
+        ASSERT_MSG(want > 0.0 && want < 1.0, "non-trivial");
+        ASSERT_MSG(fabs(exp(got) - want) < 1e-12,
+                   "P(count in range) matches the enumerated sum");
+    }
+    beam_model_destroy(m);
+    PASS();
+}
+
+struct both_ctx { struct motif_ctx mo; BeamResidueMask pin_set; uint32_t pin; };
+static bool keep_both(const uint8_t *s, uint32_t n, const void *ctx) {
+    const struct both_ctx *c = (const struct both_ctx *)ctx;
+    if (!((c->pin_set >> s[c->pin]) & 1u)) return false;
+    return naive_contains(s, n, c->mo.motif, c->mo.n);
+}
+
+static void test_masks_and_an_automaton_compose(void) {
+    BeamModel *m = build(SHORT_TRAIN, SHORT_WEIGHT, N_SHORT, 2u, 6u, true);
+    ASSERT_MSG(m != NULL, "model built");
+    const uint32_t L = 4u;
+    const uint8_t motif[2] = {AA_A_, AA_S_};
+
+    BeamConstraint *c = beam_query_constraint_new(L, R);
+    ASSERT_MSG(beam_query_constrain_set(c, 0u, (1u << AA_C) | (1u << AA_V))
+               == BEAM_OK, "mask");
+    ASSERT_MSG(beam_query_constrain_automaton(
+                   c, beam_query_automaton_motif(L, R, motif, 2u)) == BEAM_OK,
+               "automaton");
+    double got = 0.0;
+    ASSERT_MSG(beam_query_log_probability(m, c, &got) == BEAM_OK, "query");
+    beam_query_constraint_free(c);
+
+    struct both_ctx ctx = {{motif, 2u}, (1u << AA_C) | (1u << AA_V), 0u};
+    const double want = enumerate_predicate(m, L, keep_both, &ctx);
+    ASSERT_MSG(want > 0.0 && want < 1.0, "non-trivial");
+    ASSERT_MSG(fabs(exp(got) - want) < 1e-12,
+               "the two tiers intersect rather than one overriding the other");
+    beam_model_destroy(m);
+    PASS();
+}
+
+static void test_a_language_and_its_complement_partition_the_mass(void) {
+    BeamModel *m = build(TRAIN, WEIGHT, N_TRAIN, 3u, 14u, false);
+    ASSERT_MSG(m != NULL, "model built");
+    const uint32_t L = 10u;
+    const uint8_t motif[2] = {AA_L, AA_G};
+
+    BeamConstraint *a = beam_query_constraint_new(L, R);
+    BeamConstraint *b = beam_query_constraint_new(L, R);
+    BeamAutomaton *m1 = beam_query_automaton_motif(L, R, motif, 2u);
+    BeamAutomaton *m2 = beam_query_automaton_motif(L, R, motif, 2u);
+    ASSERT_MSG(m1 && m2, "built");
+    ASSERT_MSG(beam_query_constrain_automaton(a, m1) == BEAM_OK, "a");
+    ASSERT_MSG(beam_query_constrain_automaton(b, beam_query_automaton_not(m2))
+               == BEAM_OK, "not a");
+    beam_query_automaton_free(m2);
+
+    double pa = 0.0, pb = 0.0;
+    ASSERT_MSG(beam_query_log_probability(m, a, &pa) == BEAM_OK, "P(A)");
+    ASSERT_MSG(beam_query_log_probability(m, b, &pb) == BEAM_OK, "P(not A)");
+    ASSERT_MSG(exp(pa) > 0.01 && exp(pa) < 0.99, "a non-trivial split");
+    ASSERT_MSG(fabs(exp(pa) + exp(pb) - 1.0) < 1e-12,
+               "P(A) + P(not A) is 1; a product graph that lost or "
+               "double-counted a path could not manage this");
+    beam_query_constraint_free(a);
+    beam_query_constraint_free(b);
+    beam_model_destroy(m);
+    PASS();
+}
+
+static double prob_of(BeamModel *m, uint32_t L, BeamAutomaton *a) {
+    BeamConstraint *c = beam_query_constraint_new(L, R);
+    if (beam_query_constrain_automaton(c, a) != BEAM_OK) {
+        beam_query_constraint_free(c);
+        return -1.0;
+    }
+    double p = 0.0;
+    const BeamError e = beam_query_log_probability(m, c, &p);
+    beam_query_constraint_free(c);
+    return e == BEAM_OK ? exp(p) : -1.0;
+}
+
+static void test_union_obeys_inclusion_exclusion(void) {
+    BeamModel *m = build(TRAIN, WEIGHT, N_TRAIN, 3u, 14u, false);
+    ASSERT_MSG(m != NULL, "model built");
+    const uint32_t L = 10u;
+    const uint8_t u[2] = {AA_L, AA_G};
+    const uint8_t v[2] = {AA_E, AA_Q};
+
+    BeamAutomaton *a = beam_query_automaton_motif(L, R, u, 2u);
+    BeamAutomaton *b = beam_query_automaton_motif(L, R, v, 2u);
+    ASSERT_MSG(a && b, "built");
+    BeamAutomaton *both   = beam_query_automaton_and(a, b);
+    BeamAutomaton *either = beam_query_automaton_or(a, b);
+    ASSERT_MSG(both && either, "combined");
+
+    const double pa = prob_of(m, L, a);
+    const double pb = prob_of(m, L, b);
+    const double pab = prob_of(m, L, both);
+    const double pab_or = prob_of(m, L, either);
+    ASSERT_MSG(pa > 0.0 && pb > 0.0 && pab >= 0.0 && pab_or > 0.0, "all ran");
+    ASSERT_MSG(pab_or > pa && pab_or < 1.0 + 1e-12, "a real union");
+    ASSERT_MSG(fabs(pab_or - (pa + pb - pab)) < 1e-12,
+               "P(A or B) = P(A) + P(B) - P(A and B), which a product "
+               "construction that mixed up its accepting sets cannot satisfy");
+    beam_model_destroy(m);
+    PASS();
+}
+
+static void test_a_motif_the_model_cannot_spell_is_impossible(void) {
     BeamModel *m = build(TRAIN, WEIGHT, N_TRAIN, 3u, 14u, false);
     ASSERT_MSG(m != NULL, "model built");
     const uint32_t L = 10u;
     double *out = (double *)malloc((size_t)L * R * sizeof(double));
     ASSERT_MSG(out != NULL, "alloc");
+    /* The closed-world corpus spells no run of four tryptophans. */
+    const uint8_t motif[4] = {AA_W, AA_W, AA_W, AA_W};
 
-    const uint8_t motif[2] = {AA_L, AA_Q};
+    BeamConstraint *c = beam_query_constraint_new(L, R);
+    beam_query_constrain_automaton(c,
+        beam_query_automaton_motif(L, R, motif, 4u));
+    double p = 1.0;
+    ASSERT_MSG(beam_query_log_probability(m, c, &p) == BEAM_OK,
+               "asking is not an error");
+    ASSERT_MSG(p == -INFINITY, "and the answer is zero");
+    ASSERT_MSG(beam_query_marginals(m, c, out, NULL) == BEAM_ERR_NO_LIVE_PATHS,
+               "but conditioning on it has no answer");
+    beam_query_constraint_free(c);
+    free(out);
+    beam_model_destroy(m);
+    PASS();
+}
+
+static void test_a_motif_conditional_matches_enumeration(void) {
+    BeamModel *m = build(SHORT_TRAIN, SHORT_WEIGHT, N_SHORT, 2u, 6u, true);
+    ASSERT_MSG(m != NULL, "model built");
+    const uint32_t L = 4u;
+    const uint8_t motif[2] = {AA_A_, AA_S_};
+
     BeamConstraint *c = beam_query_constraint_new(L, R);
     ASSERT_MSG(beam_query_constrain_automaton(
                    c, beam_query_automaton_motif(L, R, motif, 2u)) == BEAM_OK,
                "attached");
+    double *got = (double *)malloc((size_t)L * R * sizeof(double));
+    ASSERT_MSG(got != NULL, "alloc");
+    ASSERT_MSG(beam_query_marginals(m, c, got, NULL) == BEAM_OK, "query");
+    beam_query_constraint_free(c);
+
+    /* The same conditional built by walking the support directly. */
+    const BeamAlphabetInfo *ai = beam_alphabet_info(BEAM_ALPHABET_AA);
+    double *want = (double *)calloc((size_t)L * R, sizeof(double));
+    ASSERT_MSG(want != NULL, "alloc");
+    char buf[8];
+    uint8_t idx[8];
+    for (uint32_t i = 0; i < L; ++i) idx[i] = 0u;
+    buf[L] = '\0';
+    double mass = 0.0;
+    for (;;) {
+        for (uint32_t i = 0; i < L; ++i) buf[i] = ai->idx_to_char[idx[i]];
+        if (naive_contains(idx, L, motif, 2u)) {
+            const double p = exp(beam_model_log_pseq(m, buf));
+            mass += p;
+            for (uint32_t i = 0; i < L; ++i) want[(size_t)i * R + idx[i]] += p;
+        }
+        uint32_t k = L;
+        while (k-- > 0u) {
+            if (++idx[k] < R) break;
+            idx[k] = 0u;
+            if (k == 0u) goto done;
+        }
+    }
+done:
+    ASSERT_MSG(mass > 0.0, "the reference found mass");
+    for (uint32_t k = 0; k < L * R; ++k)
+        ASSERT_MSG(fabs(got[k] - want[k] / mass) < 1e-12,
+                   "every conditional cell matches the enumerated one");
+    free(got); free(want);
+    beam_model_destroy(m);
+    PASS();
+}
+
+struct or_ctx { uint32_t pa, pb; BeamResidueMask sa, sb; };
+static bool keep_either(const uint8_t *s, uint32_t n, const void *ctx) {
+    const struct or_ctx *c = (const struct or_ctx *)ctx;
+    (void)n;
+    return ((c->sa >> s[c->pa]) & 1u) || ((c->sb >> s[c->pb]) & 1u);
+}
+
+static void test_a_layer_indexed_automaton_answers_a_disjunction(void) {
+    BeamModel *m = build(SHORT_TRAIN, SHORT_WEIGHT, N_SHORT, 2u, 6u, true);
+    ASSERT_MSG(m != NULL, "model built");
+    const uint32_t L = 4u;
+    /* Positions 1 and 3 both vary across the corpus. Position 0 does not --
+     * it is C in every training sequence -- so a disjunction naming it would
+     * be satisfied by almost all the mass and would test nothing. */
+    const BeamResidueMask sa = (1u << AA_G) | (1u << AA_T);
+    const BeamResidueMask sb = (1u << AA_Y) | (1u << AA_L);
 
     /*
-     * Until the product graph lands, an engine that reads only the masks would
-     * answer this as though the motif were not there -- a confidently wrong
-     * probability, which is worse than no answer. All three entry points must
-     * refuse it rather than one.
+     * "position 0 is C or V, OR position 2 is S or A" is not a per-position
+     * restriction and no mask can express it: the union of two restrictions is
+     * not a restriction. Lifting each to an automaton and taking their
+     * disjunction gives a LAYER-INDEXED transition function, which is the
+     * whole reason the automaton is layer-indexed rather than uniform.
      */
-    double p = 0.0;
-    BeamQueryCost cost;
-    ASSERT_MSG(beam_query_marginals(m, c, out, NULL)
-               == BEAM_ERR_PARAM_OUT_OF_RANGE, "marginals refuse");
-    ASSERT_MSG(strstr(beam_error_message(), "product graph") != NULL,
-               "and say what is missing");
-    ASSERT_MSG(beam_query_log_probability(m, c, &p)
-               == BEAM_ERR_PARAM_OUT_OF_RANGE, "probability refuses");
-    ASSERT_MSG(beam_query_estimate(m, c, &cost)
-               == BEAM_ERR_PARAM_OUT_OF_RANGE, "estimate refuses");
+    BeamConstraint *ca = beam_query_constraint_new(L, R);
+    BeamConstraint *cb = beam_query_constraint_new(L, R);
+    beam_query_constrain_set(ca, 1u, sa);
+    beam_query_constrain_set(cb, 3u, sb);
+    BeamAutomaton *aa = beam_query_automaton_from_masks(ca);
+    BeamAutomaton *ab = beam_query_automaton_from_masks(cb);
+    ASSERT_MSG(aa && ab, "lifted");
+    BeamAutomaton *either = beam_query_automaton_or(aa, ab);
+    ASSERT_MSG(either != NULL, "disjoined");
+    beam_query_automaton_free(aa);
+    beam_query_automaton_free(ab);
+    beam_query_constraint_free(ca);
+    beam_query_constraint_free(cb);
 
+    BeamConstraint *c = beam_query_constraint_new(L, R);
+    ASSERT_MSG(beam_query_constrain_automaton(c, either) == BEAM_OK, "attached");
+    double got = 0.0;
+    ASSERT_MSG(beam_query_log_probability(m, c, &got) == BEAM_OK, "query");
+
+    double *gm = (double *)malloc((size_t)L * R * sizeof(double));
+    ASSERT_MSG(gm != NULL, "alloc");
+    ASSERT_MSG(beam_query_marginals(m, c, gm, NULL) == BEAM_OK, "marginals");
     beam_query_constraint_free(c);
-    free(out);
+
+    struct or_ctx ctx = {1u, 3u, sa, sb};
+    const double want = enumerate_predicate(m, L, keep_either, &ctx);
+    ASSERT_MSG(want > 0.05 && want < 0.95,
+               "the disjunction selects a real fraction of the mass, so the "
+               "comparison below can fail");
+    ASSERT_MSG(fabs(exp(got) - want) < 1e-12,
+               "a disjunction across positions matches enumeration");
+    for (uint32_t i = 0; i < L; ++i) {
+        double s = 0.0;
+        for (uint32_t a = 0; a < R; ++a) s += gm[(size_t)i * R + a];
+        ASSERT_MSG(fabs(s - 1.0) < 1e-12, "its conditional is a distribution");
+    }
+    free(gm);
+    beam_model_destroy(m);
+    PASS();
+}
+
+static void test_the_product_layer_max_matches_the_mask_one(void) {
+    /*
+     * Both restrict the rescale to states the forward sweep has REACHED,
+     * because letting an unreachable state set the scale underflows the sum
+     * it was supposed to protect. With one automaton state the two must agree
+     * exactly; no model is needed to say so, only arrays.
+     */
+    enum { S = 64u, RR = 8u };
+    static double w[S * RR];
+    static double cur[S];
+    for (uint32_t s = 0; s < S; ++s) {
+        cur[s] = (s % 5u == 0u) ? 0.0 : 1.0;      /* most states unreached */
+        for (uint32_t x = 0; x < RR; ++x)
+            /* The unreached states carry the biggest weights, so a maximum
+             * that ignored `reached` would come back visibly larger. */
+            w[s * RR + x] = (cur[s] == 0.0) ? 100.0 + s : -(double)(s + x);
+    }
+    for (uint32_t trial = 0; trial < 2u; ++trial) {
+        const BeamResidueMask allowed = trial ? 0x2Au : BEAM_RESIDUES_ALL(RR);
+        const double a = beam_query_layer_max(w, cur, S, RR, allowed);
+        const double b = beam_query_layer_max_product(w, cur, S, RR, 1u,
+                                                      allowed);
+        ASSERT_MSG(a == b, "the two layer maxima agree at one automaton state");
+        ASSERT_MSG(a < 100.0, "and neither was set by an unreached state");
+    }
+    PASS();
+}
+
+static void test_the_estimate_grows_with_the_automaton(void) {
+    BeamModel *m = build(TRAIN, WEIGHT, N_TRAIN, 3u, 14u, false);
+    ASSERT_MSG(m != NULL, "model built");
+    const uint32_t L = 10u;
+    const uint8_t motif[3] = {AA_L, AA_G, AA_E};
+
+    BeamConstraint *plain = beam_query_constraint_new(L, R);
+    BeamConstraint *prod  = beam_query_constraint_new(L, R);
+    beam_query_constrain_automaton(prod,
+        beam_query_automaton_motif(L, R, motif, 3u));
+
+    BeamQueryCost a, b;
+    ASSERT_MSG(beam_query_estimate(m, plain, &a) == BEAM_OK, "plain");
+    ASSERT_MSG(beam_query_estimate(m, prod, &b) == BEAM_OK, "product");
+    /* A 3-residue motif is 4 automaton states, and every one multiplies. */
+    ASSERT_MSG(b.states == 4ull * a.states, "states multiply by |Q|");
+    ASSERT_MSG(b.edges  == 4ull * a.edges,  "so do edge relaxations");
+    /*
+     * Checked against arithmetic done here rather than against another call
+     * to the sizing function, which would agree with itself however wrong it
+     * was. The backward field alone is (L + 1) * n_states * |Q| doubles, so
+     * dropping |Q| from the budget formula cannot clear this bar -- while
+     * "bigger than the plain one" could, on the sink buffer alone.
+     */
+    const uint64_t beta_only = 11ull * beam_model_n_states(m) * 4ull
+                             * sizeof(double);
+    ASSERT_MSG(b.bytes >= beta_only,
+               "the budget covers a backward field four times as tall");
+    ASSERT_MSG(b.bytes  >  a.bytes, "and the sweep needs more memory");
+    beam_query_constraint_free(plain);
+    beam_query_constraint_free(prod);
     beam_model_destroy(m);
     PASS();
 }
@@ -684,12 +1146,12 @@ static void test_the_estimate_matches_what_the_sweep_allocates(void) {
     BeamQueryCost cost;
     ASSERT_MSG(beam_query_estimate(m, c, &cost) == BEAM_OK, "estimated");
     ASSERT_MSG(cost.bytes == beam_query_sweep_bytes(beam_model_n_states(m),
-                                                    R, 10u, true),
+                                                    1u, R, 10u, true),
                "the guarded figure is the allocated figure");
     /* And a probability query really is charged less, rather than the flag
      * being carried around without changing anything. */
-    ASSERT_MSG(beam_query_sweep_bytes(beam_model_n_states(m), R, 10u, false)
-               < cost.bytes,
+    ASSERT_MSG(beam_query_sweep_bytes(beam_model_n_states(m), 1u, R, 10u,
+                                      false) < cost.bytes,
                "a partition function is not charged for forward buffers");
     ASSERT_MSG(cost.states == 11ull * beam_model_n_states(m), "states");
     beam_query_constraint_free(c);
@@ -753,7 +1215,18 @@ int main(void) {
     RUN_TEST(test_a_constraint_over_the_wrong_alphabet_is_refused);
     RUN_TEST(test_a_length_the_model_never_generates_is_refused);
 
-    RUN_TEST(test_the_mask_engine_refuses_an_automaton_it_cannot_honour);
+    printf("\n[the product engine]\n");
+    RUN_TEST(test_a_universal_automaton_reproduces_the_mask_sweep);
+    RUN_TEST(test_a_motif_probability_matches_enumeration);
+    RUN_TEST(test_a_count_probability_matches_enumeration);
+    RUN_TEST(test_masks_and_an_automaton_compose);
+    RUN_TEST(test_a_motif_conditional_matches_enumeration);
+    RUN_TEST(test_a_language_and_its_complement_partition_the_mass);
+    RUN_TEST(test_union_obeys_inclusion_exclusion);
+    RUN_TEST(test_a_motif_the_model_cannot_spell_is_impossible);
+    RUN_TEST(test_a_layer_indexed_automaton_answers_a_disjunction);
+    RUN_TEST(test_the_product_layer_max_matches_the_mask_one);
+    RUN_TEST(test_the_estimate_grows_with_the_automaton);
 
     printf("\n[cost]\n");
     RUN_TEST(test_the_estimate_matches_what_the_sweep_allocates);

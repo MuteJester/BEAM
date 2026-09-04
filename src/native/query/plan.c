@@ -27,11 +27,13 @@ BeamError beam_query_estimate(const BeamModel *m, const BeamConstraint *c,
 
     const BeamResidueMask *mask = NULL;
     uint32_t length = 0u;
-    BeamError err = beam_query_resolve_masks_only(m, c, &mask, &length);
+    BeamError err = beam_query_resolve(m, c, &mask, &length);
     if (err != BEAM_OK) return err;
 
     const uint32_t R = m->n_residues;
     const uint32_t S = m->n_states;
+    const uint32_t Q = beam_query_automaton_states(c->automaton);
+    const uint32_t n_aut = Q ? Q : 1u;
     const BeamResidueMask all = BEAM_RESIDUES_ALL(R);
 
     /*
@@ -40,7 +42,7 @@ BeamError beam_query_estimate(const BeamModel *m, const BeamConstraint *c,
      * call has no business touching -- and the bound is what the sweep
      * allocates for regardless, since the buffers are sized by `n_states`.
      */
-    out->states = ((uint64_t)length + 1u) * S;
+    out->states = ((uint64_t)length + 1u) * S * n_aut;
 
     /*
      * Both sweeps relax `n_states * |allowed|` edges per layer: the backward
@@ -51,13 +53,13 @@ BeamError beam_query_estimate(const BeamModel *m, const BeamConstraint *c,
     uint64_t edges = 0u;
     for (uint32_t i = 0; i < length; ++i) {
         const BeamResidueMask allowed = mask ? mask[i] : all;
-        edges += 2ull * S * (uint32_t)__builtin_popcount(allowed);
+        edges += 2ull * S * n_aut * (uint32_t)__builtin_popcount(allowed);
     }
     out->edges = edges;
     /* The marginals figure, which is the larger of the two: a probability
      * query needs no forward buffers and is charged less when it runs. An
      * estimate that under-reported the biggest query would be the one number
      * here that could mislead. */
-    out->bytes = beam_query_sweep_bytes(S, R, length, true);
+    out->bytes = beam_query_sweep_bytes(S, n_aut, R, length, true);
     return BEAM_OK;
 }

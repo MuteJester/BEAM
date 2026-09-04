@@ -27,8 +27,10 @@ BeamError beam_query_marginals(const BeamModel *m, const BeamConstraint *c,
 
     const BeamResidueMask *mask = NULL;
     uint32_t length = 0u;
-    BeamError err = beam_query_resolve_masks_only(m, c, &mask, &length);
+    BeamError err = beam_query_resolve(m, c, &mask, &length);
     if (err != BEAM_OK) return err;
+    const BeamAutomaton *aut = c->automaton;
+    const uint32_t Q = aut ? aut->n_states : 1u;
 
     const uint32_t A = m->n_alphabet;
     const uint32_t R = m->n_residues;
@@ -48,7 +50,7 @@ BeamError beam_query_marginals(const BeamModel *m, const BeamConstraint *c,
                             "conditional it asks for does not exist");
 
     BeamQueryWork k;
-    err = beam_query_work_alloc(m, length, true, &k);
+    err = beam_query_work_alloc(m, length, Q, true, &k);
     if (err != BEAM_OK) return err;
 
     double *chunk = (double *)malloc((size_t)BEAM_SUM_CHUNKS * R
@@ -58,7 +60,9 @@ BeamError beam_query_marginals(const BeamModel *m, const BeamConstraint *c,
         return BEAM_EALLOC("the marginal partials");
     }
 
-    err = beam_query_betas(m, length, mask, k.w, k.beta);
+    err = aut ? beam_query_betas_product(m, length, mask, aut, k.w, k.tail,
+                                         k.beta)
+              : beam_query_betas(m, length, mask, k.w, k.beta);
     if (err != BEAM_OK) goto done;
 
     {
@@ -69,9 +73,10 @@ BeamError beam_query_marginals(const BeamModel *m, const BeamConstraint *c,
      * the last bits rather than to within the difference between a forward and
      * a backward evaluation of the same quantity.
      */
-    const double logz = k.beta[0][S - 1u];
+    /* The all-sentinel trellis state paired with the automaton's start. */
+    const double logz = k.beta[0][(size_t)(S - 1u) * Q];
     if (!isfinite(logz)) {
-        err = mask
+        err = (mask || aut)
             ? BEAM_ENOPATHS("the constraint describes a configuration this "
                            "model cannot produce at this length, so the "
                            "conditional it asks for does not exist")
@@ -80,7 +85,7 @@ BeamError beam_query_marginals(const BeamModel *m, const BeamConstraint *c,
     }
     if (out_log_z) *out_log_z = logz;
 
-    k.cur[S - 1u] = 1.0;                  /* the all-sentinel start state */
+    k.cur[(size_t)(S - 1u) * Q] = 1.0;    /* all-sentinel, automaton start */
     double log_scale = 0.0;
 
     for (uint32_t i = 0; i < length; ++i) {
@@ -102,8 +107,17 @@ BeamError beam_query_marginals(const BeamModel *m, const BeamConstraint *c,
         }
         /* A narrowed layer rescales by the maximum over what it actually
          * sums; rescaling by the whole layer's maximum underflows it. */
+        /*
+         * Recomputed only when the LAYER is narrowed. An automaton removes
+         * (state, q) combinations but no edge from the layer, so the layer's
+         * own maximum is as appropriate under one as it is with no constraint
+         * at all -- and using it keeps the Q = 1 arithmetic identical to the
+         * mask sweep's, which is what the cross-check test requires.
+         */
         if (allowed != BEAM_RESIDUES_ALL(R)) {
-            wmax = beam_query_layer_max(k.w, k.cur, S, R, allowed);
+            wmax = aut
+                 ? beam_query_layer_max_product(k.w, k.cur, S, R, Q, allowed)
+                 : beam_query_layer_max(k.w, k.cur, S, R, allowed);
             if (wmax == -INFINITY) {
                 err = BEAM_ENOPATHS("the constrained mass underflowed the "
                                    "forward sweep although the backward "
@@ -126,16 +140,27 @@ BeamError beam_query_marginals(const BeamModel *m, const BeamConstraint *c,
             const uint32_t shi =
                 (uint32_t)(((uint64_t)S * (ch + 1)) / BEAM_SUM_CHUNKS);
             for (uint32_t s = slo; s < shi; ++s) {
-                if (k.cur[s] == 0.0) continue;
-                const double la = log(k.cur[s]) + log_scale - logz;
+                const double *cs = k.cur + (size_t)s * Q;
                 const double *row = k.w + (size_t)s * R;
                 const uint32_t base = (s % SK) * A;
-                for (BeamResidueMask mm = allowed; mm; mm &= mm - 1u) {
-                    const uint32_t x = (uint32_t)__builtin_ctz(mm);
-                    if (row[x] == -INFINITY) continue;
-                    const double nb = bn[base + x];
-                    if (nb == -INFINITY) continue;
-                    part[x] += exp(la + row[x] + nb);
+                /*
+                 * With no automaton `Q` is 1 and `qn` is 0, so the index
+                 * arithmetic collapses to `bn[base + x]` and the floating
+                 * point performed is exactly the mask sweep's, in exactly its
+                 * order. That is what lets one loop serve both tiers.
+                 */
+                for (uint32_t q = 0; q < Q; ++q) {
+                    if (cs[q] == 0.0) continue;
+                    const double la = log(cs[q]) + log_scale - logz;
+                    for (BeamResidueMask mm = allowed; mm; mm &= mm - 1u) {
+                        const uint32_t x = (uint32_t)__builtin_ctz(mm);
+                        if (row[x] == -INFINITY) continue;
+                        const uint32_t qn =
+                            aut ? beam_query_automaton_step(aut, i, q, x) : 0u;
+                        const double nb = bn[(size_t)(base + x) * Q + qn];
+                        if (nb == -INFINITY) continue;
+                        part[x] += exp(la + row[x] + nb);
+                    }
                 }
             }
         }
@@ -148,8 +173,12 @@ BeamError beam_query_marginals(const BeamModel *m, const BeamConstraint *c,
             }
         }
 
-        if (!beam_query_advance(m, k.w, wmax, k.cur, k.next, allowed,
-                                &log_scale)) {
+        const bool moved = aut
+            ? beam_query_advance_product(m, aut, i, k.w, wmax, k.cur, k.next,
+                                         allowed, &log_scale)
+            : beam_query_advance(m, k.w, wmax, k.cur, k.next, allowed,
+                                 &log_scale);
+        if (!moved) {
             err = BEAM_ENOPATHS("the forward sweep reached a layer with no "
                                "mass although the trellis has a path");
             goto done;

@@ -62,16 +62,25 @@ uint32_t beam_query_automaton_step(const BeamAutomaton *a, uint32_t i,
  * That is not a rounding difference: on an order-4 model the forward buffers
  * are twice the backward field, so charging a probability query for them
  * would refuse questions that fit comfortably.
+ *
+ * `n_aut` is the automaton's state count, 1 when the constraint is masks
+ * alone. It multiplies the backward field and the forward vectors but not the
+ * layer weights, which do not depend on the automaton. The sink buffer exists
+ * only in the product sweep, where acceptance has to be applied to the tail
+ * weights rather than written straight into the last backward layer.
  */
 static inline uint64_t beam_query_sweep_bytes(uint32_t n_states,
+                                              uint32_t n_aut,
                                               uint32_t n_residues,
                                               uint32_t length,
                                               bool want_forward) {
     const uint64_t S = n_states;
-    uint64_t n = ((uint64_t)length + 1u) * S * sizeof(double)  /* beta field */
+    const uint64_t P = (uint64_t)n_states * n_aut;   /* product states */
+    uint64_t n = ((uint64_t)length + 1u) * P * sizeof(double)  /* beta field */
                + S * (uint64_t)n_residues * sizeof(double);    /* one layer  */
+    if (n_aut > 1u) n += S * sizeof(double);         /* sink weights   */
     if (want_forward)
-        n += 3u * S * sizeof(double)                          /* cur/next/tail */
+        n += 2u * P * sizeof(double)                 /* cur and next   */
            + (uint64_t)BEAM_SUM_CHUNKS * n_residues * sizeof(double);
     return n;
 }
@@ -104,12 +113,13 @@ bool beam_query_all_free(const BeamConstraint *c);
  * equivalent but identical.
  */
 typedef struct {
-    double **beta;    /**< [length + 1][n_states], log space          */
+    double **beta;    /**< [length + 1][n_states * n_aut], log space  */
     double  *w;       /**< [n_states * n_residues], one layer         */
-    double  *cur;     /**< [n_states], rescaled forward vector        */
-    double  *next;    /**< [n_states]                                 */
-    double  *tail;    /**< [n_states], sink weights                   */
+    double  *cur;     /**< [n_states * n_aut], rescaled forward       */
+    double  *next;    /**< [n_states * n_aut]                         */
+    double  *tail;    /**< [n_states], sink weights; product path only */
     uint32_t n_beta;  /**< rows actually allocated, for the free      */
+    uint32_t n_aut;   /**< 1 when the constraint is masks alone       */
 } BeamQueryWork;
 
 /** Release a work block and zero it. Safe on a partially built one. */
@@ -122,7 +132,8 @@ void beam_query_work_free(BeamQueryWork *k);
  * the allocation cannot drift apart.
  */
 BeamError beam_query_work_alloc(const BeamModel *m, uint32_t length,
-                                bool want_forward, BeamQueryWork *k);
+                                uint32_t n_aut, bool want_forward,
+                                BeamQueryWork *k);
 
 /**
  * `beta[i][s]`, the log total weight of every completion from state `s` at
@@ -181,5 +192,34 @@ BeamError beam_query_resolve_masks_only(const BeamModel *m,
                                         const BeamConstraint *c,
                                         const BeamResidueMask **out_mask,
                                         uint32_t *out_length);
+
+/* ── The product sweep ─────────────────────────────────────── */
+
+/**
+ * `beta[i][s * Q + q]` over the product of the trellis and `aut`.
+ *
+ * `w` is one layer of scratch and `tail` holds the sink weights; both are the
+ * caller's, so the budget guard sees every byte the sweep uses.
+ */
+BeamError beam_query_betas_product(const BeamModel *m, uint32_t length,
+                                   const BeamResidueMask *mask,
+                                   const BeamAutomaton *aut,
+                                   double *w, double *tail, double **beta);
+
+/** As `beam_query_layer_max`, over states reached in any automaton state. */
+double beam_query_layer_max_product(const double *w, const double *cur,
+                                    uint32_t n_states, uint32_t n_residues,
+                                    uint32_t n_aut, BeamResidueMask allowed);
+
+/**
+ * Advance the rescaled forward vector across one layer of the product.
+ *
+ * `layer` indexes the automaton's transition function, which may differ per
+ * position. Returns false when the layer leaves no mass.
+ */
+bool beam_query_advance_product(const BeamModel *m, const BeamAutomaton *aut,
+                                uint32_t layer, const double *w, double wmax,
+                                const double *cur, double *next,
+                                BeamResidueMask allowed, double *log_scale);
 
 #endif /* BEAM_INTERNAL_QUERY_H */

@@ -39,32 +39,37 @@ void beam_query_work_free(BeamQueryWork *k) {
 }
 
 BeamError beam_query_work_alloc(const BeamModel *m, uint32_t length,
-                                bool want_forward, BeamQueryWork *k) {
+                                uint32_t n_aut, bool want_forward,
+                                BeamQueryWork *k) {
     memset(k, 0, sizeof(*k));
+    k->n_aut = n_aut;
     const uint32_t R = m->n_residues;
     const uint32_t S = m->n_states;
+    const size_t   P = (size_t)S * n_aut;
 
     /*
      * Refused before allocating, not after. `calloc` on Linux grants an absurd
      * request lazily and fails later on first write, with the OOM killer
      * choosing a victim from the whole machine rather than from this process.
      */
-    const uint64_t need   = beam_query_sweep_bytes(S, R, length, want_forward);
+    const uint64_t need   = beam_query_sweep_bytes(S, n_aut, R, length,
+                                                   want_forward);
     const uint64_t budget = beam_model_memory_budget();
     if (need > budget)
         return BEAM_FAIL(BEAM_ERR_ALLOC,
                         "a constrained sweep at length %u needs about %.1f GB "
-                        "for the backward field of %u states, and the memory "
-                        "budget is %.1f GB; raise it with "
-                        "BEAM.set_memory_budget, or ask at a lower order",
+                        "for the backward field of %u trellis states times %u "
+                        "automaton states, and the memory budget is %.1f GB; "
+                        "raise it with BEAM.set_memory_budget, ask at a lower "
+                        "order, or use a simpler constraint",
                         (unsigned)length, (double)need / 1e9, (unsigned)S,
-                        (double)budget / 1e9);
+                        (unsigned)n_aut, (double)budget / 1e9);
 
     k->beta = (double **)calloc((size_t)length + 1u, sizeof(double *));
     if (!k->beta) return BEAM_EALLOC("the backward-value layer table");
     k->n_beta = length + 1u;
     for (uint32_t i = 0; i <= length; ++i) {
-        k->beta[i] = (double *)malloc((size_t)S * sizeof(double));
+        k->beta[i] = (double *)malloc(P * sizeof(double));
         if (!k->beta[i]) {
             beam_query_work_free(k);
             return BEAM_EALLOC("a backward layer");
@@ -75,12 +80,23 @@ BeamError beam_query_work_alloc(const BeamModel *m, uint32_t length,
         beam_query_work_free(k);
         return BEAM_EALLOC("one layer of edge weights");
     }
+    /*
+     * Sink weights are the product path's alone. The mask sweep writes them
+     * straight into its last backward layer, which the product cannot do
+     * because acceptance has to be applied to them state by state first.
+     */
+    if (n_aut > 1u) {
+        k->tail = (double *)malloc((size_t)S * sizeof(double));
+        if (!k->tail) {
+            beam_query_work_free(k);
+            return BEAM_EALLOC("the sink weights");
+        }
+    }
     if (!want_forward) return BEAM_OK;
 
-    k->cur  = (double *)calloc(S, sizeof(double));
-    k->next = (double *)malloc((size_t)S * sizeof(double));
-    k->tail = (double *)malloc((size_t)S * sizeof(double));
-    if (!k->cur || !k->next || !k->tail) {
+    k->cur  = (double *)calloc(P, sizeof(double));
+    k->next = (double *)malloc(P * sizeof(double));
+    if (!k->cur || !k->next) {
         beam_query_work_free(k);
         return BEAM_EALLOC("the constrained sweep buffers");
     }
@@ -108,19 +124,7 @@ BeamError beam_query_resolve(const BeamModel *m, const BeamConstraint *c,
     return BEAM_OK;
 }
 
-BeamError beam_query_resolve_masks_only(const BeamModel *m,
-                                        const BeamConstraint *c,
-                                        const BeamResidueMask **out_mask,
-                                        uint32_t *out_length) {
-    BeamError e = beam_query_resolve(m, c, out_mask, out_length);
-    if (e != BEAM_OK) return e;
-    if (c->automaton)
-        return BEAM_ERANGE("beam_query: this constraint carries an automaton, "
-                          "which relates positions to each other and needs "
-                          "the product graph; the mask engine would answer as "
-                          "though the automaton were not there");
-    return BEAM_OK;
-}
+
 
 /**
  * The residues layer `i` may emit, as a set.
@@ -242,8 +246,9 @@ BeamError beam_query_log_probability(const BeamModel *m,
 
     const BeamResidueMask *mask = NULL;
     uint32_t length = 0u;
-    BeamError err = beam_query_resolve_masks_only(m, c, &mask, &length);
+    BeamError err = beam_query_resolve(m, c, &mask, &length);
     if (err != BEAM_OK) return err;
+    const BeamAutomaton *aut = c->automaton;
 
     /*
      * Two answers are exact without a sweep, and taking them here is not an
@@ -254,7 +259,7 @@ BeamError beam_query_log_probability(const BeamModel *m,
      * a probability fractionally above or below one. `log_clamp_probability`
      * already short-circuits the same case for the same reason.
      */
-    if (!mask) { *out_log_p = 0.0; return BEAM_OK; }
+    if (!mask && !aut) { *out_log_p = 0.0; return BEAM_OK; }
     /* And no sequence draws a residue from the empty set. */
     if (beam_query_empty_position(c) < length) {
         *out_log_p = -INFINITY;
@@ -262,11 +267,14 @@ BeamError beam_query_log_probability(const BeamModel *m,
     }
 
     /* No forward buffers: a partition function is a backward sweep. */
+    const uint32_t Q = aut ? aut->n_states : 1u;
     BeamQueryWork k;
-    err = beam_query_work_alloc(m, length, false, &k);
+    err = beam_query_work_alloc(m, length, Q, false, &k);
     if (err != BEAM_OK) return err;
 
-    err = beam_query_betas(m, length, mask, k.w, k.beta);
+    err = aut ? beam_query_betas_product(m, length, mask, aut, k.w, k.tail,
+                                         k.beta)
+              : beam_query_betas(m, length, mask, k.w, k.beta);
     if (err == BEAM_OK) {
         /*
          * The numerator is the constrained backward sweep and the denominator
@@ -277,7 +285,9 @@ BeamError beam_query_log_probability(const BeamModel *m,
          * CONDITIONING on such an event that has no answer, and that refusal
          * lives in beam_query_marginals.
          */
-        const double logz_c = k.beta[0][m->n_states - 1u];
+        /* The all-sentinel trellis state paired with the automaton's start,
+         * which is state 0 by construction. */
+        const double logz_c = k.beta[0][(size_t)(m->n_states - 1u) * Q];
         *out_log_p = isfinite(logz_c)
                    ? logz_c - beam_model_log_partition(m, length)
                    : -INFINITY;

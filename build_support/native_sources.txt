@@ -65,5 +65,6 @@ src/native/query/constraint.c
 src/native/query/engine.c
 src/native/query/plan.c
 src/native/query/posterior.c
+src/native/query/product.c
 
 src/native/storage/sparse_rows.c
