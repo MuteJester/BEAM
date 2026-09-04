@@ -117,21 +117,24 @@ divides by zero. With it, the empty live set is detected at construction and
 reported as `BEAM_ERR_NO_LIVE_PATHS` naming the layer where the language
 died.
 
-### Gathering by target requires the inverse transition
+### Gathering by target needs no inverse transition
 
 The existing forward sweep accumulates **by target** -- each target state
 gathers from its `A` sources -- specifically so that no two threads write the
-same accumulator, and the product engine must keep that property.
+same accumulator, and the product engine keeps that property.
 
-The trellis half inverts by construction: `next(s, x) = (s % state_shift) * A
-+ x`, so a target names its own last residue and the sources differ only in
-the digit that falls off the end. The automaton half does not invert: several
-`q` may reach one `q'` on the same residue.
+An earlier version of this design concluded that the product therefore needed
+a precomputed inverse relation `delta_inv[i][x][q'] -> {q}`, because the
+trellis half inverts by construction (`next(s, x) = (s % state_shift) * A + x`
+names its own last residue) while the automaton half does not: several `q` may
+reach one `q'` on the same residue.
 
-So `automaton.c` precomputes the inverse relation `delta_inv[i][x][q'] -> {q}`
-when the product is built. `|Q|` is small and this is cheap; the alternative,
-scattering from sources, would either race or need per-thread accumulators
-over the whole product state space.
+**That was wrong, and the implementation is simpler for it.** The whole
+automaton dimension of a target trellis state is written by the single thread
+that owns that state, so the sweep scatters FORWARDS into `next[t * Q ..]` and
+still has no two threads meet. Keeping the q-dimension private to the target
+removes the inverse tables, their construction and their memory, and lets the
+sweep use the transition function it already has.
 
 Zero-mass conditions are routine, not exceptional: in a 4,000-sequence
 amino-acid model at order 3 and length 14, 38 of 280 `(position, residue)`
