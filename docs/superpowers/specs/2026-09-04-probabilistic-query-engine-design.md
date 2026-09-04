@@ -345,12 +345,26 @@ stage a diff whose numeric consequences are readable.
 | stage | contents | anchor |
 |---|---|---|
 | 1 | `constraint` (masks only), `product`, `logprob` engine, `posterior`, `plan` | reproduces `positional_marginals` and `log_clamp_probability` bit-for-bit |
-| 2 | `automaton`, composition, product construction | motif and count probabilities checked against enumeration |
+| 2a | `automaton.c`: motif, count, mask lifting, and/or/not | the language enumerated exhaustively against naive matchers |
+| 2b | `product.c` and the product engine | motif and count probabilities checked against enumeration |
 | 3 | `expect` semiring, functionals, `expectation.c` | `E` and `Var` checked against enumeration; entropy against `-sum p log p` |
 | 4 | `information.c`: MI, conditional entropy, matrices | joints via the tagging automaton, checked against clamped sweeps |
 | 5 | `indel.c` | neighbourhood scores checked against direct `log_pseq` |
 | 6 | `maxplus`, constrained MAP | checked against `top_k_sequences` under a clamp |
 | 7 | Python bindings and `src/BEAM/query/` | the Python surface checked against the C one, baselines re-recorded once |
+
+### Stage 2 splits, and 2a ships an explicit refusal
+
+The automaton is pure data -- it needs no model and no sweep -- so its language
+can be gated on its own, by enumerating a small alphabet exhaustively and
+comparing against a naive matcher. That is a decisive test and it does not
+have to wait for the product engine, so `automaton.c` lands first.
+
+Between 2a and 2b the mask engine can be handed a constraint it cannot honour.
+It refuses, by name, rather than reading the masks and ignoring the automaton:
+an engine that answered `P(contains CASSQ)` as though the motif were not there
+would return a confidently wrong number, which is worse than no number. The
+refusal is tested at all three entry points, and 2b deletes it.
 
 ## Testing
 
