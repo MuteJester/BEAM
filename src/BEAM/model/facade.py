@@ -10,6 +10,7 @@ if TYPE_CHECKING:  # annotations only
     from ..analytics.calibration import Calibration
 
 import math
+import operator
 import os
 from pathlib import Path
 from collections.abc import Iterable, Sequence
@@ -1509,6 +1510,265 @@ class BeamModel:
             "mean_layer_nodes": float(layers.mean()) if layers.size else 0.0,
             "density": float(edges / (nodes * self.n_residues)) if nodes else 0.0,
         }
+
+    # ── Positional marginals ────────────────────────────────────
+
+    #: Byte that leaves a position free in the clamp buffer handed to C.
+    #: Mirrors ``BEAM_RESIDUE_INVALID``, the one value that can never be a
+    #: residue index, so "no residue" and "not a residue" are the same byte.
+    _CLAMP_FREE = 0xFF
+
+    def _clamp_buffer(self, length: int, clamp) -> bytes | None:
+        """Turn a ``{position: residue}`` mapping into the C clamp buffer.
+
+        Returns ``None`` for an empty or absent clamp, so the C side takes the
+        unclamped path rather than one that happens to pin nothing.
+
+        Every position is checked against the length and every residue against
+        the alphabet HERE, because the C layer sees only bytes: a position of
+        ``-1`` would wrap to four billion and a residue of ``'B'`` would be a
+        silent index into a neighbouring cell.
+        """
+        if clamp is None:
+            return None
+        try:
+            items = list(clamp.items())
+        except AttributeError:
+            raise TypeError(
+                f"clamp must be a mapping of position to residue, got "
+                f"{type(clamp).__name__}") from None
+        if not items:
+            return None
+        symbols = alphabets.symbols(self.alphabet)
+        buf = bytearray([self._CLAMP_FREE]) * length
+        for pos, residue in items:
+            # __index__ rather than int(): int(4.7) silently truncates to 4,
+            # and a clamp on "position 4.7" is a typo, not a request.
+            try:
+                p = operator.index(pos)
+            except TypeError:
+                raise TypeError(
+                    f"clamp positions must be integers, got {pos!r}") from None
+            if not 0 <= p < length:
+                raise ValueError(
+                    f"clamp position {p} is outside a length-{length} "
+                    f"sequence, whose positions are 0..{length - 1}")
+            if isinstance(residue, str):
+                if len(residue) != 1 or residue not in symbols:
+                    raise ValueError(
+                        f"clamp at position {p} names {residue!r}, which is "
+                        f"not one of the {self.alphabet!r} residues {symbols!r}")
+                idx = symbols.index(residue)
+            else:
+                try:
+                    idx = int(residue)
+                except (TypeError, ValueError):
+                    raise TypeError(
+                        f"clamp values must be residue characters or indices, "
+                        f"got {residue!r}") from None
+                if not 0 <= idx < len(symbols):
+                    raise ValueError(
+                        f"clamp at position {p} names residue index {idx}, "
+                        f"which is outside 0..{len(symbols) - 1}")
+            # Unreachable from a plain dict, where equal keys collapse, but
+            # `items()` on an arbitrary mapping may yield a position twice and
+            # the second write would silently win.
+            if buf[p] != self._CLAMP_FREE and buf[p] != idx:
+                raise ValueError(
+                    f"clamp pins position {p} to two different residues")
+            buf[p] = idx
+        return bytes(buf)
+
+    def positional_marginals(self, length: int, *,
+                             clamp: dict | None = None) -> np.ndarray:
+        """``P(x_i = a | length)`` for every position, exactly.
+
+        Returns an ``(length, n_residues)`` array whose ``[i, a]`` entry is the
+        probability that a length-``length`` sequence drawn from the model
+        carries residue ``a`` at position ``i``. Columns are in
+        :attr:`BEAM_ALPHABET` order, which is what
+        ``alphabets.symbols(self.alphabet)`` returns.
+
+        Args:
+            length: the sequence length to condition on. Marginals are a
+                per-length object: position 5 of a length-12 sequence and
+                position 5 of a length-18 one are different distances from the
+                C terminus, and the model scores them from different cells, so
+                pooling them would average two things that are not the same
+                quantity. There is deliberately no pooled form.
+            clamp: an optional ``{position: residue}`` mapping pinning
+                positions, e.g. ``{4: 'G'}``. The result is then the exact
+                conditional ``P(x_i = a | length, clamp)``. Residues may be
+                given as characters or as indices into the alphabet.
+
+        Exact, and in a stronger sense than :meth:`spectrum` is. Both avoid
+        sampling, but the spectrum splits mass linearly onto a GRID at every
+        layer, so its bins carry a controlled error. A marginal has no grid to
+        be wrong about: the axis is twenty residues, and the answer is the
+        per-layer edge posterior of the trellis summed over states, which is a
+        finite sum evaluated in full. Rows sum to 1 to the last bits, and that
+        is worth checking rather than trusting -- nothing renormalises them.
+
+        A clamped row comes back one-hot. That is the correct conditional
+        rather than a placeholder: given that position 4 is ``G``, the
+        probability that it is ``G`` is 1.
+
+        Zero-probability residues come back as exactly ``0.0``. No floor is
+        applied. In a strict model a residue the corpus never spells at a
+        position is information, and flooring it would replace a fact with a
+        number too small to notice but large enough to rank.
+
+        Raises:
+            ValueError: if the model generates no sequences of this length --
+                loudly, rather than returning a row of zeros that reads like a
+                flat distribution -- or if ``clamp`` pins a configuration of
+                probability zero, which is a question with no answer rather
+                than a division by zero to be smoothed away.
+
+        Example:
+            >>> p = model.positional_marginals(14)
+            >>> p.shape
+            (14, 20)
+            >>> float(p.sum(axis=1).min())          # every row normalised
+            1.0
+            >>> q = model.positional_marginals(14, clamp={4: 'G'})
+            >>> float(q[4, BEAM_ALPHABET.index('G')])
+            1.0
+        """
+        length = self._check_length(length)
+        if length < 1:
+            raise ValueError(
+                "positional_marginals() needs a specific length of at least 1; "
+                "marginals are per-length and there is no pooled form")
+        if not math.isfinite(self.log_length_prior(length)):
+            raise ValueError(
+                f"the model generates no sequences of length {length}, so it "
+                f"has no positional marginals there; length_pmf() shows which "
+                f"lengths it does generate")
+        buf = self._clamp_buffer(length, clamp)
+        w, n_res, _logz = _c.positional_marginals(self._g, length, buf)
+        return np.frombuffer(w, dtype=np.float64).reshape(length, n_res).copy()
+
+    def log_clamp_probability(self, length: int, clamp: dict) -> float:
+        """``ln P(clamp | length)``, the exact mass the clamp keeps.
+
+        The partition function of the clamped trellis divided by the
+        unclamped one. It is the natural companion to a clamped
+        :meth:`positional_marginals` call: the marginals say what the
+        conditional looks like, and this says how much of the length's
+        probability the condition selects, which is what decides whether the
+        conditional describes anything worth looking at.
+
+        Returns ``-inf`` for a configuration the model cannot produce, rather
+        than raising, because "this cannot happen" is the answer to the
+        question rather than a failure to answer it. That is the one place
+        these two methods differ: a marginal conditional on an impossible event
+        does not exist, so :meth:`positional_marginals` raises instead.
+        """
+        length = self._check_length(length)
+        if not math.isfinite(self.log_length_prior(length)):
+            raise ValueError(
+                f"the model generates no sequences of length {length}")
+        buf = self._clamp_buffer(length, clamp)
+        if buf is None:
+            return 0.0
+        _w, _n, logz = _c.positional_marginals(self._g, length, buf, True)
+        return float(logz) - self.log_partition(length)
+
+    # ── Expected cell usage ─────────────────────────────────────
+
+    #: Block order of the C result: anchor major, expert minor.
+    _EXPECTED_BLOCKS = (
+        ("forward", "wide"), ("forward", "mid"), ("forward", "len"),
+        ("backward", "wide"), ("backward", "mid"), ("backward", "len"),
+    )
+
+    def expected_counts(self, *, length: int | None = None) -> dict[str, Any]:
+        """Exact expected usage of every table cell under the model itself.
+
+        The same edge posterior :meth:`positional_marginals` sums over states,
+        aggregated instead into the cell each edge would have incremented
+        during training. It is the E step of an EM iteration written out
+        exactly: the model's expected sufficient statistics under its own
+        distribution, with no sampling anywhere in the derivation.
+
+        Args:
+            length: a single length, or ``None`` to pool over every length the
+                model generates, each weighted by its own prior ``pi(L)``.
+                Pooled, the answer is the expected usage per sequence DRAWN
+                FROM THE MODEL, so multiplying by :attr:`total_weight` puts it
+                on the same scale as the counts the corpus produced. It is not
+                multiplied here, because the per-sequence form is the one that
+                has a check attached to it: see ``expected_length`` below.
+
+        Returns a dict with ``expected_length``, ``n_residues``, ``residues``,
+        and six blocks keyed ``forward_wide``, ``forward_mid``,
+        ``forward_len``, ``backward_wide``, ``backward_mid``, ``backward_len``.
+        Each block is itself a dict of
+
+            ``rows``    dense row indices, ascending, ``(n_rows,)`` int64
+            ``counts``  ``(n_rows, n_residues)`` expected counts
+            ``depth``   the row's distance from its anchor
+            ``context`` the row's packed context index
+            ``length``  the row's sequence length, ``len`` blocks only
+
+        SPARSE BY ROW, and that is forced rather than chosen: an order-4 model
+        has ~148 million cells and the support of this expectation is a few
+        tens of thousands of rows, so a dense block would be gigabytes of
+        zeros. A row that does not appear has expected count exactly zero.
+
+        Every block sums to ``expected_length`` -- ``length`` when one is
+        given, and ``E[L]`` when pooled -- because each position of a sequence
+        increments exactly one cell of each of the six tables. That identity is
+        the cheapest check that the sweep covered the sink and the first ``K``
+        layers, and it is returned so it can be run rather than assumed.
+
+        Contexts are packed most-distant-first in BOTH anchors, matching the
+        count tables. The finalized C-anchored wide table is repacked
+        nearest-first for cache reasons; these are counts, so they are not.
+
+        .. note::
+           This is the most expensive analytic here: a full forward-backward
+           sweep per length, over every state of every layer with no pruning.
+           Ask for one ``length`` when that is what you need.
+        """
+        want = 0 if length is None else self._check_length(length)
+        if want != 0 and not math.isfinite(self.log_length_prior(want)):
+            raise ValueError(
+                f"the model generates no sequences of length {want}, so it "
+                f"uses no cells there; length_pmf() shows which lengths it "
+                f"does generate")
+        blocks, n_res, total = _c.expected_counts(self._g, want)
+
+        cfg = self.config
+        radix = n_res + 1
+        n_ctx = {"wide": radix ** int(cfg["order"]), "mid": radix ** 3,
+                 "len": radix ** 2}
+        out: dict[str, Any] = {
+            "expected_length": float(total),
+            "n_residues": int(n_res),
+            "residues": alphabets.symbols(self.alphabet),
+        }
+        for (anchor, expert), (rows_b, vals_b) in zip(self._EXPECTED_BLOCKS,
+                                                      blocks):
+            rows = np.frombuffer(rows_b, dtype=np.uint32).astype(np.int64)
+            counts = np.frombuffer(vals_b, dtype=np.float64).reshape(
+                len(rows), n_res).copy()
+            nc = n_ctx[expert]
+            block: dict[str, np.ndarray] = {
+                "rows": rows,
+                "counts": counts,
+                "context": rows % nc,
+            }
+            if expert == "len":
+                # row = (L * max_length + depth) * A**2 + context
+                stride = rows // nc
+                block["depth"] = stride % int(cfg["max_length"])
+                block["length"] = stride // int(cfg["max_length"])
+            else:
+                block["depth"] = rows // nc
+            out[f"{anchor}_{expert}"] = block
+        return out
 
     # ── Generation ──────────────────────────────────────────────
 

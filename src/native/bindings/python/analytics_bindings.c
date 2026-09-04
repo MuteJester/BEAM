@@ -299,3 +299,129 @@ PyObject *py_topology(PyObject *self, PyObject *args) {
     PyMem_Free(layers);
     return Py_BuildValue("(ddN)", nodes, edges, list);
 }
+
+/* ── Positional marginals and expected cell usage ───────────── */
+
+/*
+ * The clamp crosses the boundary as a bytes object of exactly `length` bytes,
+ * one per position, rather than as a dict. Building the byte array is the
+ * facade's job because that is where the alphabet lives, and a fixed-width
+ * buffer means this function has no parsing to get wrong and no residue name
+ * to look up.
+ */
+PyObject *py_positional_marginals(PyObject *self, PyObject *args) {
+    (void)self;
+    PyObject *cap, *clamp_obj;
+    unsigned int length;
+    int allow_empty = 0;
+    if (!PyArg_ParseTuple(args, "OIO|p", &cap, &length, &clamp_obj,
+                          &allow_empty))
+        return NULL;
+    BeamModel *m = edge_from_capsule(cap);
+    if (!m) return NULL;
+
+    const uint8_t *clamp = NULL;
+    if (clamp_obj != Py_None) {
+        char *buf; Py_ssize_t n;
+        if (PyBytes_AsStringAndSize(clamp_obj, &buf, &n) != 0) return NULL;
+        if (n != (Py_ssize_t)length) {
+            PyErr_Format(PyExc_ValueError,
+                         "clamp must hold one byte per position: expected %u, "
+                         "got %zd", length, n);
+            return NULL;
+        }
+        clamp = (const uint8_t *)buf;
+    }
+
+    const unsigned int R = (unsigned int)beam_model_n_residues(m);
+    const size_t n = (size_t)length * R;
+    double *out = (double *)PyMem_Calloc(n ? n : 1u, sizeof(double));
+    if (!out) return PyErr_NoMemory();
+    double logz = 0.0;
+    BeamError err;
+    Py_BEGIN_ALLOW_THREADS
+    err = beam_model_positional_marginals(m, length, clamp, out, &logz);
+    Py_END_ALLOW_THREADS
+    if (err != BEAM_OK) {
+        PyMem_Free(out);
+        /*
+         * A clamp of probability zero is the one failure here that a caller
+         * may legitimately want as a VALUE rather than as an exception:
+         * `log_clamp_probability` asks exactly "how much mass does this keep",
+         * and "none" is the answer to that question rather than a failure to
+         * answer it. It is opt-in, so the marginals themselves -- which have
+         * no conditional to return -- still fail loudly.
+         */
+        if (allow_empty && err == BEAM_ERR_NO_LIVE_PATHS)
+            return Py_BuildValue("(y#Id)", "", (Py_ssize_t)0, R, -INFINITY);
+        /*
+         * Otherwise report it as a ValueError rather than the RuntimeError
+         * BEAM_ERR_NO_LIVE_PATHS maps to by default. At this entry point the
+         * length has already been checked live, so the only way the trellis
+         * can be empty is that the caller's clamp emptied it, and that is an
+         * argument problem.
+         */
+        if (err == BEAM_ERR_NO_LIVE_PATHS) {
+            const char *msg = beam_error_message();
+            PyErr_SetString(PyExc_ValueError,
+                            (msg && msg[0]) ? msg
+                                            : "the clamp selects no sequence");
+            return NULL;
+        }
+        return set_beam_error(err);
+    }
+    PyObject *b = edge_doubles_to_bytes(out, n);
+    PyMem_Free(out);
+    if (!b) return NULL;
+    return Py_BuildValue("(NId)", b, R, logz);
+}
+
+/*
+ * The six blocks come back as a flat list of `(rows, counts)` byte pairs in
+ * `[anchor][expert]` order, which the facade reshapes. Flat rather than nested
+ * because the reshaping is naming, and naming belongs on the Python side where
+ * the names can be documented next to what they mean.
+ */
+PyObject *py_expected_counts(PyObject *self, PyObject *args) {
+    (void)self;
+    PyObject *cap; unsigned int length;
+    if (!PyArg_ParseTuple(args, "OI", &cap, &length)) return NULL;
+    BeamModel *m = edge_from_capsule(cap);
+    if (!m) return NULL;
+
+    BeamExpectedCounts ec;
+    BeamError err;
+    Py_BEGIN_ALLOW_THREADS
+    err = beam_model_expected_counts(m, length, &ec);
+    Py_END_ALLOW_THREADS
+    if (err != BEAM_OK) return set_beam_error(err);
+
+    PyObject *list = PyList_New(6);
+    if (!list) { beam_model_expected_counts_free(&ec); return NULL; }
+    for (unsigned int d = 0, k = 0; d < 2u; ++d) {
+        for (unsigned int e = 0; e < 3u; ++e, ++k) {
+            const BeamCountBlock *blk = &ec.block[d][e];
+            PyObject *rows = PyBytes_FromStringAndSize(
+                (const char *)blk->rows,
+                (Py_ssize_t)((size_t)blk->n_rows * sizeof(uint32_t)));
+            PyObject *vals = edge_doubles_to_bytes(
+                blk->counts, (size_t)blk->n_rows * ec.n_residues);
+            if (!rows || !vals) {
+                Py_XDECREF(rows); Py_XDECREF(vals); Py_DECREF(list);
+                beam_model_expected_counts_free(&ec);
+                return NULL;
+            }
+            PyObject *pair = Py_BuildValue("(NN)", rows, vals);
+            if (!pair) {
+                Py_DECREF(list);
+                beam_model_expected_counts_free(&ec);
+                return NULL;
+            }
+            PyList_SET_ITEM(list, k, pair);
+        }
+    }
+    const unsigned int R = ec.n_residues;
+    const double total = ec.expected_length;
+    beam_model_expected_counts_free(&ec);
+    return Py_BuildValue("(NId)", list, R, total);
+}

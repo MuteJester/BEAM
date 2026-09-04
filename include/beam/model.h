@@ -821,6 +821,116 @@ BeamError beam_model_length_marginals(const BeamModel *m,
                                          double *mean_surprisal,
                                          double *var_surprisal);
 
+/* ── Positional marginals and expected cell usage ────────────── */
+
+/**
+ * `P(x_i = a | length)` for every position and residue, exactly.
+ *
+ * `out` must hold `length * n_residues` doubles and receives row-major
+ * `out[i * n_residues + a]`. Every row sums to 1 to within floating point;
+ * nothing is sampled and nothing is binned, so unlike
+ * `beam_model_spectrum` there is no grid to be approximate ON. The
+ * answer is the per-layer edge posterior of the trellis, summed over states.
+ *
+ * @param clamp  NULL, or `length` bytes pinning positions to residues.
+ *               `BEAM_RESIDUE_INVALID` leaves a position free, any residue
+ *               index pins it, and the result is then the exact conditional
+ *               `P(x_i = a | length, clamp)`. A pinned row comes back one-hot,
+ *               which is the correct conditional and not a placeholder.
+ * @param out_log_z  optional; receives `ln Z` of the CLAMPED trellis, so that
+ *               `out_log_z - beam_model_log_partition(m, length)` is the exact
+ *               log probability of the clamped configuration given the length.
+ *               Without a clamp it is `ln Z(length)` reached by the backward
+ *               sweep instead of the forward one.
+ *
+ * Zero-probability cells come back as exactly 0.0. No floor is applied and
+ * none is wanted: in a strict model an unspellable residue at a position is
+ * information, not a number to be smoothed.
+ *
+ * @return BEAM_ERR_PARAM_OUT_OF_RANGE if the model does not generate this
+ *         length or a clamp names a residue outside the alphabet, and
+ *         BEAM_ERR_NO_LIVE_PATHS if the clamp asks for a configuration of
+ *         probability zero -- which is a real question with no answer rather
+ *         than a division by zero to be papered over.
+ */
+BeamError beam_model_positional_marginals(const BeamModel *m, uint32_t length,
+                                          const uint8_t *clamp,
+                                          double *out, double *out_log_z);
+
+/**
+ * One expert's expected counts: the rows that carry any expected use at all.
+ *
+ * Sparse by row because the answer is: an order-4 model has 147.8 million
+ * cells and the support of this expectation is typically tens of thousands of
+ * rows, so a dense block would be gigabytes of zeros. A row absent from
+ * `rows` has expected count exactly zero.
+ *
+ * `rows` holds dense row indices ASCENDING, and `counts` holds `n_rows`
+ * consecutive rows of `n_residues` doubles each. The row index is the same one
+ * the count tables use, so `row` decomposes as
+ *
+ *     wide : row = min(depth, depth_cap) * A^order + context
+ *     mid  : row = depth                * A^3     + context
+ *     len  : row = (length * max_length + depth)  * A^2 + context
+ *
+ * with contexts packed most-distant-first in BOTH anchors, matching the counts
+ * rather than the finalized C-anchored wide table, which is repacked for cache
+ * reasons.
+ */
+typedef struct {
+    uint32_t  n_rows;
+    uint32_t *rows;     /**< [n_rows], ascending dense row indices */
+    double   *counts;   /**< [n_rows * n_residues], row-major      */
+} BeamCountBlock;
+
+/**
+ * Expected usage of every table cell under the model's own distribution.
+ *
+ * `block[anchor][expert]`, with anchor 0 the N-anchored (forward) tables and 1
+ * the C-anchored (backward) ones, and expert 0 the wide table, 1 the mid table
+ * and 2 the length-conditioned table. The indices are `BEAM_FWD`/`BEAM_BWD`
+ * and the wide/mid/len order used throughout the implementation.
+ *
+ * Every block sums to `expected_length`, because each position of a sequence
+ * increments exactly one cell of each of the six tables. That identity is the
+ * cheapest available check that the sweep covered the sink and the first `K`
+ * layers correctly, and it is worth running rather than assuming.
+ */
+typedef struct {
+    BeamCountBlock block[2][3];
+    uint32_t n_residues;
+    double   expected_length;
+} BeamExpectedCounts;
+
+/**
+ * Expected counts of every cell, from the same edge posterior the marginals
+ * use, aggregated into the cells `beam_model_observe` would have
+ * incremented.
+ *
+ * This is the E step of an EM iteration written out exactly: the expected
+ * sufficient statistics of the model under itself. Comparing it with the
+ * observed counts says which cells the model over- and under-uses relative to
+ * the corpus it was built from, cell by cell, with no sampling in between.
+ *
+ * @param length  a single length, or 0 to pool over every length the model
+ *                generates, each weighted by its own prior `pi(L)`. Pooled,
+ *                the answer is the expected usage per sequence DRAWN FROM THE
+ *                MODEL, so multiplying by `beam_model_total_weight` puts it on
+ *                the same scale as the observed counts.
+ *
+ * The caller owns the result and must release it with
+ * `beam_model_expected_counts_free`.
+ *
+ * Cost is a full forward-backward sweep per length, so this is the most
+ * expensive analytic in the library on a wide model: budget for
+ * `sum_L L * n_states * n_residues` edge visits.
+ */
+BeamError beam_model_expected_counts(const BeamModel *m, uint32_t length,
+                                     BeamExpectedCounts *out);
+
+/** Release a `BeamExpectedCounts` and zero it. Safe on an already-freed one. */
+void beam_model_expected_counts_free(BeamExpectedCounts *ec);
+
 /* ── Most probable sequences ─────────────────────────────────── */
 
 /**

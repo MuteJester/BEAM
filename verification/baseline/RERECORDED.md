@@ -176,3 +176,34 @@ coverage of the CONFIGURATION rather than of the arithmetic. The replacement
 builds order 9 — the alphabet's ceiling — in the closed world, where storage
 is sparse and the same model costs 0.3 GB, and it still builds rather than
 merely asserting the config is legal, which was the point.
+
+# Why the surface baselines moved again: the positional-marginal API
+
+Re-recorded 2026-09-02, for `positional_marginals`, `log_clamp_probability`
+and `expected_counts`. Purely additive, and that is checkable rather than
+asserted: `diff` against the previous files shows **no removed line in any of
+the four**.
+
+| baseline | added | removed |
+|---|---|---|
+| `cbeam_methods.txt` | `expected_counts`, `positional_marginals` | none |
+| `c_symbols.txt` | `beam_model_expected_counts`, `beam_model_expected_counts_free`, `beam_model_positional_marginals` | none |
+| `python_api.txt` | the three `BeamModel` methods | none |
+| `pytest_cases.txt` | 37 cases, all in `tests/python/analytics/test_positional_marginals.py` | none |
+
+The four checks that would have caught a change to existing behaviour were
+green THROUGHOUT, and were never re-recorded: `numeric` (78 quantities as
+exact hex floats over order 2/3/4 x open/strict), `saved-model bytes`,
+`thread independence`, and `C test inventory`. That is the evidence that this
+is an addition rather than an edit. It was checked independently as well, by
+hashing `log_pseq` over 4,500 amino-acid and 1,000 nucleotide sequences across
+four models before and after the change: the dumps are byte-identical, and
+`pgen_diagnostics()` still reports `is_proper: True`, `total_mass: 1.0`,
+`max_abs_deviation: 0.0` on every strict model.
+
+`pytest_cases.txt` is written as the previous file's lines in their recorded
+order with the new ones appended, rather than as a fresh collection dump.
+Pytest's collection order is not stable between runs, so a fresh dump reorders
+~200 unchanged lines and buries the 36 that are actually new. `check.py`
+compares this file as a SET, so ordering carries no meaning and the only thing
+at stake is whether the diff can be read.

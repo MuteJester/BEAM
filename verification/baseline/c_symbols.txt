@@ -41,6 +41,8 @@ beam_model_crc32c
 beam_model_destroy
 beam_model_effective_threads
 beam_model_entropy
+beam_model_expected_counts
+beam_model_expected_counts_free
 beam_model_explain
 beam_model_finalize
 beam_model_hill_number
@@ -66,6 +68,7 @@ beam_model_new
 beam_model_observe
 beam_model_path_count
 beam_model_path_count_total
+beam_model_positional_marginals
 beam_model_posterior
 beam_model_radix
 beam_model_sample

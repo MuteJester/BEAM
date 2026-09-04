@@ -94,6 +94,7 @@ class BeamModel:
   def effective_diversity(self) -> 'float'
   property effective_threads
   def entropy(self, *, base: 'float' = 2.718281828459045) -> 'float'
+  def expected_counts(self, *, length: 'int | None' = None) -> 'dict[str, Any]'
   def explain(self, sequence: 'str') -> 'dict[str, Any]'
   def hill_curve(self, orders: 'Iterable[float] | None' = None) -> 'dict[str, np.ndarray]'
   def hill_number(self, alpha: 'float') -> 'float'
@@ -103,6 +104,7 @@ class BeamModel:
   def length_marginals(self) -> 'dict[str, np.ndarray]'
   def length_moments(self, *, q: 'float' = 1.0, order: 'int' = 4) -> 'dict[str, Any]'
   def length_pmf(self) -> 'np.ndarray'
+  def log_clamp_probability(self, length: 'int', clamp: 'dict') -> 'float'
   def log_length_prior(self, length: 'int') -> 'float'
   def log_mellin(self, q: 'float') -> 'float'
   def log_partition(self, length: 'int') -> 'float'
@@ -123,6 +125,7 @@ class BeamModel:
   property observed_lengths
   def path_count(self, length: 'int | None' = None) -> 'float'
   def pgen_diagnostics(self) -> 'dict[str, Any]'
+  def positional_marginals(self, length: 'int', *, clamp: 'dict | None' = None) -> 'np.ndarray'
   def posterior(self, prior: 'BeamModel', kappa: 'float' = 100.0) -> 'None'
   def power_sum(self, q: 'float') -> 'float'
   def pseq(self, sequence, *, log: 'bool' = False)
