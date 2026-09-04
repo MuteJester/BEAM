@@ -117,6 +117,22 @@ divides by zero. With it, the empty live set is detected at construction and
 reported as `BEAM_ERR_QUERY_IMPOSSIBLE` naming the layer where the language
 died.
 
+### Gathering by target requires the inverse transition
+
+The existing forward sweep accumulates **by target** -- each target state
+gathers from its `A` sources -- specifically so that no two threads write the
+same accumulator, and the product engine must keep that property.
+
+The trellis half inverts by construction: `next(s, x) = (s % state_shift) * A
++ x`, so a target names its own last residue and the sources differ only in
+the digit that falls off the end. The automaton half does not invert: several
+`q` may reach one `q'` on the same residue.
+
+So `automaton.c` precomputes the inverse relation `delta_inv[i][x][q'] -> {q}`
+when the product is built. `|Q|` is small and this is cheap; the alternative,
+scattering from sources, would either race or need per-thread accumulators
+over the whole product state space.
+
 Zero-mass conditions are routine, not exceptional: in a 4,000-sequence
 amino-acid model at order 3 and length 14, 38 of 280 `(position, residue)`
 pairs had zero marginal. Aggregate queries such as a mutual-information matrix
