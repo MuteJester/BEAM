@@ -25,7 +25,7 @@ reason, not answered approximately without one.
   exactness; a query API that quietly estimates would cost more than it gives.
 - Expectations of arbitrary user functions of a whole sequence. Only
   functionals that decompose over the trellis are computable in closed form.
-  Everything else is refused by `BEAM_ERR_QUERY_UNSUPPORTED`.
+  Everything else is refused before any work is done.
 - Context-free or unbounded-counting constraints. The constraint language is
   regular, deliberately: regular is exactly what a finite product with the
   trellis can absorb.
@@ -114,7 +114,7 @@ both forward-reachable from `q0` and backward-co-reachable to `F`.
 **Co-reachability is a correctness requirement, not an optimization.** Without
 it a constraint that no path satisfies yields `Z = 0` and every conditional
 divides by zero. With it, the empty live set is detected at construction and
-reported as `BEAM_ERR_QUERY_IMPOSSIBLE` naming the layer where the language
+reported as `BEAM_ERR_NO_LIVE_PATHS` naming the layer where the language
 died.
 
 ### Gathering by target requires the inverse transition
@@ -281,6 +281,23 @@ order 6 has no speed bump would be a defect.
 
 `beam_query_estimate` exposes the same numbers without running anything, so
 the Python layer can warn before a 19-second call rather than after it.
+
+### Error codes are reused, not invented
+
+The existing vocabulary already covers this subsystem, and adding enum values
+to a public error type churns an ABI the verification gate records.
+
+| condition | code | precedent |
+|---|---|---|
+| unsatisfiable constraint | `BEAM_ERR_NO_LIVE_PATHS` | `positional_marginals` raises it for exactly this |
+| bad position, residue or length | `BEAM_ERR_PARAM_OUT_OF_RANGE` | every existing validator |
+| over the memory budget | `BEAM_ERR_ALLOC` + message | the construction guard in `lifecycle.c` |
+| a query with no exact answer | `BEAM_ERR_INVALID_ARG` + message | argument validation generally |
+
+A new code is added only when a stage proves it needs one. Stage 1 needs
+none. The Python layer's exception hierarchy is built over these codes plus
+the accompanying message, which `set_beam_error` already preserves for
+`BEAM_ERR_ALLOC`.
 
 ## File layout
 
