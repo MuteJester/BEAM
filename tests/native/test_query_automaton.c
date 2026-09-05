@@ -20,6 +20,7 @@
 #include "beam/common.h"
 #include "beam/model.h"
 #include "beam/query.h"
+#include <math.h>
 
 #include "../../src/native/internal/beam/query_internal.h"
 
@@ -348,6 +349,61 @@ static void test_a_product_past_the_state_ceiling_is_refused(void) {
     PASS();
 }
 
+static void test_the_state_ceiling_admits_what_it_says_it_does(void) {
+    /* The refusal above proves 1681 is too many; nothing proved 1024 is not.
+     * A ceiling only tested from one side is a ceiling at an unknown height. */
+    uint8_t motif[31];
+    for (uint32_t k = 0; k < 31u; ++k) motif[k] = (uint8_t)(k % AR);
+    BeamAutomaton *a = beam_query_automaton_motif(40u, AR, motif, 31u);
+    ASSERT_MSG(a != NULL && beam_query_automaton_states(a) == 32u, "32 states");
+    BeamAutomaton *sq = beam_query_automaton_and(a, a);
+    ASSERT_MSG(sq != NULL, "32 x 32 = 1024 is at the ceiling and admitted");
+    ASSERT_MSG(beam_query_automaton_states(sq)
+               == BEAM_QUERY_MAX_AUTOMATON_STATES, "exactly 1024");
+    beam_query_automaton_free(sq);
+    beam_query_automaton_free(a);
+    PASS();
+}
+
+static void test_the_automaton_allocation_respects_the_memory_budget(void) {
+    /*
+     * The guard exists because a maximal layer-indexed transition table is
+     * 21 MB and a subsystem that refuses a sweep over budget should not
+     * allocate around it. Nothing exercised it -- review found it had shipped
+     * without a test, so deleting it would have gone unnoticed.
+     *
+     * The budget is set between the two constructions rather than merely low:
+     * a uniform automaton stores one layer's table and a lifted mask stores
+     * `length` of them, so a ceiling that admits the first and refuses the
+     * second shows the guard scales with what is actually allocated, and not
+     * merely that some ceiling exists.
+     */
+    const uint64_t saved = beam_model_memory_budget();
+    const uint8_t motif[2] = {0u, 1u};
+    /* uniform:  1 * 3 * AR * 4 + 3  = 51 bytes
+     * layered: AL * 2 * AR * 4 + 2  = 194 bytes  */
+    beam_model_set_memory_budget(64u);
+
+    BeamConstraint *c = beam_query_constraint_new(AL, AR);
+    ASSERT_MSG(beam_query_automaton_from_masks(c) == NULL,
+               "a table with one layer per position is over a 64-byte budget");
+    ASSERT_MSG(strstr(beam_error_message(), "memory budget") != NULL,
+               "and says so in the house voice");
+    BeamAutomaton *small = beam_query_automaton_motif(AL, AR, motif, 2u);
+    ASSERT_MSG(small != NULL,
+               "while a uniform one of the same alphabet still fits");
+    beam_query_automaton_free(small);
+
+    beam_model_set_memory_budget(saved);
+    /* Restored, or every test after this one runs under 64 bytes. */
+    ASSERT_MSG(beam_model_memory_budget() == saved, "budget restored");
+    BeamAutomaton *ok = beam_query_automaton_from_masks(c);
+    ASSERT_MSG(ok != NULL, "and the layered one builds once it fits again");
+    beam_query_automaton_free(ok);
+    beam_query_constraint_free(c);
+    PASS();
+}
+
 /* ── Attaching to a constraint ───────────────────────────────── */
 
 static void test_attaching_an_automaton_intersects(void) {
@@ -432,6 +488,8 @@ int main(void) {
     RUN_TEST(test_double_negation_is_the_identity);
     RUN_TEST(test_combining_incompatible_automata_is_refused);
     RUN_TEST(test_a_product_past_the_state_ceiling_is_refused);
+    RUN_TEST(test_the_state_ceiling_admits_what_it_says_it_does);
+    RUN_TEST(test_the_automaton_allocation_respects_the_memory_budget);
 
     printf("\n[attaching to a constraint]\n");
     RUN_TEST(test_attaching_an_automaton_intersects);

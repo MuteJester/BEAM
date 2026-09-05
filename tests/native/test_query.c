@@ -270,7 +270,20 @@ static void test_a_bad_shape_is_refused_at_construction(void) {
 
 /* ── Bit-for-bit reproduction of the clamped sweep ───────────── */
 
-static void test_an_unconstrained_query_reproduces_the_marginals(void) {
+static void test_an_unconstrained_query_agrees_with_the_marginals(void) {
+    /*
+     * NOT bit for bit, and no longer claimed to be. This engine carries its
+     * forward values as logarithms; `math/positional.c` carries them rescaled
+     * per layer. Those are different computations and their last bits differ.
+     *
+     * The equivalence was real while both used a per-layer rescale, and it was
+     * this file's headline claim -- but that rescale is precisely what three
+     * separate defects came from, and removing it removed the equivalence
+     * with it. What replaces it as evidence is stronger: agreement to
+     * floating point here, agreement with brute-force enumeration elsewhere,
+     * and, where the two DO diverge, a check that this engine is the one still
+     * returning a distribution.
+     */
     BeamModel *m = build(TRAIN, WEIGHT, N_TRAIN, 3u, 14u, false);
     ASSERT_MSG(m != NULL, "model built");
     const uint32_t L = 10u;
@@ -285,9 +298,14 @@ static void test_an_unconstrained_query_reproduces_the_marginals(void) {
     BeamConstraint *c = beam_query_constraint_new(L, R);
     ASSERT_MSG(beam_query_marginals(m, c, got, &zg) == BEAM_OK, "query sweep");
 
-    ASSERT_MSG(zw == zg, "log Z identical, not merely close");
+    ASSERT_MSG(fabs(zw - zg) < 1e-9, "the two agree on ln Z");
     for (uint32_t k = 0; k < L * R; ++k)
-        ASSERT_MSG(want[k] == got[k], "every cell identical, not merely close");
+        ASSERT_MSG(fabs(want[k] - got[k]) < 1e-12, "and on every cell");
+    for (uint32_t i = 0; i < L; ++i) {
+        double s = 0.0;
+        for (uint32_t x = 0; x < R; ++x) s += got[(size_t)i * R + x];
+        ASSERT_MSG(fabs(s - 1.0) < 1e-12, "every row is a distribution");
+    }
 
     beam_query_constraint_free(c);
     free(want); free(got);
@@ -387,7 +405,7 @@ static void test_a_pinned_position_reproduces_a_clamp(void) {
     /*
      * The closed-world trellis spells only what the corpus spells, so its
      * dynamic range is narrow and neither engine underflows. There the two
-     * must agree BIT FOR BIT: same operations, same order, same values.
+     * agree to floating point on every pin.
      */
     BeamModel *shut = build(TRAIN, WEIGHT, N_TRAIN, 3u, 14u, false);
     ASSERT_MSG(shut != NULL, "closed-world model built");
@@ -1120,31 +1138,71 @@ static void test_a_layer_indexed_automaton_answers_a_disjunction(void) {
     PASS();
 }
 
-static void test_the_product_layer_max_matches_the_mask_one(void) {
+/** Two-pass log-sum-exp: find the maximum, then sum. The obvious way. */
+static double reference_lse(const double *v, uint32_t n) {
+    double mx = -INFINITY;
+    for (uint32_t k = 0; k < n; ++k) if (v[k] > mx) mx = v[k];
+    if (mx == -INFINITY) return -INFINITY;
+    double s = 0.0;
+    for (uint32_t k = 0; k < n; ++k)
+        if (v[k] != -INFINITY) s += exp(v[k] - mx);
+    return mx + log(s);
+}
+
+static void test_the_streaming_log_sum_exp_matches_a_two_pass_reference(void) {
     /*
-     * Both restrict the rescale to states the forward sweep has REACHED,
-     * because letting an unreachable state set the scale underflows the sum
-     * it was supposed to protect. With one automaton state the two must agree
-     * exactly; no model is needed to say so, only arrays.
+     * `lse_add` is the numerical core of both forward sweeps: it accumulates a
+     * target's sources in ONE pass, raising a running maximum and rescaling
+     * the running sum when a larger term arrives. The two-pass form above is
+     * written independently and is the thing it must agree with.
+     *
+     * The cases that matter are the ones a per-layer rescale used to fail:
+     * terms spanning thousands of nats, and terms arriving smallest-first so
+     * the running maximum is raised repeatedly. Exponentiating any of these
+     * directly gives zero or infinity.
      */
-    enum { S = 64u, RR = 8u };
-    static double w[S * RR];
-    static double cur[S];
-    for (uint32_t s = 0; s < S; ++s) {
-        cur[s] = (s % 5u == 0u) ? 0.0 : 1.0;      /* most states unreached */
-        for (uint32_t x = 0; x < RR; ++x)
-            /* The unreached states carry the biggest weights, so a maximum
-             * that ignored `reached` would come back visibly larger. */
-            w[s * RR + x] = (cur[s] == 0.0) ? 100.0 + s : -(double)(s + x);
+    double v[64];
+    for (uint32_t trial = 0; trial < 6u; ++trial) {
+        uint32_t n = 0u;
+        switch (trial) {
+        case 0:  /* a single term */
+            v[n++] = -1234.5; break;
+        case 1:  /* ascending: the maximum is raised at every step */
+            for (uint32_t k = 0; k < 40u; ++k) v[n++] = -3000.0 + 50.0 * k;
+            break;
+        case 2:  /* descending: the maximum is set once */
+            for (uint32_t k = 0; k < 40u; ++k) v[n++] = -50.0 * k;
+            break;
+        case 3:  /* spanning far more than a double can hold at once */
+            v[n++] = -4000.0; v[n++] = -1.0; v[n++] = -3999.0; v[n++] = -2.0;
+            break;
+        case 4:  /* equal terms: the answer is ln n above them */
+            for (uint32_t k = 0; k < 16u; ++k) v[n++] = -700.0;
+            break;
+        default: /* -inf mixed in, which must contribute nothing */
+            v[n++] = -INFINITY; v[n++] = -20.0; v[n++] = -INFINITY;
+            v[n++] = -21.0; v[n++] = -INFINITY;
+            break;
+        }
+        double mx = -INFINITY, sum = 0.0;
+        for (uint32_t k = 0; k < n; ++k) lse_add(&mx, &sum, v[k]);
+        const double got = (mx == -INFINITY) ? -INFINITY : mx + log(sum);
+        const double want = reference_lse(v, n);
+        ASSERT_MSG(fabs(got - want) < 1e-12 * (fabs(want) + 1.0),
+                   "the streaming accumulator matches a two-pass log-sum-exp");
     }
-    for (uint32_t trial = 0; trial < 2u; ++trial) {
-        const BeamResidueMask allowed = trial ? 0x2Au : BEAM_RESIDUES_ALL(RR);
-        const double a = beam_query_layer_max(w, cur, S, RR, allowed);
-        const double b = beam_query_layer_max_product(w, cur, S, RR, 1u,
-                                                      allowed);
-        ASSERT_MSG(a == b, "the two layer maxima agree at one automaton state");
-        ASSERT_MSG(a < 100.0, "and neither was set by an unreached state");
-    }
+
+    /* Sixteen equal terms sit exactly ln 16 above one of them, which pins the
+     * rescaling rather than only the ordering. */
+    double mx = -INFINITY, sum = 0.0;
+    for (uint32_t k = 0; k < 16u; ++k) lse_add(&mx, &sum, -700.0);
+    ASSERT_MSG(fabs((mx + log(sum)) - (-700.0 + log(16.0))) < 1e-12,
+               "and sixteen equal terms land ln 16 above one of them");
+
+    /* Nothing at all stays nothing. */
+    mx = -INFINITY; sum = 0.0;
+    lse_add(&mx, &sum, -INFINITY);
+    ASSERT_MSG(mx == -INFINITY, "an impossible term adds nothing");
     PASS();
 }
 
@@ -1269,6 +1327,151 @@ static void test_a_dominant_rejected_path_cannot_collapse_the_answer(void) {
     PASS();
 }
 
+/* ── The nucleotide alphabet, end to end ─────────────────────── */
+
+/**
+ * Every quantity the engine reports, on a nucleotide model, against brute
+ * force over the whole support.
+ *
+ * The alphabet was almost untested across this subsystem before review: five
+ * residues instead of twenty, a radix of six instead of twenty-one, and case
+ * folding on input. `5^5` is 3,125 sequences, so the entire support is
+ * walkable and nothing has to be taken on trust.
+ */
+static void test_the_whole_engine_on_a_nucleotide_model(void) {
+    const char *seqs[6] = {"ACGTA","ACGTT","AGGTA","ACCTA","ACGAA","TCGTA"};
+    const double w[6] = {40.0, 25.0, 18.0, 12.0, 9.0, 6.0};
+    const uint32_t NR = BEAM_NT_RESIDUES, L = 5u;
+
+    for (uint32_t world = 0; world < 2u; ++world) {
+        BeamModelConfig cfg;
+        beam_model_config_default(&cfg);
+        cfg.alphabet = BEAM_ALPHABET_NT;
+        cfg.order = 2; cfg.max_length = 8;
+        cfg.strict = (world == 0);
+        BeamModel *m = beam_model_new(&cfg);
+        ASSERT_MSG(m != NULL, "nucleotide model built");
+        ASSERT_MSG(beam_model_observe(m, seqs, w, 6u) == BEAM_OK, "observed");
+        ASSERT_MSG(beam_model_finalize(m) == BEAM_OK, "finalized");
+        ASSERT_MSG(beam_model_n_residues(m) == NR, "five residues");
+
+        /* Brute force: every string of length 5 over ACGTN. */
+        const BeamAlphabetInfo *ai = beam_alphabet_info(BEAM_ALPHABET_NT);
+        double *pm = (double *)calloc((size_t)L * NR, sizeof(double));
+        ASSERT_MSG(pm != NULL, "alloc");
+        char buf[8];
+        uint8_t idx[8];
+        double total = 0.0, kept = 0.0, hseq = 0.0;
+        const BeamResidueMask keep = (1u << 0) | (1u << 2);   /* A or G at 1 */
+        for (uint32_t i = 0; i < L; ++i) idx[i] = 0u;
+        buf[L] = '\0';
+        for (;;) {
+            for (uint32_t i = 0; i < L; ++i) buf[i] = ai->idx_to_char[idx[i]];
+            const double p = exp(beam_model_log_pseq(m, buf));
+            if (p > 0.0) {
+                total += p;
+                for (uint32_t i = 0; i < L; ++i) pm[(size_t)i * NR + idx[i]] += p;
+                if ((keep >> idx[1]) & 1u) kept += p;
+            }
+            uint32_t k = L;
+            while (k-- > 0u) {
+                if (++idx[k] < NR) break;
+                idx[k] = 0u;
+                if (k == 0u) goto done;
+            }
+        }
+done:
+        ASSERT_MSG(total > 0.0, "the support is non-empty");
+        for (uint32_t i = 0; i < L; ++i)
+            for (uint32_t a = 0; a < NR; ++a) pm[(size_t)i * NR + a] /= total;
+        /* Sequence entropy, from the same walk. */
+        for (uint32_t i = 0; i < L; ++i) idx[i] = 0u;
+        for (;;) {
+            for (uint32_t i = 0; i < L; ++i) buf[i] = ai->idx_to_char[idx[i]];
+            const double p = exp(beam_model_log_pseq(m, buf)) / total;
+            if (p > 0.0) hseq -= p * log(p);
+            uint32_t k = L;
+            while (k-- > 0u) {
+                if (++idx[k] < NR) break;
+                idx[k] = 0u;
+                if (k == 0u) goto done2;
+            }
+        }
+done2:;
+
+        BeamConstraint *c = beam_query_constraint_new(L, NR);
+        double *got = (double *)malloc((size_t)L * NR * sizeof(double));
+        double *h   = (double *)malloc((size_t)L * sizeof(double));
+        double *mi  = (double *)malloc((size_t)L * L * sizeof(double));
+        ASSERT_MSG(got && h && mi, "alloc");
+
+        ASSERT_MSG(beam_query_marginals(m, c, got, NULL) == BEAM_OK, "marginals");
+        for (uint32_t k2 = 0; k2 < L * NR; ++k2)
+            ASSERT_MSG(fabs(got[k2] - pm[k2]) < 1e-12,
+                       "every marginal matches the enumerated one");
+
+        double hs = 0.0;
+        ASSERT_MSG(beam_query_entropy(m, c, &hs, NULL) == BEAM_OK, "H(seq)");
+        ASSERT_MSG(fabs(hs - hseq) < 1e-12, "and so does the sequence entropy");
+
+        ASSERT_MSG(beam_query_position_entropy(m, c, h) == BEAM_OK, "H per pos");
+        for (uint32_t i = 0; i < L; ++i) {
+            double want = 0.0;
+            for (uint32_t a = 0; a < NR; ++a)
+                if (pm[(size_t)i * NR + a] > 0.0)
+                    want -= pm[(size_t)i * NR + a] * log(pm[(size_t)i * NR + a]);
+            ASSERT_MSG(fabs(h[i] - want) < 1e-12, "per-position entropy too");
+        }
+        ASSERT_MSG(beam_query_information_matrix(m, c, mi) == BEAM_OK, "matrix");
+        for (uint32_t i = 0; i < L; ++i)
+            ASSERT_MSG(fabs(mi[(size_t)i * L + i] - h[i]) < 1e-12,
+                       "and the matrix diagonal is the position entropy");
+        beam_query_constraint_free(c);
+
+        /* A set mask, and a motif automaton, both against the same walk. */
+        BeamConstraint *d = beam_query_constraint_new(L, NR);
+        ASSERT_MSG(beam_query_constrain_set(d, 1u, keep) == BEAM_OK, "mask");
+        double lp = 0.0;
+        ASSERT_MSG(beam_query_log_probability(m, d, &lp) == BEAM_OK, "P(mask)");
+        ASSERT_MSG(fabs(exp(lp) - kept / total) < 1e-12,
+                   "a residue set over five residues matches enumeration");
+        beam_query_constraint_free(d);
+
+        const uint8_t motif[2] = {0u, 2u};        /* AG */
+        BeamConstraint *e = beam_query_constraint_new(L, NR);
+        ASSERT_MSG(beam_query_constrain_automaton(
+                       e, beam_query_automaton_motif(L, NR, motif, 2u))
+                   == BEAM_OK, "motif over nucleotides");
+        double lm = 0.0;
+        ASSERT_MSG(beam_query_log_probability(m, e, &lm) == BEAM_OK, "P(motif)");
+        double wantm = 0.0;
+        for (uint32_t i = 0; i < L; ++i) idx[i] = 0u;
+        for (;;) {
+            bool has = false;
+            for (uint32_t i = 0; i + 1u < L; ++i)
+                if (idx[i] == 0u && idx[i + 1u] == 2u) has = true;
+            if (has) {
+                for (uint32_t i = 0; i < L; ++i) buf[i] = ai->idx_to_char[idx[i]];
+                wantm += exp(beam_model_log_pseq(m, buf));
+            }
+            uint32_t k = L;
+            while (k-- > 0u) {
+                if (++idx[k] < NR) break;
+                idx[k] = 0u;
+                if (k == 0u) goto done3;
+            }
+        }
+done3:
+        ASSERT_MSG(fabs(exp(lm) - wantm / total) < 1e-12,
+                   "and so does a motif on the product engine");
+        beam_query_constraint_free(e);
+
+        free(pm); free(got); free(h); free(mi);
+        beam_model_destroy(m);
+    }
+    PASS();
+}
+
 /* ── Cost estimation ─────────────────────────────────────────── */
 
 static void test_the_estimate_matches_what_the_sweep_allocates(void) {
@@ -1287,7 +1490,7 @@ static void test_the_estimate_matches_what_the_sweep_allocates(void) {
                           + 11ull * sizeof(double *)            /* its rows  */
                           + S * R * sizeof(double)              /* one layer */
                           + S * sizeof(double)                  /* the sink  */
-                          + 2ull * S * sizeof(double)           /* cur, next */
+                          + 3ull * S * sizeof(double)   /* cur, next, scratch */
                           + 256ull * R * sizeof(double);        /* chunks    */
     ASSERT_MSG(cost.bytes == expect,
                "the guarded figure is every buffer the sweep allocates");
@@ -1339,7 +1542,7 @@ int main(void) {
     RUN_TEST(test_a_bad_shape_is_refused_at_construction);
 
     printf("\n[bit-for-bit reproduction of the clamped sweep]\n");
-    RUN_TEST(test_an_unconstrained_query_reproduces_the_marginals);
+    RUN_TEST(test_an_unconstrained_query_agrees_with_the_marginals);
     RUN_TEST(test_a_pinned_position_reproduces_a_clamp);
     RUN_TEST(test_a_pinned_probability_reproduces_log_clamp_probability);
 
@@ -1368,9 +1571,10 @@ int main(void) {
     RUN_TEST(test_union_obeys_inclusion_exclusion);
     RUN_TEST(test_a_motif_the_model_cannot_spell_is_impossible);
     RUN_TEST(test_a_layer_indexed_automaton_answers_a_disjunction);
-    RUN_TEST(test_the_product_layer_max_matches_the_mask_one);
+    RUN_TEST(test_the_streaming_log_sum_exp_matches_a_two_pass_reference);
     RUN_TEST(test_the_estimate_grows_with_the_automaton);
     RUN_TEST(test_a_dominant_rejected_path_cannot_collapse_the_answer);
+    RUN_TEST(test_the_whole_engine_on_a_nucleotide_model);
 
     printf("\n[cost]\n");
     RUN_TEST(test_the_estimate_matches_what_the_sweep_allocates);

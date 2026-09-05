@@ -2,13 +2,13 @@
  * @file engine.c
  * @brief The constrained sum-product sweep: partition functions under a mask.
  *
- * This is `math/positional.c`'s forward-backward with the residue RANGE of a
- * clamp generalised to a residue SET. That generalisation is deliberately the
- * only difference, because the equivalence it preserves is the whole
- * correctness argument for this subsystem: a singleton set visits the residue
- * the range `lo..lo+1` would visit, a full set visits `0..R-1` in the same
- * ascending order, so on those two inputs this file performs the same
- * operations on the same values in the same order and agrees BIT FOR BIT.
+ * This began as `math/positional.c`'s forward-backward with the residue RANGE
+ * of a clamp generalised to a residue SET, and for a while the two were
+ * bit-identical. They are no longer. The forward half here carries logarithms
+ * rather than a per-layer rescale, because no single scale per layer can hold
+ * a trellis whose live states span more than 745 nats -- and the states that
+ * underflowed were not marginal ones, they included pinned positions whose row
+ * must be one-hot and came back summing to 2e-54.
  *
  * Sets are iterated by clearing the lowest set bit, which is ascending order
  * and keeps the saving that motivated the range: a layer pinned to one residue
@@ -34,7 +34,7 @@ void beam_query_work_free(BeamQueryWork *k) {
         for (uint32_t i = 0; i < k->n_beta; ++i) free(k->beta[i]);
         free(k->beta);
     }
-    free(k->w); free(k->cur); free(k->next); free(k->tail);
+    free(k->w); free(k->cur); free(k->next); free(k->acc); free(k->tail);
     memset(k, 0, sizeof(*k));
 }
 
@@ -94,9 +94,10 @@ BeamError beam_query_work_alloc(const BeamModel *m, uint32_t length,
     }
     if (!want_forward) return BEAM_OK;
 
-    k->cur  = (double *)calloc(P, sizeof(double));
+    k->cur  = (double *)malloc(P * sizeof(double));
     k->next = (double *)malloc(P * sizeof(double));
-    if (!k->cur || !k->next) {
+    k->acc  = (double *)malloc(P * sizeof(double));
+    if (!k->cur || !k->next || !k->acc) {
         beam_query_work_free(k);
         return BEAM_EALLOC("the constrained sweep buffers");
     }
@@ -183,61 +184,51 @@ BeamError beam_query_betas(const BeamModel *m, uint32_t length,
 
 /* ── The forward sweep ───────────────────────────────────────── */
 
-double beam_query_layer_max(const double *w, const double *cur,
-                            uint32_t n_states, uint32_t n_residues,
-                            BeamResidueMask allowed) {
-    double mx = -INFINITY;
-    for (uint32_t s = 0; s < n_states; ++s) {
-        if (cur[s] == 0.0) continue;
-        const double *row = w + (size_t)s * n_residues;
-        for (BeamResidueMask mm = allowed; mm; mm &= mm - 1u) {
-            const uint32_t x = (uint32_t)__builtin_ctz(mm);
-            if (row[x] > mx) mx = row[x];
-        }
-    }
-    return mx;
-}
-
-bool beam_query_advance(const BeamModel *m, const double *w, double wmax,
-                        const double *cur, double *next,
-                        BeamResidueMask allowed, const double *beta_next,
-                        double *log_scale) {
+bool beam_query_advance(const BeamModel *m, const double *w,
+                        const double *cur, double *next, double *acc,
+                        BeamResidueMask allowed, const double *beta_next) {
     const uint32_t A = m->n_alphabet;
     const uint32_t R = m->n_residues;
     const uint32_t S = m->n_states;
     const uint32_t SK = m->state_shift;
 
-    double nmax = 0.0;
+    bool any = false;
     /* Accumulated by TARGET: a target's sources are its private business, so
      * no two threads write the same accumulator. */
 #ifdef _OPENMP
-    #pragma omp parallel for schedule(static) reduction(max:nmax) \
+    #pragma omp parallel for schedule(static) reduction(||:any) \
             num_threads(beam_threads())
 #endif
     for (int64_t t = 0; t < (int64_t)S; ++t) {
         const uint32_t x = (uint32_t)t % A;
-        /* The sentinel sits at index R and no mask has a bit there, so this
-         * one test excludes both a forbidden residue and a non-residue. */
-        if (!((allowed >> x) & 1u)) { next[t] = 0.0; continue; }
+        /*
+         * The sentinel sits at index R and no mask has a bit there, so the
+         * first test excludes both a forbidden residue and a non-residue.
+         *
+         * The second is now only PRUNING. A state with no completion
+         * contributes to no posterior term either way, and in log space it can
+         * no longer distort a rescale, because there is no rescale. It was
+         * load-bearing while there was one, and saying so plainly is better
+         * than a comment implying the answer still depends on it.
+         */
+        if (!((allowed >> x) & 1u) || (beta_next && beta_next[t] == -INFINITY)) {
+            next[t] = -INFINITY;
+            continue;
+        }
         const uint32_t rest = (uint32_t)t / A;
-        double sum = 0.0;
+        double mx = -INFINITY, sum = 0.0;
         for (uint32_t a = 0; a < A; ++a) {
             const uint32_t src = a * SK + rest;
-            if (cur[src] == 0.0) continue;
+            if (cur[src] == -INFINITY) continue;
             const double wv = w[(size_t)src * R + x];
             if (wv == -INFINITY) continue;
-            sum += cur[src] * exp(wv - wmax);
+            lse_add(&mx, &sum, cur[src] + wv);
         }
-        /* Cleared when no completion leaves this state, so that a dead end
-         * cannot set the rescale; see beam_query_advance_product. */
-        next[t] = (beta_next && beta_next[t] == -INFINITY) ? 0.0 : sum;
-        if (next[t] > nmax) nmax = next[t];
+        next[t] = (mx == -INFINITY) ? -INFINITY : mx + log(sum);
+        if (next[t] != -INFINITY) any = true;
     }
-    *log_scale += wmax;
-    if (!(nmax > 0.0)) return false;
-    for (uint32_t s = 0; s < S; ++s) next[s] /= nmax;
-    *log_scale += log(nmax);
-    return true;
+    (void)acc;
+    return any;
 }
 
 /* ── Constrained probability ─────────────────────────────────── */

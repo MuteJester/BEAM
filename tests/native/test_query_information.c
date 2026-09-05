@@ -394,8 +394,30 @@ static void test_a_pair_joint_is_a_distribution_with_the_right_marginals(void) {
             if (a != b)
                 ASSERT_MSG(joint[(size_t)a * R + b] == 0.0,
                            "a position cannot disagree with itself");
+    /*
+     * BOTH positions are checked, not only the second. With the first
+     * unchecked, `pair_joint(m, c, length, 0, out)` reads `marg[length * R]`
+     * -- one row past a `length * R` buffer -- and returns BEAM_OK with
+     * whatever was there. Found by review, which mutated the check to `j` only
+     * and watched the whole suite stay green.
+     */
     ASSERT_MSG(beam_query_pair_joint(m, c, 0u, L, joint)
-               == BEAM_ERR_PARAM_OUT_OF_RANGE, "a position past the end");
+               == BEAM_ERR_PARAM_OUT_OF_RANGE, "a second position past the end");
+    ASSERT_MSG(beam_query_pair_joint(m, c, L, 0u, joint)
+               == BEAM_ERR_PARAM_OUT_OF_RANGE, "a first position past the end");
+    ASSERT_MSG(beam_query_pair_joint(m, c, L, L, joint)
+               == BEAM_ERR_PARAM_OUT_OF_RANGE, "and both");
+
+    /* A position with itself must also be a distribution, not merely
+     * off-diagonal zeros -- which an all-zero table would satisfy. */
+    ASSERT_MSG(beam_query_pair_joint(m, c, 2u, 2u, joint) == BEAM_OK, "self");
+    double self_total = 0.0, diag = 0.0;
+    for (uint32_t a = 0; a < R; ++a) {
+        for (uint32_t b = 0; b < R; ++b) self_total += joint[(size_t)a * R + b];
+        diag += joint[(size_t)a * R + a];
+    }
+    ASSERT_MSG(fabs(self_total - 1.0) < 1e-12, "the self-joint sums to one");
+    ASSERT_MSG(fabs(diag - 1.0) < 1e-12, "and all of it lies on the diagonal");
     beam_query_constraint_free(c);
     free(joint); free(marg);
     beam_model_destroy(m);
@@ -471,7 +493,50 @@ static void test_the_information_cost_reports_the_whole_job(void) {
     ASSERT_MSG(all.bytes == one.bytes + held,
                "and the peak counts what is held across them");
     ASSERT_MSG(all.bytes > one.bytes, "which is strictly more than one sweep");
+    ASSERT_MSG(all.states == one.states * (L * R + 1u),
+               "and the visited-state count scales with the sweeps too");
+
+    /*
+     * The automaton branch of the cost, which nothing reached: a constraint
+     * carrying one holds its cloned transition table across every sweep as
+     * well. A three-state uniform motif over R residues adds its table and its
+     * accepting flags.
+     */
+    const uint8_t motif[2] = {AA_A_, AA_S_};
+    BeamConstraint *d = beam_query_constraint_new(L, R);
+    ASSERT_MSG(beam_query_constrain_automaton(
+                   d, beam_query_automaton_motif(L, R, motif, 2u)) == BEAM_OK,
+               "attached");
+    BeamQueryCost withaut, oneaut;
+    ASSERT_MSG(beam_query_estimate(m, d, &oneaut) == BEAM_OK, "one sweep");
+    ASSERT_MSG(beam_query_information_cost(m, d, &withaut) == BEAM_OK, "matrix");
+    ASSERT_MSG(withaut.bytes
+               == oneaut.bytes + held + 3u * R * sizeof(uint32_t) + 3u,
+               "the clone of a 3-state uniform automaton is counted too");
+    beam_query_constraint_free(d);
     beam_query_constraint_free(c);
+    beam_model_destroy(m);
+    PASS();
+}
+
+static void test_every_entry_point_refuses_the_impossible(void) {
+    BeamModel *m = build(SHORT_TRAIN, SHORT_WEIGHT, N_SHORT, 2u, true);
+    ASSERT_MSG(m != NULL, "model built");
+    const uint32_t L = 4u;
+    double *h = (double *)malloc((size_t)L * sizeof(double));
+    double *joint = (double *)malloc((size_t)R * R * sizeof(double));
+    ASSERT_MSG(h && joint, "alloc");
+
+    BeamConstraint *c = beam_query_constraint_new(L, R);
+    beam_query_constrain_position(c, 1u, 1u);
+    beam_query_constrain_position(c, 1u, 2u);      /* contradiction */
+    /* The matrix was covered; these two were not. */
+    ASSERT_MSG(beam_query_position_entropy(m, c, h) == BEAM_ERR_NO_LIVE_PATHS,
+               "entropy of a distribution with no support");
+    ASSERT_MSG(beam_query_pair_joint(m, c, 0u, 1u, joint)
+               == BEAM_ERR_NO_LIVE_PATHS, "and a joint under it");
+    beam_query_constraint_free(c);
+    free(h); free(joint);
     beam_model_destroy(m);
     PASS();
 }
@@ -515,6 +580,7 @@ int main(void) {
     printf("\n[cost and refusals]\n");
     RUN_TEST(test_the_information_cost_reports_the_whole_job);
     RUN_TEST(test_information_refuses_what_it_cannot_answer);
+    RUN_TEST(test_every_entry_point_refuses_the_impossible);
 
     printf("\n==============================================================\n");
     printf("Results: %d passed, %d failed\n", pass_count, fail_count);

@@ -438,6 +438,60 @@ static void test_a_character_outside_the_alphabet_is_malformed_input(void) {
 
 /* ── Refusals ────────────────────────────────────────────────── */
 
+static void test_neighbourhoods_at_the_short_extreme(void) {
+    /* Insertions from one residue and deletions down to one were untested;
+     * both are legal and both were correct, which is worth pinning. */
+    BeamModel *m = build(TRAIN, WEIGHT, N_TRAIN, 3u, 8u, true);
+    ASSERT_MSG(m != NULL, "model built");
+    BeamNeighbourhood nb = {0};
+
+    if (beam_query_insertions(m, "C", &nb) == BEAM_OK) {
+        ASSERT_MSG(nb.length == 2u, "one residue becomes two");
+        ASSERT_MSG(nb.n == 2u * R - 1u,
+                   "two gaps by R residues, less the one alias");
+        double s = 0.0;
+        for (uint32_t k = 0; k < nb.n; ++k) s += nb.posterior[k];
+        ASSERT_MSG(fabs(s - 1.0) < 1e-12, "and is still a distribution");
+        beam_query_neighbourhood_free(&nb);
+    }
+    if (beam_query_deletions(m, "CA", &nb) == BEAM_OK) {
+        ASSERT_MSG(nb.length == 1u, "two residues become one");
+        ASSERT_MSG(nb.n == 2u, "and both single residues are distinct");
+        beam_query_neighbourhood_free(&nb);
+    }
+    beam_model_destroy(m);
+    PASS();
+}
+
+static void test_a_source_at_the_length_ceiling_is_handled(void) {
+    /*
+     * The source is decoded into a stack array sized BEAM_MAX_LENGTH_CEILING,
+     * and `source_shape` bounds it by exactly that. Nothing tested the
+     * boundary, so loosening the bound by one would have been an unguarded
+     * stack overflow rather than a failing test.
+     */
+    BeamModel *m = build(TRAIN, WEIGHT, N_TRAIN, 3u, 8u, true);
+    ASSERT_MSG(m != NULL, "model built");
+    char *at = (char *)malloc(BEAM_MAX_LENGTH_CEILING + 2u);
+    ASSERT_MSG(at != NULL, "alloc");
+    memset(at, 'C', BEAM_MAX_LENGTH_CEILING + 1u);
+    at[BEAM_MAX_LENGTH_CEILING + 1u] = '\0';
+
+    BeamNeighbourhood nb = {0};
+    /* One past the ceiling: refused on shape, before anything is decoded. */
+    ASSERT_MSG(beam_query_insertions(m, at, &nb)
+               == BEAM_ERR_PARAM_OUT_OF_RANGE, "one past the ceiling");
+    ASSERT_MSG(nb.n == 0u && nb.sequences == NULL, "and nothing was written");
+    /* Exactly at the ceiling: accepted by shape, then refused by the model,
+     * which is a different refusal and the one that proves it got that far. */
+    at[BEAM_MAX_LENGTH_CEILING] = '\0';
+    ASSERT_MSG(beam_query_insertions(m, at, &nb) == BEAM_ERR_NO_LIVE_PATHS,
+               "at the ceiling, refused by the model rather than the shape");
+    free(at);
+    beam_model_destroy(m);
+    PASS();
+}
+
 static void test_a_source_the_model_cannot_score_is_refused(void) {
     BeamModel *m = build(TRAIN, WEIGHT, N_TRAIN, 3u, 8u, false);
     ASSERT_MSG(m != NULL, "model built");
@@ -496,6 +550,8 @@ int main(void) {
     RUN_TEST(test_case_folded_input_does_not_multiply_the_neighbours);
 
     printf("\n[refusals]\n");
+    RUN_TEST(test_neighbourhoods_at_the_short_extreme);
+    RUN_TEST(test_a_source_at_the_length_ceiling_is_handled);
     RUN_TEST(test_a_character_outside_the_alphabet_is_malformed_input);
     RUN_TEST(test_a_source_the_model_cannot_score_is_refused);
 

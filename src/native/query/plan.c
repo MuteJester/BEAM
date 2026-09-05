@@ -56,10 +56,17 @@ BeamError beam_query_estimate(const BeamModel *m, const BeamConstraint *c,
         edges += 2ull * S * n_aut * (uint32_t)__builtin_popcount(allowed);
     }
     out->edges = edges;
-    /* The marginals figure, which is the larger of the two: a probability
-     * query needs no forward buffers and is charged less when it runs. An
-     * estimate that under-reported the biggest query would be the one number
-     * here that could mislead. */
-    out->bytes = beam_query_sweep_bytes(S, n_aut, R, length, true);
+    /*
+     * The largest figure any query here will be guarded against, not the
+     * posterior's alone. `beam_query_expect` is guarded by
+     * `beam_query_moment_bytes`, which has no length term, so at length 1 or 2
+     * it exceeds the sweep figure -- and a caller following this header's
+     * advice, comparing the estimate against the budget before asking, was
+     * refused anyway. Found by review, along with the test that started its
+     * loop at length 8 and so never saw it.
+     */
+    const uint64_t sweep  = beam_query_sweep_bytes(S, n_aut, R, length, true);
+    const uint64_t moment = beam_query_moment_bytes(S, n_aut, R);
+    out->bytes = sweep > moment ? sweep : moment;
     return BEAM_OK;
 }

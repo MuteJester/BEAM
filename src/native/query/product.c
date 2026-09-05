@@ -33,6 +33,8 @@
 #include "beam/query.h"
 #include "beam/query_internal.h"
 
+/* `lse_add` is shared with engine.c through the internal header. */
+
 /** The residues layer `i` may emit, as a set. NULL masks admit everything. */
 static inline BeamResidueMask layer_set(const BeamResidueMask *mask,
                                         uint32_t i, uint32_t R) {
@@ -125,100 +127,58 @@ double beam_query_layer_max_product(const double *w, const double *cur,
     return mx;
 }
 
-double beam_query_layer_max_live(const BeamModel *m, const BeamAutomaton *aut,
-                                 uint32_t layer, const double *w,
-                                 const double *cur, const double *beta_next,
-                                 uint32_t n_aut, BeamResidueMask allowed) {
-    const uint32_t A  = m->n_alphabet;
-    const uint32_t R  = m->n_residues;
-    const uint32_t S  = m->n_states;
-    const uint32_t SK = m->state_shift;
-
-    double mx = -INFINITY;
-    for (uint32_t s = 0; s < S; ++s) {
-        const double *cs  = cur + (size_t)s * n_aut;
-        const double *row = w + (size_t)s * R;
-        const uint32_t base = (s % SK) * A;
-        for (uint32_t q = 0; q < n_aut; ++q) {
-            if (cs[q] == 0.0) continue;          /* no path reaches here    */
-            for (BeamResidueMask mm = allowed; mm; mm &= mm - 1u) {
-                const uint32_t x = (uint32_t)__builtin_ctz(mm);
-                if (row[x] == -INFINITY || row[x] <= mx) continue;
-                const uint32_t qn = aut
-                    ? beam_query_automaton_step(aut, layer, q, x) : 0u;
-                /* And no completion leaves here, so this edge carries no
-                 * mass into the answer however heavy it is. */
-                if (beta_next[(size_t)(base + x) * n_aut + qn] == -INFINITY)
-                    continue;
-                mx = row[x];
-            }
-        }
-    }
-    return mx;
-}
-
 bool beam_query_advance_product(const BeamModel *m, const BeamAutomaton *aut,
-                                uint32_t layer, const double *w, double wmax,
-                                const double *cur, double *next,
+                                uint32_t layer, const double *w,
+                                const double *cur, double *next, double *acc,
                                 BeamResidueMask allowed,
-                                const double *beta_next, double *log_scale) {
+                                const double *beta_next) {
     const uint32_t A  = m->n_alphabet;
     const uint32_t R  = m->n_residues;
     const uint32_t S  = m->n_states;
     const uint32_t SK = m->state_shift;
     const uint32_t Q  = aut->n_states;
 
-    double nmax = 0.0;
+    bool any = false;
 #ifdef _OPENMP
-    #pragma omp parallel for schedule(static) reduction(max:nmax) \
+    #pragma omp parallel for schedule(static) reduction(||:any) \
             num_threads(beam_threads())
 #endif
     for (int64_t t = 0; t < (int64_t)S; ++t) {
-        double *dst = next + (size_t)t * Q;
+        double *dm = next + (size_t)t * Q;
+        double *ds = acc  + (size_t)t * Q;
         const uint32_t x = (uint32_t)t % A;
-        /* The sentinel sits at index R and no mask has a bit there, so this
-         * one test excludes both a forbidden residue and a non-residue. */
-        if (!((allowed >> x) & 1u)) {
-            for (uint32_t q = 0; q < Q; ++q) dst[q] = 0.0;
-            continue;
-        }
-        for (uint32_t q = 0; q < Q; ++q) dst[q] = 0.0;
+        for (uint32_t q = 0; q < Q; ++q) { dm[q] = -INFINITY; ds[q] = 0.0; }
+        if (!((allowed >> x) & 1u)) continue;
 
         const uint32_t rest = (uint32_t)t / A;
         for (uint32_t a = 0; a < A; ++a) {
             const uint32_t src = a * SK + rest;
             const double wv = w[(size_t)src * R + x];
             if (wv == -INFINITY) continue;
-            const double e = exp(wv - wmax);
             const double *cs = cur + (size_t)src * Q;
             /*
              * Scattered forwards into this target's own slice. Every write
-             * lands in `dst`, which belongs to the one thread holding `t`, so
-             * the automaton's non-invertibility costs nothing here.
+             * lands in `dm`/`ds`, which belong to the one thread holding `t`,
+             * so the automaton's non-invertibility costs nothing here.
              */
             for (uint32_t q = 0; q < Q; ++q) {
-                if (cs[q] == 0.0) continue;
-                dst[beam_query_automaton_step(aut, layer, q, x)] += cs[q] * e;
+                if (cs[q] == -INFINITY) continue;
+                const uint32_t qn = beam_query_automaton_step(aut, layer, q, x);
+                lse_add(&dm[qn], &ds[qn], cs[q] + wv);
             }
         }
-        /*
-         * A product state with no completion contributes nothing to any
-         * answer, so it is cleared rather than carried -- and, decisively, it
-         * is kept out of the rescale below. Leaving it in lets a heavy
-         * REJECTED path set the scale and drive the accepted mass to zero,
-         * which returned an all-zero row of a distribution while reporting
-         * success. Found by review.
-         */
         for (uint32_t q = 0; q < Q; ++q) {
-            if (beta_next && beta_next[(size_t)t * Q + q] == -INFINITY)
-                dst[q] = 0.0;
-            if (dst[q] > nmax) nmax = dst[q];
+            /* A product state with no completion contributes to no answer
+             * either way; clearing it is pruning, not correctness, now that
+             * the sweep carries logarithms and has no rescale to distort. */
+            if (dm[q] == -INFINITY) continue;
+            if (beta_next && beta_next[(size_t)t * Q + q] == -INFINITY) {
+                dm[q] = -INFINITY;
+                continue;
+            }
+            dm[q] += log(ds[q]);
+            any = true;
         }
     }
-    *log_scale += wmax;
-    if (!(nmax > 0.0)) return false;
-    const size_t n_prod = (size_t)S * Q;
-    for (size_t p = 0; p < n_prod; ++p) next[p] /= nmax;
-    *log_scale += log(nmax);
-    return true;
+    return any;
 }

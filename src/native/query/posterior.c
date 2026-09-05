@@ -85,34 +85,15 @@ BeamError beam_query_marginals(const BeamModel *m, const BeamConstraint *c,
     }
     if (out_log_z) *out_log_z = logz;
 
-    k.cur[(size_t)(S - 1u) * Q] = 1.0;    /* all-sentinel, automaton start */
-    double log_scale = 0.0;
+    for (size_t p = 0; p < (size_t)S * Q; ++p) k.cur[p] = -INFINITY;
+    k.cur[(size_t)(S - 1u) * Q] = 0.0;    /* ln 1: all-sentinel, aut start */
 
     for (uint32_t i = 0; i < length; ++i) {
         const BeamResidueMask allowed =
             mask ? mask[i] : BEAM_RESIDUES_ALL(R);
         beam_layer_weights(m, i, length, k.w, NULL);
         const double *bn = k.beta[i + 1];
-        /*
-         * The rescale is taken over edges a live path can USE, always, and
-         * not over the layer as a whole.
-         *
-         * An earlier version used the layer's own maximum whenever the mask
-         * was full, on the reasoning that an automaton removes (state, q)
-         * combinations rather than edges from the layer. That was wrong. A
-         * heavy edge into a state the automaton REJECTS still sets the layer
-         * maximum, and every accepted path then underflows to zero -- so a row
-         * of a distribution came back summing to nothing while the call
-         * reported success. Found by review.
-         */
-        double wmax = beam_query_layer_max_live(m, aut, i, k.w, k.cur, bn, Q,
-                                                allowed);
-        if (wmax == -INFINITY) {
-            err = BEAM_ENOPATHS("the layer has no edge that both a reached "
-                               "state can take and a completion can leave, "
-                               "although the trellis has a path");
-            goto done;
-        }
+
 #ifdef _OPENMP
         #pragma omp parallel for schedule(dynamic, 1) num_threads(beam_threads())
 #endif
@@ -128,14 +109,15 @@ BeamError beam_query_marginals(const BeamModel *m, const BeamConstraint *c,
                 const double *row = k.w + (size_t)s * R;
                 const uint32_t base = (s % SK) * A;
                 /*
-                 * With no automaton `Q` is 1 and `qn` is 0, so the index
-                 * arithmetic collapses to `bn[base + x]` and the floating
-                 * point performed is exactly the mask sweep's, in exactly its
-                 * order. That is what lets one loop serve both tiers.
+                 * The forward value is already a logarithm, so the posterior
+                 * of an edge is one exponential of a sum of logs and nothing
+                 * has to be un-scaled first. With no automaton `Q` is 1 and
+                 * `qn` is 0, so the index arithmetic collapses to
+                 * `bn[base + x]`.
                  */
                 for (uint32_t q = 0; q < Q; ++q) {
-                    if (cs[q] == 0.0) continue;
-                    const double la = log(cs[q]) + log_scale - logz;
+                    if (cs[q] == -INFINITY) continue;
+                    const double la = cs[q] - logz;
                     for (BeamResidueMask mm = allowed; mm; mm &= mm - 1u) {
                         const uint32_t x = (uint32_t)__builtin_ctz(mm);
                         if (row[x] == -INFINITY) continue;
@@ -158,10 +140,9 @@ BeamError beam_query_marginals(const BeamModel *m, const BeamConstraint *c,
         }
 
         const bool moved = aut
-            ? beam_query_advance_product(m, aut, i, k.w, wmax, k.cur, k.next,
-                                         allowed, k.beta[i + 1], &log_scale)
-            : beam_query_advance(m, k.w, wmax, k.cur, k.next, allowed,
-                                 k.beta[i + 1], &log_scale);
+            ? beam_query_advance_product(m, aut, i, k.w, k.cur, k.next, k.acc,
+                                         allowed, bn)
+            : beam_query_advance(m, k.w, k.cur, k.next, k.acc, allowed, bn);
         if (!moved) {
             err = BEAM_ENOPATHS("the forward sweep reached a layer with no "
                                "mass although the trellis has a path");

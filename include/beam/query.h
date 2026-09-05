@@ -26,12 +26,19 @@
  * Nothing here samples, bins, or estimates. A question with no exact answer is
  * refused; a question whose answer is zero returns zero and says so.
  *
- * The mask-only path is arithmetically the same computation as
- * `beam_model_positional_marginals`, which imposes a single-residue clamp by
- * loop bounds. A singleton mask iterated in ascending residue order visits the
- * same one residue, and a full mask visits 0..R-1 in the same order, so the two
- * agree BIT FOR BIT and not merely to a tolerance. That equivalence is the
- * regression test for this file; see test_query.c.
+ * This engine answers the same questions as `beam_model_positional_marginals`
+ * and answers them differently: its forward values are logarithms, where that
+ * routine rescales each layer and carries them linearly. The two agree to
+ * floating point, not to the bit.
+ *
+ * They were once bit-identical, and the equivalence was this file's headline
+ * evidence -- but a per-layer rescale cannot hold a trellis whose states span
+ * more than 745 nats, and at the C API's own defaults a length-60 nucleotide
+ * sweep does. Three defects came from trying to choose that rescale well
+ * before it was removed. Where the two now diverge, it is
+ * `positional_marginals` that returns a row summing to something other than
+ * one; `test_query.c` classifies every disagreement and fails if this engine
+ * is ever the wrong one.
  */
 #ifndef BEAM_QUERY_H
 #define BEAM_QUERY_H
@@ -363,6 +370,11 @@ BeamError beam_query_insertions(const BeamModel *m, const char *sequence,
  * The mirror of `beam_query_insertions`, with `site` naming the position
  * removed and `residue` left as `UINT32_MAX`. Deleting either `S` of `CASSF`
  * gives `CASF`, which appears once, attributed to the leftmost position.
+ *
+ * @return as `beam_query_insertions`, and additionally
+ *         BEAM_ERR_PARAM_OUT_OF_RANGE for a source of one residue, which has
+ *         nothing to delete down to. That refusal is structural and is made
+ *         before the model is consulted.
  */
 BeamError beam_query_deletions(const BeamModel *m, const char *sequence,
                                BeamNeighbourhood *out);
@@ -377,7 +389,9 @@ BeamError beam_query_deletions(const BeamModel *m, const char *sequence,
  * magnitude of model, and the caller cannot see that from the question.
  */
 typedef struct {
-    uint64_t states;  /**< live states summed over layers            */
+    uint64_t states;  /**< trellis states the sweep will VISIT, summed
+                           over layers -- an upper bound on the live count,
+                           and on a closed-world model a very loose one   */
     uint64_t edges;   /**< edge relaxations the sweep will perform    */
     uint64_t bytes;   /**< peak working-set bytes, the budgeted figure */
 } BeamQueryCost;
@@ -414,7 +428,9 @@ BeamError beam_query_position_entropy(const BeamModel *m,
  *             summing to 1. With `i == j` it is diagonal, which is the
  *             correct joint of a position with itself.
  *
- * Costs one free-tier sweep per residue that position `i` can take.
+ * Costs one sweep per residue that position `i` can take -- free-tier if the
+ * constraint is masks alone, and `|Q|` times that if it carries an automaton,
+ * since conditioning inside a language means sweeping the product.
  */
 BeamError beam_query_pair_joint(const BeamModel *m, const BeamConstraint *c,
                                 uint32_t i, uint32_t j, double *out);

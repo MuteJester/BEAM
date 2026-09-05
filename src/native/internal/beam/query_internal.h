@@ -94,7 +94,7 @@ static inline uint64_t beam_query_sweep_bytes(uint32_t n_states,
                + S * (uint64_t)n_residues * sizeof(double)      /* one layer  */
                + S * sizeof(double);                            /* the sink   */
     if (want_forward)
-        n += 2u * P * sizeof(double)                 /* cur and next   */
+        n += 3u * P * sizeof(double)            /* cur, next and scratch */
            + (uint64_t)BEAM_SUM_CHUNKS * n_residues * sizeof(double);
     return n;
 }
@@ -147,8 +147,9 @@ bool beam_query_all_free(const BeamConstraint *c);
 typedef struct {
     double **beta;    /**< [length + 1][n_states * n_aut], log space  */
     double  *w;       /**< [n_states * n_residues], one layer         */
-    double  *cur;     /**< [n_states * n_aut], rescaled forward       */
+    double  *cur;     /**< [n_states * n_aut], LOG forward values     */
     double  *next;    /**< [n_states * n_aut]                         */
+    double  *acc;     /**< [n_states * n_aut], log-sum-exp scratch     */
     double  *tail;    /**< [n_states], sink weights; product path only */
     uint32_t n_beta;  /**< rows actually allocated, for the free      */
     uint32_t n_aut;   /**< 1 when the constraint is masks alone       */
@@ -183,25 +184,42 @@ BeamError beam_query_betas(const BeamModel *m, uint32_t length,
                            const BeamResidueMask *mask, double *w,
                            double **beta);
 
-/**
- * The rescale a constrained layer needs: the largest weight among the edges
- * the sweep will actually sum, over the states it has reached.
- *
- * Returns -inf when the layer kills every live path.
- */
-double beam_query_layer_max(const double *w, const double *cur,
-                            uint32_t n_states, uint32_t n_residues,
-                            BeamResidueMask allowed);
+
 
 /**
  * Advance the rescaled forward vector across one layer, admitting only the
  * residues in `allowed`. Returns false when the layer leaves no mass, which
  * under a constraint is an outcome rather than an error.
  */
-bool beam_query_advance(const BeamModel *m, const double *w, double wmax,
-                        const double *cur, double *next,
-                        BeamResidueMask allowed, const double *beta_next,
-                        double *log_scale);
+/**
+ * Add one term to a running (max, sum) pair holding `sum * exp(max)`.
+ *
+ * Streaming log-sum-exp: the running maximum is raised when a larger term
+ * arrives and the accumulated sum is rescaled to match. One `exp` per term and
+ * no second pass, so a target can be finished in a single sweep of its sources
+ * while never leaving log space.
+ */
+static inline void lse_add(double *mx, double *sum, double v) {
+    if (v == -INFINITY) return;
+    if (v > *mx) { *sum = *sum * exp(*mx - v) + 1.0; *mx = v; }
+    else         { *sum += exp(v - *mx); }
+}
+
+/**
+ * Advance the LOG forward vector across one layer, admitting only the residues
+ * in `allowed`. `acc` is scratch of the same shape as `next`. Returns false
+ * when the layer leaves no mass.
+ *
+ * There is no rescale and no running scale factor. Three separate defects came
+ * from choosing one -- over the whole layer, over live edges, and over
+ * mass-weighted live edges -- because a single scale per layer cannot hold a
+ * trellis whose states span more than 745 nats, and at the C API's own
+ * defaults a length-60 nucleotide sweep does. The backward sweep never had the
+ * problem, being log-space already; now neither half does.
+ */
+bool beam_query_advance(const BeamModel *m, const double *w,
+                        const double *cur, double *next, double *acc,
+                        BeamResidueMask allowed, const double *beta_next);
 
 /**
  * The masks a constraint imposes, or NULL for a constraint that admits
@@ -239,10 +257,7 @@ BeamError beam_query_betas_product(const BeamModel *m, uint32_t length,
                                    const BeamAutomaton *aut,
                                    double *w, double *tail, double **beta);
 
-/** As `beam_query_layer_max`, over states reached in any automaton state. */
-double beam_query_layer_max_product(const double *w, const double *cur,
-                                    uint32_t n_states, uint32_t n_residues,
-                                    uint32_t n_aut, BeamResidueMask allowed);
+
 
 /**
  * Advance the rescaled forward vector across one layer of the product.
@@ -251,23 +266,11 @@ double beam_query_layer_max_product(const double *w, const double *cur,
  * position. Returns false when the layer leaves no mass.
  */
 bool beam_query_advance_product(const BeamModel *m, const BeamAutomaton *aut,
-                                uint32_t layer, const double *w, double wmax,
-                                const double *cur, double *next,
+                                uint32_t layer, const double *w,
+                                const double *cur, double *next, double *acc,
                                 BeamResidueMask allowed,
-                                const double *beta_next, double *log_scale);
+                                const double *beta_next);
 
-/**
- * The largest weight among edges a live path can actually use: leaving a state
- * the sweep has reached, permitted by the mask, and arriving somewhere with a
- * completion.
- *
- * Restricting to reached states is not enough on its own. A heavy edge into a
- * state the constraint later rejects will otherwise set the rescale and drive
- * every surviving path below the smallest double.
- */
-double beam_query_layer_max_live(const BeamModel *m, const BeamAutomaton *aut,
-                                 uint32_t layer, const double *w,
-                                 const double *cur, const double *beta_next,
-                                 uint32_t n_aut, BeamResidueMask allowed);
+
 
 #endif /* BEAM_INTERNAL_QUERY_H */
