@@ -33,38 +33,60 @@
 #include "beam/query.h"
 #include "beam/query_internal.h"
 
-/* ── Running (weight, mean, sum of squared deviations) ───────── */
+/* ── Running (log weight, mean, variance) ────────────────────── */
 
 /**
- * Merge one contribution into an accumulator.
+ * Merge one contribution into an accumulator, in log space.
  *
- * `P == 0` is the first-contribution case and falls out without a branch: the
- * deviation term carries a factor of `P`, so it vanishes, and `M` becomes
- * `m_k` exactly.
+ * The weight is carried as a logarithm and the merge uses only NORMALISED
+ * ratios, so nothing here can overflow or underflow however far the mass sits
+ * below the mode. That is why there is no rescaling pass in this file at all.
+ *
+ * The rescaled-linear form this replaces had two defects that review found.
+ * Its first-contribution case formed `d * d` where `d` was a whole mean rather
+ * than a difference, so a functional valued around 1e155 overflowed to
+ * infinity and `infinity * 0` gave a NaN that was later reported as a variance
+ * of zero. And its per-layer rescale was chosen over states that could not
+ * reach an accepting end, so a dominant rejected path drove the surviving mass
+ * below the smallest double and a producible event came back as
+ * NO_LIVE_PATHS. Neither failure is possible without a rescale.
+ *
+ * The variance is a mixture, by the law of total variance:
+ *
+ *   v = wP v_P + wk v_k + wP wk (m_k - M)^2,
+ *
+ * with `wP + wk = 1`. Both weights come from one `logaddexp`, so they are
+ * exact complements and lie in [0, 1] whatever the inputs.
  */
-static inline void merge(double *P, double *M, double *S,
-                         double p_k, double m_k, double s_k) {
-    if (p_k == 0.0) return;
-    const double pn = *P + p_k;
+static inline void merge(double *logP, double *M, double *V,
+                         double log_p, double m_k, double v_k) {
+    if (log_p == -INFINITY) return;
+    if (*logP == -INFINITY) { *logP = log_p; *M = m_k; *V = v_k; return; }
+
+    const double hi = *logP > log_p ? *logP : log_p;
+    const double ln = hi + log(exp(*logP - hi) + exp(log_p - hi));
+    const double wk = exp(log_p - ln);
+    const double wP = exp(*logP - ln);
     const double d  = m_k - *M;
-    *S += s_k + d * d * (*P) * p_k / pn;
-    *M += d * p_k / pn;
-    *P  = pn;
+
+    *V    = wP * (*V) + wk * v_k + (wP * wk) * d * d;
+    *M   += wk * d;
+    *logP = ln;
 }
 
 /* ── Scratch ─────────────────────────────────────────────────── */
 
 typedef struct {
-    double *a[2];     /* rescaled weight per product state      */
+    double *la[2];    /* LOG weight per product state           */
     double *mu[2];    /* mean of f over prefixes through it     */
-    double *s2[2];    /* weight times variance, same rescale    */
+    double *v[2];     /* variance of f over those prefixes      */
     double *w;        /* one layer of edge weights              */
     double *tail;     /* sink weights                           */
 } MomentWork;
 
 static void mw_free(MomentWork *k) {
     for (int i = 0; i < 2; ++i) {
-        free(k->a[i]); free(k->mu[i]); free(k->s2[i]);
+        free(k->la[i]); free(k->mu[i]); free(k->v[i]);
     }
     free(k->w); free(k->tail);
     memset(k, 0, sizeof(*k));
@@ -89,10 +111,10 @@ static BeamError mw_alloc(const BeamModel *m, uint32_t n_aut, MomentWork *k) {
                         (double)budget / 1e9);
 
     for (int i = 0; i < 2; ++i) {
-        k->a[i]  = (double *)calloc(P, sizeof(double));
+        k->la[i] = (double *)malloc(P * sizeof(double));
         k->mu[i] = (double *)calloc(P, sizeof(double));
-        k->s2[i] = (double *)calloc(P, sizeof(double));
-        if (!k->a[i] || !k->mu[i] || !k->s2[i]) {
+        k->v[i]  = (double *)calloc(P, sizeof(double));
+        if (!k->la[i] || !k->mu[i] || !k->v[i]) {
             mw_free(k);
             return BEAM_EALLOC("the moment accumulators");
         }
@@ -147,39 +169,23 @@ BeamError beam_query_expect(const BeamModel *m, const BeamConstraint *c,
 
     const size_t n_prod = (size_t)S * Q;
     int cur = 0;
-    k.a[cur][(size_t)(S - 1u) * Q] = 1.0;   /* all-sentinel, automaton start */
-    double log_scale = 0.0;
+    for (size_t p = 0; p < n_prod; ++p) k.la[cur][p] = -INFINITY;
+    k.la[cur][(size_t)(S - 1u) * Q] = 0.0;   /* ln 1: the start state */
 
     for (uint32_t i = 0; i < length; ++i) {
         const BeamResidueMask allowed = mask ? mask[i] : BEAM_RESIDUES_ALL(R);
-        double wmax = -INFINITY;
-        beam_layer_weights(m, i, length, k.w, &wmax);
-        if (wmax == -INFINITY) {
-            mw_free(&k);
-            return BEAM_ENOPATHS("the layer has no live edge at all");
-        }
-        if (allowed != BEAM_RESIDUES_ALL(R)) {
-            wmax = aut
-                 ? beam_query_layer_max_product(k.w, k.a[cur], S, R, Q, allowed)
-                 : beam_query_layer_max(k.w, k.a[cur], S, R, allowed);
-            if (wmax == -INFINITY) {
-                mw_free(&k);
-                return BEAM_ENOPATHS("the constraint leaves this layer no "
-                                    "live edge, so the sequences it describes "
-                                    "do not exist at this length");
-            }
-        }
+        beam_layer_weights(m, i, length, k.w, NULL);
 
         const int nxt = cur ^ 1;
-        double *na = k.a[nxt], *nm = k.mu[nxt], *ns = k.s2[nxt];
-        memset(na, 0, n_prod * sizeof(double));
-        memset(nm, 0, n_prod * sizeof(double));
-        memset(ns, 0, n_prod * sizeof(double));
+        double *nl = k.la[nxt], *nm = k.mu[nxt], *nv = k.v[nxt];
+        for (size_t p = 0; p < n_prod; ++p) {
+            nl[p] = -INFINITY; nm[p] = 0.0; nv[p] = 0.0;
+        }
 
         /*
-         * Accumulated by TARGET, as every sweep in this subsystem is, so no
-         * two threads write one accumulator -- and here that matters twice
-         * over, because a merge reads the running mean it is about to update.
+         * Accumulated by TARGET, as every sweep here is, so no two threads
+         * write one accumulator -- and here that matters twice over, because
+         * a merge reads the running mean it is about to update.
          */
 #ifdef _OPENMP
         #pragma omp parallel for schedule(static) num_threads(beam_threads())
@@ -194,34 +200,22 @@ BeamError beam_query_expect(const BeamModel *m, const BeamConstraint *c,
                 const uint32_t src = a * SK + rest;
                 const double wv = k.w[(size_t)src * R + x];
                 if (wv == -INFINITY) continue;
-                const double e = exp(wv - wmax);
                 /* LOG_WEIGHT's increment is the edge's own weight. */
                 const double inc = (f->kind == BEAM_FUNCTIONAL_LOG_WEIGHT)
                                  ? wv : g;
                 for (uint32_t q = 0; q < Q; ++q) {
-                    const double pa = k.a[cur][(size_t)src * Q + q];
-                    if (pa == 0.0) continue;
+                    const double pl = k.la[cur][(size_t)src * Q + q];
+                    if (pl == -INFINITY) continue;
                     const uint32_t qn = aut
                         ? beam_query_automaton_step(aut, i, q, x) : 0u;
                     const size_t d = (size_t)t * Q + qn;
-                    merge(&na[d], &nm[d], &ns[d],
-                          pa * e,
+                    merge(&nl[d], &nm[d], &nv[d],
+                          pl + wv,
                           k.mu[cur][(size_t)src * Q + q] + inc,
-                          k.s2[cur][(size_t)src * Q + q] * e);
+                          k.v[cur][(size_t)src * Q + q]);
                 }
             }
         }
-
-        double nmax = 0.0;
-        for (size_t p = 0; p < n_prod; ++p) if (na[p] > nmax) nmax = na[p];
-        if (!(nmax > 0.0)) {
-            mw_free(&k);
-            return BEAM_ENOPATHS("the forward sweep reached a layer with no "
-                                "mass, so the constraint admits no sequence "
-                                "of this length");
-        }
-        for (size_t p = 0; p < n_prod; ++p) { na[p] /= nmax; ns[p] /= nmax; }
-        log_scale += wmax + log(nmax);
         cur = nxt;
     }
 
@@ -231,40 +225,33 @@ BeamError beam_query_expect(const BeamModel *m, const BeamConstraint *c,
      * too. Acceptance enters here and only here.
      */
     beam_tail_weights(m, length, k.tail);
-    double tmax = -INFINITY;
-    for (uint32_t s = 0; s < S; ++s) if (k.tail[s] > tmax) tmax = k.tail[s];
-    if (tmax == -INFINITY) {
-        mw_free(&k);
-        return BEAM_ENOPATHS("no state of the final layer can terminate");
-    }
 
-    double P = 0.0, M = 0.0, Sacc = 0.0;
+    double logP = -INFINITY, M = 0.0, V = 0.0;
     for (uint32_t s = 0; s < S; ++s) {
         if (k.tail[s] == -INFINITY) continue;
-        const double te = exp(k.tail[s] - tmax);
         const double inc = (f->kind == BEAM_FUNCTIONAL_LOG_WEIGHT)
                          ? k.tail[s] : 0.0;
         for (uint32_t q = 0; q < Q; ++q) {
             if (aut && !aut->accept[q]) continue;
             const size_t p = (size_t)s * Q + q;
-            if (k.a[cur][p] == 0.0) continue;
-            merge(&P, &M, &Sacc, k.a[cur][p] * te, k.mu[cur][p] + inc,
-                  k.s2[cur][p] * te);
+            if (k.la[cur][p] == -INFINITY) continue;
+            merge(&logP, &M, &V, k.la[cur][p] + k.tail[s],
+                  k.mu[cur][p] + inc, k.v[cur][p]);
         }
     }
     mw_free(&k);
 
-    if (!(P > 0.0))
+    if (logP == -INFINITY)
         return BEAM_ENOPATHS("the constraint describes a configuration this "
                             "model cannot produce at this length, so its "
                             "moments do not exist");
 
-    out->log_z    = log(P) + log_scale + tmax;
+    out->log_z    = logP;
     out->mean     = M;
-    /* Never negative: a sum of squared deviations divided by a positive
-     * weight. Clamped anyway, because a caller taking a square root of a
+    /* A mixture of non-negative variances and a squared deviation, so never
+     * negative; clamped anyway, because a caller taking a square root of a
      * -1e-19 deserves better than a NaN. */
-    out->variance = Sacc > 0.0 ? Sacc / P : 0.0;
+    out->variance = V > 0.0 ? V : 0.0;
     return BEAM_OK;
 }
 

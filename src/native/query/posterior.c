@@ -91,44 +91,28 @@ BeamError beam_query_marginals(const BeamModel *m, const BeamConstraint *c,
     for (uint32_t i = 0; i < length; ++i) {
         const BeamResidueMask allowed =
             mask ? mask[i] : BEAM_RESIDUES_ALL(R);
-        double wmax = -INFINITY;
-        beam_layer_weights(m, i, length, k.w, &wmax);
+        beam_layer_weights(m, i, length, k.w, NULL);
+        const double *bn = k.beta[i + 1];
         /*
-         * A finite `logz` says a complete path exists, so the forward sweep
-         * must still carry mass at every layer. Reaching here with none would
-         * leave the remaining rows as zeros that read like a flat
-         * distribution, so it is guarded rather than assumed.
+         * The rescale is taken over edges a live path can USE, always, and
+         * not over the layer as a whole.
+         *
+         * An earlier version used the layer's own maximum whenever the mask
+         * was full, on the reasoning that an automaton removes (state, q)
+         * combinations rather than edges from the layer. That was wrong. A
+         * heavy edge into a state the automaton REJECTS still sets the layer
+         * maximum, and every accepted path then underflows to zero -- so a row
+         * of a distribution came back summing to nothing while the call
+         * reported success. Found by review.
          */
+        double wmax = beam_query_layer_max_live(m, aut, i, k.w, k.cur, bn, Q,
+                                                allowed);
         if (wmax == -INFINITY) {
-            err = BEAM_ENOPATHS("the layer has no live edge although the "
-                               "trellis has a path; the forward sweep lost "
-                               "the mass to underflow");
+            err = BEAM_ENOPATHS("the layer has no edge that both a reached "
+                               "state can take and a completion can leave, "
+                               "although the trellis has a path");
             goto done;
         }
-        /* A narrowed layer rescales by the maximum over what it actually
-         * sums; rescaling by the whole layer's maximum underflows it. */
-        /*
-         * Recomputed only when the LAYER is narrowed. An automaton removes
-         * (state, q) combinations but no edge from the layer, so the layer's
-         * own maximum is as appropriate under one as it is with no constraint
-         * at all -- and using it keeps the Q = 1 arithmetic identical to the
-         * mask sweep's, which is what the cross-check test requires.
-         */
-        if (allowed != BEAM_RESIDUES_ALL(R)) {
-            wmax = aut
-                 ? beam_query_layer_max_product(k.w, k.cur, S, R, Q, allowed)
-                 : beam_query_layer_max(k.w, k.cur, S, R, allowed);
-            if (wmax == -INFINITY) {
-                err = BEAM_ENOPATHS("the constrained mass underflowed the "
-                                   "forward sweep although the backward "
-                                   "sweep found it; "
-                                   "beam_query_log_probability still answers "
-                                   "in log space");
-                goto done;
-            }
-        }
-
-        const double *bn = k.beta[i + 1];
 #ifdef _OPENMP
         #pragma omp parallel for schedule(dynamic, 1) num_threads(beam_threads())
 #endif
@@ -175,9 +159,9 @@ BeamError beam_query_marginals(const BeamModel *m, const BeamConstraint *c,
 
         const bool moved = aut
             ? beam_query_advance_product(m, aut, i, k.w, wmax, k.cur, k.next,
-                                         allowed, &log_scale)
+                                         allowed, k.beta[i + 1], &log_scale)
             : beam_query_advance(m, k.w, wmax, k.cur, k.next, allowed,
-                                 &log_scale);
+                                 k.beta[i + 1], &log_scale);
         if (!moved) {
             err = BEAM_ENOPATHS("the forward sweep reached a layer with no "
                                "mass although the trellis has a path");

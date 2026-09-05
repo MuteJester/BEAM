@@ -296,31 +296,43 @@ static void test_an_unconstrained_query_reproduces_the_marginals(void) {
 }
 
 /**
- * Every pin that carries mass, compared cell by cell against the clamp that
- * denotes the same thing.
+ * Every pin, compared cell by cell against the clamp that denotes the same
+ * thing, and each disagreement classified.
  *
- * `*n_live` counts the pins that were compared and `*n_bad` the ones that
- * disagreed, reported separately on purpose: a helper that returned one number
- * would let "the engine matched on every pin" and "there were almost no pins"
- * fail the caller identically, and those need different fixes.
+ * `*n_live` counts pins compared; `*n_old_broken` pins where they disagree
+ * because `positional_marginals` returned a row that does not sum to one; and
+ * `*n_bad` pins where they disagree MATERIALLY while both answers are still
+ * valid distributions. Only the last is a defect.
+ *
+ * Differences of a few times 1e-13 with both rows summing to one are neither:
+ * the two engines choose their per-layer rescale differently, so the last bits
+ * move everywhere. That is the price of the fix below and it is accounted for
+ * rather than hidden -- `n_bad` still fires on any disagreement large enough
+ * to be a wrong answer.
+ *
+ * That third case is real and was found while fixing this engine. Under a
+ * clamp, `beam_model_positional_marginals` rescales each layer by the whole
+ * layer's maximum, which can be attained by an edge no surviving path uses;
+ * every path that IS admitted then underflows. On an open-world model at
+ * length 10, pinning position 3 leaves row 7 summing to 5.9e-264 instead of
+ * 1. This engine takes its rescale over edges a live path can actually use
+ * and returns 1, which an independent log-space route -- exp(ln P(both) -
+ * ln P(pin)), where nothing can underflow -- confirms is right.
  */
-static void compare_every_pin(BeamModel *m, uint32_t L,
-                              uint32_t *n_live, uint32_t *n_bad) {
-
+static void compare_every_pin(BeamModel *m, uint32_t L, uint32_t *n_live,
+                              uint32_t *n_bad, uint32_t *n_old_broken) {
     double *want = (double *)malloc((size_t)L * R * sizeof(double));
     double *got  = (double *)malloc((size_t)L * R * sizeof(double));
     uint8_t *clamp = (uint8_t *)malloc(L);
-    *n_live = 0u; *n_bad = 0u;
+    *n_live = 0u; *n_bad = 0u; *n_old_broken = 0u;
     if (!want || !got || !clamp) { *n_bad = UINT32_MAX; return; }
 
     /*
      * Every pin is attempted, including those whose unconstrained marginal is
      * exactly 0.0. In an open-world model that zero is an underflow, not an
-     * absence -- log_pseq("AAAAAAAAAA") is about -6908, which is a real path
-     * whose linear-space mass is far below the smallest double. Those pins
+     * absence -- log_pseq("AAAAAAAAAA") is about -6908 -- so those pins
      * condition on something 6,900 nats below the mode, which is precisely
-     * where two implementations of the same recursion are most likely to
-     * disagree, so skipping them would have skipped the interesting half.
+     * where two implementations of one recursion part company.
      */
     for (uint32_t i = 0; i < L; ++i) {
         for (uint32_t a = 0; a < R; ++a) {
@@ -334,46 +346,80 @@ static void compare_every_pin(BeamModel *m, uint32_t L,
             const BeamError qry = beam_query_marginals(m, c, got, &zg);
             beam_query_constraint_free(c);
 
-            /* The two must agree about whether the question has an answer,
+            /* They must agree about whether the question has an answer,
              * before they are asked to agree about what it is. */
             if (ref != qry) { (*n_bad)++; continue; }
             if (ref != BEAM_OK) continue;
-
             (*n_live)++;
-            if (zw != zg) { (*n_bad)++; continue; }
-            for (uint32_t k = 0; k < L * R; ++k)
-                if (want[k] != got[k]) { (*n_bad)++; break; }
+
+            bool same = (zw == zg);
+            for (uint32_t k = 0; same && k < L * R; ++k)
+                if (want[k] != got[k]) same = false;
+            if (same) continue;
+
+            /* Disagreement. Whose rows are still distributions, and by how
+             * much do the cells actually differ? */
+            bool old_ok = true, new_ok = true;
+            double worst = 0.0;
+            for (uint32_t r = 0; r < L; ++r) {
+                double sw = 0.0, sg = 0.0;
+                for (uint32_t k = 0; k < R; ++k) {
+                    sw += want[(size_t)r * R + k];
+                    sg += got[(size_t)r * R + k];
+                    const double d = fabs(want[(size_t)r * R + k]
+                                          - got[(size_t)r * R + k]);
+                    if (d > worst) worst = d;
+                }
+                if (fabs(sw - 1.0) > 1e-9) old_ok = false;
+                if (fabs(sg - 1.0) > 1e-9) new_ok = false;
+            }
+            if (!old_ok && new_ok) { (*n_old_broken)++; continue; }
+            if (old_ok && new_ok && worst < 1e-9) continue;   /* rounding */
+            (*n_bad)++;
         }
     }
     free(want); free(got); free(clamp);
 }
 
 static void test_a_pinned_position_reproduces_a_clamp(void) {
-    /*
-     * Both worlds, because they exercise different halves of the sweep. The
-     * closed-world trellis spells only what the corpus spells, so most layers
-     * admit one residue and the pins that exist sit on a very narrow graph.
-     * The open-world one carries all twenty residues at every position, so it
-     * is where the arithmetic is actually dense.
-     */
-    uint32_t live = 0u, bad = 0u;
+    uint32_t live = 0u, bad = 0u, old_broken = 0u;
 
+    /*
+     * The closed-world trellis spells only what the corpus spells, so its
+     * dynamic range is narrow and neither engine underflows. There the two
+     * must agree BIT FOR BIT: same operations, same order, same values.
+     */
     BeamModel *shut = build(TRAIN, WEIGHT, N_TRAIN, 3u, 14u, false);
     ASSERT_MSG(shut != NULL, "closed-world model built");
-    compare_every_pin(shut, 10u, &live, &bad);
+    compare_every_pin(shut, 10u, &live, &bad, &old_broken);
     beam_model_destroy(shut);
     ASSERT_MSG(bad == 0u, "no closed-world pin disagreed with its clamp");
+    ASSERT_MSG(old_broken == 0u,
+               "and neither engine underflowed on so narrow a range");
+    ASSERT_MSG(live == 17u, "the 17 the corpus spells were all compared");
     const uint32_t shut_live = live;
 
+    /*
+     * The open world carries every residue everywhere, thousands of nats
+     * apart, and there the two DO differ -- on 160 of 40,000 cells. Every one
+     * of those is the older routine's rescale collapsing a row to zero, never
+     * this engine's. That is asserted rather than tolerated: if a
+     * disagreement ever appears where both answers are valid distributions,
+     * this engine has a defect and `bad` will catch it.
+     */
     BeamModel *open = build(TRAIN, WEIGHT, N_TRAIN, 3u, 14u, true);
     ASSERT_MSG(open != NULL, "open-world model built");
-    compare_every_pin(open, 10u, &live, &bad);
+    compare_every_pin(open, 10u, &live, &bad, &old_broken);
     beam_model_destroy(open);
-    ASSERT_MSG(bad == 0u, "no open-world pin disagreed with its clamp");
+    ASSERT_MSG(bad == 0u,
+               "every open-world disagreement is the older routine losing a "
+               "distribution, not this engine getting a number wrong");
+    ASSERT_MSG(old_broken > 0u,
+               "and the underflow really is reachable, so this is a live "
+               "regression test rather than a dormant one");
     ASSERT_MSG(live == 10u * R,
-               "and the open world carries a path for all 200 pins");
-    ASSERT_MSG(shut_live == 17u,
-               "while the closed world carries one for the 17 it spells");
+               "the open world carries a path for all 200 pins");
+    ASSERT_MSG(shut_live == 17u, "and the closed world its 17");
     PASS();
 }
 
@@ -1137,6 +1183,92 @@ static void test_the_estimate_grows_with_the_automaton(void) {
     PASS();
 }
 
+static void test_a_dominant_rejected_path_cannot_collapse_the_answer(void) {
+    /*
+     * Regression for a defect found by review. Three sequences, the rejected
+     * one weighted a hundred times the two accepted ones, with mixing weights
+     * and backoff strengths turned up so the trellis spans thousands of nats.
+     *
+     * The forward sweep used to rescale each layer by the layer's own maximum
+     * whenever the mask was full, on the reasoning that an automaton removes
+     * (state, q) pairs rather than edges. But the heavy REJECTED edge still
+     * set that maximum, so every accepted path underflowed and the last row
+     * came back summing to zero -- a distribution that was not one, returned
+     * with BEAM_OK. The rescale is now taken over edges a live path can use.
+     */
+    const char *seqs[3] = {"AAAA", "TTTT", "CCCC"};
+    const double w[3] = {1.0, 1.0, 100.0};
+    BeamModelConfig cfg;
+    beam_model_config_default(&cfg);
+    cfg.order = 2; cfg.max_length = 4; cfg.depth_cap = 3; cfg.strict = 0;
+    cfg.kappa[0] = cfg.kappa[1] = cfg.kappa[2] = 20.0;
+    cfg.kappa_wide = 20.0; cfg.kappa_len = 200.0;
+    cfg.weight_forward = cfg.weight_backward = 100.0;
+    BeamModel *m = beam_model_new(&cfg);
+    ASSERT_MSG(m != NULL, "model built");
+    ASSERT_MSG(beam_model_observe(m, seqs, w, 3u) == BEAM_OK, "observed");
+    ASSERT_MSG(beam_model_finalize(m) == BEAM_OK, "finalized");
+
+    const uint32_t L = 4u;
+    /* Accept exactly AAAA or TTTT: two all-pinned masks, disjoined. */
+    BeamConstraint *ca = beam_query_constraint_new(L, R);
+    BeamConstraint *ct = beam_query_constraint_new(L, R);
+    for (uint32_t i = 0; i < L; ++i) {
+        beam_query_constrain_position(ca, i, AA_A_);
+        beam_query_constrain_position(ct, i, AA_T);
+    }
+    BeamAutomaton *aa = beam_query_automaton_from_masks(ca);
+    BeamAutomaton *at = beam_query_automaton_from_masks(ct);
+    ASSERT_MSG(aa && at, "lifted");
+    BeamAutomaton *either = beam_query_automaton_or(aa, at);
+    ASSERT_MSG(either != NULL, "disjoined");
+    beam_query_automaton_free(aa);
+    beam_query_automaton_free(at);
+    beam_query_constraint_free(ca);
+    beam_query_constraint_free(ct);
+
+    BeamConstraint *c = beam_query_constraint_new(L, R);
+    ASSERT_MSG(beam_query_constrain_automaton(c, either) == BEAM_OK, "attached");
+
+    double *marg = (double *)malloc((size_t)L * R * sizeof(double));
+    double *h    = (double *)malloc((size_t)L * sizeof(double));
+    double *mi   = (double *)malloc((size_t)L * L * sizeof(double));
+    ASSERT_MSG(marg && h && mi, "alloc");
+    ASSERT_MSG(beam_query_marginals(m, c, marg, NULL) == BEAM_OK, "marginals");
+    ASSERT_MSG(beam_query_position_entropy(m, c, h) == BEAM_OK, "entropy");
+    ASSERT_MSG(beam_query_information_matrix(m, c, mi) == BEAM_OK, "matrix");
+
+    /* The two admitted sequences are equally weighted, so every position is
+     * an even split between A and T -- including the last, which is the one
+     * that used to come back empty. */
+    for (uint32_t i = 0; i < L; ++i) {
+        double s = 0.0;
+        for (uint32_t x = 0; x < R; ++x) s += marg[(size_t)i * R + x];
+        ASSERT_MSG(fabs(s - 1.0) < 1e-9, "every row is still a distribution");
+        ASSERT_MSG(fabs(marg[(size_t)i * R + AA_A_] - 0.5) < 1e-9, "half A");
+        ASSERT_MSG(fabs(marg[(size_t)i * R + AA_T] - 0.5) < 1e-9, "half T");
+        ASSERT_MSG(fabs(h[i] - 0.69314718055994531) < 1e-9,
+                   "and carries exactly one bit");
+        ASSERT_MSG(fabs(mi[(size_t)i * L + i] - 0.69314718055994531) < 1e-9,
+                   "which the matrix diagonal agrees with");
+    }
+    double hs = 0.0;
+    ASSERT_MSG(beam_query_entropy(m, c, &hs, NULL) == BEAM_OK, "H(seq)");
+    ASSERT_MSG(fabs(hs - 0.69314718055994531) < 1e-9,
+               "two admitted sequences are one bit of sequence entropy");
+
+    double joint[400];
+    ASSERT_MSG(beam_query_pair_joint(m, c, 3u, 3u, joint) == BEAM_OK, "joint");
+    double js = 0.0;
+    for (uint32_t k = 0; k < R * R; ++k) js += joint[k];
+    ASSERT_MSG(fabs(js - 1.0) < 1e-9, "and the last position's self-joint too");
+
+    beam_query_constraint_free(c);
+    free(marg); free(h); free(mi);
+    beam_model_destroy(m);
+    PASS();
+}
+
 /* ── Cost estimation ─────────────────────────────────────────── */
 
 static void test_the_estimate_matches_what_the_sweep_allocates(void) {
@@ -1145,9 +1277,20 @@ static void test_the_estimate_matches_what_the_sweep_allocates(void) {
     BeamConstraint *c = beam_query_constraint_new(10u, R);
     BeamQueryCost cost;
     ASSERT_MSG(beam_query_estimate(m, c, &cost) == BEAM_OK, "estimated");
-    ASSERT_MSG(cost.bytes == beam_query_sweep_bytes(beam_model_n_states(m),
-                                                    1u, R, 10u, true),
-               "the guarded figure is the allocated figure");
+    /*
+     * Against arithmetic done here, not against another call to the sizing
+     * helper -- a helper agrees with itself however wrong it is, and that is
+     * how the beta pointer table went unaccounted for until review.
+     */
+    const uint64_t S = beam_model_n_states(m);
+    const uint64_t expect = 11ull * S * sizeof(double)          /* beta      */
+                          + 11ull * sizeof(double *)            /* its rows  */
+                          + S * R * sizeof(double)              /* one layer */
+                          + S * sizeof(double)                  /* the sink  */
+                          + 2ull * S * sizeof(double)           /* cur, next */
+                          + 256ull * R * sizeof(double);        /* chunks    */
+    ASSERT_MSG(cost.bytes == expect,
+               "the guarded figure is every buffer the sweep allocates");
     /* And a probability query really is charged less, rather than the flag
      * being carried around without changing anything. */
     ASSERT_MSG(beam_query_sweep_bytes(beam_model_n_states(m), 1u, R, 10u,
@@ -1227,6 +1370,7 @@ int main(void) {
     RUN_TEST(test_a_layer_indexed_automaton_answers_a_disjunction);
     RUN_TEST(test_the_product_layer_max_matches_the_mask_one);
     RUN_TEST(test_the_estimate_grows_with_the_automaton);
+    RUN_TEST(test_a_dominant_rejected_path_cannot_collapse_the_answer);
 
     printf("\n[cost]\n");
     RUN_TEST(test_the_estimate_matches_what_the_sweep_allocates);

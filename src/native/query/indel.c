@@ -114,7 +114,7 @@ static BeamError nb_finish(BeamNeighbourhood *nb, const double *score,
  * model, whereas the other is a fact about this one.
  */
 static BeamError source_shape(const BeamModel *m, const char *sequence,
-                              uint32_t *out_len) {
+                              uint32_t *out_len, uint8_t *out_idx) {
     if (!m) return BEAM_ENULL("model");
     if (!sequence) return BEAM_ENULL("sequence");
     if (!m->finalized) return BEAM_ENOTBUILT();
@@ -124,6 +124,31 @@ static BeamError source_shape(const BeamModel *m, const char *sequence,
         return BEAM_ERANGE("beam_query: a source sequence of %zu residues is "
                           "outside 1..%u", n,
                           (unsigned)BEAM_MAX_LENGTH_CEILING);
+
+    /*
+     * Decoded once, and every byte checked. Two things depend on this.
+     *
+     * A character outside the alphabet is a MALFORMED source, not a source of
+     * probability zero, and the two are different answers: `log_pseq` maps
+     * both to -inf, so without this check `AA?A` came back as
+     * NO_LIVE_PATHS -- "this cannot happen" -- rather than as bad input.
+     *
+     * And the alias rule below must compare RESIDUES rather than bytes. The
+     * nucleotide alphabet folds case, so `a` and `A` are one residue; comparing
+     * raw bytes made every case variant look distinct, and the neighbourhood
+     * of `aaaa` came back with the same sequence five times, each holding a
+     * fifth of the posterior. Found by review.
+     */
+    const BeamAlphabetInfo *a = beam_alphabet_info(m->cfg.alphabet);
+    for (size_t i = 0; i < n; ++i) {
+        const uint8_t r = a->char_to_idx[(unsigned char)sequence[i]];
+        if (r >= m->n_residues)
+            return BEAM_FAIL(BEAM_ERR_INVALID_SEQUENCE,
+                            "beam_query: position %zu of the source is '%c', "
+                            "which is not a residue of this model's %s "
+                            "alphabet", i, sequence[i], a->name);
+        out_idx[i] = r;
+    }
     *out_len = (uint32_t)n;
     return BEAM_OK;
 }
@@ -153,7 +178,8 @@ BeamError beam_query_insertions(const BeamModel *m, const char *sequence,
     memset(out, 0, sizeof(*out));
     uint32_t L = 0u;
     double log_source = 0.0;
-    BeamError err = source_shape(m, sequence, &L);
+    uint8_t idx[BEAM_MAX_LENGTH_CEILING];
+    BeamError err = source_shape(m, sequence, &L, idx);
     if (err != BEAM_OK) return err;
     err = source_score(m, sequence, &log_source);
     if (err != BEAM_OK) return err;
@@ -177,9 +203,11 @@ BeamError beam_query_insertions(const BeamModel *m, const char *sequence,
             /*
              * Leftmost representative only. An alias exists exactly when the
              * residue before the gap is the one being inserted, because the
-             * strings coincide only inside a run of it.
+             * strings coincide only inside a run of it. Compared as RESIDUES,
+             * so that a case-folded alphabet does not make `a` and `A` look
+             * like different neighbours.
              */
-            if (g > 0u && sequence[g - 1u] == ch) continue;
+            if (g > 0u && idx[g - 1u] == x) continue;
 
             char *dst = buf + (size_t)out->n * (L + 2u);
             memcpy(dst, sequence, g);
@@ -211,7 +239,8 @@ BeamError beam_query_deletions(const BeamModel *m, const char *sequence,
     memset(out, 0, sizeof(*out));
     uint32_t L = 0u;
     double log_source = 0.0;
-    BeamError err = source_shape(m, sequence, &L);
+    uint8_t idx[BEAM_MAX_LENGTH_CEILING];
+    BeamError err = source_shape(m, sequence, &L, idx);
     if (err != BEAM_OK) return err;
     /* Before scoring: this is true of every model, and the zero-probability
      * refusal below would otherwise mask it for most of them. */
@@ -233,8 +262,8 @@ BeamError beam_query_deletions(const BeamModel *m, const char *sequence,
     char *buf = out->sequences;
     for (uint32_t p = 0; p < L; ++p) {
         /* Leftmost of a run again: deleting either of two equal neighbours
-         * leaves the same string. */
-        if (p > 0u && sequence[p - 1u] == sequence[p]) continue;
+         * leaves the same string. Residues, not bytes; see above. */
+        if (p > 0u && idx[p - 1u] == idx[p]) continue;
 
         char *dst = buf + (size_t)out->n * L;
         memcpy(dst, sequence, p);

@@ -125,10 +125,43 @@ double beam_query_layer_max_product(const double *w, const double *cur,
     return mx;
 }
 
+double beam_query_layer_max_live(const BeamModel *m, const BeamAutomaton *aut,
+                                 uint32_t layer, const double *w,
+                                 const double *cur, const double *beta_next,
+                                 uint32_t n_aut, BeamResidueMask allowed) {
+    const uint32_t A  = m->n_alphabet;
+    const uint32_t R  = m->n_residues;
+    const uint32_t S  = m->n_states;
+    const uint32_t SK = m->state_shift;
+
+    double mx = -INFINITY;
+    for (uint32_t s = 0; s < S; ++s) {
+        const double *cs  = cur + (size_t)s * n_aut;
+        const double *row = w + (size_t)s * R;
+        const uint32_t base = (s % SK) * A;
+        for (uint32_t q = 0; q < n_aut; ++q) {
+            if (cs[q] == 0.0) continue;          /* no path reaches here    */
+            for (BeamResidueMask mm = allowed; mm; mm &= mm - 1u) {
+                const uint32_t x = (uint32_t)__builtin_ctz(mm);
+                if (row[x] == -INFINITY || row[x] <= mx) continue;
+                const uint32_t qn = aut
+                    ? beam_query_automaton_step(aut, layer, q, x) : 0u;
+                /* And no completion leaves here, so this edge carries no
+                 * mass into the answer however heavy it is. */
+                if (beta_next[(size_t)(base + x) * n_aut + qn] == -INFINITY)
+                    continue;
+                mx = row[x];
+            }
+        }
+    }
+    return mx;
+}
+
 bool beam_query_advance_product(const BeamModel *m, const BeamAutomaton *aut,
                                 uint32_t layer, const double *w, double wmax,
                                 const double *cur, double *next,
-                                BeamResidueMask allowed, double *log_scale) {
+                                BeamResidueMask allowed,
+                                const double *beta_next, double *log_scale) {
     const uint32_t A  = m->n_alphabet;
     const uint32_t R  = m->n_residues;
     const uint32_t S  = m->n_states;
@@ -168,7 +201,19 @@ bool beam_query_advance_product(const BeamModel *m, const BeamAutomaton *aut,
                 dst[beam_query_automaton_step(aut, layer, q, x)] += cs[q] * e;
             }
         }
-        for (uint32_t q = 0; q < Q; ++q) if (dst[q] > nmax) nmax = dst[q];
+        /*
+         * A product state with no completion contributes nothing to any
+         * answer, so it is cleared rather than carried -- and, decisively, it
+         * is kept out of the rescale below. Leaving it in lets a heavy
+         * REJECTED path set the scale and drive the accepted mass to zero,
+         * which returned an all-zero row of a distribution while reporting
+         * success. Found by review.
+         */
+        for (uint32_t q = 0; q < Q; ++q) {
+            if (beta_next && beta_next[(size_t)t * Q + q] == -INFINITY)
+                dst[q] = 0.0;
+            if (dst[q] > nmax) nmax = dst[q];
+        }
     }
     *log_scale += wmax;
     if (!(nmax > 0.0)) return false;

@@ -278,10 +278,12 @@ static void test_de_morgan_holds_over_the_whole_language(void) {
 
     BeamAutomaton *na = beam_query_automaton_not(a);
     BeamAutomaton *nb = beam_query_automaton_not(b);
-    BeamAutomaton *lhs = beam_query_automaton_not(
-                             beam_query_automaton_and(a, b));
+    /* `not` copies rather than consuming, so the conjunction has to be held
+     * and freed; leaving it inline leaked it. */
+    BeamAutomaton *both = beam_query_automaton_and(a, b);
+    BeamAutomaton *lhs = beam_query_automaton_not(both);
     BeamAutomaton *rhs = beam_query_automaton_or(na, nb);
-    ASSERT_MSG(na && nb && lhs && rhs, "built");
+    ASSERT_MSG(na && nb && both && lhs && rhs, "built");
 
     uint8_t s[AL];
     for (uint32_t code = 0; code < N_STRINGS; ++code) {
@@ -290,6 +292,7 @@ static void test_de_morgan_holds_over_the_whole_language(void) {
                    == beam_query_automaton_accepts(rhs, s, AL),
                    "not(a and b) is (not a) or (not b), string for string");
     }
+    beam_query_automaton_free(both);
     beam_query_automaton_free(lhs);
     beam_query_automaton_free(rhs);
     beam_query_automaton_free(na);

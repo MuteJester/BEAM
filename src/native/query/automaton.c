@@ -22,6 +22,7 @@
 #include "beam/query.h"
 #include "beam/query_internal.h"
 #include "beam/errors.h"
+#include "beam/model_state.h"
 
 /* ── Construction ────────────────────────────────────────────── */
 
@@ -50,6 +51,27 @@ static BeamAutomaton *aut_new(uint32_t length, uint32_t n_residues,
                       "1..%u", what, (unsigned)length, (unsigned)n_residues,
                       (unsigned)BEAM_MAX_LENGTH_CEILING,
                       (unsigned)BEAM_MAX_RESIDUES);
+        return NULL;
+    }
+
+    /*
+     * Bounded by the state and length ceilings, so this is nowhere near the
+     * model-construction hazard -- but a maximal layer-indexed table is still
+     * 21 MB, and a composition transiently holds three of them. A subsystem
+     * that refuses a sweep over budget should not allocate around it here.
+     */
+    const uint64_t need = (uint64_t)(uniform ? 1u : length) * n_states
+                        * n_residues * sizeof(uint32_t) + n_states;
+    const uint64_t budget = beam_model_memory_budget();
+    if (need > budget) {
+        beam_set_error(BEAM_ERR_ALLOC,
+                      "%s: an automaton of %u states over %u layers needs "
+                      "about %.1f GB for its transition table, and the memory "
+                      "budget is %.1f GB; raise it with "
+                      "BEAM.set_memory_budget, or use a simpler constraint",
+                      what, (unsigned)n_states,
+                      (unsigned)(uniform ? 1u : length),
+                      (double)need / 1e9, (double)budget / 1e9);
         return NULL;
     }
 
@@ -89,6 +111,10 @@ static inline uint32_t *delta_at(BeamAutomaton *a, uint32_t i, uint32_t q,
                                  uint32_t x) {
     const uint32_t layer = a->uniform ? 0u : i;
     return a->delta + (((size_t)layer * a->n_states + q) * a->n_residues + x);
+}
+
+uint32_t beam_query_automaton_layers(const BeamAutomaton *a) {
+    return a ? delta_layers(a) : 0u;
 }
 
 uint32_t beam_query_automaton_step(const BeamAutomaton *a, uint32_t i,

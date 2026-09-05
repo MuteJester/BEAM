@@ -322,7 +322,11 @@ typedef struct {
     uint32_t *residue;     /**< [n] residue inserted; UINT32_MAX for a
                                 deletion, which removes rather than adds    */
     double   *log_odds;    /**< [n] `ln P(neighbour) - ln P(source)`        */
-    double   *posterior;   /**< [n] normalised over the neighbourhood       */
+    double   *posterior;   /**< [n] normalised over the neighbourhood, EXCEPT
+                                when no neighbour is producible at all, where
+                                it is all zeros: there is no distribution over
+                                an empty set, and the odds already say so by
+                                being -inf                                   */
     double    log_source;  /**< `ln P(source)`                              */
 } BeamNeighbourhood;
 

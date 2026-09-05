@@ -49,6 +49,9 @@ BeamAutomaton *beam_query_automaton_clone(const BeamAutomaton *a);
 /** An independent copy of `c`, automaton included. NULL on failure. */
 BeamConstraint *beam_query_constraint_clone(const BeamConstraint *c);
 
+/** Transition-table layers an automaton stores: 1 if uniform, else `length`. */
+uint32_t beam_query_automaton_layers(const BeamAutomaton *a);
+
 /** `delta[i](q, x)`, reading the shared layer when the automaton is uniform. */
 uint32_t beam_query_automaton_step(const BeamAutomaton *a, uint32_t i,
                                    uint32_t q, uint32_t x);
@@ -71,9 +74,13 @@ uint32_t beam_query_automaton_step(const BeamAutomaton *a, uint32_t i,
  *
  * `n_aut` is the automaton's state count, 1 when the constraint is masks
  * alone. It multiplies the backward field and the forward vectors but not the
- * layer weights, which do not depend on the automaton. The sink buffer exists
- * only in the product sweep, where acceptance has to be applied to the tail
- * weights rather than written straight into the last backward layer.
+ * layer weights, which do not depend on the automaton.
+ *
+ * The sink buffer is counted unconditionally even though only the product
+ * sweep reads it. It used to be allocated only for `n_aut > 1` while
+ * `beam_query_betas_product` wrote through it regardless, which a one-state
+ * automaton would have turned into a null dereference -- no public builder
+ * makes one, but the landmine is not worth the megabyte. Found by review.
  */
 static inline uint64_t beam_query_sweep_bytes(uint32_t n_states,
                                               uint32_t n_aut,
@@ -83,8 +90,9 @@ static inline uint64_t beam_query_sweep_bytes(uint32_t n_states,
     const uint64_t S = n_states;
     const uint64_t P = (uint64_t)n_states * n_aut;   /* product states */
     uint64_t n = ((uint64_t)length + 1u) * P * sizeof(double)  /* beta field */
-               + S * (uint64_t)n_residues * sizeof(double);    /* one layer  */
-    if (n_aut > 1u) n += S * sizeof(double);         /* sink weights   */
+               + ((uint64_t)length + 1u) * sizeof(double *)     /* its rows   */
+               + S * (uint64_t)n_residues * sizeof(double)      /* one layer  */
+               + S * sizeof(double);                            /* the sink   */
     if (want_forward)
         n += 2u * P * sizeof(double)                 /* cur and next   */
            + (uint64_t)BEAM_SUM_CHUNKS * n_residues * sizeof(double);
@@ -192,7 +200,8 @@ double beam_query_layer_max(const double *w, const double *cur,
  */
 bool beam_query_advance(const BeamModel *m, const double *w, double wmax,
                         const double *cur, double *next,
-                        BeamResidueMask allowed, double *log_scale);
+                        BeamResidueMask allowed, const double *beta_next,
+                        double *log_scale);
 
 /**
  * The masks a constraint imposes, or NULL for a constraint that admits
@@ -244,6 +253,21 @@ double beam_query_layer_max_product(const double *w, const double *cur,
 bool beam_query_advance_product(const BeamModel *m, const BeamAutomaton *aut,
                                 uint32_t layer, const double *w, double wmax,
                                 const double *cur, double *next,
-                                BeamResidueMask allowed, double *log_scale);
+                                BeamResidueMask allowed,
+                                const double *beta_next, double *log_scale);
+
+/**
+ * The largest weight among edges a live path can actually use: leaving a state
+ * the sweep has reached, permitted by the mask, and arriving somewhere with a
+ * completion.
+ *
+ * Restricting to reached states is not enough on its own. A heavy edge into a
+ * state the constraint later rejects will otherwise set the rescale and drive
+ * every surviving path below the smallest double.
+ */
+double beam_query_layer_max_live(const BeamModel *m, const BeamAutomaton *aut,
+                                 uint32_t layer, const double *w,
+                                 const double *cur, const double *beta_next,
+                                 uint32_t n_aut, BeamResidueMask allowed);
 
 #endif /* BEAM_INTERNAL_QUERY_H */

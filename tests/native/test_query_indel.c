@@ -356,6 +356,86 @@ static void test_the_posterior_survives_a_neighbourhood_that_underflows(void) {
     PASS();
 }
 
+static void test_case_folded_input_does_not_multiply_the_neighbours(void) {
+    /*
+     * Regression for a defect found by review. The nucleotide alphabet folds
+     * case, so `a` and `A` are one residue -- but the alias rule compared the
+     * source's raw BYTE against the canonical uppercase character, so no
+     * lowercase run ever looked like a run. The neighbourhood of `aaaa` came
+     * back with `Aaaaa`, `aAaaa`, `aaAaa`, `aaaAa` and `aaaaA`: five spellings
+     * of one sequence, each holding a fifth of the posterior that belongs
+     * entirely to it.
+     */
+    const char *seqs[4] = {"ACGTA", "AAAAA", "ACGTT", "AAAA"};
+    const double w[4] = {10.0, 40.0, 5.0, 20.0};
+    BeamModelConfig cfg;
+    beam_model_config_default(&cfg);
+    cfg.alphabet = BEAM_ALPHABET_NT;
+    cfg.order = 2; cfg.max_length = 8; cfg.strict = 0;
+    BeamModel *m = beam_model_new(&cfg);
+    ASSERT_MSG(m != NULL, "nucleotide model built");
+    ASSERT_MSG(beam_model_observe(m, seqs, w, 4u) == BEAM_OK, "observed");
+    ASSERT_MSG(beam_model_finalize(m) == BEAM_OK, "finalized");
+    const uint32_t NR = BEAM_NT_RESIDUES;
+
+    /* Lowercase and uppercase spell the same sequence, so they must give the
+     * same neighbourhood. */
+    BeamNeighbourhood lo = {0}, up = {0};
+    ASSERT_MSG(beam_query_insertions(m, "aaaa", &lo) == BEAM_OK, "lower");
+    ASSERT_MSG(beam_query_insertions(m, "AAAA", &up) == BEAM_OK, "upper");
+    ASSERT_MSG(lo.n == up.n,
+               "case cannot change how many distinct neighbours there are");
+    /* 5 gaps x 5 residues = 25 candidates; inserting A is an alias at every
+     * gap but the first, so 21 survive. */
+    ASSERT_MSG(lo.n == 5u * NR - 4u, "21 of the 25 candidates are distinct");
+
+    uint32_t all_a = 0u;
+    double p_all_a = 0.0;
+    for (uint32_t k = 0; k < lo.n; ++k) {
+        const char *s = lo.sequences + (size_t)k * (lo.length + 1u);
+        bool only_a = true;
+        for (uint32_t i = 0; i < lo.length; ++i)
+            if (s[i] != 'a' && s[i] != 'A') only_a = false;
+        if (only_a) { all_a++; p_all_a = lo.posterior[k]; }
+    }
+    ASSERT_MSG(all_a == 1u,
+               "the all-adenine neighbour appears once, not once per gap");
+    ASSERT_MSG(p_all_a > 0.9,
+               "and holds the mass the corpus gives it, undivided");
+
+    BeamNeighbourhood dl = {0};
+    ASSERT_MSG(beam_query_deletions(m, "AaAA", &dl) == BEAM_OK, "deletions");
+    ASSERT_MSG(dl.n == 1u,
+               "every deletion from a mixed-case run leaves one sequence");
+
+    beam_query_neighbourhood_free(&lo);
+    beam_query_neighbourhood_free(&up);
+    beam_query_neighbourhood_free(&dl);
+    beam_model_destroy(m);
+    PASS();
+}
+
+static void test_a_character_outside_the_alphabet_is_malformed_input(void) {
+    /*
+     * Regression for a defect found by review. `log_pseq` maps both a
+     * malformed sequence and a merely impossible one to -inf, so routing
+     * every non-finite score to NO_LIVE_PATHS reported bad input as "this
+     * cannot happen". The two are different answers and the header promises
+     * to distinguish them.
+     */
+    BeamModel *m = build(TRAIN, WEIGHT, N_TRAIN, 3u, 8u, true);
+    ASSERT_MSG(m != NULL, "model built");
+    BeamNeighbourhood nb = {0};
+    ASSERT_MSG(beam_query_insertions(m, "CA?SF", &nb)
+               == BEAM_ERR_INVALID_SEQUENCE, "malformed, not impossible");
+    ASSERT_MSG(strstr(beam_error_message(), "not a residue") != NULL,
+               "and the message says which character and why");
+    ASSERT_MSG(beam_query_deletions(m, "CA?SF", &nb)
+               == BEAM_ERR_INVALID_SEQUENCE, "the same for deletions");
+    beam_model_destroy(m);
+    PASS();
+}
+
 /* ── Refusals ────────────────────────────────────────────────── */
 
 static void test_a_source_the_model_cannot_score_is_refused(void) {
@@ -413,7 +493,10 @@ int main(void) {
     RUN_TEST(test_an_impossible_neighbourhood_still_reports_its_odds);
     RUN_TEST(test_the_posterior_survives_a_neighbourhood_that_underflows);
 
+    RUN_TEST(test_case_folded_input_does_not_multiply_the_neighbours);
+
     printf("\n[refusals]\n");
+    RUN_TEST(test_a_character_outside_the_alphabet_is_malformed_input);
     RUN_TEST(test_a_source_the_model_cannot_score_is_refused);
 
     printf("\n==============================================================\n");

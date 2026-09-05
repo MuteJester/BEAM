@@ -45,6 +45,7 @@ static int pass_count = 0, fail_count = 0;
 #define AA_F   4u
 #define AA_G   5u
 #define AA_S_ 15u
+#define AA_W 18u
 
 #define N_TRAIN 12
 static const char *TRAIN[N_TRAIN] = {
@@ -127,6 +128,49 @@ next_pass:
     if (out_mean) *out_mean = mean;
     if (out_var) *out_var = var;
     if (out_entropy) *out_entropy = H;
+}
+
+/**
+ * `E[f]` and `Var[f]` over the sequences whose residue at `pos` lies in
+ * `keep`, by direct summation. The conditional reference the test above needs.
+ */
+static void enumerate_moments_where(const BeamModel *m, uint32_t length,
+                                    const double *table, uint32_t pos,
+                                    BeamResidueMask keep,
+                                    double *out_mean, double *out_var) {
+    const BeamAlphabetInfo *ai = beam_alphabet_info(BEAM_ALPHABET_AA);
+    char buf[8];
+    uint8_t idx[8];
+    double total = 0.0, mean = 0.0, var = 0.0;
+
+    for (int pass = 0; pass < 2; ++pass) {
+        for (uint32_t i = 0; i < length; ++i) idx[i] = 0u;
+        buf[length] = '\0';
+        for (;;) {
+            if ((keep >> idx[pos]) & 1u) {
+                for (uint32_t i = 0; i < length; ++i)
+                    buf[i] = ai->idx_to_char[idx[i]];
+                const double raw = exp(beam_model_log_pseq(m, buf));
+                if (raw > 0.0) {
+                    double f = 0.0;
+                    for (uint32_t i = 0; i < length; ++i)
+                        f += table[(size_t)i * R + idx[i]];
+                    if (pass == 0) { total += raw; mean += raw * f; }
+                    else var += (raw / total) * (f - mean) * (f - mean);
+                }
+            }
+            uint32_t k = length;
+            while (k-- > 0u) {
+                if (++idx[k] < R) break;
+                idx[k] = 0u;
+                if (k == 0u) goto next_pass;
+            }
+        }
+next_pass:
+        if (pass == 0) mean /= total;
+    }
+    *out_mean = mean;
+    *out_var = var;
 }
 
 /* ── Entropy ─────────────────────────────────────────────────── */
@@ -329,17 +373,26 @@ static void test_moments_match_enumeration_under_a_constraint(void) {
     ASSERT_MSG(fabs(mo.variance - wv) < 1e-12, "Var[f] matches enumeration");
     beam_query_constraint_free(c);
 
-    /* Again with a mask, where the reference must condition too. */
+    /*
+     * Again with a mask, and this time the reference conditions too. The
+     * earlier version of this only checked that the mean had MOVED and the
+     * variance was non-negative, which any number satisfies; review was right
+     * to call it out.
+     */
+    const BeamResidueMask keep = (1u << AA_A_) | (1u << AA_G);
     BeamConstraint *d = beam_query_constraint_new(L, R);
-    ASSERT_MSG(beam_query_constrain_set(d, 1u,
-                   (1u << AA_A_) | (1u << AA_G)) == BEAM_OK, "mask");
+    ASSERT_MSG(beam_query_constrain_set(d, 1u, keep) == BEAM_OK, "mask");
     BeamQueryMoments md;
     ASSERT_MSG(beam_query_expect(m, d, &f, &md) == BEAM_OK, "expect");
-    /* The conditional reference: zero out the disallowed residues by giving
-     * them no mass, which is what a mask does to the trellis. */
-    ASSERT_MSG(md.mean != mo.mean, "the mask changed the answer");
-    ASSERT_MSG(md.variance >= 0.0, "and left a real variance");
     beam_query_constraint_free(d);
+
+    double cm = 0.0, cv = 0.0;
+    enumerate_moments_where(m, L, tab, 1u, keep, &cm, &cv);
+    ASSERT_MSG(fabs(md.mean - cm) < 1e-12,
+               "E[f | mask] matches the enumerated conditional");
+    ASSERT_MSG(fabs(md.variance - cv) < 1e-12,
+               "and so does Var[f | mask]");
+    ASSERT_MSG(fabs(md.mean - mo.mean) > 1e-9, "the mask really did change it");
     free(tab);
     beam_model_destroy(m);
     PASS();
@@ -397,6 +450,150 @@ static void test_variance_survives_a_large_constant_offset(void) {
                "so the centred accumulation is load-bearing and not a "
                "preference");
     free(plain); free(offset);
+    beam_model_destroy(m);
+    PASS();
+}
+
+static void test_variance_survives_an_offset_that_squares_to_infinity(void) {
+    /*
+     * Regression for a defect found by review. On the FIRST contribution into
+     * an accumulator the running mean is still zero, so the deviation is the
+     * whole functional value rather than a difference. At 1e155 that squares
+     * to infinity, and `infinity * 0` -- the zero being the accumulator's
+     * empty weight -- is NaN, not zero. The NaN travelled to the end and was
+     * reported as a variance of ZERO, because `NaN > 0` is false: a silent
+     * wrong answer, with BEAM_OK.
+     *
+     * The first contribution is now taken as its own case and no deviation is
+     * formed. All the path values and the true variance here are ordinary
+     * finite doubles; only the intermediate was not.
+     */
+    const char *seqs[2] = {"CASF", "CAGF"};
+    const double w[2] = {1.0, 1.0};
+    BeamModel *m = build(seqs, w, 2u, 2u, 6u, false);
+    ASSERT_MSG(m != NULL, "model built");
+    const uint32_t L = 4u;
+
+    double *tab = (double *)calloc((size_t)L * R, sizeof(double));
+    ASSERT_MSG(tab != NULL, "alloc");
+    /* Every path totals about 4e155; the two differ by 1e150, so the true
+     * variance is about 2.5e299 -- large, and perfectly representable. */
+    for (uint32_t i = 0; i < L; ++i)
+        for (uint32_t a = 0; a < R; ++a)
+            tab[(size_t)i * R + a] = 1e155;
+    tab[(size_t)2 * R + AA_S_] = 1e155 + 1e150;
+
+    const BeamFunctional f = { BEAM_FUNCTIONAL_TABLE, tab };
+    BeamConstraint *c = beam_query_constraint_new(L, R);
+    BeamQueryMoments mo;
+    ASSERT_MSG(beam_query_expect(m, c, &f, &mo) == BEAM_OK, "expect");
+    beam_query_constraint_free(c);
+
+    /* Two equally likely paths differing by 1e150: variance is (d/2)^2. */
+    const double want = 0.25 * 1e150 * 1e150;
+    ASSERT_MSG(mo.variance > 0.0,
+               "a finite variance is not reported as zero");
+    ASSERT_MSG(fabs(mo.variance - want) < 1e-6 * want,
+               "and it is the variance the two paths actually have");
+    ASSERT_MSG(isfinite(mo.mean) && mo.mean > 1e155, "the mean is finite too");
+    free(tab);
+    beam_model_destroy(m);
+    PASS();
+}
+
+static void test_many_rare_paths_still_mix_into_an_entropy(void) {
+    /*
+     * The test below pins every position, so each state has exactly one
+     * arrival and the merge never has to COMBINE two contributions. This one
+     * leaves a position free, giving twenty paths all around 6,900 nats below
+     * the mode, so the mixture is exercised where its weights would underflow.
+     *
+     * Taking those weights as `exp(a) / (exp(a) + exp(b))` -- the obvious
+     * form -- gives 0/0 at these magnitudes. The merge subtracts the larger
+     * log first, so its two weights are exact complements whatever the inputs,
+     * and that is the whole reason this file carries logarithms.
+     */
+    BeamModel *m = build(TRAIN, WEIGHT, N_TRAIN, 3u, 14u, true);
+    ASSERT_MSG(m != NULL, "open-world model built");
+    const uint32_t L = 10u, FREE = 4u;
+
+    BeamConstraint *c = beam_query_constraint_new(L, R);
+    for (uint32_t i = 0; i < L; ++i)
+        if (i != FREE)
+            ASSERT_MSG(beam_query_constrain_position(c, i, AA_W) == BEAM_OK,
+                       "pin");
+
+    double h = -1.0, v = -1.0;
+    ASSERT_MSG(beam_query_entropy(m, c, &h, &v) == BEAM_OK, "entropy");
+    ASSERT_MSG(h > 0.1,
+               "twenty admitted sequences carry real entropy, so the merge "
+               "genuinely combined contributions rather than taking one");
+    /* Not that the surprisal must VARY: if the free position is uniform the
+     * admitted sequences are equally likely and its spread is exactly zero,
+     * which is the right answer and not a collapsed one. */
+    ASSERT_MSG(v >= 0.0 && isfinite(v), "with a finite surprisal spread");
+
+    /*
+     * With every other position determined, the sequence entropy IS the
+     * entropy of the free position's marginal -- computed by the posterior
+     * sweep, which shares no accumulator with the moment sweep.
+     */
+    double *marg = (double *)malloc((size_t)L * R * sizeof(double));
+    ASSERT_MSG(marg != NULL, "alloc");
+    ASSERT_MSG(beam_query_marginals(m, c, marg, NULL) == BEAM_OK, "marginals");
+    double want = 0.0;
+    for (uint32_t a = 0; a < R; ++a) {
+        const double q = marg[(size_t)FREE * R + a];
+        if (q > 0.0) want -= q * log(q);
+    }
+    ASSERT_MSG(fabs(h - want) < 1e-9,
+               "and it matches the entropy of that position's marginal");
+    free(marg);
+    beam_query_constraint_free(c);
+    beam_model_destroy(m);
+    PASS();
+}
+
+static void test_a_rare_but_certain_event_has_moments(void) {
+    /*
+     * Regression for a defect found by review. The sink rescale used to be
+     * taken over every trellis state, whether or not the sweep had reached it
+     * or the automaton would accept it. A conditioned event more than about
+     * 745 nats below an unreachable maximum then underflowed to no mass at
+     * all, and a perfectly producible question came back NO_LIVE_PATHS --
+     * while `beam_query_log_probability`, which is log-space throughout,
+     * answered it without difficulty.
+     *
+     * Pinning every position leaves exactly one sequence, so its conditional
+     * entropy and variance are exactly zero and its log Z is its own score.
+     */
+    BeamModel *m = build(TRAIN, WEIGHT, N_TRAIN, 3u, 14u, true);
+    ASSERT_MSG(m != NULL, "open-world model built");
+    const uint32_t L = 10u;
+    const char *rare = "WWWWWWWWWW";
+    const double score = beam_model_log_pseq(m, rare);
+    ASSERT_MSG(isfinite(score) && score < -700.0,
+               "producible, and thousands of nats below the mode");
+
+    BeamConstraint *c = beam_query_constraint_new(L, R);
+    for (uint32_t i = 0; i < L; ++i)
+        ASSERT_MSG(beam_query_constrain_position(c, i, AA_W) == BEAM_OK, "pin");
+
+    double lp = 0.0;
+    ASSERT_MSG(beam_query_log_probability(m, c, &lp) == BEAM_OK,
+               "the log-space route always answered this");
+    double h = -1.0, v = -1.0;
+    ASSERT_MSG(beam_query_entropy(m, c, &h, &v) == BEAM_OK,
+               "and so must the moment sweep");
+    ASSERT_MSG(fabs(h) < 1e-9, "one sequence carries no entropy");
+    ASSERT_MSG(v >= 0.0 && v < 1e-9, "and its surprisal does not vary");
+
+    const BeamFunctional f = { BEAM_FUNCTIONAL_LOG_WEIGHT, NULL };
+    BeamQueryMoments mo;
+    ASSERT_MSG(beam_query_expect(m, c, &f, &mo) == BEAM_OK, "expect");
+    ASSERT_MSG(fabs(mo.log_z - (lp + beam_model_log_partition(m, L))) < 1e-6,
+               "and the two routes agree on the constrained partition");
+    beam_query_constraint_free(c);
     beam_model_destroy(m);
     PASS();
 }
@@ -504,14 +701,22 @@ static void test_a_moment_sweep_is_cheaper_than_a_posterior(void) {
      * worth pinning: an implementation that grew a backward field would lose
      * it silently.
      */
-    const uint32_t S = 194481u, Q = 4u, Rr = 20u;
-    for (uint32_t L = 8u; L <= 24u; L += 8u) {
-        const uint64_t mom = beam_query_moment_bytes(S, Q, Rr);
-        const uint64_t pos = beam_query_sweep_bytes(S, Q, Rr, L, true);
-        ASSERT_MSG(mom < pos, "moments cost less than a posterior");
-        ASSERT_MSG(mom == beam_query_moment_bytes(S, Q, Rr),
-                   "and do not grow with the length at all");
-    }
+    const uint64_t S = 194481u, Q = 4u, Rr = 20u;
+    /*
+     * Against arithmetic done here rather than another call to the same
+     * helper: three quantities per product state, double-buffered, one layer
+     * of weights, and the sink. A helper that returned a constant zero would
+     * pass a comparison with itself and silently disable the budget guard.
+     */
+    const uint64_t expect = 6ull * S * Q * sizeof(double)
+                          + S * Rr * sizeof(double)
+                          + S * sizeof(double);
+    ASSERT_MSG(beam_query_moment_bytes(S, Q, Rr) == expect,
+               "the moment sweep is costed as what it allocates");
+    for (uint32_t L = 8u; L <= 24u; L += 8u)
+        ASSERT_MSG(beam_query_moment_bytes(S, Q, Rr)
+                   < beam_query_sweep_bytes(S, Q, Rr, L, true),
+                   "and costs less than a posterior at every length");
     PASS();
 }
 
@@ -531,6 +736,9 @@ int main(void) {
 
     printf("\n[numerical conditioning]\n");
     RUN_TEST(test_variance_survives_a_large_constant_offset);
+    RUN_TEST(test_variance_survives_an_offset_that_squares_to_infinity);
+    RUN_TEST(test_a_rare_but_certain_event_has_moments);
+    RUN_TEST(test_many_rare_paths_still_mix_into_an_entropy);
 
     printf("\n[constraints]\n");
     RUN_TEST(test_moments_respect_an_automaton);

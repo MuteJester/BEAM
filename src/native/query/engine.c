@@ -81,16 +81,16 @@ BeamError beam_query_work_alloc(const BeamModel *m, uint32_t length,
         return BEAM_EALLOC("one layer of edge weights");
     }
     /*
-     * Sink weights are the product path's alone. The mask sweep writes them
-     * straight into its last backward layer, which the product cannot do
-     * because acceptance has to be applied to them state by state first.
+     * Allocated for every sweep, not only the product one. The mask sweep
+     * writes the sink straight into its last backward layer and never touches
+     * this, but `beam_query_betas_product` writes through it unconditionally,
+     * and gating the allocation on `n_aut > 1` left a null dereference waiting
+     * for the first one-state automaton. Found by review.
      */
-    if (n_aut > 1u) {
-        k->tail = (double *)malloc((size_t)S * sizeof(double));
-        if (!k->tail) {
-            beam_query_work_free(k);
-            return BEAM_EALLOC("the sink weights");
-        }
+    k->tail = (double *)malloc((size_t)S * sizeof(double));
+    if (!k->tail) {
+        beam_query_work_free(k);
+        return BEAM_EALLOC("the sink weights");
     }
     if (!want_forward) return BEAM_OK;
 
@@ -200,7 +200,8 @@ double beam_query_layer_max(const double *w, const double *cur,
 
 bool beam_query_advance(const BeamModel *m, const double *w, double wmax,
                         const double *cur, double *next,
-                        BeamResidueMask allowed, double *log_scale) {
+                        BeamResidueMask allowed, const double *beta_next,
+                        double *log_scale) {
     const uint32_t A = m->n_alphabet;
     const uint32_t R = m->n_residues;
     const uint32_t S = m->n_states;
@@ -227,8 +228,10 @@ bool beam_query_advance(const BeamModel *m, const double *w, double wmax,
             if (wv == -INFINITY) continue;
             sum += cur[src] * exp(wv - wmax);
         }
-        next[t] = sum;
-        if (sum > nmax) nmax = sum;
+        /* Cleared when no completion leaves this state, so that a dead end
+         * cannot set the rescale; see beam_query_advance_product. */
+        next[t] = (beta_next && beta_next[t] == -INFINITY) ? 0.0 : sum;
+        if (next[t] > nmax) nmax = next[t];
     }
     *log_scale += wmax;
     if (!(nmax > 0.0)) return false;

@@ -457,8 +457,20 @@ static void test_the_information_cost_reports_the_whole_job(void) {
      * of them carry mass. */
     ASSERT_MSG(all.edges == one.edges * (L * R + 1u),
                "the matrix is costed as the sweeps it will actually take");
-    ASSERT_MSG(all.bytes == one.bytes,
-               "but they run one at a time, so the memory is one sweep's");
+    /*
+     * The sweeps run one at a time, but the matrix HOLDS its accumulators
+     * across all of them, so the peak is a sweep plus those. An earlier
+     * version of this test asserted equality with one sweep, which enshrined
+     * an undercount: a caller could set the budget to the reported figure and
+     * still exceed it. Review caught the test as well as the code.
+     */
+    const uint64_t held = 2ull * L * R * sizeof(double)
+                        + (uint64_t)L * L * sizeof(double)
+                        + L * sizeof(double)
+                        + L * sizeof(BeamResidueMask);
+    ASSERT_MSG(all.bytes == one.bytes + held,
+               "and the peak counts what is held across them");
+    ASSERT_MSG(all.bytes > one.bytes, "which is strictly more than one sweep");
     beam_query_constraint_free(c);
     beam_model_destroy(m);
     PASS();

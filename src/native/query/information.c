@@ -224,9 +224,30 @@ BeamError beam_query_information_cost(const BeamModel *m,
     if (err != BEAM_OK) return err;
     /* One sweep per (position, residue), plus the unconstrained one that
      * finds out which of them carry mass. */
-    const uint64_t sweeps = (uint64_t)beam_query_constraint_length(c)
-                          * m->n_residues + 1u;
+    const uint64_t L = beam_query_constraint_length(c);
+    const uint64_t R = m->n_residues;
+    const uint64_t sweeps = L * R + 1u;
     out->edges  *= sweeps;
     out->states *= sweeps;
+
+    /*
+     * Held ACROSS every one of those sweeps, so it is peak memory the sweep's
+     * own figure does not include: two marginal blocks, the joint-entropy
+     * accumulator, the per-position entropies, and a working copy of the
+     * constraint with its automaton. Reporting one sweep's bytes let a caller
+     * set the budget to exactly the reported cost and then exceed it. Found
+     * by review.
+     */
+    uint64_t held = 2u * L * R * sizeof(double)      /* marg and cond      */
+                  + L * L * sizeof(double)           /* joint entropies    */
+                  + L * sizeof(double)               /* position entropies */
+                  + L * sizeof(BeamResidueMask);     /* the cloned masks   */
+    const BeamAutomaton *aut = beam_query_constraint_automaton(c);
+    if (aut) {
+        const uint64_t Q = beam_query_automaton_states(aut);
+        held += (uint64_t)beam_query_automaton_layers(aut) * Q * R
+                * sizeof(uint32_t) + Q;
+    }
+    out->bytes += held;
     return BEAM_OK;
 }
