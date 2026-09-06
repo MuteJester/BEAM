@@ -6,7 +6,7 @@
 #include <stdlib.h>
 
 #include "beam/publicness.h"
-#include "beam/errors.h"
+#include "beam/error_macros.h"
 #include "beam/budget.h"
 #include "beam/occupancy_internal.h"
 

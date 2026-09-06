@@ -17,7 +17,7 @@
 
 #include "beam/query.h"
 #include "beam/query_internal.h"
-#include "beam/errors.h"
+#include "beam/error_macros.h"
 
 /* ── Construction ────────────────────────────────────────────── */
 

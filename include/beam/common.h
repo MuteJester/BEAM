@@ -10,91 +10,16 @@
 #include <stdbool.h>
 #include <math.h>
 
-/* ── Result / error codes ───────────────────────────────────── */
+/* ── Result / error codes and the error context ─────────────── */
 
-typedef enum {
-    BEAM_OK = 0,
-
-    /* Memory */
-    BEAM_ERR_ALLOC,                /* malloc/calloc/realloc failed   */
-
-    /* Input validation */
-    BEAM_ERR_NULL_ARG,             /* required pointer is NULL       */
-    BEAM_ERR_EMPTY_INPUT,          /* empty sequence list or array   */
-    BEAM_ERR_INVALID_SEQUENCE,     /* bad characters or length       */
-    BEAM_ERR_INVALID_VARIANT,      /* unknown BeamVariant value       */
-    BEAM_ERR_LENGTH_MISMATCH,      /* array lengths don't match      */
-    BEAM_ERR_PARAM_OUT_OF_RANGE,   /* parameter outside valid range  */
-
-    /* Graph state */
-    BEAM_ERR_NOT_BUILT,            /* graph not yet built/finalized  */
-    BEAM_ERR_NO_LIVE_PATHS,        /* no live initial states exist   */
-    BEAM_ERR_HAS_CYCLES,           /* graph is not a DAG             */
-
-    /* Gene data */
-    BEAM_ERR_NO_GENE_DATA,         /* gene op on graph without genes */
-    BEAM_ERR_GENE_NOT_FOUND,       /* gene name not in string pool   */
-
-    /* Graph operations */
-    BEAM_ERR_VARIANT_MISMATCH,     /* set op on different variants   */
-    BEAM_ERR_MISSING_EDGE,         /* walk requires a missing edge   */
-
-    /* IO */
-    BEAM_ERR_IO_OPEN,              /* cannot open file               */
-    BEAM_ERR_IO_READ,              /* read error or unexpected EOF   */
-    BEAM_ERR_IO_WRITE,             /* write error                    */
-    BEAM_ERR_IO_CORRUPT,           /* CRC mismatch or bad structure  */
-    BEAM_ERR_IO_VERSION,           /* unsupported format version     */
-
-    /* Numerical */
-    BEAM_ERR_CONVERGENCE,          /* iterative method did not converge */
-
-    /* Internal (library bugs — should never reach the user) */
-    BEAM_ERR_OVERFLOW,             /* fixed-size buffer exceeded     */
-    BEAM_ERR_INTERNAL,             /* invariant violation (report!)  */
-
-    /* Backward compatibility aliases (map old codes to new) */
-    BEAM_ERR_INVALID_ARG   = BEAM_ERR_NULL_ARG,
-    BEAM_ERR_NOT_FINALIZED = BEAM_ERR_NOT_BUILT,
-    BEAM_ERR_EMPTY_DATA    = BEAM_ERR_EMPTY_INPUT,
-    BEAM_ERR_IO            = BEAM_ERR_IO_OPEN,
-} BeamError;
-
-/* ── Thread-local error context ────────────────────────────── */
-
-/**
- * Get the human-readable error message for the last error.
- * Returns "" if no error has been set. Thread-safe (thread-local storage).
+/*
+ * Moved to beam/errors.h, and included here so every existing translation
+ * unit still compiles unchanged. The enum, BEAM_FAIL and the thread-local
+ * context are all still public and still spelled the same; what changed is
+ * that they now live in a file named after them, with the two calling
+ * protocols and the append-only rule written down beside them.
  */
-const char *beam_error_message(void);
-
-/**
- * Get the error code of the last error.
- */
-BeamError beam_last_error(void);
-
-/**
- * Set the error context. Called internally before returning an error code.
- * Supports printf-style formatting.
- *
- * Usage:
- *   beam_set_error(BEAM_ERR_NULL_ARG, "sequences must not be NULL");
- *   return BEAM_ERR_NULL_ARG;
- *
- * Or use the convenience macro:
- *   return BEAM_FAIL(BEAM_ERR_NULL_ARG, "sequences must not be NULL");
- */
-void beam_set_error(BeamError code, const char *fmt, ...);
-
-/**
- * Clear the error state.
- */
-void beam_clear_error(void);
-
-/**
- * Convenience macro: set error and return the code in one line.
- */
-#define BEAM_FAIL(code, ...) (beam_set_error((code), __VA_ARGS__), (code))
+#include "beam/errors.h"
 
 /* ── Graph variant ──────────────────────────────────────────── */
 

@@ -21,7 +21,7 @@
 
 #include "beam/query.h"
 #include "beam/query_internal.h"
-#include "beam/errors.h"
+#include "beam/error_macros.h"
 #include "beam/budget.h"
 #include "beam/model_state.h"
 

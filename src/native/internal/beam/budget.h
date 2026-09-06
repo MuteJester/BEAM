@@ -53,7 +53,7 @@
 #include <stdint.h>
 
 #include "beam/model.h"
-#include "beam/errors.h"
+#include "beam/error_macros.h"
 
 /** True when a working set of `need` bytes fits the budget in force. */
 static inline bool beam_budget_fits(uint64_t need) {
