@@ -191,7 +191,9 @@ class BeamQuery:
   property model
   def mutual_information(self, cond: 'Condition') -> 'np.ndarray'
   def pair_joint(self, cond: 'Condition', i: 'int', j: 'int') -> 'np.ndarray'
+  def position_divergence(self, cond: 'Condition') -> 'np.ndarray'
   def position_entropy(self, cond: 'Condition') -> 'np.ndarray'
+  def position_information(self, cond: 'Condition') -> 'np.ndarray'
   def probability(self, cond: 'Condition') -> 'float'
   def surprisal_variance(self, cond: 'Condition') -> 'float'
   def total_correlation(self, cond: 'Condition') -> 'float'

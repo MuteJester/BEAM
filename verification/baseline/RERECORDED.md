@@ -299,3 +299,15 @@ which is the comparison that matters.
 the C public symbols were all green across these, which is the expected
 signature of a change that adds capability and fixes documentation without
 moving an existing number.
+
+Two moved once more, in the same session, for the position-versus-property
+information the same review recommended:
+
+    python_api.txt      487 -> 489   (+2)   BeamQuery.position_information
+                                            and .position_divergence
+    pytest_cases.txt    417 -> 421   (+4)   enumeration, the bounds, the
+                                            pinned-position case, and the
+                                            constant condition
+
+Both are derived quantities -- two marginal sweeps and arithmetic -- so no C
+symbol, no `_cbeam` entry and no C test case moved with them.

@@ -299,6 +299,71 @@ def test_conditional_entropy_matches_the_matrix_route(aa_model):
         "a position determines itself"
 
 
+def test_position_information_matches_enumeration(nt_model):
+    """`I(X_i ; 1_C)`: which positions predict whether the condition holds."""
+    q = BeamQuery(nt_model)
+    sup = _support(nt_model, 5)
+    cases = [
+        (q.condition(5).contains("CG"), lambda s: "CG" in s),
+        (q.condition(5).at(0, "A"), lambda s: s[0] == "A"),
+        (q.condition(5).count("A", 2, 3), lambda s: 2 <= s.count("A") <= 3),
+    ]
+    for cond, keep in cases:
+        pC = sum(p for s, p in sup.items() if keep(s))
+        assert 0.0 < pC < 1.0
+        want_i, want_d = np.zeros(5), np.zeros(5)
+        for i in range(5):
+            pa, pin, pout = (np.zeros(len(NT)) for _ in range(3))
+            for s, p in sup.items():
+                a = NT.index(s[i])
+                pa[a] += p
+                (pin if keep(s) else pout)[a] += p
+            pin /= pC
+            pout /= (1.0 - pC)
+            ent = lambda v: -sum(x * math.log(x) for x in v if x > 0.0)
+            want_i[i] = ent(pa) - pC * ent(pin) - (1.0 - pC) * ent(pout)
+            want_d[i] = sum(pin[a] * math.log(pin[a] / pa[a])
+                            for a in range(len(NT)) if pin[a] > 0.0)
+        assert np.allclose(q.position_information(cond), want_i, atol=1e-12)
+        assert np.allclose(q.position_divergence(cond), want_d, atol=1e-12)
+
+
+def test_position_information_obeys_its_bounds(nt_model):
+    q = BeamQuery(nt_model)
+    cond = q.condition(5).contains("CG")
+    info = q.position_information(cond)
+    p = q.probability(cond)
+    h_y = -(p * math.log(p) + (1 - p) * math.log(1 - p))
+
+    assert (info >= -EXACT).all(), "information is never negative"
+    assert (info <= h_y + EXACT).all(), \
+        "and never exceeds what there is to know about the condition"
+    assert (info <= q.position_entropy(cond) + q.position_entropy(
+        q.condition(5)) + EXACT).all()
+    assert (q.position_divergence(cond) >= -EXACT).all(), "KL is non-negative"
+
+
+def test_a_condition_that_pins_a_position_is_told_by_that_position(nt_model):
+    """The sharpest case: the condition IS position 0, so position 0 predicts
+    it perfectly and the others barely at all."""
+    q = BeamQuery(nt_model)
+    cond = q.condition(5).at(0, "A")
+    info = q.position_information(cond)
+    p = q.probability(cond)
+    h_y = -(p * math.log(p) + (1 - p) * math.log(1 - p))
+    assert info[0] == pytest.approx(h_y, abs=1e-12), \
+        "knowing position 0 settles the condition entirely"
+    assert info[1:].max() < 0.01, "and the rest say almost nothing"
+
+
+def test_a_constant_condition_carries_no_information(nt_model):
+    """Selecting everything is not a fact about any position."""
+    q = BeamQuery(nt_model)
+    info = q.position_information(q.condition(5))
+    assert np.allclose(info, 0.0, atol=EXACT)
+    assert np.allclose(q.position_divergence(q.condition(5)), 0.0, atol=EXACT)
+
+
 # ── Refusals ───────────────────────────────────────────────────
 
 def test_conditioning_on_the_impossible_is_refused(nt_model):

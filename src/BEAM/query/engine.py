@@ -32,6 +32,14 @@ from .errors import ImpossibleCondition, QueryTooLarge, UnsupportedQuery
 __all__ = ["BeamQuery"]
 
 
+def _row_entropy(rows: np.ndarray) -> np.ndarray:
+    """Shannon entropy of each row, in nats. Zero probabilities contribute
+    nothing, which is the limit of `p ln p` and not a special case."""
+    with np.errstate(divide="ignore", invalid="ignore"):
+        term = np.where(rows > 0.0, rows * np.log(rows), 0.0)
+    return -term.sum(axis=1)
+
+
 def _translate(exc: BaseException) -> BaseException:
     """Narrow a binding's built-in exception to this package's own.
 
@@ -191,6 +199,66 @@ class BeamQuery:
         raw = self._call(_c.query_information_matrix, cond)
         n = int(round(math.sqrt(raw.__len__() / 8)))
         return np.frombuffer(raw, dtype=np.float64).reshape(n, n).copy()
+
+    def position_information(self, cond: Condition) -> np.ndarray:
+        """``I(X_i ; 1_C)`` for each position, in nats.
+
+        How much each position tells you about whether the condition HOLDS --
+        as against :meth:`mutual_information`, which relates positions to each
+        other. "Which positions carry the information that a sequence contains
+        the J motif, or has at least two cysteines" is this, and it is the
+        question a repertoire analysis usually starts from.
+
+        With ``Y = 1{s in C}`` and ``p = P(C)``::
+
+            I(X_i ; Y) = H(X_i) - p H(X_i | C) - (1 - p) H(X_i | ~C)
+
+        and ``P(X_i | ~C)`` is a subtraction rather than a third sweep, since
+        ``P(X_i) = p P(X_i | C) + (1 - p) P(X_i | ~C)``.
+
+        **Two sweeps.** :meth:`mutual_information` is one per
+        ``(position, residue)`` pair -- 281 on a length-14 amino-acid model
+        against 2 here.
+
+        Zero everywhere when the condition selects everything or nothing, which
+        is correct rather than degenerate: a constant tells you nothing.
+        """
+        free = self.condition(self._length_of(cond))
+        p = self.probability(cond)
+        m_all = self.marginals(free)
+        if not (0.0 < p < 1.0):
+            # Y is constant, so it shares no information with anything.
+            return np.zeros(m_all.shape[0])
+        m_in = self.marginals(cond)
+        m_out = np.clip((m_all - p * m_in) / (1.0 - p), 0.0, None)
+        s = m_out.sum(axis=1, keepdims=True)
+        m_out = np.divide(m_out, s, out=np.zeros_like(m_out), where=s > 0.0)
+        return (_row_entropy(m_all)
+                - p * _row_entropy(m_in)
+                - (1.0 - p) * _row_entropy(m_out))
+
+    def position_divergence(self, cond: Condition) -> np.ndarray:
+        """``D(P(X_i | C) || P(X_i))`` for each position, in nats.
+
+        How far the condition MOVES each position, as against how much the
+        position predicts the condition. The two rank differently: a position
+        can shift a great deal under a rare condition while telling you little
+        about it, because the shift is diluted by how seldom the condition
+        holds. :meth:`position_information` is the predictive quantity;
+        this is the descriptive one.
+
+        Costs the same two sweeps.
+        """
+        free = self.condition(self._length_of(cond))
+        m_all = self.marginals(free)
+        m_in = self.marginals(cond)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            term = np.where(m_in > 0.0, m_in * np.log(m_in / m_all), 0.0)
+        return np.nan_to_num(term, nan=0.0, posinf=np.inf).sum(axis=1)
+
+    def _length_of(self, cond: Condition) -> int:
+        length, _, _ = self._check(cond)
+        return length
 
     def conditional_entropy(self, cond: Condition, i: int, j: int) -> float:
         """``H(X_i | X_j, C)``: what is left to learn about `i` knowing `j`.

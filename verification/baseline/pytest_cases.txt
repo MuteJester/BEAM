@@ -393,6 +393,8 @@ tests/python/publicness/test_publicness.py::test_zero_depth_repertoires_never_de
 tests/python/publicness/test_publicness.py::test_zero_multiplicity_atoms_are_dropped
 tests/python/query/test_query.py::test_a_condition_over_the_wrong_alphabet_is_refused
 tests/python/query/test_query.py::test_a_condition_refuses_what_it_cannot_express
+tests/python/query/test_query.py::test_a_condition_that_pins_a_position_is_told_by_that_position
+tests/python/query/test_query.py::test_a_constant_condition_carries_no_information
 tests/python/query/test_query.py::test_a_fresh_condition_selects_everything
 tests/python/query/test_query.py::test_a_functional_of_the_wrong_shape_is_refused
 tests/python/query/test_query.py::test_a_neighbourhood_says_when_the_length_prior_rules_it_out
@@ -411,6 +413,8 @@ tests/python/query/test_query.py::test_insertions_and_deletions_round_trip
 tests/python/query/test_query.py::test_marginals_and_entropy_match_enumeration
 tests/python/query/test_query.py::test_multiplicity_recovers_the_per_edit_convention
 tests/python/query/test_query.py::test_pair_joint_agrees_with_the_marginals
+tests/python/query/test_query.py::test_position_information_matches_enumeration
+tests/python/query/test_query.py::test_position_information_obeys_its_bounds
 tests/python/query/test_query.py::test_probability_matches_enumeration
 tests/python/query/test_query.py::test_the_automaton_tier_is_visible
 tests/python/query/test_query.py::test_the_information_matrix_obeys_its_identities

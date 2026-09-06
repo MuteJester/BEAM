@@ -74,7 +74,25 @@ q.position_entropy(c)     # H(X_i | C), one per position
 q.mutual_information(c)   # (length, length), symmetric, non-negative
 q.conditional_entropy(c, i, j)
 q.total_correlation(c)    # sum_i H(X_i) - H(X)
+
+q.position_information(c) # I(X_i ; 1_C), one per position
+q.position_divergence(c)  # D(P(X_i | C) || P(X_i))
 ```
+
+### Which positions carry the condition
+
+`mutual_information` relates positions to **each other**. `position_information` relates each position to **whether the condition holds** — "which positions carry the information that a sequence contains the J motif, or has at least two cysteines", which is usually where a repertoire analysis starts.
+
+```python
+c = q.condition(5).contains("CG")
+q.position_information(c)   # [0.003, 0.215, 0.221, 0.002, 0.001]
+```
+
+Positions 1 and 2 carry almost all of it, which is where `CG` can sit. Pin a position instead and that position carries the whole of `H(1_C)` while the others carry nearly nothing.
+
+**Two sweeps**, against the one-per-`(position, residue)`-pair that `mutual_information` costs — 2 rather than 281 on a length-14 amino-acid model. `P(X_i | ~C)` is a subtraction, not a third sweep.
+
+`position_divergence` is the descriptive counterpart: how far the condition **moves** each position, rather than how much the position **predicts** it. They rank differently — a position can shift a great deal under a rare condition while telling you little about it, because the shift is diluted by how seldom the condition holds.
 
 ### Three things are called "the entropy"
 
@@ -150,6 +168,5 @@ Each keeps its built-in as a base class, so existing code catching `ValueError` 
 ## Not yet available
 
 - Cross-length questions: `E[length | C]`, `P(seq | C)`. Conditions are bound to one length at construction.
-- Mutual information between a position and a **property** rather than another position.
 - Exact KL divergence between two models.
 - Constrained MAP — the most probable sequence satisfying a condition.
