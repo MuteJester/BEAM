@@ -46,6 +46,22 @@ python verification/check.py     # the contract below
 | numeric | 78 quantities, order 2/3/4 x open/strict, as hex floats |
 | saved-model bytes | the sha256 of a written model |
 | thread independence | results at 1, 4 and 16 threads |
+| exact | 280 quantities against brute-force enumeration |
+
+Every row above `exact` pins REPRODUCIBILITY: each quantity is compared with a
+recording of ITSELF, so a quantity that has been wrong since the day it was
+written passes for ever. Three defects lived inside quantities `numeric`
+already pinned -- `positional_marginals` returning rows summing to 5.9e-264,
+the tilted sweeps overflowing at any negative `q`, and a zero anchor weight
+filling the edge weights with NaNs -- and the baseline never moved for any of
+them.
+
+`exact.py` is the answer to that. It builds models small enough to enumerate
+the whole support, scores every sequence once, and checks each exported
+functional against a direct sum over the resulting vector. Nothing in it reads
+a baseline file. Its tolerances are measured rather than guessed:
+`BEAM_EXACT_VERBOSE=1` prints how much of each one is actually consumed (worst
+is currently 5.7%).
 
 The numeric check is exact except for the publicness keys, which are compared
 within 1e-9 relative. Those run their forward transform through numpy's FFT,

@@ -227,6 +227,19 @@ for n in (1, 4, 16):
 BEAM.set_threads(0)
 check("thread independence", tg, tw)
 
+# ── Correctness against enumeration ────────────────────────────────────────
+# Everything above pins REPRODUCIBILITY: each quantity is compared against a
+# recording of itself, so a quantity that has been wrong since it was written
+# passes for ever. `exact.py` compares against brute-force enumeration of a
+# model's whole support instead, which is the only check here that can fail on
+# a defect that predates the baseline. Three such defects were found that way,
+# all inside quantities the baseline already pinned.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import exact                                                     # noqa: E402
+
+if exact.run():
+    fail.append("exact")
+
 print()
 if fail:
     print(f"BASELINE CHECK FAILED: {', '.join(fail)}")
