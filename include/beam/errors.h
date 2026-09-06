@@ -51,6 +51,26 @@
  * The compatibility aliases share values with the codes they alias, so a
  * `switch` cannot carry a `case` for both halves of a pair -- that is a
  * duplicate-case error whose cause is not obvious from the message.
+ *
+ * ── Codes nothing produces ─────────────────────────────────────────────────
+ *
+ * Eight are never raised anywhere in the library, verified by grep over every
+ * producer including the ones hidden behind the BEAM_E* macros:
+ *
+ *     INVALID_VARIANT  LENGTH_MISMATCH  HAS_CYCLES     NO_GENE_DATA
+ *     GENE_NOT_FOUND   MISSING_EDGE     CONVERGENCE    OVERFLOW
+ *
+ * Three of them (NO_GENE_DATA, GENE_NOT_FOUND, MISSING_EDGE) are vestigial
+ * from the LZGraphs extraction and describe a graph this model does not have.
+ * They are kept because removing a member of a public enum breaks anyone who
+ * names it, and listed here so nobody writes a handler for a failure that
+ * cannot happen.
+ *
+ * BEAM_ERR_NULL_ARG is a subtler case: it is unreachable under its own name,
+ * because every binding resolves its capsule and returns before C sees a NULL.
+ * The only live producers of its value are two BEAM_ERR_INVALID_ARG alias
+ * sites in model/prism.c, which mean "parameter out of range" rather than
+ * "null argument".
  */
 #ifndef BEAM_ERRORS_H
 #define BEAM_ERRORS_H

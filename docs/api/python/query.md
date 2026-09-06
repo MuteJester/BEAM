@@ -157,13 +157,13 @@ The ladder is worth seeing before you run into it: a mask-only condition is one 
 
 ## Refusals
 
-| exception | means | base |
+| exception | means | also a |
 |---|---|---|
-| `ImpossibleCondition` | the condition selects no sequence, so the conditional does not exist | `RuntimeError` |
-| `UnsupportedQuery` | no exact answer, or malformed | `ValueError` |
-| `QueryTooLarge` | exactly answerable, and over the memory budget | `MemoryError` |
+| `ImpossibleCondition` | the condition selects no sequence, so the conditional does not exist | `NoLivePaths`, `RuntimeError` |
+| `UnsupportedQuery` | no exact answer, or malformed | `BeamValueError`, `ValueError` |
+| `QueryTooLarge` | exactly answerable, and over the memory budget | `BudgetExceeded`, `MemoryError` |
 
-Each keeps its built-in as a base class, so existing code catching `ValueError` around a query keeps working.
+Each keeps its built-in as a base class, so existing code catching `ValueError` around a query keeps working. Each also descends from the library-wide equivalent in [errors.md](errors.md), so `except BEAM.BudgetExceeded` catches a query refused by the budget just as it catches a model that will not fit.
 
 ## Not yet available
 

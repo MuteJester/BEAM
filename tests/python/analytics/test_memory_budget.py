@@ -31,6 +31,7 @@ import numpy as np
 import pytest
 
 import BEAM
+from BEAM import BudgetExceeded
 
 #: Small enough that no sweep on any model fits, large enough to be a
 #: plausible setting rather than a degenerate zero.
@@ -117,7 +118,13 @@ def test_every_heavy_entry_point_refuses_under_a_starved_budget(
     """
     call = _calls(model)[name]
     BEAM.set_memory_budget(STARVED)
-    with pytest.raises(Exception) as exc:
+    # `BudgetExceeded`, not bare `Exception`. This test used to catch anything
+    # at all and assert on the words in the message, because a budget refusal
+    # and a genuine out-of-memory shared an error code and therefore a Python
+    # class -- the type system had nothing to offer for the refusal this repo
+    # has invested the most engineering in. Catching the type is the point of
+    # having split BEAM_ERR_BUDGET out.
+    with pytest.raises(BudgetExceeded) as exc:
         call()
     text = str(exc.value)
     # Names the cause...
@@ -169,7 +176,7 @@ def test_the_refusal_reports_a_figure_in_a_useful_unit(model, restore_budget):
     case a user hits deliberately.
     """
     BEAM.set_memory_budget(STARVED)
-    with pytest.raises(Exception) as exc:
+    with pytest.raises(BudgetExceeded) as exc:
         model.path_count(12)
     text = str(exc.value)
     assert "0.00 GB" not in text, f"unit did not scale: {text}"
@@ -202,7 +209,7 @@ def test_the_reported_figure_matches_an_independent_calculation(
     want = model.n_states * (4 + 3 * 8)
 
     BEAM.set_memory_budget(STARVED)
-    with pytest.raises(Exception) as exc:
+    with pytest.raises(BudgetExceeded) as exc:
         model.path_count(12)
 
     text = str(exc.value)
