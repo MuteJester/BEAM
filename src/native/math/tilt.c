@@ -36,9 +36,18 @@ BeamError beam_model_surprisal_tilt(const BeamModel *m, double q,
     }
     const uint32_t nw = beam_live_lengths_desc(m, work);
     int failed = BEAM_OK;
+    /* Concurrent sweeps DIVIDE the budget rather than multiplying it. A
+     * concurrency of 0 means one sweep does not fit at all, which the sweep
+     * itself refuses with the better message, so run one and report that. */
+    const uint32_t conc = beam_budget_concurrency(
+        beam_jet_sweep_bytes(m->n_states, m->n_residues, 3u), nw ? nw : 1u);
+    if (nw && conc == 0u)
+        return beam_budget_refuse("a tilted cumulant sweep", work[0],
+                                  beam_jet_sweep_bytes(m->n_states, m->n_residues, 3u));
+
 #ifdef _OPENMP
     #pragma omp parallel for schedule(dynamic, 1) reduction(max:failed) \
-            num_threads(beam_threads())
+            num_threads((int)conc)
 #endif
     for (int64_t k = 0; k < (int64_t)nw; ++k) {
         double mom[3] = {0}, lz = 0.0;

@@ -789,17 +789,47 @@ static void test_spectra_by_length_equal_one_at_a_time(void) {
         ASSERT_MSG(fabs(acc[b] - pooled[b]) < 1e-15,
                    "the rows must decompose the pooled spectrum");
 
-    /* Lowering the memory budget changes only how many lengths run at once. */
+    /*
+     * The memory budget changes the SCHEDULE, not the answer -- and below the
+     * size of a single sweep it refuses rather than running anyway.
+     *
+     * This used to assert that a budget of one byte still returned BEAM_OK,
+     * pinning the old promise that "one length always runs, however large".
+     * That promise was never kept: `positional.c` and the query layer refused
+     * above the budget from the same setter, so a call that worked at 4 GB
+     * failed at 1 MB in exactly the paths the documentation said it could not.
+     * The refusing half was kept, because one sweep reaches 6.6 GB on a
+     * nucleotide model at the ceiling order and a budget that cannot say no to
+     * that protects nothing.
+     */
     const uint64_t before = beam_model_memory_budget();
-    beam_model_set_memory_budget(1u);
     double *serial = (double *)calloc((size_t)(W + 1u) * bins, sizeof(double));
     ASSERT_MSG(serial != NULL, "alloc");
+
+    /* Far below the 4 GB default, so concurrency drops, but comfortably above
+     * one sweep of this order-3 model: the answer must not move. */
+    beam_model_set_memory_budget(256ull << 20);
     ASSERT_MSG(beam_model_spectra_by_length(m, false, 0, bins, ds, serial,
-                                                NULL) == BEAM_OK, "budget 1");
+                                                NULL) == BEAM_OK,
+               "a reduced budget still runs, one length at a time");
     for (size_t i = 0; i < (size_t)(W + 1u) * bins; ++i)
         ASSERT_MSG(serial[i] == rows[i],
                    "the memory budget must not change the answer");
+
+    /* Below one sweep: refused, and refused with a diagnosable message rather
+     * than a bare code. The budget is process-global and ASSERT_MSG returns
+     * from the middle of a test, so it is restored BEFORE the assertions --
+     * leaving it starved made later, unrelated tests fail with "build". */
+    beam_model_set_memory_budget(1u);
+    const BeamError starved = beam_model_spectra_by_length(m, false, 0, bins,
+                                                           ds, serial, NULL);
+    const int named = strstr(beam_error_message(), "memory budget") != NULL;
     beam_model_set_memory_budget(before);
+
+    ASSERT_MSG(starved != BEAM_OK,
+               "a budget below a single sweep must refuse, not run anyway");
+    ASSERT_MSG(named, "and the refusal must name the budget as the cause");
+    ASSERT_MSG(beam_model_memory_budget() == before, "budget restored");
 
     free(pooled); free(rows); free(one); free(acc); free(serial);
     beam_model_destroy(m);
@@ -1430,22 +1460,69 @@ static void test_live_cache_respects_the_memory_bound(void) {
     ASSERT_MSG(beam_live_cache_entries(m) > 0, "cache should be warm");
     ASSERT_MSG(beam_live_cache_bytes(m) > 0, "a warm cache holds bytes");
 
-    beam_model_memory_budget();
-    beam_model_set_memory_budget(4u);       /* a quarter of this is 1 byte */
-    beam_live_cache_drop(m);
+    /*
+     * Two properties, and they can no longer be starved with one number.
+     *
+     * The cache cap is a quarter of the budget, and the budget now also
+     * REFUSES a sweep too large to fit. On this model an entry averages
+     * 0.26 MB, so the cache declines only below about a 1.05 MB budget, while
+     * one path-counting sweep needs 5.45 MB. There is no budget at which the
+     * cache declines and that sweep still runs -- and there should not be:
+     * at 1 MB, refusing a 5.45 MB sweep is the whole point of the setting.
+     *
+     * So the fallback and the decline are exercised separately. Dropping the
+     * cache forces the build path, which IS the code that ran before the cache
+     * existed; and a budget that starves the cap is checked against topology,
+     * which needs 0.78 MB and therefore still fits.
+     */
+    int ok_count = 1, ok_topo = 1, ok_ret = 1;
+
+    /* The fallback path, at a budget where everything runs. */
     for (uint32_t L = 1; L <= 12; ++L) {
         if (!beam_length_live(m, L)) continue;
-        ASSERT_MSG(beam_model_path_count(m, L) == cached[L],
-                   "the uncached path must give the identical count");
+        beam_live_cache_drop(m);
+        if (beam_model_path_count(m, L) != cached[L]) ok_count = 0;
+        beam_live_cache_drop(m);
         double n = 0.0, e = 0.0;
-        ASSERT_MSG(beam_model_topology(m, L, &n, &e, NULL) == BEAM_OK,
-                   "topology");
-        ASSERT_MSG(n == nodes[L] && e == edges[L],
-                   "the uncached path must give the identical topology");
+        if (beam_model_topology(m, L, &n, &e, NULL) != BEAM_OK) ok_ret = 0;
+        else if (n != nodes[L] || e != edges[L]) ok_topo = 0;
     }
-    ASSERT_MSG(beam_live_cache_entries(m) == 0,
-               "nothing may be cached under a 1-byte bound");
+
+    /* The decline, at a budget below the cap but above a topology sweep. */
+    beam_model_set_memory_budget(1000000u);   /* cap 250 kB < a 256 kB entry */
+    beam_live_cache_drop(m);
+    int ok_uncached = 1, ok_empty = 1;
+    for (uint32_t L = 1; L <= 12; ++L) {
+        if (!beam_length_live(m, L)) continue;
+        double n = 0.0, e = 0.0;
+        if (beam_model_topology(m, L, &n, &e, NULL) != BEAM_OK
+            || n != nodes[L] || e != edges[L]) ok_uncached = 0;
+    }
+    /*
+     * The invariant is that the cache never exceeds its cap, not that it is
+     * necessarily empty: entries vary in size, and a budget low enough to
+     * exclude every one of them is also too low to run the topology sweep this
+     * loop needs. Asserting "empty" was asserting an accident of these two
+     * entries averaging 256 kB against a 250 kB cap.
+     */
+    if (beam_live_cache_bytes(m) > beam_model_memory_budget() / 4u)
+        ok_empty = 0;
+
+    /*
+     * Restored BEFORE the assertions. The budget is process-global, and an
+     * ASSERT_MSG returns from the middle of the test: leaving it starved made
+     * eight later, unrelated tests fail with "build", which is how this was
+     * found.
+     */
     beam_model_set_memory_budget(saved);
+
+    ASSERT_MSG(ok_count, "the uncached path must give the identical count");
+    ASSERT_MSG(ok_ret, "topology");
+    ASSERT_MSG(ok_topo, "the uncached path must give the identical topology");
+    ASSERT_MSG(ok_uncached,
+               "declining to cache must not change the topology");
+    ASSERT_MSG(ok_empty, "the cache must stay within its cap");
+    ASSERT_MSG(beam_model_memory_budget() == saved, "budget restored");
     beam_model_destroy(m);
     PASS();
 }

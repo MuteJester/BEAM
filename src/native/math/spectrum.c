@@ -301,6 +301,14 @@ static BeamError spectrum_spacing(const BeamModel *m, uint32_t bins,
     if (spacing > 0.0) { *out_ds = spacing; return BEAM_OK; }
 
     const double hi = beam_model_accumulator_max(m);
+    /*
+     * That helper reports failure as 0.0 with the error set, so a zero bound
+     * has two causes that must not be conflated: a model that generates
+     * nothing, and a sweep that was refused over the memory budget. Reporting
+     * the second as the first sent the user looking at their corpus for a
+     * problem that was in their budget.
+     */
+    if (beam_last_error() != BEAM_OK) return beam_last_error();
     if (!(hi > 0.0))
         return BEAM_ENOPATHS("the accumulator bound is zero, so the "
                                  "model generates nothing to bin");
@@ -466,6 +474,16 @@ BeamError beam_model_spectra_by_length(const BeamModel *m, bool counting,
     }
 
     const uint64_t need = spectrum_bytes(m, bins, 1u, maxlive);
+    /*
+     * The floor below used to be unconditional, so a budget under one sweep
+     * ran it anyway -- the concurrency cap was honoured and the ceiling was
+     * not. Refusing here is what makes the budget one number with one meaning.
+     */
+    if (need && !beam_budget_fits(need)) {
+        const uint32_t at = nw ? work[0] : 0u;
+        free(work);
+        return beam_budget_refuse("a spectrum sweep", at, need);
+    }
     const int th = beam_threads();
     uint32_t conc = (uint32_t)(need ? beam_model_memory_budget() / need
                                     : (uint64_t)nw);

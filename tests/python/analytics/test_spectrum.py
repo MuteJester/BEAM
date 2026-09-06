@@ -71,23 +71,46 @@ def test_spectra_by_length_rows_are_bit_identical(small):
     assert np.allclose(W.sum(axis=0), pooled, rtol=0, atol=1e-15)
 
 
-def test_spectra_by_length_does_not_depend_on_the_memory_budget(small):
-    """The budget caps CONCURRENCY, never what one length may allocate, so
-    squeezing it to a single byte must change the schedule and not the
-    answer."""
+def test_a_reduced_budget_changes_the_schedule_and_not_the_answer(small):
+    """The budget divides across concurrent lengths, so squeezing it (while
+    still leaving room for one sweep) must change how many run at once and
+    nothing else."""
     from BEAM import memory_budget, set_memory_budget
 
     spacing = small._grid_spacing(ANALYSIS_BINS)
     before = memory_budget()
     try:
         roomy = small.spectra_by_length(bins=ANALYSIS_BINS, spacing=spacing)
-        set_memory_budget(1)
-        assert memory_budget() == 1
+        set_memory_budget(64 << 20)          # far below the default, above one sweep
         cramped = small.spectra_by_length(bins=ANALYSIS_BINS, spacing=spacing)
     finally:
         set_memory_budget(before)
     assert np.array_equal(roomy["weights"], cramped["weights"])
     assert memory_budget() == before
+
+
+def test_a_budget_below_one_sweep_is_refused(small):
+    """Below the size of a single sweep the budget REFUSES rather than running.
+
+    It used to promise the opposite -- "a cap on concurrency, never on what a
+    single length may allocate" -- while the positional and query paths refused
+    above it from the same setter. The refusing half was kept: one sweep is
+    6.6 GB on a nucleotide model at the ceiling order, and a budget that cannot
+    say no to that protects nothing.
+    """
+    from BEAM import memory_budget, set_memory_budget
+
+    spacing = small._grid_spacing(ANALYSIS_BINS)
+    before = memory_budget()
+    try:
+        set_memory_budget(1)
+        with pytest.raises(Exception) as exc:
+            small.spectra_by_length(bins=ANALYSIS_BINS, spacing=spacing)
+    finally:
+        set_memory_budget(before)
+    text = str(exc.value)
+    assert "memory budget" in text          # names the cause
+    assert "set_memory_budget" in text      # and the way out
 
 
 def test_memory_budget_zero_restores_the_default():

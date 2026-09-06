@@ -14,6 +14,23 @@
  * `alpha = 0` counts paths, `alpha = 1` is the ordinary partition function,
  * and general `alpha` gives the power sums the Hill numbers are built from.
  */
+/**
+ * Peak bytes a per-length sweep in this file holds.
+ *
+ * `n_vec` is the number of `n_states` double vectors the sweep carries --
+ * four for `tilted_log_z`, six for `expected_raw` -- and `alive` adds one
+ * byte per state on top. The layer of edge weights dominates both.
+ *
+ * Shared by the guards inside the sweeps and by the concurrency bound in the
+ * drivers, so what is refused and what is scheduled come from one expression.
+ */
+static inline uint64_t sweep_bytes(uint32_t n_states, uint32_t n_residues,
+                                   uint32_t n_vec) {
+    return (uint64_t)n_states * n_residues * sizeof(double)
+         + (uint64_t)n_vec * n_states * sizeof(double)
+         + n_states;
+}
+
 static BeamError tilted_log_z(const BeamModel *m, uint32_t len, double alpha,
                              double *out) {
     const uint32_t A = m->n_alphabet;
@@ -40,6 +57,8 @@ static BeamError tilted_log_z(const BeamModel *m, uint32_t len, double alpha,
     if (beam_live_acquire(m, len, &h) != BEAM_OK)
         return BEAM_EALLOC("the forward frontier");
     const BeamLive *L = h.L;
+
+    BEAM_BUDGET_OR_REFUSE("a tilted forward sweep", len, sweep_bytes(S, R, 4u));
 
     double *w    = (double *)malloc((size_t)S * R * sizeof(double));
     double *cur  = (double *)calloc(S, sizeof(double));
@@ -168,6 +187,9 @@ static BeamError expected_raw(const BeamModel *m, uint32_t len, double *out) {
     const uint32_t R = m->n_residues;
     const uint32_t S = m->n_states;
     const uint32_t SK = m->state_shift;
+
+    BEAM_BUDGET_OR_REFUSE("an expected-weight sweep", len,
+                          sweep_bytes(S, R, 6u));
 
     double *w  = (double *)malloc((size_t)S * R * sizeof(double));
     double *a  = (double *)calloc(S, sizeof(double));
@@ -310,10 +332,20 @@ BeamError beam_model_entropy(const BeamModel *m, double *out) {
     /* `BEAM_OK` is zero and every failure code is positive, so a max-reduction
      * both avoids a data race on the flag and picks the same code however the
      * iterations are distributed. */
+    /* Six vectors per sweep, and the sweeps run concurrently, so they divide
+     * the budget rather than multiplying it. The size does not depend on the
+     * length here, only on the state space. */
+    const uint32_t conc_e = beam_budget_concurrency(
+        sweep_bytes(m->n_states, m->n_residues, 6u), nw ? nw : 1u);
+    if (nw && conc_e == 0u)
+        return beam_budget_refuse("an expected-weight sweep", work[0],
+                                  sweep_bytes(m->n_states,
+                                              m->n_residues, 6u));
+
     int failed = BEAM_OK;
 #ifdef _OPENMP
     #pragma omp parallel for schedule(dynamic, 1) reduction(max:failed) \
-            num_threads(beam_threads())
+            num_threads((int)conc_e)
 #endif
     for (int64_t k = 0; k < (int64_t)nw; ++k) {
         double e = 0.0;
@@ -370,10 +402,17 @@ BeamError beam_model_hill_number(const BeamModel *m, double alpha,
         return BEAM_EALLOC("the per-length tilted partition functions");
     }
     const uint32_t nw = beam_live_lengths_desc(m, work);
+    const uint32_t conc_z = beam_budget_concurrency(
+        sweep_bytes(m->n_states, m->n_residues, 4u), nw ? nw : 1u);
+    if (nw && conc_z == 0u)
+        return beam_budget_refuse("a tilted forward sweep", work[0],
+                                  sweep_bytes(m->n_states,
+                                              m->n_residues, 4u));
+
     int failed = BEAM_OK;
 #ifdef _OPENMP
     #pragma omp parallel for schedule(dynamic, 1) reduction(max:failed) \
-            num_threads(beam_threads())
+            num_threads((int)conc_z)
 #endif
     for (int64_t k = 0; k < (int64_t)nw; ++k) {
         double v = 0.0;

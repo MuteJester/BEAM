@@ -156,6 +156,9 @@ static BeamError best_completions(const BeamModel *m, uint32_t len,
     const uint32_t S = m->n_states;
     const uint32_t SK = m->state_shift;
 
+    BEAM_BUDGET_OR_REFUSE("a best-completion sweep", len,
+                          (uint64_t)S * R * sizeof(double) + S);
+
     double *w = (double *)malloc((size_t)S * R * sizeof(double));
     uint8_t *alive = (uint8_t *)malloc(S);
     if (!w || !alive) { free(w); free(alive);
@@ -227,6 +230,18 @@ static BeamError top_k_one(const BeamModel *m, uint32_t len, uint32_t k,
     const uint32_t R = m->n_residues;
     const uint32_t S = m->n_states;
     const uint32_t SK = m->state_shift;
+
+    /*
+     * Refused before allocating. `beta` here holds best COMPLETIONS rather
+     * than sums, but it is the same `(len + 1) * S` doubles and the same
+     * reason to refuse before the OOM killer gets a vote. `best_completions`
+     * charges its own layer of weights separately, since it allocates and
+     * frees that inside this field's lifetime.
+     */
+    BEAM_BUDGET_OR_REFUSE("a top-k search", len,
+                          ((uint64_t)len + 1u) * S * sizeof(double)
+                        + ((uint64_t)len + 1u) * sizeof(double *)
+                        + (uint64_t)R * sizeof(double));
 
     double **beta = (double **)calloc(len + 1u, sizeof(double *));
     if (!beta) return BEAM_EALLOC("the backward-value layer table");

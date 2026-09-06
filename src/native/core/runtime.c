@@ -54,8 +54,16 @@ int beam_model_effective_threads(void) {
  *
  * Four gigabytes by default: enough for full parallelism at order 2 or 3,
  * and for two or three concurrent lengths at order 4, on a machine that can
- * hold the model at all. It is a cap on CONCURRENCY, never on what a single
- * length is allowed to allocate — one length always runs, however large.
+ * hold the model at all.
+ *
+ * It is the most scratch one operation may hold, which caps concurrency AND
+ * refuses a single program too large to fit. It used to say the opposite --
+ * "a cap on CONCURRENCY, never on what a single length is allowed to
+ * allocate, one length always runs, however large" -- while `positional.c`
+ * and the query layer refused above it from the same setter. The refusing
+ * half was kept: a single sweep reaches 6.6 GB on a nucleotide model at the
+ * ceiling order, and a budget that cannot say no to it is decoration.
+ * See src/native/internal/beam/budget.h.
  */
 static uint64_t g_beam_budget = 4ull << 30;
 

@@ -297,7 +297,24 @@ BEAM_SCALAR(n_states,        beam_model_n_states(m),        PyLong_FromUnsignedL
 BEAM_SCALAR(n_cells,         beam_model_n_cells(m),         PyLong_FromUnsignedLongLong)
 BEAM_SCALAR(n_nonzero_cells, beam_model_n_nonzero_cells(m), PyLong_FromUnsignedLongLong)
 BEAM_SCALAR(memory_bytes,    beam_model_memory_bytes(m),    PyLong_FromUnsignedLongLong)
-BEAM_SCALAR(path_count_total, beam_model_path_count_total(m), PyFloat_FromDouble)
+/*
+ * Not BEAM_SCALAR, which is for accessors that cannot fail. This one reports
+ * failure as 0.0 with the error set, and 0.0 is also a legitimate total, so
+ * without the check a memory-budget refusal reached Python as "this model
+ * generates nothing". `beam_model_path_count_total` clears the error on entry
+ * by way of the per-length calls it makes, so a stale one cannot trip it.
+ */
+PyObject *py_path_count_total(PyObject *self, PyObject *arg) {
+    (void)self;
+    BeamModel *m = edge_from_capsule(arg);
+    if (!m) return NULL;
+    double v;
+    Py_BEGIN_ALLOW_THREADS
+    v = beam_model_path_count_total(m);
+    Py_END_ALLOW_THREADS
+    if (beam_last_error() != BEAM_OK) return set_beam_error(beam_last_error());
+    return PyFloat_FromDouble(v);
+}
 BEAM_SCALAR(accumulator_max, beam_model_accumulator_max(m), PyFloat_FromDouble)
 #define BEAM_LEN_FN(name, call)                                          \
     PyObject *py_##name(PyObject *self, PyObject *args) {    \

@@ -48,6 +48,18 @@ double beam_model_path_count(const BeamModel *m, uint32_t length) {
      * untouched, because `w[x] == -INFINITY` and `bit x clear` are the same
      * predicate over the same weights.
      */
+    /*
+     * Refused before allocating. This entry point reports failure as 0.0 with
+     * the error set, the same as the allocation failure below, so the refusal
+     * follows that convention rather than the BeamError one.
+     */
+    const uint64_t need = beam_path_count_bytes(S);
+    if (!beam_budget_fits(need)) {
+        beam_live_release(&h);
+        (void)beam_budget_refuse("a path-counting sweep", length, need);
+        return 0.0;
+    }
+
     uint32_t *bits = (uint32_t *)malloc((size_t)S * sizeof(uint32_t));
     double *cur  = (double *)calloc(S, sizeof(double));
     /* calloc, then cleared only where it was last written: see the loop.
@@ -158,8 +170,25 @@ double beam_model_path_count_total(const BeamModel *m) {
     /* The lengths are independent dynamic programs and this is where the
      * parallelism belongs: one whole DP per thread beats sixteen threads
      * inside one DP's layer, which has to synchronise once per layer. */
+    /*
+     * Concurrent sweeps DIVIDE the budget rather than multiplying it, and a
+     * concurrency of 0 means one does not fit at all. Refused HERE rather than
+     * inside the loop: `beam_set_error` is thread-local, so a refusal raised
+     * on a worker never reaches the caller, and this driver would return a
+     * total of 0.0 with no error set at all.
+     */
+    const uint32_t conc = beam_budget_concurrency(
+        beam_path_count_bytes(m->n_states), nw ? nw : 1u);
+    if (nw && conc == 0u) {
+        const uint64_t need = beam_path_count_bytes(m->n_states);
+        const uint32_t at = work[0];
+        free(work); free(per);
+        (void)beam_budget_refuse("a path-counting sweep", at, need);
+        return 0.0;
+    }
+
 #ifdef _OPENMP
-    #pragma omp parallel for schedule(dynamic, 1) num_threads(beam_threads())
+    #pragma omp parallel for schedule(dynamic, 1) num_threads((int)conc)
 #endif
     for (int64_t k = 0; k < (int64_t)nw; ++k)
         per[work[k]] = beam_model_path_count(m, work[k]);

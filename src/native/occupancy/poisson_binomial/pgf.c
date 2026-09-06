@@ -6,6 +6,7 @@
 #include <stdlib.h>
 
 #include "beam/publicness.h"
+#include "beam/budget.h"
 #include "beam/occupancy_internal.h"
 
 /* 2*pi to the last representable bit; the codebase spells such constants out
@@ -75,6 +76,20 @@ BeamError beam_publicness_pgf(const double *p, uint32_t n_atoms,
     if ((size_t)n_roots > SIZE_MAX / sizeof(double))
         return BEAM_FAIL(BEAM_ERR_ALLOC, "publicness root grid is too large");
 #endif
+    /*
+     * Refused before allocating, on top of the overflow checks above. Those
+     * catch a request that cannot be expressed; this catches one that can be
+     * expressed and would still take the machine down. `n_atoms` is a
+     * sequence count, so this grid grows with the repertoire.
+     */
+    {
+        const uint64_t need = (uint64_t)n_atoms * n_groups * sizeof(double)
+                            + 2ull * n_roots * sizeof(double);
+        if (!beam_budget_fits(need))
+            return beam_budget_refuse_bytes("the publicness PGF workspace",
+                                            need);
+    }
+
     pi = malloc((size_t)n_atoms * (size_t)n_groups * sizeof(double));
     root_re = malloc((size_t)n_roots * sizeof(double));
     root_im = malloc((size_t)n_roots * sizeof(double));

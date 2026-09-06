@@ -22,11 +22,34 @@
  * constant flips it, and a grid sized to the surprisal alone would then index
  * past its own top. Both are covered here.
  */
+/**
+ * Peak bytes a per-length sweep in this file holds. `n_vec` is the number of
+ * `n_states` double vectors -- four for the max-plus accumulator, six for the
+ * min-plus/max-plus range -- plus one byte per state for `alive`.
+ *
+ * Shared by the guards inside the sweeps and the concurrency bounds in the
+ * drivers, so what is refused and what is scheduled agree by construction.
+ */
+static inline uint64_t sweep_bytes(uint32_t n_states, uint32_t n_residues,
+                                   uint32_t n_vec) {
+    return (uint64_t)n_states * n_residues * sizeof(double)
+         + (uint64_t)n_vec * n_states * sizeof(double)
+         + n_states;
+}
+
 static double accumulator_max_at(const BeamModel *m, uint32_t len) {
     const uint32_t A = m->n_alphabet;
     const uint32_t R = m->n_residues;
     const uint32_t S = m->n_states;
     const uint32_t SK = m->state_shift;
+
+    /* Refused before allocating. This helper reports failure as 0.0 with the
+     * error set, the same as its allocation failure below. */
+    const uint64_t need = sweep_bytes(S, R, 4u);
+    if (!beam_budget_fits(need)) {
+        (void)beam_budget_refuse("a max-plus accumulator sweep", len, need);
+        return 0.0;
+    }
 
     double *w    = (double *)malloc((size_t)S * R * sizeof(double));
     double *cur  = (double *)malloc((size_t)S * sizeof(double));
@@ -106,9 +129,21 @@ double beam_model_accumulator_max(const BeamModel *m) {
     if (!work) { (void)BEAM_EALLOC("the per-length work list"); return 0.0; }
     const uint32_t nw = beam_live_lengths_desc(m, work);
     double hi = 0.0;
+    /* Concurrent sweeps DIVIDE the budget rather than multiplying it. A
+     * concurrency of 0 means one sweep does not fit at all, which the sweep
+     * refuses on its own, so run one and let it report that. */
+    const uint32_t conc = beam_budget_concurrency(
+        sweep_bytes(m->n_states, m->n_residues, 4u), nw ? nw : 1u);
+    if (nw && conc == 0u) {
+        (void)beam_budget_refuse("a max-plus accumulator sweep", work[0],
+                                 sweep_bytes(m->n_states, m->n_residues, 4u));
+        free(work);
+        return 0.0;
+    }
+
 #ifdef _OPENMP
     #pragma omp parallel for schedule(dynamic, 1) reduction(max:hi) \
-            num_threads(beam_threads())
+            num_threads((int)conc)
 #endif
     for (int64_t k = 0; k < (int64_t)nw; ++k) {
         const double v = accumulator_max_at(m, work[k]);
@@ -130,6 +165,9 @@ static BeamError range_at(const BeamModel *m, uint32_t len,
     const uint32_t R = m->n_residues;
     const uint32_t S = m->n_states;
     const uint32_t SK = m->state_shift;
+
+    BEAM_BUDGET_OR_REFUSE("a min-plus / max-plus sweep", len,
+                          sweep_bytes(S, R, 6u));
 
     double *w    = (double *)malloc((size_t)S * R * sizeof(double));
     double *lo   = (double *)malloc((size_t)S * sizeof(double));
@@ -206,10 +244,22 @@ BeamError beam_model_surprisal_range(const BeamModel *m,
     int failed = BEAM_OK;
     /* Minimum and maximum are order-independent, so reducing them across
      * threads gives the same answer the serial scan did, bit for bit. */
+    /* Concurrent sweeps DIVIDE the budget rather than multiplying it. A
+     * concurrency of 0 means one sweep does not fit at all, which the sweep
+     * refuses on its own, so run one and let it report that. */
+    const uint32_t conc = beam_budget_concurrency(
+        sweep_bytes(m->n_states, m->n_residues, 6u), nw ? nw : 1u);
+    if (nw && conc == 0u) {
+        const uint64_t need = sweep_bytes(m->n_states, m->n_residues, 6u);
+        const uint32_t at = work[0];
+        free(work);
+        return beam_budget_refuse("a min-plus / max-plus sweep", at, need);
+    }
+
 #ifdef _OPENMP
     #pragma omp parallel for schedule(dynamic, 1) reduction(min:best) \
             reduction(max:worst) reduction(max:failed) \
-            num_threads(beam_threads())
+            num_threads((int)conc)
 #endif
     for (int64_t k = 0; k < (int64_t)nw; ++k) {
         double a = 0.0, b = 0.0;

@@ -66,6 +66,11 @@ BeamError jet_sweep(const BeamModel *m, uint32_t len, double q,
     double bc[BEAM_MAX_MOMENT + 1][BEAM_MAX_MOMENT + 1];
     beam_binomials(bc, order);
 
+    /* Refused before allocating, from the sizing function beside the
+     * allocation so the two cannot drift apart. */
+    BEAM_BUDGET_OR_REFUSE("a jet sweep", len,
+                          beam_jet_sweep_bytes(S, R, NM));
+
     Sweep sw = {0};
     if (!sweep_alloc(&sw, S, R, NM))
         return BEAM_EALLOC("the jet-sweep scratch buffers");

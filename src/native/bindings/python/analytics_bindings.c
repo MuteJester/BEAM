@@ -106,6 +106,15 @@ PyObject *py_path_count(PyObject *self, PyObject *args) {
     Py_BEGIN_ALLOW_THREADS
     v = beam_model_path_count(m, L);
     Py_END_ALLOW_THREADS
+    /*
+     * This entry point reports failure as 0.0 with the error set, and 0.0 is
+     * also a legitimate answer, so the return value cannot distinguish them.
+     * Without this the memory-budget refusal reached Python as "this length
+     * has no paths" -- a refusal that looks like an answer is worse than a
+     * crash. `beam_model_path_count` clears the error on entry, so a stale
+     * one from an earlier call cannot trip this.
+     */
+    if (beam_last_error() != BEAM_OK) return set_beam_error(beam_last_error());
     return PyFloat_FromDouble(v);
 }
 PyObject *py_entropy(PyObject *self, PyObject *arg) {

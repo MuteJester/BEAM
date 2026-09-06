@@ -333,3 +333,43 @@ this branch and that all eight checks passed over:
 records, and the weight guard changes nothing for a finite mix. That is the
 point worth keeping -- both defects lived in quantities the baseline pins, and
 the baseline pins them against a recording of themselves.
+
+## Amended 2026-09-06, for the memory-budget guards
+
+    pytest_cases.txt    421 -> 440   (+20, -1)
+
+Superseded file kept as `pytest_cases.prebudget.txt`.
+
+Fifteen of eighteen files in `dp/`, `math/` and `algorithms/` allocated
+per-length scratch with no memory-budget check at all, and every one of them
+is parallel over lengths, so the real peak was threads x per-sweep. `calloc`
+grants an absurd request lazily on Linux and fails on first write, so an
+unguarded sweep does not fail -- it takes the machine down.
+
+The one removed case is a rename, not a deletion:
+
+  - `test_spectra_by_length_does_not_depend_on_the_memory_budget` became
+    `test_a_reduced_budget_changes_the_schedule_and_not_the_answer` plus
+    `test_a_budget_below_one_sweep_is_refused`. It asserted that a budget of
+    one byte still returned success, pinning the old promise that the budget
+    was "a cap on CONCURRENCY, never on what a single length is allowed to
+    allocate". That promise was never kept -- `positional.c` and the whole
+    query layer refused above the budget from the same setter -- so the two
+    halves of the codebase disagreed about what the number meant. The
+    refusing half was kept, and the header, `runtime.c` and `runtime.py` now
+    say so.
+
+The twenty added cases are `tests/python/analytics/test_memory_budget.py`
+(fourteen entry points refusing, one that must NOT be budgeted, the reported
+figure checked against an independent calculation, and answers pinned
+identical under a reduced budget) plus the spectrum pair above.
+
+`numeric` did not move, and that is the load-bearing observation: the guards
+refuse before allocating and the concurrency bounds only change how many
+lengths run at once, so no recorded quantity could shift. `exact` also held
+at 280 quantities. Two defects were found on the way and are fixed here
+rather than recorded: `path_count` and `path_count_total` returned 0.0 to
+Python on refusal, which is a legitimate answer and made a refusal look like
+"this model generates nothing"; and `spectrum` reported a refused accumulator
+sweep as "the accumulator bound is zero, so the model generates nothing to
+bin", sending the reader to their corpus for a problem in their settings.

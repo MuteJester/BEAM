@@ -46,19 +46,22 @@ def effective_threads() -> int:
 
 
 def set_memory_budget(nbytes: int) -> None:
-    """Cap the scratch memory concurrent per-length spectra may hold together.
+    """The most scratch BEAM will hold at once for one operation.
 
-    Only :meth:`BeamModel.spectra_by_length` is large enough to care: one length's
-    histogram grids run to 1.6 GB at order 4 with 512 bins, so running one
-    length per core would ask for twenty-five gigabytes. It divides this
-    budget by what one length needs and runs that many at a time.
+    Enforced two ways. Lengths that run concurrently **divide** it, so the
+    thread count cannot multiply the footprint: one length's histogram grids
+    run to 1.6 GB at order 4 with 512 bins, and running one per core would ask
+    for twenty-five gigabytes. And a single program that does not fit is
+    **refused before it allocates**, naming itself, the figure it needed and
+    this setter.
 
-    The default is 4 GB; ``0`` restores it. This caps **concurrency only** — a
-    single length always runs whatever its size — so lowering it can never
-    turn a working call into a failing one, only a slower one.
+    So lowering this **can** turn a working call into a failing one — that is
+    what makes it a budget rather than a suggestion. One forward-backward
+    sweep is 6.6 GB on a nucleotide model at the alphabet's ceiling order, and
+    a limit that cannot refuse it protects nothing.
 
-    It is a resource knob and nothing else. **Results do not depend on it**,
-    which the C unit tests pin at a budget of one byte.
+    The default is 4 GB; ``0`` restores it. **Results never depend on it**: it
+    changes what is refused and how much runs at once, never an answer.
     """
     _c.set_memory_budget(int(nbytes))
 

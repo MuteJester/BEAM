@@ -31,6 +31,14 @@ BeamError beam_betas_tilted(const BeamModel *m, uint32_t len, double q,
     const uint32_t S = m->n_states;
     const uint32_t SK = m->state_shift;
 
+    /*
+     * One layer, `S * R` doubles: 31 MB on an order-4 amino-acid model. The
+     * backward FIELD is the caller's -- it is `(len + 1) * S` doubles and
+     * dwarfs this -- so it is budgeted where it is allocated, not here.
+     */
+    BEAM_BUDGET_OR_REFUSE("a backward sweep", len,
+                          (uint64_t)S * R * sizeof(double));
+
     double *w = (double *)malloc((size_t)S * R * sizeof(double));
     if (!w) return BEAM_EALLOC("one layer of edge weights");
 

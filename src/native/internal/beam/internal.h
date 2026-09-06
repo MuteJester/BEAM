@@ -68,5 +68,6 @@
 #include "beam/indexing.h"
 #include "beam/table_access.h"
 #include "beam/dp.h"
+#include "beam/budget.h"
 
 #endif /* BEAM_MODEL_INTERNAL_H */

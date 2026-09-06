@@ -17,6 +17,20 @@
  * concurrently: each writes its own row, and the rows are mixed afterwards in
  * ascending length, so the pooled answer is the one the serial loop produced.
  */
+/**
+ * Peak bytes one `by_depth_one` sweep holds, from the same expression it
+ * allocates from. The driver divides the budget by this to decide how many
+ * lengths may run at once, so the guard and the schedule agree by
+ * construction rather than by two people remembering the same formula.
+ */
+static inline uint64_t by_depth_bytes(uint32_t n_states, uint32_t n_residues,
+                                      uint32_t L) {
+    return ((uint64_t)L + 1u) * n_states * sizeof(double)   /* beta field */
+         + ((uint64_t)L + 1u) * sizeof(double *)            /* its rows   */
+         + (uint64_t)n_states * (n_residues + 3u) * sizeof(double)
+         + (uint64_t)BEAM_SUM_CHUNKS * sizeof(double);
+}
+
 static BeamError by_depth_one(const BeamModel *m, uint32_t L, double q,
                              double *out) {
     const uint32_t A = m->n_alphabet;
@@ -25,6 +39,15 @@ static BeamError by_depth_one(const BeamModel *m, uint32_t L, double q,
     const uint32_t SK = m->state_shift;
 
     for (uint32_t d = 0; d < L; ++d) out[d] = 0.0;
+
+    /*
+     * Refused before allocating. The backward field dominates everything else
+     * here: `(L + 1) * S` doubles is 44 MB on the default amino-acid model and
+     * 6.6 GB on a nucleotide model at the alphabet's ceiling order, so the
+     * bound is a real one at the top of the range rather than a formality.
+     */
+    BEAM_BUDGET_OR_REFUSE("a tilted forward-backward sweep", L,
+                          by_depth_bytes(S, R, L));
 
     /* Backward values of the q-tilted trellis. */
     double **beta = (double **)calloc(L + 1u, sizeof(double *));
@@ -191,10 +214,30 @@ BeamError beam_model_surprisal_by_depth(const BeamModel *m, double q,
     uint32_t nw = 0;
     for (uint32_t L = n; L-- > 1; ) if (terms[L] != -INFINITY) work[nw++] = L;
 
+    /*
+     * `work` descends, so `work[0]` is the longest length and its sweep is the
+     * largest: budgeting for the worst case means no thread can be holding
+     * more than this while the others run. A concurrency of 0 means one sweep
+     * does not fit at all, which `by_depth_one` refuses on its own with the
+     * better message, so the loop still runs and reports that.
+     */
+    const uint32_t work_max = nw ? work[0] : 0u;
+    uint32_t conc = nw ? beam_budget_concurrency(
+                             by_depth_bytes(m->n_states, m->n_residues,
+                                            work[0]), nw)
+                       : 1u;
+    if (nw && conc == 0u) {
+        free(work); free(rows); free(terms);
+        return beam_budget_refuse("a tilted forward-backward sweep", work_max,
+                                  by_depth_bytes(m->n_states, m->n_residues,
+                                                 work_max));
+    }
+    if (conc < 1u) conc = 1u;
+
     int failed = BEAM_OK;
 #ifdef _OPENMP
     #pragma omp parallel for schedule(dynamic, 1) reduction(max:failed) \
-            num_threads(beam_threads())
+            num_threads((int)conc)
 #endif
     for (int64_t k = 0; k < (int64_t)nw; ++k) {
         const BeamError e = by_depth_one(m, work[k], q,

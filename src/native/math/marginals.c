@@ -28,9 +28,24 @@ BeamError beam_model_length_marginals(const BeamModel *m,
     int failed = BEAM_OK;
     /* Every length is an independent pair of sweeps writing its own slot, so
      * this needs no reduction at all. */
+
+    /*
+     * Each iteration runs a path-count sweep and then a jet sweep, one after
+     * the other, so a thread's peak is the LARGER of the two rather than their
+     * sum. The jet sweep carries a layer of edge weights and the path-count
+     * sweep does not, so the jet is the larger on every model.
+     *
+     * Concurrent lengths divide the budget rather than multiplying it.
+     */
+    const uint32_t conc = beam_budget_concurrency(
+        beam_jet_sweep_bytes(m->n_states, m->n_residues, 3u), nw ? nw : 1u);
+    if (nw && conc == 0u)
+        return beam_budget_refuse("a per-length marginal sweep", work[0],
+                                  beam_jet_sweep_bytes(m->n_states, m->n_residues, 3u));
+
 #ifdef _OPENMP
     #pragma omp parallel for schedule(dynamic, 1) reduction(max:failed) \
-            num_threads(beam_threads())
+            num_threads((int)conc)
 #endif
     for (int64_t k = 0; k < (int64_t)nw; ++k) {
         const uint32_t L = work[k];

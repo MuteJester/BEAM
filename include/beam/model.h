@@ -1063,17 +1063,24 @@ int beam_model_threads(void);
 int beam_model_effective_threads(void);
 
 /**
- * Cap the scratch memory concurrent per-length dynamic programs may hold.
+ * The most scratch the library will hold at once for one operation.
  *
- * Only the spectrum is large enough to care: its per-state histogram grids
- * run to 1.6 GB at order 4 with 512 bins, so `spectra_by_length` would ask
- * for twenty-five gigabytes if it ran one length per core. It divides this
- * budget by what one length needs and runs that many at a time.
+ * Enforced two ways, both following from that one sentence. Lengths that run
+ * concurrently DIVIDE it, so the thread count cannot multiply the footprint:
+ * the spectrum's per-state histogram grids run to 1.6 GB at order 4 with 512
+ * bins, and `spectra_by_length` would ask for twenty-five gigabytes if it ran
+ * one length per core. And a single program whose working set exceeds it is
+ * REFUSED before it allocates, because the alternative protects nothing -- one
+ * forward-backward sweep is 6.6 GB on a nucleotide model at the alphabet's
+ * ceiling order, and letting that through unconditionally is how a machine
+ * dies rather than how a call fails.
  *
- * The default is 4 GB. `bytes = 0` restores it. This caps CONCURRENCY only:
- * a single length always runs whatever its size, so lowering this can never
- * turn a working call into a failing one, only a slower one. Results do not
- * depend on it.
+ * So lowering this CAN turn a working call into a failing one. That is the
+ * point of it, and the refusal names the analytic, the figure it needed and
+ * this setter. Raising it restores the call.
+ *
+ * The default is 4 GB. `bytes = 0` restores it. Results never depend on it:
+ * it changes what is refused and how much runs at once, never an answer.
  */
 void beam_model_set_memory_budget(uint64_t bytes);
 

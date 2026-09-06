@@ -170,4 +170,37 @@ BeamError jet_sweep(const BeamModel *m, uint32_t len, double q,
                           uint32_t order, double *out_moments,
                           double *out_log_z);
 
+/**
+ * Peak bytes one `beam_model_path_count` sweep holds: the residue-mask bits
+ * and three state vectors. No layer of edge weights, because path counting
+ * never asks what an edge weighs -- which is why this is so much smaller than
+ * every other sweep in the library.
+ */
+static inline uint64_t beam_path_count_bytes(uint32_t n_states) {
+    return (uint64_t)n_states * sizeof(uint32_t)
+         + 3ull * n_states * sizeof(double);
+}
+
+/**
+ * Peak bytes one `jet_sweep` holds, from the same expression it allocates
+ * from.
+ *
+ * Here rather than beside the allocation because four callers -- the Mellin
+ * transform, the tilted cumulants and both moment entry points -- run these
+ * sweeps concurrently over lengths and must divide the memory budget by one
+ * sweep's size. A caller computing that from its own copy of the formula is
+ * how a guard and the thing it guards drift apart.
+ *
+ * `n_moments` is `order + 1`, the width of the jet the sweep carries.
+ */
+static inline uint64_t beam_jet_sweep_bytes(uint32_t n_states,
+                                            uint32_t n_residues,
+                                            uint32_t n_moments) {
+    const uint64_t S = n_states;
+    return S * (uint64_t)n_residues * sizeof(double)     /* one layer   */
+         + S * sizeof(double)                            /* the sink    */
+         + 2ull * n_moments * S * sizeof(double)         /* cur, next   */
+         + S;                                            /* alive       */
+}
+
 #endif /* BEAM_INTERNAL_DP_H */

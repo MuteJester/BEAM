@@ -15,6 +15,13 @@ BeamError beam_model_surprisal_cumulants(const BeamModel *m, double q,
                                __func__, (unsigned)order,
                                (unsigned)BEAM_MAX_MOMENT);
 
+    /*
+     * No memory-budget guard here, and that is deliberate rather than missed.
+     * `order` is already bounded to BEAM_MAX_MOMENT above, so this is at most
+     * seventeen doubles however large the model is -- the only allocation in
+     * dp/ or math/ that does not scale with the state space. The sweeps this
+     * delegates to carry their own guards.
+     */
     double *mu = (double *)calloc(order + 1u, sizeof(double));
     if (!mu) return BEAM_EALLOC("the raw-moment buffer");
     BeamError e = beam_model_surprisal_moments(m, q, order, mu);

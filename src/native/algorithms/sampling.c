@@ -28,6 +28,21 @@ static uint32_t draw_length(const BeamModel *m, BeamRng *rng) {
 }
 
 /** Draw `n` sequences of one fixed length, sharing one backward pass. */
+/**
+ * Peak bytes one `sample_fixed` holds, from the same expression it allocates
+ * from. Shared with the driver's concurrency bound so that what is refused and
+ * what is scheduled cannot drift apart.
+ */
+static inline uint64_t sample_fixed_bytes(uint32_t n_states,
+                                          uint32_t n_residues,
+                                          uint32_t len, uint32_t n) {
+    return ((uint64_t)len + 1u) * n_states * sizeof(double)  /* beta field */
+         + ((uint64_t)len + 1u) * sizeof(double *)           /* its rows   */
+         + (uint64_t)n_states * n_residues * sizeof(double)  /* one layer  */
+         + (uint64_t)n_residues * sizeof(double)             /* the pmf    */
+         + (uint64_t)n * sizeof(uint32_t);                   /* the walk   */
+}
+
 static BeamError sample_fixed(const BeamModel *m, uint32_t len, uint32_t n,
                              BeamRng *rng, char *out, uint32_t *out_lengths,
                              const uint32_t *slots) {
@@ -36,6 +51,14 @@ static BeamError sample_fixed(const BeamModel *m, uint32_t len, uint32_t n,
     const uint32_t S  = m->n_states;
     const uint32_t SK = m->state_shift;
     const uint32_t stride = m->max_len + 1u;
+
+    /*
+     * Refused before allocating. The backward field dominates: `(len + 1) * S`
+     * doubles, held whole because the walk descends it after the sweep builds
+     * it. `n` is the sample count, one state index each.
+     */
+    BEAM_BUDGET_OR_REFUSE("an ancestral sampling sweep", len,
+                          sample_fixed_bytes(S, R, len, n));
 
     double **beta = (double **)calloc(len + 1u, sizeof(double *));
     if (!beta) return BEAM_EALLOC("the backward-value layer table");
@@ -190,10 +213,29 @@ BeamError beam_model_sample(const BeamModel *m, uint32_t n,
     /* Longest first: the backward pass costs one layer per residue. */
     for (uint32_t L = m->n_len_slots; L-- > 1; ) if (cnt[L]) work[nw++] = L;
 
+    /*
+     * `work` descends, so `work[0]` is the longest length and its backward
+     * field is the largest. Refused here rather than inside the loop because
+     * `beam_set_error` is thread-local: a refusal raised on a worker reaches
+     * the driver as a bare code, and the message that names the figure and the
+     * way out is lost.
+     */
+    const uint64_t per_draw = nw ? sample_fixed_bytes(m->n_states,
+                                                      m->n_residues,
+                                                      work[0], cnt[work[0]])
+                                 : 0u;
+    const uint32_t conc = beam_budget_concurrency(per_draw, nw ? nw : 1u);
+    if (nw && conc == 0u) {
+        const uint32_t at = work[0];
+        free(cnt); free(start); free(sub); free(work);
+        free(len_of); free(slots);
+        return beam_budget_refuse("an ancestral sampling sweep", at, per_draw);
+    }
+
     int failed = BEAM_OK;
 #ifdef _OPENMP
     #pragma omp parallel for schedule(dynamic, 1) reduction(max:failed) \
-            num_threads(beam_threads())
+            num_threads((int)conc)
 #endif
     for (int64_t k = 0; k < (int64_t)nw; ++k) {
         const uint32_t L = work[k];
