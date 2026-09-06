@@ -11,6 +11,7 @@
 
 #include "beam/query.h"
 #include "beam/model_state.h"   /* BEAM_SUM_CHUNKS */
+#include "beam/math_internal.h" /* lse_add           */
 
 /**
  * A constraint is its masks and nothing else while the alphabet is the only
@@ -191,20 +192,6 @@ BeamError beam_query_betas(const BeamModel *m, uint32_t length,
  * residues in `allowed`. Returns false when the layer leaves no mass, which
  * under a constraint is an outcome rather than an error.
  */
-/**
- * Add one term to a running (max, sum) pair holding `sum * exp(max)`.
- *
- * Streaming log-sum-exp: the running maximum is raised when a larger term
- * arrives and the accumulated sum is rescaled to match. One `exp` per term and
- * no second pass, so a target can be finished in a single sweep of its sources
- * while never leaving log space.
- */
-static inline void lse_add(double *mx, double *sum, double v) {
-    if (v == -INFINITY) return;
-    if (v > *mx) { *sum = *sum * exp(*mx - v) + 1.0; *mx = v; }
-    else         { *sum += exp(v - *mx); }
-}
-
 /**
  * Advance the LOG forward vector across one layer, admitting only the residues
  * in `allowed`. `acc` is scratch of the same shape as `next`. Returns false

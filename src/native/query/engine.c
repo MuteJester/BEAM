@@ -2,13 +2,17 @@
  * @file engine.c
  * @brief The constrained sum-product sweep: partition functions under a mask.
  *
- * This began as `math/positional.c`'s forward-backward with the residue RANGE
- * of a clamp generalised to a residue SET, and for a while the two were
- * bit-identical. They are no longer. The forward half here carries logarithms
- * rather than a per-layer rescale, because no single scale per layer can hold
- * a trellis whose live states span more than 745 nats -- and the states that
- * underflowed were not marginal ones, they included pinned positions whose row
- * must be one-hot and came back summing to 2e-54.
+ * This is `math/positional.c`'s forward-backward with the residue RANGE of a
+ * clamp generalised to a residue SET. That generalisation is deliberately the
+ * only difference, and the two agree BIT FOR BIT: a singleton set visits the
+ * residue the range `lo..lo+1` would, a full set visits `0..R-1` in the same
+ * ascending order, and both halves of both sweeps now carry logarithms.
+ *
+ * The forward half did not always. It rescaled each layer by a single factor,
+ * and no such factor can hold a trellis whose live states span more than 745
+ * nats -- at the C API's own defaults a length-60 nucleotide sweep does, and
+ * the states that underflowed included pinned positions whose row must be
+ * one-hot and came back summing to 2e-54.
  *
  * Sets are iterated by clearing the lowest set bit, which is ascending order
  * and keeps the saving that motivated the range: a layer pinned to one residue

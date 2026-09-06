@@ -26,19 +26,18 @@
  * Nothing here samples, bins, or estimates. A question with no exact answer is
  * refused; a question whose answer is zero returns zero and says so.
  *
- * This engine answers the same questions as `beam_model_positional_marginals`
- * and answers them differently: its forward values are logarithms, where that
- * routine rescales each layer and carries them linearly. The two agree to
- * floating point, not to the bit.
+ * The mask-only path and `beam_model_positional_marginals` are separate
+ * implementations of one recursion -- a residue SET here, a residue RANGE
+ * there -- and they agree BIT FOR BIT, in both worlds and on every pin. That
+ * equivalence is the regression test for this file; see test_query.c.
  *
- * They were once bit-identical, and the equivalence was this file's headline
- * evidence -- but a per-layer rescale cannot hold a trellis whose states span
- * more than 745 nats, and at the C API's own defaults a length-60 nucleotide
- * sweep does. Three defects came from trying to choose that rescale well
- * before it was removed. Where the two now diverge, it is
- * `positional_marginals` that returns a row summing to something other than
- * one; `test_query.c` classifies every disagreement and fails if this engine
- * is ever the wrong one.
+ * It is not free, and it was briefly false. Both routines used to rescale each
+ * layer by a single factor, and no such factor can hold a trellis whose live
+ * states span more than 745 nats: at the C API's own defaults a length-60
+ * nucleotide sweep spans that, and rows came back summing to 5.9e-264 instead
+ * of one. Both now carry their forward values as logarithms, and the test
+ * classifies any future disagreement by which side stopped returning a
+ * distribution, rather than only reporting that one exists.
  */
 #ifndef BEAM_QUERY_H
 #define BEAM_QUERY_H

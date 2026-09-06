@@ -270,19 +270,11 @@ static void test_a_bad_shape_is_refused_at_construction(void) {
 
 /* ── Bit-for-bit reproduction of the clamped sweep ───────────── */
 
-static void test_an_unconstrained_query_agrees_with_the_marginals(void) {
+static void test_an_unconstrained_query_reproduces_the_marginals(void) {
     /*
-     * NOT bit for bit, and no longer claimed to be. This engine carries its
-     * forward values as logarithms; `math/positional.c` carries them rescaled
-     * per layer. Those are different computations and their last bits differ.
-     *
-     * The equivalence was real while both used a per-layer rescale, and it was
-     * this file's headline claim -- but that rescale is precisely what three
-     * separate defects came from, and removing it removed the equivalence
-     * with it. What replaces it as evidence is stronger: agreement to
-     * floating point here, agreement with brute-force enumeration elsewhere,
-     * and, where the two DO diverge, a check that this engine is the one still
-     * returning a distribution.
+     * Bit for bit. Both engines carry their forward values as logarithms now,
+     * accumulated by the same streaming log-sum-exp in the same order, so
+     * there is no rounding for them to differ over.
      */
     BeamModel *m = build(TRAIN, WEIGHT, N_TRAIN, 3u, 14u, false);
     ASSERT_MSG(m != NULL, "model built");
@@ -298,9 +290,9 @@ static void test_an_unconstrained_query_agrees_with_the_marginals(void) {
     BeamConstraint *c = beam_query_constraint_new(L, R);
     ASSERT_MSG(beam_query_marginals(m, c, got, &zg) == BEAM_OK, "query sweep");
 
-    ASSERT_MSG(fabs(zw - zg) < 1e-9, "the two agree on ln Z");
+    ASSERT_MSG(zw == zg, "the two agree on ln Z exactly");
     for (uint32_t k = 0; k < L * R; ++k)
-        ASSERT_MSG(fabs(want[k] - got[k]) < 1e-12, "and on every cell");
+        ASSERT_MSG(want[k] == got[k], "and on every cell, to the last bit");
     for (uint32_t i = 0; i < L; ++i) {
         double s = 0.0;
         for (uint32_t x = 0; x < R; ++x) s += got[(size_t)i * R + x];
@@ -338,11 +330,12 @@ static void test_an_unconstrained_query_agrees_with_the_marginals(void) {
  * ln P(pin)), where nothing can underflow -- confirms is right.
  */
 static void compare_every_pin(BeamModel *m, uint32_t L, uint32_t *n_live,
-                              uint32_t *n_bad, uint32_t *n_old_broken) {
+                              uint32_t *n_bad, uint32_t *n_old_broken,
+                              uint32_t *n_identical) {
     double *want = (double *)malloc((size_t)L * R * sizeof(double));
     double *got  = (double *)malloc((size_t)L * R * sizeof(double));
     uint8_t *clamp = (uint8_t *)malloc(L);
-    *n_live = 0u; *n_bad = 0u; *n_old_broken = 0u;
+    *n_live = 0u; *n_bad = 0u; *n_old_broken = 0u; *n_identical = 0u;
     if (!want || !got || !clamp) { *n_bad = UINT32_MAX; return; }
 
     /*
@@ -373,7 +366,7 @@ static void compare_every_pin(BeamModel *m, uint32_t L, uint32_t *n_live,
             bool same = (zw == zg);
             for (uint32_t k = 0; same && k < L * R; ++k)
                 if (want[k] != got[k]) same = false;
-            if (same) continue;
+            if (same) { (*n_identical)++; continue; }
 
             /* Disagreement. Whose rows are still distributions, and by how
              * much do the cells actually differ? */
@@ -400,44 +393,44 @@ static void compare_every_pin(BeamModel *m, uint32_t L, uint32_t *n_live,
 }
 
 static void test_a_pinned_position_reproduces_a_clamp(void) {
-    uint32_t live = 0u, bad = 0u, old_broken = 0u;
-
     /*
-     * The closed-world trellis spells only what the corpus spells, so its
-     * dynamic range is narrow and neither engine underflows. There the two
-     * agree to floating point on every pin.
+     * Bit for bit, on every pin, in both worlds. The two are separate
+     * implementations of one recursion -- this engine's over a residue SET and
+     * `positional_marginals`' over a residue RANGE -- and both now carry their
+     * forward values as logarithms accumulated in the same order, so agreement
+     * to the last bit is the right expectation and anything less is a defect.
+     *
+     * It was not always so. While both rescaled each layer by a single factor
+     * the claim held on amino acids and failed on nucleotides, and while only
+     * one of them had been fixed it failed on 160 open-world cells -- every
+     * one of them `positional_marginals` returning a row that summed to
+     * 5.9e-264 instead of 1. The classification below survives from that
+     * period deliberately: if the two ever diverge again it says WHICH is
+     * wrong, rather than only that they differ.
      */
+    uint32_t live = 0u, bad = 0u, old_broken = 0u, identical = 0u;
+
     BeamModel *shut = build(TRAIN, WEIGHT, N_TRAIN, 3u, 14u, false);
     ASSERT_MSG(shut != NULL, "closed-world model built");
-    compare_every_pin(shut, 10u, &live, &bad, &old_broken);
+    compare_every_pin(shut, 10u, &live, &bad, &old_broken, &identical);
     beam_model_destroy(shut);
     ASSERT_MSG(bad == 0u, "no closed-world pin disagreed with its clamp");
-    ASSERT_MSG(old_broken == 0u,
-               "and neither engine underflowed on so narrow a range");
+    ASSERT_MSG(old_broken == 0u, "and neither engine lost a distribution");
+    ASSERT_MSG(identical == live, "every closed-world pin is bit-identical");
     ASSERT_MSG(live == 17u, "the 17 the corpus spells were all compared");
-    const uint32_t shut_live = live;
 
-    /*
-     * The open world carries every residue everywhere, thousands of nats
-     * apart, and there the two DO differ -- on 160 of 40,000 cells. Every one
-     * of those is the older routine's rescale collapsing a row to zero, never
-     * this engine's. That is asserted rather than tolerated: if a
-     * disagreement ever appears where both answers are valid distributions,
-     * this engine has a defect and `bad` will catch it.
-     */
     BeamModel *open = build(TRAIN, WEIGHT, N_TRAIN, 3u, 14u, true);
     ASSERT_MSG(open != NULL, "open-world model built");
-    compare_every_pin(open, 10u, &live, &bad, &old_broken);
+    compare_every_pin(open, 10u, &live, &bad, &old_broken, &identical);
     beam_model_destroy(open);
-    ASSERT_MSG(bad == 0u,
-               "every open-world disagreement is the older routine losing a "
-               "distribution, not this engine getting a number wrong");
-    ASSERT_MSG(old_broken > 0u,
-               "and the underflow really is reachable, so this is a live "
-               "regression test rather than a dormant one");
+    ASSERT_MSG(bad == 0u, "no open-world pin disagreed either");
+    ASSERT_MSG(old_broken == 0u,
+               "and the underflow that used to lose six rows here is gone");
+    ASSERT_MSG(identical == live,
+               "every open-world pin is bit-identical too, across a trellis "
+               "spanning thousands of nats");
     ASSERT_MSG(live == 10u * R,
                "the open world carries a path for all 200 pins");
-    ASSERT_MSG(shut_live == 17u, "and the closed world its 17");
     PASS();
 }
 
@@ -1542,7 +1535,7 @@ int main(void) {
     RUN_TEST(test_a_bad_shape_is_refused_at_construction);
 
     printf("\n[bit-for-bit reproduction of the clamped sweep]\n");
-    RUN_TEST(test_an_unconstrained_query_agrees_with_the_marginals);
+    RUN_TEST(test_an_unconstrained_query_reproduces_the_marginals);
     RUN_TEST(test_a_pinned_position_reproduces_a_clamp);
     RUN_TEST(test_a_pinned_probability_reproduces_log_clamp_probability);
 

@@ -2152,6 +2152,90 @@ static void test_add_equals_counting_together(void) {
 
 /* ── Runner ──────────────────────────────────────────────────── */
 
+/* ── Positional marginals over a wide dynamic range ──────────── */
+
+/**
+ * Every row of a clamped marginal is a distribution, on a trellis whose live
+ * states span thousands of nats.
+ *
+ * Regression for a defect found by review. The forward sweep carried `alpha`
+ * linearly and renormalised it once per layer by the largest edge weight in
+ * that layer -- and no single factor per layer can hold a trellis that wide.
+ * The states that underflowed to zero were skipped from then on, so rows came
+ * back summing to 5.9e-264 while the call reported BEAM_OK. Six of sixty rows
+ * were lost here, including PINNED positions, whose row must be one-hot.
+ *
+ * Nothing exotic is needed to reach it: this is `beam_model_config_default()`
+ * with the alphabet and the length changed. The sweep now carries logarithms,
+ * as the backward half always did.
+ */
+static void test_clamped_marginals_survive_a_wide_dynamic_range(void) {
+    enum { NSEQ = 64, LEN = 60 };
+    static char store[NSEQ][72];
+    static const char *seqs[NSEQ];
+    static double ab[NSEQ];
+    /* Two periodic dialects of differing length, so the trellis is deep and
+     * its paths are very unequally weighted. */
+    for (uint32_t s = 0; s < NSEQ; ++s) {
+        const uint32_t n = 54u + (s % 11u);
+        const char *cyc = (s % 2u) ? "ACGT" : "AACCGGTT";
+        const uint32_t clen = (s % 2u) ? 4u : 8u;
+        for (uint32_t i = 0; i < n; ++i)
+            store[s][i] = cyc[(i + s) % clen];
+        store[s][n] = '\0';
+        seqs[s] = store[s];
+        ab[s] = 1.0 + (double)(s % 7u);
+    }
+
+    BeamModelConfig cfg;
+    beam_model_config_default(&cfg);
+    cfg.alphabet = BEAM_ALPHABET_NT;
+    cfg.order = 3;
+    cfg.max_length = 70;
+    cfg.strict = false;
+    BeamModel *m = beam_model_new(&cfg);
+    ASSERT_MSG(m != NULL, "nucleotide model built");
+    ASSERT_MSG(beam_model_observe(m, seqs, ab, NSEQ) == BEAM_OK, "observed");
+    ASSERT_MSG(beam_model_finalize(m) == BEAM_OK, "finalized");
+
+    const uint32_t NR = BEAM_NT_RESIDUES;
+    double *out = (double *)malloc((size_t)LEN * NR * sizeof(double));
+    uint8_t *clamp = (uint8_t *)malloc(LEN);
+    ASSERT_MSG(out && clamp, "alloc");
+    memset(clamp, BEAM_RESIDUE_INVALID, LEN);
+    clamp[7]  = 0u;   /* A */
+    clamp[52] = 2u;   /* G */
+    clamp[54] = 1u;   /* C */
+
+    double logz = 0.0;
+    ASSERT_MSG(beam_model_positional_marginals(m, LEN, clamp, out, &logz)
+               == BEAM_OK, "clamped marginals");
+    ASSERT_MSG(isfinite(logz) && logz < -100.0,
+               "the clamped mass is real and thousands of nats down");
+
+    for (uint32_t i = 0; i < LEN; ++i) {
+        double s = 0.0;
+        for (uint32_t x = 0; x < NR; ++x) s += out[(size_t)i * NR + x];
+        ASSERT_MSG(fabs(s - 1.0) < 1e-9, "every row is a distribution");
+    }
+    /*
+     * A pinned row is one-hot: that is the correct conditional, and the rows
+     * that used to come back as 5.9e-264 were pinned ones. Sixty layers of
+     * accumulation put these about 1.5e-12 from one, which is rounding; the
+     * defect this guards against was 264 orders of magnitude away.
+     */
+    ASSERT_MSG(fabs(out[(size_t)7 * NR + 0] - 1.0) < 1e-9, "x7 is A");
+    ASSERT_MSG(fabs(out[(size_t)52 * NR + 2] - 1.0) < 1e-9, "x52 is G");
+    ASSERT_MSG(fabs(out[(size_t)54 * NR + 1] - 1.0) < 1e-9, "x54 is C");
+    for (uint32_t x = 1; x < NR; ++x)
+        ASSERT_MSG(out[(size_t)7 * NR + x] == 0.0,
+                   "and carries nothing anywhere else");
+
+    free(out); free(clamp);
+    beam_model_destroy(m);
+    PASS();
+}
+
 int main(void) {
     printf("\n=== BEAM (Ensemble of Dual Graph Experts) ===\n");
 
@@ -2222,6 +2306,7 @@ int main(void) {
     RUN_TEST(test_posterior_shrinks_towards_the_prior);
     RUN_TEST(test_posterior_of_a_model_with_itself_keeps_its_scores);
     RUN_TEST(test_finalize_rolls_back_on_allocation_failure);
+    RUN_TEST(test_clamped_marginals_survive_a_wide_dynamic_range);
 
     printf("\n  %d passed, %d failed\n\n", pass_count, fail_count);
     return fail_count == 0 ? 0 : 1;
