@@ -81,6 +81,15 @@ static PyMethodDef module_methods[] = {
     {"topology",           py_topology,                      METH_VARARGS, NULL},
     {"positional_marginals", py_positional_marginals,        METH_VARARGS, NULL},
     {"expected_counts",    py_expected_counts,               METH_VARARGS, NULL},
+    {"query_probability",  py_query_probability,             METH_VARARGS, NULL},
+    {"query_marginals",    py_query_marginals,               METH_VARARGS, NULL},
+    {"query_entropy",      py_query_entropy,                 METH_VARARGS, NULL},
+    {"query_expect",       py_query_expect,                  METH_VARARGS, NULL},
+    {"query_position_entropy", py_query_position_entropy,    METH_VARARGS, NULL},
+    {"query_pair_joint",   py_query_pair_joint,              METH_VARARGS, NULL},
+    {"query_information_matrix", py_query_information_matrix, METH_VARARGS, NULL},
+    {"query_cost",         py_query_cost,                    METH_VARARGS, NULL},
+    {"query_neighbours",   py_query_neighbours,              METH_VARARGS, NULL},
     {NULL, NULL, 0, NULL}
 };
 

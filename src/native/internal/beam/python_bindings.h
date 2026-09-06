@@ -90,6 +90,15 @@ PyObject *py_threads(PyObject *self, PyObject *arg);
 PyObject *py_top_k(PyObject *self, PyObject *args);
 PyObject *py_topology(PyObject *self, PyObject *args);
 PyObject *py_total_weight(PyObject *self, PyObject *arg);
+PyObject *py_query_cost(PyObject *self, PyObject *args);
+PyObject *py_query_entropy(PyObject *self, PyObject *args);
+PyObject *py_query_expect(PyObject *self, PyObject *args);
+PyObject *py_query_information_matrix(PyObject *self, PyObject *args);
+PyObject *py_query_marginals(PyObject *self, PyObject *args);
+PyObject *py_query_neighbours(PyObject *self, PyObject *args);
+PyObject *py_query_pair_joint(PyObject *self, PyObject *args);
+PyObject *py_query_position_entropy(PyObject *self, PyObject *args);
+PyObject *py_query_probability(PyObject *self, PyObject *args);
 void release_f64_buffers(Py_buffer *views, int n);
 PyObject *set_beam_error(BeamError err);
 

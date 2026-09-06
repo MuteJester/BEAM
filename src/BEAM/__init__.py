@@ -22,6 +22,7 @@ from ._model import (
 from ._publicness import PublicnessModel
 from .analytics.scale import Attribution, ScaleIndex, attribute
 from .prism import Prism, PrismScorer
+from .query import BeamQuery, Condition
 
 __all__ = [
     "BeamModel", "Atoms", "Builder", "Calibration", "Histogram",
@@ -30,5 +31,6 @@ __all__ = [
     "PublicnessModel",
     "Attribution", "ScaleIndex", "attribute",
     "Prism", "PrismScorer",
+    "BeamQuery", "Condition",
 ]
 __version__ = "0.1.0"
