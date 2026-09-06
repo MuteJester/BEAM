@@ -421,3 +421,40 @@ OSError contract is what users and tests depend on.
 
 `numeric` did not move and `exact` held at 280 quantities: every change here
 is to how a failure is REPORTED, not to any computed value.
+
+## Amended 2026-09-06, for the error-contract pin test
+
+    pytest_cases.txt    448 -> 470   (+22, -0)
+
+Superseded file kept as `pytest_cases.precontract.txt`. Purely additive:
+`tests/python/test_error_contract.py`.
+
+The error system is being restructured to give failures a real Python
+exception hierarchy, and the danger is a failure silently changing class --
+every `except ValueError` in a user's pipeline stops catching and nothing says
+so. That already happened once: making BEAM_ERR_IO_CORRUPT and
+BEAM_ERR_IO_VERSION reachable converted three `beam_model_load` failures from
+OSError to ValueError, because the switch mapping them had never run.
+
+This file generalises the three tests that caught it. It pins
+(ENTRY POINT -> class), deliberately not (code -> class): one code does not
+imply one class, and assuming it does is how that regression happened.
+BEAM_ERR_NO_LIVE_PATHS reaches Python as a ValueError from
+`positional_marginals`, as an `ImpossibleCondition` from `BeamQuery`, and as a
+plain -inf return from `log_clamp_probability` -- all three deliberate, all
+three pinned.
+
+Verified to bite: re-introducing the IO_CORRUPT regression fails exactly the
+three rows that describe it.
+
+Two uncomfortable facts are pinned as facts rather than left as claims: a
+`beam_model_load` failure is NOT always an OSError (a budget refusal is a
+MemoryError, so the invariant asserted in an earlier commit message was
+already false), and several `PyErr_NoMemory()` sites raise with an empty
+message and no error code at all, so a future `except BeamMemoryError` will
+not catch them.
+
+Also in this commit: the two remaining refusal messages that still hardcoded
+gigabytes, in `query/engine.c` and `math/positional.c`. The previous commit
+fixed three such sites by name without grepping for the shape, so these two
+survived reading "0.0 GB".
