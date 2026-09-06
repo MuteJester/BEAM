@@ -49,7 +49,13 @@ BeamError beam_model_length_marginals(const BeamModel *m,
 #endif
     for (int64_t k = 0; k < (int64_t)nw; ++k) {
         const uint32_t L = work[k];
-        if (counting)  counting[L]  = beam_model_path_count(m, L);
+        if (counting) {
+            /* Same thread-local read-back: without it a failed sweep left a
+             * zero in the counting column and the call still returned OK. */
+            counting[L] = beam_model_path_count(m, L);
+            const int pe = (int)beam_last_error();
+            if (pe > failed) failed = pe;
+        }
         if (generated) generated[L] = exp(m->log_pi[L]);
         if (mean_surprisal || var_surprisal) {
             double mom[3] = {0}, lz = 0.0;

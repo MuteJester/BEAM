@@ -96,10 +96,28 @@ uint64_t beam_model_memory_bytes(const BeamModel *m) {
 }
 
 double beam_model_log_length_prior(const BeamModel *m, uint32_t length) {
-    if (!m || !m->finalized || length >= m->n_len_slots) return -INFINITY;
+    /*
+     * -inf is a real answer here -- it is what a length the model does not
+     * generate is worth -- so the three ERROR conditions must be separated
+     * from it by the error context rather than by the return value.
+     */
+    if (!m) return (void)BEAM_ENULL("model"), -INFINITY;
+    if (!m->finalized) return (void)BEAM_ENOTBUILT(), -INFINITY;
+    if (length >= m->n_len_slots)
+        return (void)BEAM_ERANGE("%s: length %u is outside 0..%u",
+                                 __func__, (unsigned)length,
+                                 (unsigned)m->n_len_slots - 1u), -INFINITY;
+    beam_clear_error();
     return m->log_pi[length];
 }
 double beam_model_log_partition(const BeamModel *m, uint32_t length) {
-    if (!m || !m->finalized || length >= m->n_len_slots) return -INFINITY;
+    /* Same split as `beam_model_log_length_prior` above. */
+    if (!m) return (void)BEAM_ENULL("model"), -INFINITY;
+    if (!m->finalized) return (void)BEAM_ENOTBUILT(), -INFINITY;
+    if (length >= m->n_len_slots)
+        return (void)BEAM_ERANGE("%s: length %u is outside 0..%u",
+                                 __func__, (unsigned)length,
+                                 (unsigned)m->n_len_slots - 1u), -INFINITY;
+    beam_clear_error();
     return m->log_z[length];
 }

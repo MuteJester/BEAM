@@ -100,15 +100,18 @@ static BeamError mw_alloc(const BeamModel *m, uint32_t n_aut, MomentWork *k) {
 
     const uint64_t need   = beam_query_moment_bytes(S, n_aut, R);
     const uint64_t budget = beam_model_memory_budget();
-    if (need > budget)
+    if (need > budget) {
+        const char *nu, *bu;
+        const double nv = beam_budget_scaled(need, &nu);
+        const double bv = beam_budget_scaled(budget, &bu);
         return BEAM_FAIL(BEAM_ERR_ALLOC,
                         "a moment sweep over %u trellis states times %u "
-                        "automaton states needs about %.1f GB, and the memory "
-                        "budget is %.1f GB; raise it with "
+                        "automaton states needs about %.2f %s, and the memory "
+                        "budget is %.2f %s; raise it with "
                         "BEAM.set_memory_budget, ask at a lower order, or use "
                         "a simpler constraint",
-                        (unsigned)S, (unsigned)n_aut, (double)need / 1e9,
-                        (double)budget / 1e9);
+                        (unsigned)S, (unsigned)n_aut, nv, nu, bv, bu);
+    }
 
     for (int i = 0; i < 2; ++i) {
         k->la[i] = (double *)malloc(P * sizeof(double));

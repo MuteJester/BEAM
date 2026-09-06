@@ -72,7 +72,19 @@ PyObject *set_beam_error(BeamError err) {
 
         case BEAM_ERR_IO_CORRUPT:
         case BEAM_ERR_IO_VERSION:
-            PyErr_SetString(PyExc_ValueError,
+            /*
+             * OSError, with the other I/O codes, because that is the contract
+             * `beam_model_load` has always had: every one of its failures was
+             * a hard-coded OSError, and three tests plus any user writing
+             * `except OSError` around a load depend on it.
+             *
+             * These two codes mapped to ValueError and nothing noticed,
+             * because until `load` learned to name its failures they were
+             * never produced -- dead cases in a switch. Making them live
+             * surfaced the disagreement, and the tested contract wins over
+             * the unreachable one.
+             */
+            PyErr_SetString(PyExc_OSError,
                             has_msg ? msg : "corrupt or unsupported model file");
             return NULL;
 
@@ -158,6 +170,25 @@ int edge_parse_config(PyObject *args, BeamModelConfig *cfg,
         return 0;
     }
     beam_model_config_default_for(a->id, cfg);
+    /*
+     * Range-checked BEFORE the cast. These three were cast straight to
+     * uint8_t, so `order = 258` wrapped to 2 -- a LEGAL order, which then
+     * passed `beam_config_valid` and produced a fully working model at an
+     * order the caller never asked for, scoring wrongly and saying nothing.
+     * `max_length = 300` wrapped to 44 the same way. The Python facade
+     * validates these properly, but `_cbeam` is an importable boundary and
+     * must not be the one place where a nonsense argument silently becomes a
+     * plausible one.
+     */
+    if (order < 0 || order > 255 || depth_cap < 0 || depth_cap > 255
+        || max_length < 0 || max_length > 255) {
+        PyErr_Format(PyExc_ValueError,
+                     "order, depth_cap and max_length must each be in 0..255 "
+                     "(got %d, %d, %d); a larger value would wrap to an "
+                     "unrelated but legal setting",
+                     order, depth_cap, max_length);
+        return 0;
+    }
     cfg->order = (uint8_t)order;
     cfg->depth_cap = (uint8_t)depth_cap;
     cfg->max_length = (uint8_t)max_length;

@@ -293,6 +293,23 @@ PyObject *py_topology(PyObject *self, PyObject *args) {
     if (!PyArg_ParseTuple(args, "OI", &cap, &length)) return NULL;
     BeamModel *m = edge_from_capsule(cap);
     if (!m) return NULL;
+    /*
+     * Validate the length BEFORE sizing anything from it. Sized first, a
+     * nonsense length raised a bare `MemoryError` with an EMPTY message --
+     * the allocator's verdict on a 2 GB request -- instead of the C layer's
+     * precise "length N is not one this model generates". The query bindings
+     * already refuse an out-of-range length before anything is sized; these
+     * two did not.
+     */
+    {
+        const BeamModelConfig *bcfg = beam_model_config(m);
+        if (bcfg && length > bcfg->max_length) {
+            PyErr_Format(PyExc_ValueError,
+                         "length %u is above this model's max_length of %u",
+                         length, (unsigned)bcfg->max_length);
+            return NULL;
+        }
+    }
     uint32_t *layers = (uint32_t *)PyMem_Calloc(length + 1u, sizeof(uint32_t));
     if (!layers) return PyErr_NoMemory();
     double nodes = 0.0, edges = 0.0;
@@ -340,6 +357,24 @@ PyObject *py_positional_marginals(PyObject *self, PyObject *args) {
             return NULL;
         }
         clamp = (const uint8_t *)buf;
+    }
+
+    /*
+     * Validate the length BEFORE sizing anything from it. Sized first, a
+     * nonsense length raised a bare `MemoryError` with an EMPTY message --
+     * the allocator's verdict on a 2 GB request -- instead of the C layer's
+     * precise "length N is not one this model generates". The query bindings
+     * already refuse an out-of-range length before anything is sized; these
+     * two did not.
+     */
+    {
+        const BeamModelConfig *bcfg = beam_model_config(m);
+        if (bcfg && length > bcfg->max_length) {
+            PyErr_Format(PyExc_ValueError,
+                         "length %u is above this model's max_length of %u",
+                         length, (unsigned)bcfg->max_length);
+            return NULL;
+        }
     }
 
     const unsigned int R = (unsigned int)beam_model_n_residues(m);

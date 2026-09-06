@@ -292,8 +292,25 @@ BeamError beam_model_save(const BeamModel *m, const char *path) {
                            (size_t)m->n_len_slots * sizeof(double), &crc);
     if (ok) ok = fwrite(&crc, 1, sizeof crc, f) == sizeof crc;
 
-    if (fclose(f) != 0) ok = false;
-    return ok ? BEAM_OK : BEAM_ERR_IO_WRITE;
+    /*
+     * A bare code here served whatever the thread-local message buffer last
+     * held, because `beam_set_error` is the only thing that writes it and this
+     * path never called it. Saving to a full disk reported "beam_model_path_count:
+     * length 0 is not one this model generates" -- a specific, actionable and
+     * entirely unrelated diagnosis, which is worse than none because it will
+     * be acted on. Naming the flush separately matters: buffered writes fail
+     * at `fclose`, so a full disk almost always surfaces there rather than at
+     * one of the `write_all` calls above.
+     */
+    const bool flushed = fclose(f) == 0;
+    if (!ok || !flushed)
+        return BEAM_FAIL(BEAM_ERR_IO_WRITE,
+                        "%s: writing '%s' failed%s, so the file is incomplete "
+                        "and must not be loaded; the disk may be full or the "
+                        "path may have become unwritable",
+                        __func__, path,
+                        flushed ? "" : " while flushing the last buffer");
+    return BEAM_OK;
 }
 
 bool beam_model_is_legacy_file(const char *path) {
@@ -306,10 +323,27 @@ bool beam_model_is_legacy_file(const char *path) {
     return got && magic == BEAM_MAGIC_LEGACY;
 }
 
+/*
+ * Every failure below names itself.
+ *
+ * All nine used to `return NULL` without touching the error context, so the
+ * binding hard-coded one sentence -- "not a model file, truncated, or
+ * corrupt" -- for every one of them. A missing file, a directory, a text
+ * file, and a PERFECTLY GOOD model that merely did not fit the memory budget
+ * all produced that same sentence, and the last of those sent the reader to
+ * rebuild a file that was never damaged.
+ *
+ * Two of the nine must NOT set an error of their own: `beam_model_new` and
+ * `beam_model_finalize` already set precise ones (the budget refusal among
+ * them), and overwriting those is how the information was lost.
+ */
 BeamModel *beam_model_load(const char *path) {
-    if (!path) return NULL;
+    if (!path) return (void)BEAM_ENULL("path"), NULL;
+    beam_clear_error();
     FILE *f = fopen(path, "rb");
-    if (!f) return NULL;
+    if (!f) return (void)BEAM_FAIL(BEAM_ERR_IO_OPEN,
+                                  "beam_model_load: cannot open '%s' for "
+                                  "reading", path), NULL;
 
     /*
      * Read the bytes every format wrote, decide from `format` whether there
@@ -327,20 +361,39 @@ BeamModel *beam_model_load(const char *path) {
         || (h.format != BEAM_FORMAT
             && h.format != BEAM_FORMAT_V2
             && h.format != BEAM_FORMAT_DENSE_V1)) {
+        const bool short_read = h.magic != BEAM_MAGIC && h.magic == 0u;
+        const bool bad_magic  = h.magic != BEAM_MAGIC;
         fclose(f);
-        return NULL;
+        if (short_read)
+            return (void)BEAM_FAIL(BEAM_ERR_IO_READ,
+                                  "beam_model_load: '%s' is too short to be a "
+                                  "BEAM model file", path), NULL;
+        if (bad_magic)
+            return (void)BEAM_FAIL(BEAM_ERR_IO_CORRUPT,
+                                  "beam_model_load: '%s' is not a BEAM model "
+                                  "file (wrong magic number)", path), NULL;
+        return (void)BEAM_FAIL(BEAM_ERR_IO_VERSION,
+                              "beam_model_load: '%s' is a BEAM model file in "
+                              "format %u, which this build does not read",
+                              path, (unsigned)h.format), NULL;
     }
     if (h.format >= BEAM_FORMAT
         && !read_all(f, (unsigned char *)&h + BEAM_HEADER_V2_BYTES,
                      sizeof h - BEAM_HEADER_V2_BYTES, &crc)) {
         fclose(f);
-        return NULL;
+        return (void)BEAM_FAIL(BEAM_ERR_IO_READ,
+                              "beam_model_load: '%s' ends inside its header, "
+                              "so it was truncated in writing", path), NULL;
     }
     /* An alphabet this build does not know makes every table dimension in the
      * payload unreadable, so it is refused here rather than misinterpreted. */
     if (!beam_alphabet_info((BeamAlphabet)h.alphabet)) {
+        const unsigned a = (unsigned)h.alphabet;
         fclose(f);
-        return NULL;
+        return (void)BEAM_FAIL(BEAM_ERR_IO_VERSION,
+                              "beam_model_load: '%s' was written with "
+                              "alphabet id %u, which this build does not know",
+                              path, a), NULL;
     }
 
     BeamModelConfig cfg;
@@ -356,7 +409,10 @@ BeamModel *beam_model_load(const char *path) {
     if (h.format >= BEAM_FORMAT_V2
         && h.storage_sparse != 0.0 && h.storage_sparse != 1.0) {
         fclose(f);
-        return NULL;
+        return (void)BEAM_FAIL(BEAM_ERR_IO_CORRUPT,
+                              "beam_model_load: '%s' has a storage flag that "
+                              "is neither 0 nor 1, so its header is corrupt",
+                              path), NULL;
     }
     cfg.coef_wide       = h.coef_wide;
     cfg.coef_mid        = h.coef_mid;
@@ -369,6 +425,9 @@ BeamModel *beam_model_load(const char *path) {
     cfg.weight_forward  = h.weight_forward;
     cfg.weight_backward = h.weight_backward;
 
+    /* `beam_model_new` has already set a precise error -- a memory-budget
+     * refusal names the figure and the remedy -- so it is passed through
+     * untouched rather than replaced with a report about the file. */
     BeamModel *m = beam_model_new(&cfg);
     if (!m) { fclose(f); return NULL; }
 
@@ -393,12 +452,26 @@ BeamModel *beam_model_load(const char *path) {
     uint32_t stored = 0;
     if (ok) ok = fread(&stored, 1, sizeof stored, f) == sizeof stored;
     fclose(f);
-    if (!ok || stored != crc) { beam_model_destroy(m); return NULL; }
+    if (!ok) {
+        beam_model_destroy(m);
+        return (void)BEAM_FAIL(BEAM_ERR_IO_READ,
+                              "beam_model_load: '%s' ends before its counts "
+                              "do, so it was truncated in writing", path), NULL;
+    }
+    if (stored != crc) {
+        beam_model_destroy(m);
+        return (void)BEAM_FAIL(BEAM_ERR_IO_CORRUPT,
+                              "beam_model_load: '%s' fails its checksum "
+                              "(stored %08x, computed %08x), so its contents "
+                              "changed after it was written",
+                              path, stored, crc), NULL;
+    }
 
     m->total_weight = h.total_weight;
     m->n_observed   = h.n_observed;
     m->n_skipped    = h.n_skipped;
 
+    /* Same as `beam_model_new`: finalize's own error is the useful one. */
     if (beam_model_finalize(m) != BEAM_OK) {
         beam_model_destroy(m);
         return NULL;

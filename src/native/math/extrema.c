@@ -68,6 +68,10 @@ static double accumulator_max_at(const BeamModel *m, uint32_t len) {
     uint8_t *alive = (uint8_t *)malloc(S);
     LiveHandle h;
     if (!alive || beam_live_acquire(m, len, &h) != BEAM_OK) {
+        /* `range_at` below returns BEAM_EALLOC from the identical branch.
+         * This one set nothing, so 0.0 reached the binding's guard with a
+         * clean error context and was served as an answer. */
+        if (!alive) (void)BEAM_EALLOC("the accumulator frontier mask");
         free(alive); free(w); free(cur); free(next); free(tail);
         return 0.0;
     }
@@ -129,6 +133,7 @@ double beam_model_accumulator_max(const BeamModel *m) {
     if (!work) { (void)BEAM_EALLOC("the per-length work list"); return 0.0; }
     const uint32_t nw = beam_live_lengths_desc(m, work);
     double hi = 0.0;
+    int failed = BEAM_OK;
     /* Concurrent sweeps DIVIDE the budget rather than multiplying it. A
      * concurrency of 0 means one sweep does not fit at all, which the sweep
      * refuses on its own, so run one and let it report that. */
@@ -143,13 +148,25 @@ double beam_model_accumulator_max(const BeamModel *m) {
 
 #ifdef _OPENMP
     #pragma omp parallel for schedule(dynamic, 1) reduction(max:hi) \
-            num_threads((int)conc)
+            reduction(max:failed) num_threads((int)conc)
 #endif
     for (int64_t k = 0; k < (int64_t)nw; ++k) {
         const double v = accumulator_max_at(m, work[k]);
+        const int e = (int)beam_last_error();
+        if (e > failed) failed = e;
         if (v > hi) hi = v;
     }
     free(work);
+    if (failed != BEAM_OK) {
+        /* Whether a refusal was reported used to depend on which thread it
+         * landed on: the binding checks the MASTER thread's error, and
+         * `beam_set_error` is thread-local. Collected per iteration, the
+         * answer no longer depends on the thread count. */
+        (void)BEAM_FAIL((BeamError)failed,
+                       "accumulator_max: a per-length sweep failed, so the "
+                       "bound would be too low");
+        return 0.0;
+    }
     return hi;
 }
 
@@ -187,6 +204,10 @@ static BeamError range_at(const BeamModel *m, uint32_t len,
     uint8_t *alive = (uint8_t *)malloc(S);
     LiveHandle h;
     if (!alive || beam_live_acquire(m, len, &h) != BEAM_OK) {
+        /* `range_at` below returns BEAM_EALLOC from the identical branch.
+         * This one set nothing, so 0.0 reached the binding's guard with a
+         * clean error context and was served as an answer. */
+        if (!alive) (void)BEAM_EALLOC("the accumulator frontier mask");
         free(alive); free(w); free(lo); free(hi); free(nlo); free(nhi); free(tail);
         return BEAM_EALLOC("the forward frontier");
     }

@@ -373,3 +373,51 @@ Python on refusal, which is a legitimate answer and made a refusal look like
 "this model generates nothing"; and `spectrum` reported a refused accumulator
 sweep as "the accumulator bound is zero, so the model generates nothing to
 bin", sending the reader to their corpus for a problem in their settings.
+
+## Amended 2026-09-06, for the error-reporting defects
+
+    pytest_cases.txt    440 -> 448   (+8, -0)
+
+Superseded file kept as `pytest_cases.prediag.txt`. Purely additive: eight
+cases in the new `tests/python/model/test_error_reporting.py`, nothing renamed
+and nothing removed.
+
+Two audits of the error surface found failures being reported in forms a
+caller could not distinguish from a real answer, or carrying a diagnosis that
+belonged to an unrelated earlier call. The two worst were verified by
+reproduction:
+
+  - saving to a full disk raised "beam_model_path_count: length 0 is not one
+    this model generates". `beam_model_save` ended in a bare
+    `return ... BEAM_ERR_IO_WRITE`, and the binding read the thread-local
+    message buffer, which nothing had cleared. The diagnosis was specific,
+    actionable and about a different call.
+  - a sound model file that merely exceeded the memory budget was reported as
+    "not a model file, truncated, or corrupt". All nine of `beam_model_load`'s
+    failure returns set no error, so the binding hard-coded one sentence --
+    and `beam_model_new` / `beam_model_finalize`, which DO set precise ones,
+    had theirs discarded. The remedy was `set_memory_budget`; the reader was
+    told to rebuild the file.
+
+Also fixed: `path_count_total` returned a silent 0.0 on an unfinalized model
+while `path_count` twelve lines above set an error on the identical condition
+(this defeated the binding guard added in the previous commit -- its premise,
+that the per-length calls clear the error, is false on a branch that makes
+none); worker failures dropped inside OpenMP loops in the path-count and
+accumulator drivers, which summed zeros into a silently short total; a
+`malloc` failure in the accumulator sweep that set no error at all;
+`order=258` truncating to a LEGAL order 2 and building a working model that
+scored wrongly; two bindings sizing an allocation from an unvalidated length,
+so a nonsense length raised an empty MemoryError from the allocator instead of
+the C layer's precise refusal; the three budget messages that still read
+"0.0 GB"; and seven bare-code returns in `occupancy/` and `io/`.
+
+One behaviour change beyond the defects, and it was NOT intended: making
+`BEAM_ERR_IO_CORRUPT` and `BEAM_ERR_IO_VERSION` reachable exposed that they
+mapped to ValueError, while every `beam_model_load` failure had always been a
+hard-coded OSError. Three tests caught it. The mapping was changed to OSError
+rather than the contract, since the codes were previously unreachable and the
+OSError contract is what users and tests depend on.
+
+`numeric` did not move and `exact` held at 280 quantities: every change here
+is to how a failure is REPORTED, not to any computed value.

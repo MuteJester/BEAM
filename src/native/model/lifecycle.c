@@ -162,17 +162,20 @@ BeamModel *beam_model_new(const BeamModelConfig *cfg) {
             : rows_total * m->n_residues * BEAM_DIRS * 2ull * sizeof(double);
         const uint64_t budget = beam_model_memory_budget();
         if (need > budget) {
+            const char *nu, *bu;
+            const double nv = beam_budget_scaled(need, &nu);
+            const double bv = beam_budget_scaled(budget, &bu);
             beam_set_error(BEAM_ERR_ALLOC,
-                          "this %s configuration needs about %.1f GB for its "
+                          "this %s configuration needs about %.2f %s for its "
                           "tables (order %u, max_length %u, depth_cap %u, %s) "
-                          "and the memory budget is %.1f GB; raise it with "
+                          "and the memory budget is %.2f %s; raise it with "
                           "beam_model_set_memory_budget / "
                           "BEAM.set_memory_budget, or build a smaller model",
-                          a->name, (double)need / 1e9,
+                          a->name, nv, nu,
                           (unsigned)c.order, (unsigned)c.max_length,
                           (unsigned)c.depth_cap,
                           c.sparse ? "sparse" : "dense",
-                          (double)budget / 1e9);
+                          bv, bu);
             free(m);
             return NULL;
         }

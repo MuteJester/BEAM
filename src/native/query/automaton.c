@@ -22,6 +22,7 @@
 #include "beam/query.h"
 #include "beam/query_internal.h"
 #include "beam/errors.h"
+#include "beam/budget.h"
 #include "beam/model_state.h"
 
 /* ── Construction ────────────────────────────────────────────── */
@@ -70,14 +71,16 @@ static BeamAutomaton *aut_new(uint32_t length, uint32_t n_residues,
                         * n_residues * sizeof(uint32_t) + n_states;
     const uint64_t budget = beam_model_memory_budget();
     if (need > budget) {
+        const char *nu, *bu;
+        const double nv = beam_budget_scaled(need, &nu);
+        const double bv = beam_budget_scaled(budget, &bu);
         beam_set_error(BEAM_ERR_ALLOC,
                       "%s: an automaton of %u states over %u layers needs "
-                      "about %.1f GB for its transition table, and the memory "
-                      "budget is %.1f GB; raise it with "
+                      "about %.2f %s for its transition table, and the memory "
+                      "budget is %.2f %s; raise it with "
                       "BEAM.set_memory_budget, or use a simpler constraint",
                       what, (unsigned)n_states,
-                      (unsigned)(uniform ? 1u : length),
-                      (double)need / 1e9, (double)budget / 1e9);
+                      (unsigned)(uniform ? 1u : length), nv, nu, bv, bu);
         return NULL;
     }
 

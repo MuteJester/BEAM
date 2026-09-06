@@ -157,7 +157,20 @@ uint32_t beam_live_lengths_desc(const BeamModel *m, uint32_t *out) {
 }
 
 double beam_model_path_count_total(const BeamModel *m) {
-    if (!m || !m->finalized) return 0.0;
+    /*
+     * Sets the error, like `beam_model_path_count` twelve lines above does on
+     * the identical condition. Without this the two disagreed about whether
+     * the same input is an error, and 0.0 -- indistinguishable from "this
+     * model generates nothing" -- reached Python with the error context
+     * clean, so the binding's guard could not fire.
+     */
+    if (!m || !m->finalized) {
+        if (!m) beam_set_error(BEAM_ERR_NULL_ARG,
+                              "path_count_total: model must not be NULL");
+        else    (void)BEAM_ENOTBUILT();
+        return 0.0;
+    }
+    beam_clear_error();
     const uint32_t n = m->n_len_slots;
     uint32_t *work = (uint32_t *)malloc((size_t)n * sizeof(uint32_t));
     double *per = (double *)calloc(n, sizeof(double));
@@ -187,11 +200,32 @@ double beam_model_path_count_total(const BeamModel *m) {
         return 0.0;
     }
 
+    /*
+     * A worker's failure used to vanish. `beam_model_path_count` reports
+     * failure as 0.0, the driver summed those zeros, and the total came back
+     * silently too small with the error context clean -- a wrong answer, not
+     * a failure. `beam_set_error` is thread-local, so each iteration can read
+     * back its OWN error immediately after its own call; `max` over the codes
+     * then reduces them, BEAM_OK being zero.
+     */
+    int failed = BEAM_OK;
 #ifdef _OPENMP
-    #pragma omp parallel for schedule(dynamic, 1) num_threads((int)conc)
+    #pragma omp parallel for schedule(dynamic, 1) reduction(max:failed) \
+            num_threads((int)conc)
 #endif
-    for (int64_t k = 0; k < (int64_t)nw; ++k)
+    for (int64_t k = 0; k < (int64_t)nw; ++k) {
         per[work[k]] = beam_model_path_count(m, work[k]);
+        const int e = (int)beam_last_error();
+        if (e > failed) failed = e;
+    }
+    if (failed != BEAM_OK) {
+        free(work); free(per);
+        (void)BEAM_FAIL((BeamError)failed,
+                       "path_count_total: a per-length sweep failed, so the "
+                       "total would be short; the per-length message is lost "
+                       "to the worker thread that raised it");
+        return 0.0;
+    }
     /* Summed in ascending length, exactly as the serial loop did. */
     double t = 0.0;
     for (uint32_t L = 1; L < n; ++L) t += per[L];

@@ -6,6 +6,7 @@
 #include <stdlib.h>
 
 #include "beam/publicness.h"
+#include "beam/errors.h"
 #include "beam/budget.h"
 #include "beam/occupancy_internal.h"
 
@@ -60,7 +61,7 @@ BeamError beam_publicness_pgf(const double *p, uint32_t n_atoms,
     uint32_t n_roots;
     BeamError err;
 
-    if (!p || !out) return BEAM_ERR_NULL_ARG;
+    if (!p || !out) return BEAM_ENULL(!p ? "probabilities" : "output buffer");
     if (n_atoms == 0) return BEAM_FAIL(BEAM_ERR_EMPTY_INPUT, "no probabilities");
     if (k_fft < 2 || (k_fft & 1u))
         return BEAM_FAIL(BEAM_ERR_PARAM_OUT_OF_RANGE,
@@ -97,7 +98,7 @@ BeamError beam_publicness_pgf(const double *p, uint32_t n_atoms,
         free(pi);
         free(root_re);
         free(root_im);
-        return BEAM_ERR_ALLOC;
+        return BEAM_EALLOC("the publicness PGF workspace");
     }
 
     for (uint32_t a = 0; a < n_atoms; a++) {

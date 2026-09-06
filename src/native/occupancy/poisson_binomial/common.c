@@ -6,6 +6,7 @@
 #include <stdlib.h>
 
 #include "beam/publicness.h"
+#include "beam/errors.h"
 #include "beam/occupancy_internal.h"
 
 /* 2*pi to the last representable bit; the codebase spells such constants out
@@ -16,7 +17,8 @@
 BeamError publicness_check_groups(const double *depths,
                                         const double *multiplicity,
                                         uint32_t n_groups) {
-    if (!depths || !multiplicity) return BEAM_ERR_NULL_ARG;
+    if (!depths || !multiplicity)
+        return BEAM_ENULL(!depths ? "depths" : "multiplicity");
     if (n_groups == 0)
         return BEAM_FAIL(BEAM_ERR_EMPTY_INPUT, "no depth groups given");
 
