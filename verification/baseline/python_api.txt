@@ -1,4 +1,4 @@
-__all__: ['Atoms', 'Attribution', 'BeamModel', 'Builder', 'Calibration', 'Histogram', 'Prism', 'PrismScorer', 'PseqAnalysis', 'PublicnessModel', 'ScaleIndex', 'attribute', 'effective_threads', 'memory_budget', 'set_memory_budget', 'set_threads', 'threads']
+__all__: ['Atoms', 'Attribution', 'BeamModel', 'BeamQuery', 'Builder', 'Calibration', 'Condition', 'Histogram', 'Prism', 'PrismScorer', 'PseqAnalysis', 'PublicnessModel', 'ScaleIndex', 'attribute', 'effective_threads', 'memory_budget', 'set_memory_budget', 'set_threads', 'threads']
 __version__: 0.1.0
 class Atoms:
   def __delattr__(self, name, /)
@@ -154,6 +154,46 @@ class BeamModel:
   property variant
   def with_prior(self, prior: 'BeamModel', kappa: 'float' = 100.0) -> 'BeamModel'
   def without(self, other: 'Any', *, abundances: 'Iterable[float] | None' = None) -> 'BeamModel'
+class BeamQuery:
+  def __delattr__(self, name, /)
+  def __dir__(self, /)
+  def __eq__(self, value, /)
+  def __format__(self, format_spec, /)
+  def __ge__(self, value, /)
+  def __getattribute__(self, name, /)
+  def __getstate__(self, /)
+  def __gt__(self, value, /)
+  def __hash__(self, /)
+  def __init__(self, model) -> 'None'
+  def __init_subclass__(?)
+  def __le__(self, value, /)
+  def __lt__(self, value, /)
+  def __ne__(self, value, /)
+  def __new__(*args, **kwargs)
+  def __reduce__(self, /)
+  def __reduce_ex__(self, protocol, /)
+  def __repr__(self) -> 'str'
+  def __setattr__(self, name, value, /)
+  def __sizeof__(self, /)
+  def __str__(self, /)
+  def __subclasshook__(?)
+  def condition(self, length: 'int') -> 'Condition'
+  def conditional_entropy(self, cond: 'Condition', i: 'int', j: 'int') -> 'float'
+  def cost(self, cond: 'Condition', *, whole_matrix: 'bool' = False) -> 'dict'
+  def deletions(self, sequence: 'str') -> 'list[dict]'
+  def entropy(self, cond: 'Condition') -> 'float'
+  def expect(self, table, cond: 'Condition') -> 'tuple[float, float]'
+  def expect_count(self, residues: 'Iterable[str]', cond: 'Condition') -> 'tuple[float, float]'
+  def insertions(self, sequence: 'str') -> 'list[dict]'
+  def log_partition(self, cond: 'Condition') -> 'float'
+  def log_probability(self, cond: 'Condition') -> 'float'
+  def marginals(self, cond: 'Condition') -> 'np.ndarray'
+  property model
+  def mutual_information(self, cond: 'Condition') -> 'np.ndarray'
+  def pair_joint(self, cond: 'Condition', i: 'int', j: 'int') -> 'np.ndarray'
+  def position_entropy(self, cond: 'Condition') -> 'np.ndarray'
+  def probability(self, cond: 'Condition') -> 'float'
+  def surprisal_variance(self, cond: 'Condition') -> 'float'
 class Builder:
   def __delattr__(self, name, /)
   def __dir__(self, /)
@@ -216,6 +256,43 @@ class Calibration:
   def quantile(self, length: 'int | None', probability)
   property resolution_floor
   def scale(self, length: 'int', surprisal, *, method: 'str' = 'pvalue')
+class Condition:
+  def __and__(self, other: "'Condition'") -> "'Condition'"
+  def __delattr__(self, name, /)
+  def __dir__(self, /)
+  def __eq__(self, value, /)
+  def __format__(self, format_spec, /)
+  def __ge__(self, value, /)
+  def __getattribute__(self, name, /)
+  def __getstate__(self, /)
+  def __gt__(self, value, /)
+  def __hash__(self, /)
+  def __init__(self, length: 'int', alphabet: 'str' = 'aa') -> 'None'
+  def __init_subclass__(?)
+  def __invert__(self) -> "'Condition'"
+  def __le__(self, value, /)
+  def __lt__(self, value, /)
+  def __ne__(self, value, /)
+  def __new__(*args, **kwargs)
+  def __or__(self, other: "'Condition'") -> "'Condition'"
+  def __reduce__(self, /)
+  def __reduce_ex__(self, protocol, /)
+  def __repr__(self) -> 'str'
+  def __setattr__(self, name, value, /)
+  def __sizeof__(self, /)
+  def __str__(self, /)
+  def __subclasshook__(?)
+  property alphabet
+  def at(self, position: 'int', residue: 'str') -> "'Condition'"
+  def contains(self, motif: 'str') -> "'Condition'"
+  def count(self, residues: 'Iterable[str]', lo: 'int', hi: 'int') -> "'Condition'"
+  def exclude(self, position: 'int', residues: 'Iterable[str] | str') -> "'Condition'"
+  property is_free
+  property length
+  property needs_product
+  def oneof(self, position: 'int', residues: 'Iterable[str]') -> "'Condition'"
+  def pattern(self) -> 'str'
+  def run(self, start: 'int', residues: 'str') -> "'Condition'"
 class Histogram:
   def __delattr__(self, name, /)
   def __dir__(self, /)

@@ -109,24 +109,6 @@ BeamError beam_query_betas_product(const BeamModel *m, uint32_t length,
 
 /* ── The forward sweep over the product ──────────────────────── */
 
-double beam_query_layer_max_product(const double *w, const double *cur,
-                                    uint32_t n_states, uint32_t n_residues,
-                                    uint32_t n_aut, BeamResidueMask allowed) {
-    double mx = -INFINITY;
-    for (uint32_t s = 0; s < n_states; ++s) {
-        const double *cs = cur + (size_t)s * n_aut;
-        bool reached = false;
-        for (uint32_t q = 0; q < n_aut; ++q)
-            if (cs[q] != 0.0) { reached = true; break; }
-        if (!reached) continue;
-        const double *row = w + (size_t)s * n_residues;
-        for (BeamResidueMask mm = allowed; mm; mm &= mm - 1u)
-            if (row[(uint32_t)__builtin_ctz(mm)] > mx)
-                mx = row[(uint32_t)__builtin_ctz(mm)];
-    }
-    return mx;
-}
-
 bool beam_query_advance_product(const BeamModel *m, const BeamAutomaton *aut,
                                 uint32_t layer, const double *w,
                                 const double *cur, double *next, double *acc,

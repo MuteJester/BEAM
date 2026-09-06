@@ -207,3 +207,77 @@ Pytest's collection order is not stable between runs, so a fresh dump reorders
 ~200 unchanged lines and buries the 36 that are actually new. `check.py`
 compares this file as a SET, so ordering carries no meaning and the only thing
 at stake is whether the diff can be read.
+
+# Why five baselines were re-recorded for the query engine
+
+Re-recorded 2026-09-06, at the end of the `probabilistic-queries` branch. The
+superseded files are kept beside them as `*.prequery.txt`, so
+`diff c_symbols.prequery.txt c_symbols.txt` and its siblings show exactly what
+moved.
+
+Re-recorded ONCE, at the end, and not per commit. The branch left all five
+failing through thirteen commits deliberately: re-recording as it went would
+have fused unrelated changes into diffs nobody could audit.
+
+    cbeam_methods.txt    58 ->  67   (+9,  -0)
+    c_symbols.txt       115 -> 162   (+47, -0)
+    c_cases.txt         104 -> 198   (+94, -0)
+    pytest_cases.txt    380 -> 412   (+32, -0)
+    python_api.txt      409 -> 486   (+34, -1)
+
+**Nothing was removed from any of them.** The single line the Python API lost
+is `__all__:` itself, replaced by the same line with two names added.
+
+## The additions, by source
+
+1. **47 C symbols**, all `beam_query_*`, from the query engine under
+   `src/native/query/`. 24 are declared in `include/beam/query.h` and are
+   public API; the rest are cross-file helpers declared only in
+   `beam/query_internal.h`, which the check reports as a note rather than a
+   failure, exactly as it does for the existing `beam_layer_weights` and
+   `beam_betas`.
+
+2. **9 `_cbeam` callables**, `query_*`, one per public entry point of that
+   engine.
+
+3. **34 Python API lines**: the `BeamQuery` and `Condition` classes, plus their
+   two names in `__all__`. `BEAM.query` is exported at top level as
+   `PrismScorer` is.
+
+4. **94 C test cases** across five new files -- `test_query.c`,
+   `test_query_automaton.c`, `test_query_moments.c`,
+   `test_query_information.c`, `test_query_indel.c` -- and one added to
+   `test_model.c`.
+
+5. **32 pytest cases**: 19 in `tests/python/query/test_query.py`, and 13 in
+   `tests/python/analytics/test_rules.py`, which is a separate module
+   committed on this branch.
+
+## What did NOT move, which is the point
+
+`numeric` (78 hex-float quantities, order 2/3/4 x open/strict), the
+saved-model bytes, and thread independence were green at every commit,
+including the two that changed shipped numerics:
+
+  - the query engine's forward sweep moving to log space, and
+  - `beam_model_positional_marginals` and `beam_model_expected_counts` moving
+    with it, which fixed a real defect in shipped code -- at
+    `beam_model_config_default()`, a length-60 nucleotide sweep returned six of
+    sixty rows summing to 5.9e-264 instead of 1, three of them PINNED
+    positions whose row must be one-hot.
+
+That a correctness fix to shipped numerics moved no recorded quantity is worth
+stating plainly. It is not luck: the recorded models do not span enough
+dynamic range to underflow, and where the linear sweep did not underflow the
+log-space one reproduces it bit for bit. Had anything else shifted, `numeric`
+would have caught it, and it is the check that must never be re-recorded
+casually.
+
+## One symbol was removed before recording rather than recorded
+
+The first pass of this re-record listed `beam_query_layer_max_product` among
+the additions. Its declaration had been deleted with its two siblings when the
+per-layer rescale was removed, but the definition was left behind -- dead code
+with external linkage, reachable by nobody. It was deleted rather than
+recorded. The symbol check found it, which is the check doing its job on the
+day it was updated.
