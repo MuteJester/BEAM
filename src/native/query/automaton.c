@@ -74,7 +74,7 @@ static BeamAutomaton *aut_new(uint32_t length, uint32_t n_residues,
         const char *nu, *bu;
         const double nv = beam_budget_scaled(need, &nu);
         const double bv = beam_budget_scaled(budget, &bu);
-        beam_set_error(BEAM_ERR_ALLOC,
+        beam_set_error(BEAM_ERR_BUDGET,
                       "%s: an automaton of %u states over %u layers needs "
                       "about %.2f %s for its transition table, and the memory "
                       "budget is %.2f %s; raise it with "

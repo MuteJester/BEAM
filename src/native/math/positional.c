@@ -264,7 +264,7 @@ static BeamError fb_alloc(const BeamModel *m, uint32_t len, FBWork *k) {
         const char *nu, *bu;
         const double nv = beam_budget_scaled(need, &nu);
         const double bv = beam_budget_scaled(budget, &bu);
-        return BEAM_FAIL(BEAM_ERR_ALLOC,
+        return BEAM_FAIL(BEAM_ERR_BUDGET,
                         "a forward-backward sweep at length %u needs about "
                         "%.2f %s for the backward field of %u states, and the "
                         "memory budget is %.2f %s; raise it with "

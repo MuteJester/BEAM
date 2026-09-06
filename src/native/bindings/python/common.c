@@ -36,6 +36,15 @@ PyObject *set_beam_error(BeamError err) {
     const int has_msg = msg && msg[0];
 
     switch (err) {
+        case BEAM_ERR_BUDGET:
+            /*
+             * MemoryError, the same class BEAM_ERR_ALLOC produces, so this
+             * commit changes what is DISTINGUISHABLE without changing what is
+             * caught: `except MemoryError` keeps working everywhere it did.
+             * The Python hierarchy will give this its own subclass, at which
+             * point "raise your budget" becomes catchable apart from "buy
+             * more RAM" -- which is the point of splitting the code out.
+             */
         case BEAM_ERR_ALLOC:
             /* PyErr_NoMemory() sets MemoryError with no message, which is
              * right for a bare allocation failure and wrong for a refusal

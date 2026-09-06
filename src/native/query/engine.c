@@ -63,7 +63,7 @@ BeamError beam_query_work_alloc(const BeamModel *m, uint32_t length,
         const char *nu, *bu;
         const double nv = beam_budget_scaled(need, &nu);
         const double bv = beam_budget_scaled(budget, &bu);
-        return BEAM_FAIL(BEAM_ERR_ALLOC,
+        return BEAM_FAIL(BEAM_ERR_BUDGET,
                         "a constrained sweep at length %u needs about %.2f %s "
                         "for the backward field of %u trellis states times %u "
                         "automaton states, and the memory budget is %.2f %s; "

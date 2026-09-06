@@ -102,6 +102,20 @@ typedef enum {
     BEAM_ERR_OVERFLOW           = 21,  /* fixed-size buffer exceeded        */
     BEAM_ERR_INTERNAL           = 22,  /* invariant violation (report!)     */
 
+    /*
+     * A refusal by the memory BUDGET, which is not an allocation failure.
+     * They shared BEAM_ERR_ALLOC, so "raise your budget" and "buy more RAM"
+     * were the same code and the same Python class, separable only by reading
+     * the prose -- which is why the memory-budget tests had to match on the
+     * string "memory budget" rather than catch a type.
+     *
+     * Appended rather than filed beside BEAM_ERR_ALLOC in the Memory group
+     * above, because inserting it there would renumber twenty codes. This is
+     * the rule this header states, applied to itself the first time it came
+     * up.
+     */
+    BEAM_ERR_BUDGET             = 23,  /* refused by the memory budget      */
+
     /* Append new codes HERE, above the aliases, taking the next free value. */
 
     /* Backward compatibility aliases (map old codes to new) */
