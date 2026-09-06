@@ -21,42 +21,99 @@
 #include "beam/python_bindings.h"
 
 /*
- * Map a C error code onto a Python exception.
+ * Map a C error code onto a Python exception CLASS.
  *
- * Adapted from LZGraphs' version. The gene-data, graph-operation and
- * convergence branches referred to exception types that only exist in that
- * package and to failures this model cannot produce, so they fold into the
- * generic cases rather than being carried across as dead code. The message
- * itself always comes from `beam_error_message()`, which is where the useful
- * detail lives -- a bare code reaches Python as "invalid argument" and is
- * worth nothing to a caller.
+ * A table, not a switch, and the classes come from `BEAM.errors` so a caller
+ * can write `except BudgetExceeded` instead of matching on the text of a
+ * message. Every class keeps the built-in it replaces as a second base, so
+ * this is additive: `except ValueError` catches everything it caught before.
+ *
+ * THE ENTRY POINT STILL WINS. This table is the default for a code, not a
+ * decree. Several bindings deliberately raise something more specific before
+ * ever reaching here -- `positional_marginals` turns BEAM_ERR_NO_LIVE_PATHS
+ * into a ValueError about the clamp, and the query facade narrows built-ins to
+ * its own classes -- because one code does not imply one class. Assuming it
+ * did is how BEAM_ERR_IO_CORRUPT silently converted three `beam_model_load`
+ * failures from OSError to ValueError: its arm had never run, so nobody had
+ * ever seen what it said. `tests/python/test_error_contract.py` pins the
+ * observed class per entry point, which is the thing that must not move.
+ *
+ * The import is LAZY and cached, not done at module init: `BEAM/__init__.py`
+ * imports `_cbeam`, so reaching back into `BEAM.errors` from this module's
+ * initialisation would be circular. By the time any error is raised the
+ * package is fully imported. If the import fails for any reason the built-in
+ * is used instead, so a broken install degrades to the old behaviour rather
+ * than to a confusing secondary failure.
  */
+static PyObject *beam_error_class(BeamError err, PyObject *fallback) {
+    static PyObject *mod = NULL;      /* borrowed-forever, module-lifetime */
+    const char *name = NULL;
+
+    switch (err) {
+        case BEAM_ERR_BUDGET:            name = "BudgetExceeded";  break;
+        case BEAM_ERR_ALLOC:             name = "OutOfMemory";     break;
+
+        case BEAM_ERR_INVALID_SEQUENCE:  name = "InvalidSequence"; break;
+        case BEAM_ERR_NULL_ARG:          /* == BEAM_ERR_INVALID_ARG */
+        case BEAM_ERR_EMPTY_INPUT:
+        case BEAM_ERR_INVALID_VARIANT:
+        case BEAM_ERR_LENGTH_MISMATCH:
+        case BEAM_ERR_PARAM_OUT_OF_RANGE: name = "BeamValueError"; break;
+
+        case BEAM_ERR_NOT_BUILT:         name = "NotFinalized";    break;
+        case BEAM_ERR_NO_LIVE_PATHS:     name = "NoLivePaths";     break;
+        case BEAM_ERR_VARIANT_MISMATCH:  name = "ModelMismatch";   break;
+
+        case BEAM_ERR_IO_OPEN:
+        case BEAM_ERR_IO_READ:
+        case BEAM_ERR_IO_WRITE:
+        case BEAM_ERR_IO_CORRUPT:
+        case BEAM_ERR_IO_VERSION:        name = "ModelFileError";  break;
+
+        /* Library bugs and codes nothing produces. BEAM_ERR_HAS_CYCLES is
+         * among them: a cyclic trellis would be an invariant violation, not a
+         * user error. */
+        case BEAM_ERR_INTERNAL:
+        case BEAM_ERR_HAS_CYCLES:
+        case BEAM_ERR_OVERFLOW:
+        case BEAM_ERR_CONVERGENCE:
+        case BEAM_ERR_NO_GENE_DATA:
+        case BEAM_ERR_GENE_NOT_FOUND:
+        case BEAM_ERR_MISSING_EDGE:      name = "InternalError";   break;
+
+        default:                         return fallback;
+    }
+
+    if (!mod) {
+        mod = PyImport_ImportModule("BEAM.errors");
+        if (!mod) { PyErr_Clear(); return fallback; }
+    }
+    PyObject *cls = PyObject_GetAttrString(mod, name);
+    if (!cls) { PyErr_Clear(); return fallback; }
+    return cls;                      /* new reference; caller decrefs */
+}
+
 PyObject *set_beam_error(BeamError err) {
     const char *msg = beam_error_message();
     const int has_msg = msg && msg[0];
 
+    /*
+     * The built-in each code produced before this table existed. Keeping it as
+     * the fallback means a failed import cannot change what a caller catches,
+     * and it documents the mapping the exception classes are built to
+     * preserve.
+     */
+    PyObject *builtin;
+    const char *generic;
     switch (err) {
         case BEAM_ERR_BUDGET:
-            /*
-             * MemoryError, the same class BEAM_ERR_ALLOC produces, so this
-             * commit changes what is DISTINGUISHABLE without changing what is
-             * caught: `except MemoryError` keeps working everywhere it did.
-             * The Python hierarchy will give this its own subclass, at which
-             * point "raise your budget" becomes catchable apart from "buy
-             * more RAM" -- which is the point of splitting the code out.
-             */
         case BEAM_ERR_ALLOC:
             /* PyErr_NoMemory() sets MemoryError with no message, which is
              * right for a bare allocation failure and wrong for a refusal
              * that has something to say -- "this configuration needs 41 GB
-             * and the budget is 4" tells a caller what to change, and losing
-             * it leaves them a blank MemoryError to guess at. Keep the type,
-             * keep the detail. */
-            if (has_msg) {
-                PyErr_SetString(PyExc_MemoryError, msg);
-                return NULL;
-            }
-            return PyErr_NoMemory();
+             * and the budget is 4" tells a caller what to change. */
+            if (!has_msg) return PyErr_NoMemory();
+            builtin = PyExc_MemoryError; generic = "out of memory";      break;
 
         case BEAM_ERR_NULL_ARG:
         case BEAM_ERR_EMPTY_INPUT:
@@ -64,43 +121,30 @@ PyObject *set_beam_error(BeamError err) {
         case BEAM_ERR_INVALID_VARIANT:
         case BEAM_ERR_LENGTH_MISMATCH:
         case BEAM_ERR_PARAM_OUT_OF_RANGE:
-            PyErr_SetString(PyExc_ValueError, has_msg ? msg : "invalid argument");
-            return NULL;
+            builtin = PyExc_ValueError;  generic = "invalid argument";   break;
 
         case BEAM_ERR_NOT_BUILT:
         case BEAM_ERR_NO_LIVE_PATHS:
         case BEAM_ERR_HAS_CYCLES:
-            PyErr_SetString(PyExc_RuntimeError, has_msg ? msg : "model state error");
-            return NULL;
+            builtin = PyExc_RuntimeError; generic = "model state error"; break;
 
         case BEAM_ERR_IO_OPEN:
         case BEAM_ERR_IO_READ:
         case BEAM_ERR_IO_WRITE:
-            PyErr_SetString(PyExc_OSError, has_msg ? msg : "I/O error");
-            return NULL;
-
         case BEAM_ERR_IO_CORRUPT:
         case BEAM_ERR_IO_VERSION:
-            /*
-             * OSError, with the other I/O codes, because that is the contract
-             * `beam_model_load` has always had: every one of its failures was
-             * a hard-coded OSError, and three tests plus any user writing
-             * `except OSError` around a load depend on it.
-             *
-             * These two codes mapped to ValueError and nothing noticed,
-             * because until `load` learned to name its failures they were
-             * never produced -- dead cases in a switch. Making them live
-             * surfaced the disagreement, and the tested contract wins over
-             * the unreachable one.
-             */
-            PyErr_SetString(PyExc_OSError,
-                            has_msg ? msg : "corrupt or unsupported model file");
-            return NULL;
+            /* OSError for the whole family: that is the contract
+             * `beam_model_load` has always had, and three tests depend on it. */
+            builtin = PyExc_OSError;      generic = "I/O error";         break;
 
         default:
-            PyErr_SetString(PyExc_RuntimeError, has_msg ? msg : "unknown error");
-            return NULL;
+            builtin = PyExc_RuntimeError; generic = "unknown error";     break;
     }
+
+    PyObject *cls = beam_error_class(err, builtin);
+    PyErr_SetString(cls, has_msg ? msg : generic);
+    if (cls != builtin) Py_DECREF(cls);
+    return NULL;
 }
 void capsule_destructor(PyObject *capsule) {
     BeamModel *m = (BeamModel *)PyCapsule_GetPointer(capsule, BEAM_CAPSULE_NAME);

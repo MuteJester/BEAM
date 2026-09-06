@@ -458,3 +458,35 @@ Also in this commit: the two remaining refusal messages that still hardcoded
 gigabytes, in `query/engine.c` and `math/positional.c`. The previous commit
 fixed three such sites by name without grepping for the shape, so these two
 survived reading "0.0 GB".
+
+## Amended 2026-09-06, for the Python exception hierarchy
+
+    python_api.txt      489 -> 879   (+390)
+
+Superseded file kept as `python_api.prehierarchy.txt`. Purely additive: 15
+exception classes, each contributing exactly 26 lines (a `class` header plus
+the 25 inherited BaseException members the snapshot records). 15 x 26 = 390,
+which is the whole delta -- it matched the figure predicted before the change
+was made, which is the cross-check that nothing unintended was exported.
+
+Before this, `BEAM.__all__` exported no exception at all. The query package
+had the library's only hierarchy and it was not reachable from the root: a
+caller had to know to write `from BEAM.query.errors import QueryTooLarge`.
+Everything else raised bare built-ins, so the only way to tell a memory-budget
+refusal from a genuine out-of-memory was to match on the text of the message --
+which is exactly what `tests/python/analytics/test_memory_budget.py` had to do.
+
+Every class keeps the built-in it replaces as a second base, so this is
+additive rather than breaking: `except ValueError` catches everything it caught
+before. That is verified rather than asserted -- the full suite passes
+unchanged at 470, and `tests/python/test_error_contract.py` pins the observed
+class per entry point and is untouched by this commit.
+
+The built-in is chosen PER CLASS, not uniformly. Collapsing everything onto
+`BeamValueError` would have been tidier and would have broken the eight
+`pytest.raises(TypeError)` sites that guard entry points where the argument's
+type is wrong rather than its value.
+
+`python_api.txt` is the only baseline that moved. `numeric`, `exact`,
+`pytest_cases`, `c_symbols` and the rest are untouched: no computed value
+changed and no test was added or renamed.
