@@ -79,7 +79,9 @@ static BeamError tilted_log_z(const BeamModel *m, uint32_t len, double alpha,
             beam_layer_weights(m, i, len, w, &wmax);
         }
         if (wmax == -INFINITY) goto dead;
-        const double amax = alpha * wmax;
+        const double amax = beam_tilted_layer_max(w, cur, S, R, alpha,
+                                                  wmax);
+        if (amax == -INFINITY) goto dead;
 
         /* Accumulate by TARGET rather than by source. The scatter
          * `next[(s % SK) * A + x] += ...` has 21 sources per target, so

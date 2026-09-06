@@ -311,3 +311,25 @@ information the same review recommended:
 
 Both are derived quantities -- two marginal sweeps and arithmetic -- so no C
 symbol, no `_cbeam` entry and no C test case moved with them.
+
+## Amended again 2026-09-06, for two defects found in SHIPPED code
+
+    c_cases.txt         199 -> 201   (+2)
+
+Two regression tests, both for defects a review found in code that predates
+this branch and that all eight checks passed over:
+
+  - `test_a_negative_tilt_does_not_overflow_the_sweeps` -- the tilted forward
+    sweeps rescaled by `q * wmax` with `wmax` the largest UNTILTED weight, so
+    a negative `q` overflowed every layer. `log_mellin(-5)` returned `-inf`
+    and `hill_number(-5)` returned `0.0`, both with BEAM_OK, and `q = -1.5`
+    returned a finite WRONG number.
+  - `test_a_zero_forward_weight_leaves_no_nan_edge_weights` -- `0 * -inf` in
+    the forward mix, which the backward half already guarded against.
+    Measured before the fix: 608,573 NaN edge weights of 1,666,980.
+
+`numeric` did not move for either, and could not have: the tilted fix returns
+`q * wmax` unchanged for every `q >= 0`, which is every quantity the baseline
+records, and the weight guard changes nothing for a finite mix. That is the
+point worth keeping -- both defects lived in quantities the baseline pins, and
+the baseline pins them against a recording of themselves.

@@ -2236,6 +2236,132 @@ static void test_clamped_marginals_survive_a_wide_dynamic_range(void) {
     PASS();
 }
 
+/* ── Tilted sweeps at a negative q ────────────────────────────── */
+
+/**
+ * A negative tilt must not overflow the forward sweeps.
+ *
+ * Regression for a defect found by review, in shipped code. The tilted sweeps
+ * rescaled each layer by `q * wmax`, where `wmax` is the largest UNTILTED
+ * weight. For `q < 0` the largest tilted weight sits at the SMALLEST untilted
+ * one, so `q * wmax` is a minimum instead: every `exp(q * w - qmax)` became an
+ * `exp` of a large positive number and the layer overflowed to infinity.
+ *
+ * The trigger is ordinary -- the open world with backoff off, where unobserved
+ * cells sit at `ln(1e-300)` and any `|q| > 1.03` overflows. It was not a loud
+ * failure: `log_mellin(-5)` returned `-inf` and `hill_number(-5)` returned
+ * `0.0`, both with BEAM_OK, and at `q = -1.5` the answer came back FINITE and
+ * wrong, which is worse than either.
+ *
+ * The reference is the model scoring its own support, one sequence at a time,
+ * which shares no sweep with the quantity under test.
+ */
+static void test_a_negative_tilt_does_not_overflow_the_sweeps(void) {
+    static const char *NT_TRAIN[10] = {
+        "ACGTA", "ACGTT", "AGGTA", "ACCTA", "ACGAA",
+        "TCGTA", "ACGTG", "ACGTC", "AGGTT", "TCGAA",
+    };
+    BeamModelConfig cfg;
+    beam_model_config_default(&cfg);
+    cfg.alphabet = BEAM_ALPHABET_NT;
+    cfg.order = 3; cfg.max_length = 5; cfg.strict = false;
+    cfg.kappa[0] = cfg.kappa[1] = cfg.kappa[2] = 0.0;
+    cfg.kappa_wide = 0.0; cfg.kappa_len = 0.0;
+    BeamModel *m = beam_model_new(&cfg);
+    ASSERT_MSG(m != NULL, "model built");
+    ASSERT_MSG(beam_model_observe(m, NT_TRAIN, NULL, 10) == BEAM_OK, "observed");
+    ASSERT_MSG(beam_model_finalize(m) == BEAM_OK, "finalized");
+
+    const uint32_t NR = BEAM_NT_RESIDUES;
+    const BeamAlphabetInfo *ai = beam_alphabet_info(BEAM_ALPHABET_NT);
+    const double qs[5] = {-0.5, -1.5, -2.0, -5.0, -24.0};
+
+    for (uint32_t k = 0; k < 5u; ++k) {
+        const double q = qs[k];
+        /* ln sum_s P(s)^q over the whole support, by enumeration. */
+        double mx = -INFINITY, acc = 0.0;
+        char buf[8];
+        uint8_t idx[8];
+        for (uint32_t len = 1u; len <= 5u; ++len) {
+            for (uint32_t i = 0; i < len; ++i) idx[i] = 0u;
+            buf[len] = '\0';
+            for (;;) {
+                for (uint32_t i = 0; i < len; ++i) buf[i] = ai->idx_to_char[idx[i]];
+                const double lp = beam_model_log_pseq(m, buf);
+                if (isfinite(lp)) {
+                    const double v = q * lp;
+                    if (v > mx) { acc *= exp(mx - v); mx = v; acc += 1.0; }
+                    else acc += exp(v - mx);
+                }
+                uint32_t j = len;
+                while (j-- > 0u) {
+                    if (++idx[j] < NR) break;
+                    idx[j] = 0u;
+                    if (j == 0u) goto next_q;
+                }
+            }
+next_q:     ;
+        }
+        const double want = mx + log(acc);
+        double got = 0.0;
+        ASSERT_MSG(beam_model_log_mellin(m, q, &got) == BEAM_OK, "log_mellin");
+        ASSERT_MSG(isfinite(got),
+                   "a negative tilt has a finite answer and must not return "
+                   "-inf with a success code");
+        ASSERT_MSG(fabs(got - want) < 1e-9 * fabs(want),
+                   "and it is the answer the model's own scores give");
+    }
+    beam_model_destroy(m);
+    PASS();
+}
+
+/* ── A zero anchor weight ─────────────────────────────────────── */
+
+/**
+ * `weight_forward = 0` must not put NaNs in the edge weights.
+ *
+ * Regression for a defect found by review. A dead cell mixes to `-inf`, and
+ * the forward half formed `weight_forward * mix`, so a weight of zero made
+ * `0 * -inf` a NaN rather than the `-inf` it must be. The BACKWARD half was
+ * already guarded, and that asymmetry is what gave the defect away.
+ *
+ * Nothing rejected the weight -- the config validates only `>= 0` -- and the
+ * NaNs were latent here, because every sweep iterates reached states and
+ * skipped them. On a larger corpus they were not latent: `finalize` reported
+ * that the model could generate nothing. Measured on this model before the
+ * fix: 608,573 NaN edge weights of 1,666,980.
+ */
+static void test_a_zero_forward_weight_leaves_no_nan_edge_weights(void) {
+    BeamModelConfig cfg;
+    beam_model_config_default(&cfg);
+    cfg.order = 3; cfg.max_length = 12;
+    cfg.weight_forward = 0.0; cfg.weight_backward = 1.0;
+    BeamModel *m = beam_model_new(&cfg);
+    ASSERT_MSG(m != NULL, "a zero anchor weight is a legal configuration");
+    ASSERT_MSG(beam_model_observe(m, TRAIN, WEIGHT, N_TRAIN) == BEAM_OK, "obs");
+    ASSERT_MSG(beam_model_finalize(m) == BEAM_OK,
+               "and finalizes rather than reporting the model generates nothing");
+
+    /* `A`, `R` and `NON` are macros in this file, so the locals are named
+     * around them. */
+    const uint32_t n_st = beam_model_n_states(m);
+    const uint32_t n_re = beam_model_n_residues(m);
+    double *w = (double *)malloc((size_t)n_st * n_re * sizeof(double));
+    ASSERT_MSG(w != NULL, "alloc");
+    long nans = 0;
+    for (uint32_t i = 0; i < 10u; ++i) {
+        beam_layer_weights(m, i, 10u, w, NULL);
+        for (size_t k = 0; k < (size_t)n_st * n_re; ++k)
+            if (isnan(w[k])) nans++;
+    }
+    ASSERT_MSG(nans == 0, "no edge weight is a NaN");
+    ASSERT_MSG(isfinite(beam_model_log_pseq(m, TRAIN[0])),
+               "and a training sequence still scores");
+    free(w);
+    beam_model_destroy(m);
+    PASS();
+}
+
 int main(void) {
     printf("\n=== BEAM (Ensemble of Dual Graph Experts) ===\n");
 
@@ -2307,6 +2433,8 @@ int main(void) {
     RUN_TEST(test_posterior_of_a_model_with_itself_keeps_its_scores);
     RUN_TEST(test_finalize_rolls_back_on_allocation_failure);
     RUN_TEST(test_clamped_marginals_survive_a_wide_dynamic_range);
+    RUN_TEST(test_a_negative_tilt_does_not_overflow_the_sweeps);
+    RUN_TEST(test_a_zero_forward_weight_leaves_no_nan_edge_weights);
 
     printf("\n  %d passed, %d failed\n\n", pass_count, fail_count);
     return fail_count == 0 ? 0 : 1;

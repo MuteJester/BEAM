@@ -75,6 +75,48 @@ void beam_state_weights(const BeamModel *m, uint32_t i, uint32_t len,
  */
 void beam_tail_weights(const BeamModel *m, uint32_t len, double *out);
 
+/**
+ * The largest `q * w` among the edges a tilted sweep will actually use.
+ *
+ * A tilted sweep rescales its layer by the maximum of the TILTED weights, and
+ * for `q >= 0` that is `q * wmax`, since `q * w` rises with `w`. For `q < 0`
+ * it rises as `w` FALLS, so the maximum sits at the smallest weight and
+ * `q * wmax` is a minimum instead. Rescaling by it makes every
+ * `exp(q * w - qmax)` an `exp` of a large positive number, and the layer
+ * overflows to infinity.
+ *
+ * That is not a theoretical concern. Three sweeps did exactly this, and in the
+ * open world with backoff off -- `beam_model_config_default()` with `strict`
+ * cleared -- unobserved cells sit at `ln(1e-300)`, so any `|q| > 1.03`
+ * overflowed. `beam_model_log_mellin(-5)` returned `-inf` and
+ * `beam_model_hill_number(-5)` returned `0.0`, both with BEAM_OK, where the
+ * true values are finite; and at `q = -1.5` the answer came back finite and
+ * WRONG, which is worse. `beam_betas_tilted` never had the defect because it
+ * maximises the tilted quantity directly.
+ *
+ * Free when `q >= 0`, which is every quantity BEAM computes by default: the
+ * caller has already found `wmax`, and this returns `q * wmax` without
+ * looking at the layer. Only a negative tilt pays for the scan.
+ *
+ * `cur` restricts the scan to states the sweep has reached, whose edges are
+ * the only ones that enter any sum. Returns `-INFINITY` when no reached state
+ * has a live edge.
+ */
+static inline double beam_tilted_layer_max(const double *w, const double *cur,
+                                           uint32_t n_states,
+                                           uint32_t n_residues,
+                                           double q, double wmax) {
+    if (q >= 0.0) return q * wmax;
+    double wmin = INFINITY;
+    for (uint32_t s = 0; s < n_states; ++s) {
+        if (cur && cur[s] == 0.0) continue;
+        const double *row = w + (size_t)s * n_residues;
+        for (uint32_t x = 0; x < n_residues; ++x)
+            if (row[x] != -INFINITY && row[x] < wmin) wmin = row[x];
+    }
+    return wmin == INFINITY ? -INFINITY : q * wmin;
+}
+
 /** Compute `log_z[len]`. Returns BEAM_OK or an allocation error. */
 BeamError beam_compute_log_z(BeamModel *m, uint32_t len, double *out);
 

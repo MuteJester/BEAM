@@ -55,7 +55,8 @@ static BeamError by_depth_one(const BeamModel *m, uint32_t L, double q,
         double wmax = -INFINITY;
         beam_layer_weights(m, i, L, w, &wmax);
         if (wmax == -INFINITY) break;
-        const double qmax = q * wmax;
+        const double qmax = beam_tilted_layer_max(w, cur, S, R, q, wmax);
+        if (qmax == -INFINITY) break;
 
         /* Posterior weight of each edge, and the surprisal it settles.
          * Summed by source state in ascending order, so the parallel form

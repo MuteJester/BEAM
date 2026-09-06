@@ -110,7 +110,10 @@ BeamError jet_sweep(const BeamModel *m, uint32_t len, double q,
         }
         if (wmax == -INFINITY) { free(alive); beam_live_release(&h); sweep_free(&sw);
           *out_log_z = -INFINITY; return BEAM_OK; }
-        const double qmax = q * wmax;
+        const double qmax = beam_tilted_layer_max(sw.w, sw.cur, S, R, q,
+                                                  wmax);
+        if (qmax == -INFINITY) { free(alive); beam_live_release(&h);
+          sweep_free(&sw); *out_log_z = -INFINITY; return BEAM_OK; }
 
         memset(sw.next, 0, (size_t)NM * S * sizeof(double));
         double nmax = 0.0;

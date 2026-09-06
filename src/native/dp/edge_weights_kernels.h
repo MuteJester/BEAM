@@ -89,10 +89,21 @@ static inline void BEAM_KFN(state_weights_dense)(const BeamModel *m, uint32_t i,
      * carry sentinel-padded rows for exactly that case. Every forward context
      * is a suffix of the state, because the state is packed oldest-first and
      * a shorter context is simply the nearer residues. */
+    /*
+     * The forward half is guarded the way the backward half already is. A dead
+     * cell mixes to -inf, and `weight_forward = 0` then makes `0 * -inf` a
+     * NaN rather than the -inf it must be. Nothing rejected that weight --
+     * `config.c` validates only `>= 0` -- and the NaNs were latent, because
+     * every sweep iterates reached states and skipped them. On a
+     * 200-sequence closed-world model they were not latent: `finalize`
+     * reported "no length has a finite partition function, so the model can
+     * generate nothing" about a perfectly generative model. Found by review;
+     * the asymmetry with the backward half below was the tell.
+     */
     for (uint32_t x = 0; x < R; ++x) {
-        row[x] = m->cfg.weight_forward
-               * mix_dense(m, BEAM_FWD, len, i,
-                           s % nw, s % n3, s % n2, x);
+        const double f = mix_dense(m, BEAM_FWD, len, i,
+                                   s % nw, s % n3, s % n2, x);
+        row[x] = (f == -INFINITY) ? -INFINITY : m->cfg.weight_forward * f;
     }
     if (!settle_back) return;
 
