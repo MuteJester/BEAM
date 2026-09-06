@@ -177,9 +177,23 @@ static inline void BEAM_KFN(state_weights_sparse)(const BeamModel *m, uint32_t i
     if (!fw || !fm || !fl) {
         for (uint32_t x = 0; x < R; ++x) row[x] = -INFINITY;
     } else {
-        for (uint32_t x = 0; x < R; ++x)
-            row[x] = m->cfg.weight_forward
-                   * mix_values(m, fw[x], fm[x], fl[x]);
+        /*
+         * Guarded exactly as the dense kernel above is, and for the same
+         * reason: `mix_values` returns -INFINITY when any expert cell is
+         * dead, and `weight_forward = 0` makes that `0 * -inf`, which is NaN.
+         *
+         * The dense half was fixed and this one was not, because the
+         * regression test that caught it builds from `beam_model_config_default`,
+         * where `sparse` is false. The Python layer selects sparse for the
+         * default closed world, so the shipped path was the unguarded one:
+         * measured at 115 NaN edge weights of 3,519,180 on a ten-sequence
+         * order-3 strict model. The sparse BACKWARD half below was already
+         * guarded, and that asymmetry is what gave this away.
+         */
+        for (uint32_t x = 0; x < R; ++x) {
+            const double f = mix_values(m, fw[x], fm[x], fl[x]);
+            row[x] = (f == -INFINITY) ? -INFINITY : m->cfg.weight_forward * f;
+        }
     }
     if (!settle_back) return;
 

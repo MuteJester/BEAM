@@ -2408,10 +2408,23 @@ next_q:     ;
  * that the model could generate nothing. Measured on this model before the
  * fix: 608,573 NaN edge weights of 1,666,980.
  */
-static void test_a_zero_forward_weight_leaves_no_nan_edge_weights(void) {
+/*
+ * Both storage modes, because the first version of this test checked only one
+ * and the defect survived in the other for exactly that reason.
+ *
+ * `beam_model_config_default` sets `sparse = false`, so building from the
+ * default exercised the DENSE kernel -- which the fix guarded. The Python
+ * layer selects sparse for the default closed world, so the path users
+ * actually run was the unguarded one, and it still produced 115 NaN edge
+ * weights of 3,519,180 on this model. A test that takes the default
+ * configuration tests the default configuration, not the shipped one.
+ */
+static void zero_forward_weight_one_mode(bool sparse) {
     BeamModelConfig cfg;
     beam_model_config_default(&cfg);
     cfg.order = 3; cfg.max_length = 12;
+    cfg.sparse = sparse;
+    cfg.strict = sparse ? true : cfg.strict;   /* sparse is valid only strict */
     cfg.weight_forward = 0.0; cfg.weight_backward = 1.0;
     BeamModel *m = beam_model_new(&cfg);
     ASSERT_MSG(m != NULL, "a zero anchor weight is a legal configuration");
@@ -2436,6 +2449,11 @@ static void test_a_zero_forward_weight_leaves_no_nan_edge_weights(void) {
                "and a training sequence still scores");
     free(w);
     beam_model_destroy(m);
+}
+
+static void test_a_zero_forward_weight_leaves_no_nan_edge_weights(void) {
+    zero_forward_weight_one_mode(false);   /* dense  */
+    zero_forward_weight_one_mode(true);    /* sparse */
     PASS();
 }
 
