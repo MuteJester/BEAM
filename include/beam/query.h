@@ -264,7 +264,11 @@ typedef enum {
 typedef struct {
     BeamFunctionalKind kind;
     /** `[length * n_residues]`, row-major `table[i * n_residues + x]`.
-        Required for BEAM_FUNCTIONAL_TABLE, ignored otherwise. */
+        Required for BEAM_FUNCTIONAL_TABLE, ignored otherwise.
+        EVERY ENTRY MUST BE FINITE: a functional taking an infinite value on a
+        live path has no variance and an infinite expectation, and is refused.
+        A residue that should not count wants a weight of ZERO here, not the
+        logarithm of a zero probability. */
     const double *table;
 } BeamFunctional;
 
@@ -324,16 +328,21 @@ typedef struct {
     uint32_t  n;           /**< distinct neighbours                        */
     uint32_t  length;      /**< their common length                        */
     char     *sequences;   /**< [n * (length + 1)] NUL-terminated, in order */
-    uint32_t *site;        /**< [n] gap inserted at, or position deleted    */
+    uint32_t *site;        /**< [n] the LEFTMOST gap or position producing
+                                this string -- a canonical label, not a
+                                claim about where an edit occurred          */
     uint32_t *residue;     /**< [n] residue inserted; UINT32_MAX for a
                                 deletion, which removes rather than adds    */
+    uint32_t *multiplicity;/**< [n] how many distinct edits produce this
+                                string; see the note on `posterior`         */
     double   *log_odds;    /**< [n] `ln P(neighbour) - ln P(source)`        */
-    double   *posterior;   /**< [n] normalised over the neighbourhood, EXCEPT
-                                when no neighbour is producible at all, where
-                                it is all zeros: there is no distribution over
-                                an empty set, and the odds already say so by
-                                being -inf                                   */
+    double   *posterior;   /**< [n] `P(s' | s' in this set)`; see below     */
     double    log_source;  /**< `ln P(source)`                              */
+    bool      length_producible; /**< false when the model generates NO
+                                sequence of the neighbours' length, which is
+                                why they are all impossible -- a fact about
+                                the length prior rather than about any of
+                                these strings                               */
 } BeamNeighbourhood;
 
 /** Release a neighbourhood and zero it. Safe on an already-freed one. */
@@ -345,9 +354,22 @@ void beam_query_neighbourhood_free(BeamNeighbourhood *nb);
  * `log_odds` answers "how much more or less likely is this than what I have",
  * as a joint probability: `log_pseq` carries the length prior, so the
  * comparison across two lengths is well posed and the prior does not cancel.
- * `posterior` answers the other half -- "given that ONE residue was inserted,
- * where and which" -- and there the prior is a common factor and does cancel.
- * Both are exposed because they are different questions.
+ *
+ * `posterior` is `P(s' | s' in N+(s))` -- the model's own law RESTRICTED to
+ * this set of strings, with the length prior a common factor that cancels.
+ *
+ * **It is a distribution over STRINGS, not over edits**, and the difference is
+ * not cosmetic. Inserting `S` into the `SS` of `CASSSQYF` yields one string
+ * reachable four ways; this reports it once, with `multiplicity = 4`. Weighted
+ * per EDIT instead -- `P(s') * multiplicity(s')`, renormalised -- that string
+ * is the likeliest neighbour, where here it ranks ninth.
+ *
+ * Both are right, under different questions. Per string asks what the model
+ * makes of a candidate set. Per edit asks what happens when a longer sequence
+ * is drawn and a uniformly chosen position removed, which is the generative
+ * story `beam_model_prism_*` uses -- `prism.c` sums repairs WITH multiplicity
+ * for exactly that reason, and deliberately does not deduplicate. A caller who
+ * wants that convention has `multiplicity` and one line of arithmetic.
  *
  * **This is not an inferred edit.** The model has no alignment and no indel
  * process; nothing here says a sequence was edited. The quantity is a ratio

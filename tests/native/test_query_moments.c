@@ -688,6 +688,28 @@ static void test_a_functional_the_engine_cannot_sum_is_refused(void) {
     BeamFunctional no_table = { BEAM_FUNCTIONAL_TABLE, NULL };
     ASSERT_MSG(beam_query_expect(m, c, &no_table, &mo) == BEAM_ERR_NULL_ARG,
                "a table functional without a table is refused");
+
+    /*
+     * A non-finite entry is refused, naming the cell. `np.log(p)` is the
+     * obvious way to build a functional and gives -inf wherever p is zero; the
+     * sweep then formed a difference of two infinities and the NaN reached the
+     * end, where `NaN > 0` being false reported it as a VARIANCE OF ZERO.
+     * Found by review, and the same shape as a defect found on the overflow
+     * path before it.
+     */
+    double *bad_tab = (double *)calloc((size_t)10u * R, sizeof(double));
+    ASSERT_MSG(bad_tab != NULL, "alloc");
+    for (uint32_t probe = 0; probe < 3u; ++probe) {
+        bad_tab[(size_t)2 * R + 4] = (probe == 0) ? -INFINITY
+                                   : (probe == 1) ? INFINITY : NAN;
+        BeamFunctional bad_val = { BEAM_FUNCTIONAL_TABLE, bad_tab };
+        ASSERT_MSG(beam_query_expect(m, c, &bad_val, &mo)
+                   == BEAM_ERR_PARAM_OUT_OF_RANGE,
+                   "a non-finite functional value is refused");
+        ASSERT_MSG(strstr(beam_error_message(), "position 2 residue 4") != NULL,
+                   "and the message names the cell");
+    }
+    free(bad_tab);
     beam_query_constraint_free(c);
     beam_model_destroy(m);
     PASS();

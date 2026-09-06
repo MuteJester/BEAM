@@ -194,6 +194,7 @@ class BeamQuery:
   def position_entropy(self, cond: 'Condition') -> 'np.ndarray'
   def probability(self, cond: 'Condition') -> 'float'
   def surprisal_variance(self, cond: 'Condition') -> 'float'
+  def total_correlation(self, cond: 'Condition') -> 'float'
 class Builder:
   def __delattr__(self, name, /)
   def __dir__(self, /)

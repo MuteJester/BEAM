@@ -281,3 +281,21 @@ per-layer rescale was removed, but the definition was left behind -- dead code
 with external linkage, reachable by nobody. It was deleted rather than
 recorded. The symbol check found it, which is the check doing its job on the
 day it was updated.
+
+## Amended 2026-09-06, same branch, for the third review's fixes
+
+Three of the five moved again, all additive, all in the same session as the
+re-record above; the `*.prequery.txt` copies still record the pre-branch state,
+which is the comparison that matters.
+
+    python_api.txt      486 -> 487   (+1)   BeamQuery.total_correlation
+    c_cases.txt         198 -> 199   (+1)   multiplicity partitions the edits
+    pytest_cases.txt    412 -> 417   (+5)   multiplicity, the length-prior
+                                            flag, total correlation, the
+                                            cheap conditional entropy, and
+                                            the non-finite functional refusal
+
+`numeric`, the saved-model bytes, thread independence, `_cbeam` callables and
+the C public symbols were all green across these, which is the expected
+signature of a change that adds capability and fixes documentation without
+moving an existing number.

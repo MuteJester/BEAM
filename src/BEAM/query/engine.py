@@ -139,7 +139,21 @@ class BeamQuery:
     # ── information ─────────────────────────────────────────────
 
     def entropy(self, cond: Condition) -> float:
-        """``H(X | length, C)`` in nats: the entropy of the whole sequence."""
+        """``H(X | length, C)`` in nats: of the whole sequence, not one position.
+
+        Conditional on the length and EXCLUDING the length prior. Three things
+        are called "the entropy" around here and they are different numbers:
+
+        - this one, ``H(X | L, C)``;
+        - ``length_marginals()["mean_surprisal"][L]``, which is
+          ``E[-ln P | L]`` on the JOINT and so exceeds this by ``-ln pi(L)`` --
+          1.54 nats, or 33%, at one measured length;
+        - the model's total ``H(X) = H(L) + sum_L pi(L) H(X | L)``, which this
+          engine does not produce because its conditions are per-length.
+
+        The variance is unaffected by the shift, so
+        :meth:`surprisal_variance` matches the jet's exactly.
+        """
         return float(self._call(_c.query_entropy, cond)[0])
 
     def surprisal_variance(self, cond: Condition) -> float:
@@ -157,7 +171,17 @@ class BeamQuery:
         return np.frombuffer(raw, dtype=np.float64).copy()
 
     def mutual_information(self, cond: Condition) -> np.ndarray:
-        """``I(X_i ; X_j | C)`` for every pair, in nats.
+        """Mutual information between every pair of positions, in nats,
+        computed WITHIN the event `cond`.
+
+        Not ``I(X_i ; X_j | C)`` in the information-theoretic sense, which
+        averages over the values of ``C``. This is the mutual information of
+        the distribution restricted to ``C`` -- ``I`` under ``P(. | C)``. The
+        two differ: on one test model an entry read 0.079 here against 0.157
+        for the averaged quantity, low by a factor of two, which is the
+        direction that makes you miss a coupling. The averaged form is
+        ``p * MI(C) + (1 - p) * MI(~C)``, and ``~cond`` is expressible, so it
+        is two more calls if that is what you want.
 
         Symmetric, non-negative, with :meth:`position_entropy` on the diagonal
         -- a position tells you exactly itself. Costs one sweep per
@@ -169,9 +193,31 @@ class BeamQuery:
         return np.frombuffer(raw, dtype=np.float64).reshape(n, n).copy()
 
     def conditional_entropy(self, cond: Condition, i: int, j: int) -> float:
-        """``H(X_i | X_j, C)``: what is left to learn about `i` knowing `j`."""
-        mi = self.mutual_information(cond)
-        return float(mi[i, i] - mi[i, j])
+        """``H(X_i | X_j, C)``: what is left to learn about `i` knowing `j`.
+
+        From the pair joint, which is one sweep per residue of `j`. Reading it
+        off :meth:`mutual_information` instead would be `length * n_residues`
+        sweeps for two cells -- 281 rather than 20 on a length-14 amino-acid
+        model.
+        """
+        joint = self.pair_joint(cond, i, j)
+        pi = joint.sum(axis=1)
+        h_i = -np.sum(pi[pi > 0] * np.log(pi[pi > 0]))
+        nz = joint > 0
+        h_ij = -np.sum(joint[nz] * np.log(joint[nz]))
+        pj = joint.sum(axis=0)
+        h_j = -np.sum(pj[pj > 0] * np.log(pj[pj > 0]))
+        return float(h_ij - h_j)
+
+    def total_correlation(self, cond: Condition) -> float:
+        """``sum_i H(X_i) - H(X)``: everything the positions share, at any order.
+
+        The mutual-information matrix sees pairs; this sees the whole
+        dependency structure, including interactions no pair exhibits. Zero
+        exactly when the positions are independent. Costs nothing new -- both
+        halves are already computed.
+        """
+        return float(self.position_entropy(cond).sum() - self.entropy(cond))
 
     # ── expectations ────────────────────────────────────────────
 
@@ -222,11 +268,28 @@ class BeamQuery:
     def insertions(self, sequence: str) -> list[dict]:
         """Every sequence one insertion away from `sequence`, scored.
 
-        Each entry carries ``sequence``, ``site`` (the gap inserted at),
-        ``residue``, ``log_odds`` against the source, and ``posterior`` over
-        the neighbourhood. The odds compare joint probabilities across two
-        lengths, so the length prior does not cancel; the posterior asks where
-        and which GIVEN that one residue was inserted, and there it does.
+        Each entry carries ``sequence``, ``site``, ``residue``,
+        ``multiplicity``, ``log_odds`` against the source, ``posterior``, and
+        ``length_producible``.
+
+        ``posterior`` is ``P(s\' | s\' in this set)`` -- a distribution over
+        STRINGS, not over edit operations. Inserting ``S`` into the ``SS`` of
+        ``CASSSQYF`` gives one string reachable four ways; it appears once,
+        with ``multiplicity=4``. Weighted per EDIT instead -- multiply by
+        ``multiplicity`` and renormalise -- that string is the likeliest
+        neighbour, where here it ranks ninth. Per string asks what the model
+        makes of a candidate set; per edit asks what happens when a longer
+        sequence is drawn and a uniform position removed, which is the story
+        :class:`~BEAM.prism.PrismScorer` uses and why it sums repairs with
+        multiplicity rather than deduplicating.
+
+        ``site`` is the LEFTMOST gap producing that string -- a canonical
+        label, not a claim about where an edit occurred.
+
+        ``length_producible`` is false when the model generates no sequence of
+        the neighbours' length at all. Every posterior is then zero for that
+        one reason, which is a fact about the length prior rather than about
+        any of these strings.
 
         **This does not infer an edit.** The model has no alignment and no
         indel process. These are ratios between what it assigns to two strings
@@ -246,19 +309,21 @@ class BeamQuery:
 
     def _neighbours(self, sequence: str, *, deletions: bool) -> list[dict]:
         try:
-            rows, log_source = _c.query_neighbours(
+            rows, log_source, producible = _c.query_neighbours(
                 self._model._g, sequence, deletions)
         except (ValueError, RuntimeError, MemoryError) as exc:
             raise _translate(exc) from None
         out = []
-        for seq, site, res, odds, post in rows:
+        for seq, site, res, mult, odds, post in rows:
             out.append({
                 "sequence": seq,
                 "site": int(site),
                 "residue": None if deletions else self._syms[res],
+                "multiplicity": int(mult),
                 "log_odds": float(odds),
                 "posterior": float(post),
                 "log_source": float(log_source),
+                "length_producible": bool(producible),
             })
         out.sort(key=lambda r: -r["posterior"])
         return out

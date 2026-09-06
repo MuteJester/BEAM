@@ -229,6 +229,76 @@ def test_a_run_collapses_its_aliases(nt_model):
     assert len(got) == len(q.deletions("AACGT")), "no duplicate spellings"
 
 
+def test_multiplicity_recovers_the_per_edit_convention(nt_model):
+    """The posterior is over strings; multiplicity is the bridge to per-edit.
+
+    PRISM sums repairs WITH multiplicity, deliberately and for a different
+    generative story, so a caller who wants that convention needs to know how
+    many edits each string stands for. Without it the two subsystems in this
+    library disagree with nothing to reconcile them.
+    """
+    q = BeamQuery(nt_model)
+    ins = q.insertions("ACGTA")
+    assert sum(r["multiplicity"] for r in ins) == 6 * len(NT), \
+        "the multiplicities partition the candidate insertions"
+    assert all(r["multiplicity"] >= 1 for r in ins)
+
+    # Inserting A at gap 0 of ACGTA gives AACGTA, reachable two ways.
+    by = {r["sequence"]: r for r in ins}
+    assert by["AACGTA"]["multiplicity"] == 2
+    assert by["AACGTA"]["site"] == 0, "labelled by the leftmost gap"
+
+    # Re-weighting per edit is one line, and it changes the ranking.
+    z = sum(r["posterior"] * r["multiplicity"] for r in ins)
+    per_edit = sorted(ins, key=lambda r: -r["posterior"] * r["multiplicity"] / z)
+    assert abs(sum(r["posterior"] * r["multiplicity"] / z for r in ins) - 1) < EXACT
+    assert per_edit[0]["multiplicity"] >= 1
+
+
+def test_a_neighbourhood_says_when_the_length_prior_rules_it_out(nt_model):
+    """All-zero posteriors have two causes and they need telling apart."""
+    q = BeamQuery(nt_model)
+    good = q.insertions("ACGTA")            # length 6 is producible
+    assert good[0]["length_producible"] is True
+    assert sum(r["posterior"] for r in good) == pytest.approx(1.0, abs=EXACT)
+
+    edge = q.insertions("ACGTAC")           # length 7 is not
+    assert edge, "the neighbourhood is still enumerated"
+    assert all(r["posterior"] == 0.0 for r in edge)
+    assert edge[0]["length_producible"] is False, \
+        "and says the length prior is why, not the strings"
+
+
+def test_total_correlation_is_the_gap_the_pairs_do_not_see(aa_model):
+    q = BeamQuery(aa_model)
+    c = q.condition(11)
+    tc = q.total_correlation(c)
+    assert tc == pytest.approx(
+        q.position_entropy(c).sum() - q.entropy(c), abs=EXACT)
+    assert tc >= -EXACT, "subadditivity, so never negative"
+    mi = q.mutual_information(c)
+    off = mi[~np.eye(11, dtype=bool)].max()
+    assert tc > off, \
+        "the whole dependency exceeds the strongest single pair"
+
+
+def test_conditional_entropy_matches_the_matrix_route(aa_model):
+    """The cheap route and the expensive one must agree.
+
+    `conditional_entropy` reads a pair joint -- one sweep per residue of `j`.
+    Reading it off the information matrix instead is `length * n_residues`
+    sweeps for two cells, which is what it used to do.
+    """
+    q = BeamQuery(aa_model)
+    c = q.condition(11)
+    mi = q.mutual_information(c)
+    for i, j in ((4, 6), (6, 4), (5, 5), (0, 10)):
+        assert q.conditional_entropy(c, i, j) == pytest.approx(
+            mi[i, i] - mi[i, j], abs=1e-9)
+    assert q.conditional_entropy(c, 5, 5) == pytest.approx(0.0, abs=1e-9), \
+        "a position determines itself"
+
+
 # ── Refusals ───────────────────────────────────────────────────
 
 def test_conditioning_on_the_impossible_is_refused(nt_model):
@@ -255,6 +325,26 @@ def test_a_functional_of_the_wrong_shape_is_refused(aa_model):
         q.expect(np.zeros((3, 20)), q.condition(11))
     with pytest.raises(UnsupportedQuery, match="not one of"):
         q.expect_count("BZ", q.condition(11))
+
+
+def test_a_non_finite_functional_is_refused(aa_model):
+    """`np.log(p)` is the obvious way to build one, and gives -inf at p = 0.
+
+    That used to reach the end as a NaN and be reported as a variance of ZERO,
+    because `NaN > 0` is false.
+    """
+    q = BeamQuery(aa_model)
+    c = q.condition(11)
+    for bad in (-np.inf, np.inf, np.nan):
+        table = np.zeros((11, 20))
+        table[3, 7] = bad
+        with pytest.raises(UnsupportedQuery, match="position 3 residue 7"):
+            q.expect(table, c)
+    # A probability of zero wants a weight of zero, which is accepted.
+    table = np.zeros((11, 20))
+    table[3, 7] = 0.0
+    mean, var = q.expect(table, c)
+    assert mean == 0.0 and var == 0.0
 
 
 def test_a_query_over_the_memory_budget_is_refused(aa_model):

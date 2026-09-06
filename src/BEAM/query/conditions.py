@@ -198,8 +198,10 @@ class Condition:
         """This whole condition as one automaton description.
 
         Used by the operations masks cannot express in place. A condition that
-        narrows nothing lifts to a counter that can never be satisfied, so that
-        complementing it gives everything rather than an error.
+        narrows nothing lifts to a counter satisfied by EVERYTHING -- zero
+        residues drawn from the empty set, required to be zero -- so that
+        complementing it gives nothing, which is what the complement of
+        everything is.
         """
         full = (1 << len(self._syms)) - 1
         parts = []

@@ -40,6 +40,7 @@ void beam_query_neighbourhood_free(BeamNeighbourhood *nb) {
     free(nb->sequences);
     free(nb->site);
     free(nb->residue);
+    free(nb->multiplicity);
     free(nb->log_odds);
     free(nb->posterior);
     memset(nb, 0, sizeof(*nb));
@@ -52,10 +53,11 @@ static BeamError nb_alloc(BeamNeighbourhood *nb, uint32_t cap,
     nb->sequences = (char *)malloc((size_t)cap * (length + 1u));
     nb->site      = (uint32_t *)malloc((size_t)cap * sizeof(uint32_t));
     nb->residue   = (uint32_t *)malloc((size_t)cap * sizeof(uint32_t));
+    nb->multiplicity = (uint32_t *)malloc((size_t)cap * sizeof(uint32_t));
     nb->log_odds  = (double *)malloc((size_t)cap * sizeof(double));
     nb->posterior = (double *)malloc((size_t)cap * sizeof(double));
-    if (!nb->sequences || !nb->site || !nb->residue || !nb->log_odds
-        || !nb->posterior) {
+    if (!nb->sequences || !nb->site || !nb->residue || !nb->multiplicity
+        || !nb->log_odds || !nb->posterior) {
         beam_query_neighbourhood_free(nb);
         return BEAM_EALLOC("the edit neighbourhood");
     }
@@ -72,9 +74,18 @@ static BeamError nb_alloc(BeamNeighbourhood *nb, uint32_t cap,
  * the posterior comes back as a vector of zeros rather than as the perfectly
  * well-defined distribution it is.
  */
-static BeamError nb_finish(BeamNeighbourhood *nb, const double *score,
-                           double log_source) {
+static BeamError nb_finish(BeamNeighbourhood *nb, const BeamModel *m,
+                           const double *score, double log_source) {
     nb->log_source = log_source;
+    /*
+     * Whether the model generates the neighbours' length AT ALL. When it does
+     * not, every neighbour is impossible for one reason -- the length prior --
+     * rather than because of anything about the strings, and a caller sweeping
+     * a repertoire sees a vector of zeros at the tails that reads like "no
+     * insertion is tolerated here". `beam_model_explain` reports the same
+     * distinction as `length_is_producible`, for the same reason.
+     */
+    nb->length_producible = isfinite(beam_model_log_length_prior(m, nb->length));
     double mx = -INFINITY;
     for (uint32_t k = 0; k < nb->n; ++k) if (score[k] > mx) mx = score[k];
 
@@ -217,11 +228,19 @@ BeamError beam_query_insertions(const BeamModel *m, const char *sequence,
 
             out->site[out->n]    = g;
             out->residue[out->n] = x;
+            /* Aliases are the gaps inside the run of this residue starting
+             * here, plus this one: inserting `S` anywhere in an `SS` gives one
+             * string, reachable three ways. */
+            {
+                uint32_t run = 0u;
+                while (g + run < L && idx[g + run] == x) ++run;
+                out->multiplicity[out->n] = run + 1u;
+            }
             score[out->n]        = beam_model_log_pseq(m, dst);
             out->n++;
         }
     }
-    err = nb_finish(out, score, log_source);
+    err = nb_finish(out, m, score, log_source);
     free(score);
     return err;
 }
@@ -272,10 +291,17 @@ BeamError beam_query_deletions(const BeamModel *m, const char *sequence,
 
         out->site[out->n]    = p;
         out->residue[out->n] = UINT32_MAX;    /* a deletion adds nothing */
+        /* The run this position opens: deleting any of its members leaves the
+         * same string. */
+        {
+            uint32_t run = 0u;
+            while (p + run < L && idx[p + run] == idx[p]) ++run;
+            out->multiplicity[out->n] = run;
+        }
         score[out->n]        = beam_model_log_pseq(m, dst);
         out->n++;
     }
-    err = nb_finish(out, score, log_source);
+    err = nb_finish(out, m, score, log_source);
     free(score);
     return err;
 }

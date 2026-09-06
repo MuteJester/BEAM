@@ -354,14 +354,17 @@ PyObject *py_query_neighbours(PyObject *self, PyObject *args) {
     if (!list) { beam_query_neighbourhood_free(&nb); return NULL; }
     for (uint32_t k = 0; k < nb.n; ++k) {
         PyObject *row = Py_BuildValue(
-            "(sIIdd)", nb.sequences + (size_t)k * (nb.length + 1u),
+            "(sIIIdd)", nb.sequences + (size_t)k * (nb.length + 1u),
             (unsigned int)nb.site[k], (unsigned int)nb.residue[k],
+            (unsigned int)nb.multiplicity[k],
             nb.log_odds[k], nb.posterior[k]);
         if (!row) { Py_DECREF(list); beam_query_neighbourhood_free(&nb);
                     return NULL; }
         PyList_SET_ITEM(list, k, row);
     }
     const double src = nb.log_source;
+    const int producible = nb.length_producible ? 1 : 0;
     beam_query_neighbourhood_free(&nb);
-    return Py_BuildValue("(Nd)", list, src);
+    return Py_BuildValue("(NdO)", list, src,
+                         producible ? Py_True : Py_False);
 }

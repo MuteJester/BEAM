@@ -295,6 +295,15 @@ static void test_an_impossible_neighbourhood_still_reports_its_odds(void) {
     ASSERT_MSG(beam_query_insertions(m, "CASSAF", &nb) == BEAM_OK,
                "asking is not an error");
     ASSERT_MSG(nb.n > 0u, "the neighbourhood is still enumerated");
+    /*
+     * And it says WHY they are all impossible. Every posterior is zero for one
+     * reason -- the model generates no sequence of this length at all -- which
+     * is a fact about the length prior rather than about these strings. Review
+     * found a caller sweeping a repertoire seeing zeros at the tails and
+     * reading them as "no insertion is tolerated here".
+     */
+    ASSERT_MSG(!nb.length_producible,
+               "the length prior, not the strings, is what rules them out");
     for (uint32_t k = 0; k < nb.n; ++k) {
         ASSERT_MSG(nb.log_odds[k] == -INFINITY, "each neighbour is impossible");
         ASSERT_MSG(nb.posterior[k] == 0.0,
@@ -436,6 +445,52 @@ static void test_a_character_outside_the_alphabet_is_malformed_input(void) {
     PASS();
 }
 
+static void test_multiplicity_accounts_for_every_edit_exactly_once(void) {
+    /*
+     * The posterior is over distinct STRINGS, so a string reachable several
+     * ways appears once. `multiplicity` is what makes the other convention
+     * recoverable -- PRISM sums repairs WITH multiplicity, deliberately, and
+     * a caller wanting that needs to know how many edits each string stands
+     * for. Review found the two conventions clashing with nothing to bridge
+     * them.
+     *
+     * The check that cannot be fudged: the multiplicities must sum to the
+     * number of candidate operations, since they partition them.
+     */
+    BeamModel *m = build(TRAIN, WEIGHT, N_TRAIN, 3u, 8u, true);
+    ASSERT_MSG(m != NULL, "model built");
+
+    BeamNeighbourhood nb = {0};
+    ASSERT_MSG(beam_query_insertions(m, "CASSF", &nb) == BEAM_OK, "insertions");
+    uint32_t total = 0u;
+    for (uint32_t k = 0; k < nb.n; ++k) {
+        ASSERT_MSG(nb.multiplicity[k] >= 1u, "every string has one edit");
+        total += nb.multiplicity[k];
+    }
+    ASSERT_MSG(total == (5u + 1u) * R,
+               "the multiplicities partition the 120 candidate insertions");
+    ASSERT_MSG(nb.n == 115u, "into 115 distinct strings");
+
+    /* CASSF: inserting S at gaps 2, 3 or 4 all give CASSSF. */
+    for (uint32_t k = 0; k < nb.n; ++k) {
+        const char *s = nb.sequences + (size_t)k * (nb.length + 1u);
+        if (strcmp(s, "CASSSF") == 0) {
+            ASSERT_MSG(nb.multiplicity[k] == 3u, "three gaps give CASSSF");
+            ASSERT_MSG(nb.site[k] == 2u, "labelled by the leftmost of them");
+        }
+    }
+    beam_query_neighbourhood_free(&nb);
+
+    ASSERT_MSG(beam_query_deletions(m, "CAAAF", &nb) == BEAM_OK, "deletions");
+    total = 0u;
+    for (uint32_t k = 0; k < nb.n; ++k) total += nb.multiplicity[k];
+    ASSERT_MSG(total == 5u, "and the 5 candidate deletions likewise");
+    ASSERT_MSG(nb.multiplicity[1] == 3u, "the run of three A's is one string");
+    beam_query_neighbourhood_free(&nb);
+    beam_model_destroy(m);
+    PASS();
+}
+
 /* ── Refusals ────────────────────────────────────────────────── */
 
 static void test_neighbourhoods_at_the_short_extreme(void) {
@@ -546,6 +601,7 @@ int main(void) {
     RUN_TEST(test_the_posterior_ranks_the_insertions_the_corpus_prefers);
     RUN_TEST(test_an_impossible_neighbourhood_still_reports_its_odds);
     RUN_TEST(test_the_posterior_survives_a_neighbourhood_that_underflows);
+    RUN_TEST(test_multiplicity_accounts_for_every_edit_exactly_once);
 
     RUN_TEST(test_case_folded_input_does_not_multiply_the_neighbours);
 

@@ -152,6 +152,31 @@ BeamError beam_query_expect(const BeamModel *m, const BeamConstraint *c,
     const BeamAutomaton *aut = c->automaton;
     const uint32_t Q  = aut ? aut->n_states : 1u;
     const uint32_t A  = m->n_alphabet;
+    const uint32_t Rv = m->n_residues;
+
+    /*
+     * Every table entry must be finite, and the check is not pedantry.
+     * `np.log(p)` is the obvious way to build a functional and gives `-inf`
+     * wherever `p` is zero; the sweep then forms `m_k - M` between two
+     * infinities, and the NaN that follows reached the end and was reported as
+     * a VARIANCE OF ZERO, because `NaN > 0` is false. Found by review.
+     *
+     * Refused rather than propagated. A functional taking a non-finite value
+     * on a live path has an expectation of plus or minus infinity and no
+     * variance at all, and this engine's promise is an exact number or a
+     * refusal that says why -- not a number that happens to be zero.
+     */
+    if (f->kind == BEAM_FUNCTIONAL_TABLE) {
+        for (uint32_t i = 0; i < c->length; ++i)
+            for (uint32_t x = 0; x < Rv; ++x)
+                if (!isfinite(f->table[(size_t)i * Rv + x]))
+                    return BEAM_ERANGE(
+                        "beam_query_expect: the functional is %g at position "
+                        "%u residue %u, and a non-finite value has no variance "
+                        "and an infinite expectation; a probability of zero "
+                        "wants a weight of zero, not a logarithm of one",
+                        f->table[(size_t)i * Rv + x], (unsigned)i, (unsigned)x);
+    }
     const uint32_t R  = m->n_residues;
     const uint32_t S  = m->n_states;
     const uint32_t SK = m->state_shift;
@@ -248,10 +273,18 @@ BeamError beam_query_expect(const BeamModel *m, const BeamConstraint *c,
 
     out->log_z    = logP;
     out->mean     = M;
-    /* A mixture of non-negative variances and a squared deviation, so never
+    /*
+     * A mixture of non-negative variances and a squared deviation, so never
      * negative; clamped anyway, because a caller taking a square root of a
-     * -1e-19 deserves better than a NaN. */
-    out->variance = V > 0.0 ? V : 0.0;
+     * -1e-19 deserves better than a NaN.
+     *
+     * A NaN is passed THROUGH rather than clamped. `NaN > 0.0` is false, so
+     * the bare clamp turned one into a confident zero -- the defect above, and
+     * the shape of one an earlier review found on the overflow path. No
+     * arithmetic here can produce a NaN now, which is exactly why this must
+     * stay: if one ever appears it has to be visible.
+     */
+    out->variance = isnan(V) ? V : (V > 0.0 ? V : 0.0);
     return BEAM_OK;
 }
 
