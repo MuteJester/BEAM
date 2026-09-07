@@ -1,4 +1,4 @@
-__all__: ['Atoms', 'Attribution', 'BeamError', 'BeamModel', 'BeamQuery', 'BeamTypeError', 'BeamValueError', 'BudgetExceeded', 'Builder', 'Calibration', 'Condition', 'Histogram', 'ImpossibleCondition', 'InternalError', 'InvalidSequence', 'ModelFileError', 'ModelMismatch', 'NoLivePaths', 'NotFinalized', 'OutOfMemory', 'Prism', 'PrismScorer', 'PseqAnalysis', 'PublicnessModel', 'QueryError', 'QueryTooLarge', 'ScaleIndex', 'UnsupportedQuery', 'attribute', 'effective_threads', 'memory_budget', 'set_memory_budget', 'set_threads', 'threads']
+__all__: ['Atoms', 'Attribution', 'BeamError', 'BeamModel', 'BeamQuery', 'BeamTypeError', 'BeamValueError', 'BetaDiversity', 'BudgetExceeded', 'Builder', 'Calibration', 'Condition', 'EntropyBounds', 'EntropyEstimate', 'Histogram', 'ImpossibleCondition', 'IncompatibleMembers', 'InternalError', 'InvalidSequence', 'Mixture', 'MixtureError', 'MixtureTooLarge', 'ModelFileError', 'ModelMismatch', 'NoLivePaths', 'NotFinalized', 'OutOfMemory', 'Prism', 'PrismScorer', 'PseqAnalysis', 'PublicnessModel', 'QueryError', 'QueryTooLarge', 'ScaleIndex', 'SupportSize', 'UnsupportedOrder', 'UnsupportedQuery', 'attribute', 'effective_threads', 'memory_budget', 'set_memory_budget', 'set_threads', 'threads']
 __version__: 0.1.0
 class Atoms:
   def __delattr__(self, name, /)
@@ -275,6 +275,29 @@ class BeamValueError:
   def __subclasshook__(?)
   def add_note(?)
   def with_traceback(?)
+class BetaDiversity:
+  def __delattr__(self, name)
+  def __dir__(self, /)
+  def __eq__(self, other)
+  def __format__(self, format_spec, /)
+  def __ge__(self, value, /)
+  def __getattribute__(self, name, /)
+  def __getstate__(self, /)
+  def __gt__(self, value, /)
+  def __hash__(self)
+  def __init__(self, order: 'float', gamma: 'float | None', alpha: 'float', beta: 'float | None', lower: 'float', upper: 'float', exact: 'bool', estimate: 'float | None' = None, stderr: 'float | None' = None) -> None
+  def __init_subclass__(?)
+  def __le__(self, value, /)
+  def __lt__(self, value, /)
+  def __ne__(self, value, /)
+  def __new__(*args, **kwargs)
+  def __reduce__(self, /)
+  def __reduce_ex__(self, protocol, /)
+  def __repr__(self)
+  def __setattr__(self, name, value)
+  def __sizeof__(self, /)
+  def __str__(self, /)
+  def __subclasshook__(?)
 class BudgetExceeded:
   def __delattr__(self, name, /)
   def __dir__(self, /)
@@ -400,6 +423,55 @@ class Condition:
   def oneof(self, position: 'int', residues: 'Iterable[str]') -> "'Condition'"
   def pattern(self) -> 'str'
   def run(self, start: 'int', residues: 'str') -> "'Condition'"
+class EntropyBounds:
+  def __delattr__(self, name)
+  def __dir__(self, /)
+  def __eq__(self, other)
+  def __format__(self, format_spec, /)
+  def __ge__(self, value, /)
+  def __getattribute__(self, name, /)
+  def __getstate__(self, /)
+  def __gt__(self, value, /)
+  def __hash__(self)
+  def __init__(self, lower: 'float', upper: 'float', weight_entropy: 'float', exact: 'bool' = True) -> None
+  def __init_subclass__(?)
+  def __le__(self, value, /)
+  def __lt__(self, value, /)
+  def __ne__(self, value, /)
+  def __new__(*args, **kwargs)
+  def __reduce__(self, /)
+  def __reduce_ex__(self, protocol, /)
+  def __repr__(self)
+  def __setattr__(self, name, value)
+  def __sizeof__(self, /)
+  def __str__(self, /)
+  def __subclasshook__(?)
+  def brackets(self, value: 'float') -> 'bool'
+  property width
+class EntropyEstimate:
+  def __delattr__(self, name)
+  def __dir__(self, /)
+  def __eq__(self, other)
+  def __format__(self, format_spec, /)
+  def __ge__(self, value, /)
+  def __getattribute__(self, name, /)
+  def __getstate__(self, /)
+  def __gt__(self, value, /)
+  def __hash__(self)
+  def __init__(self, value: 'float', stderr: 'float', n_samples: 'int', seed: 'int | None', bounds: 'EntropyBounds', exact: 'bool' = False) -> None
+  def __init_subclass__(?)
+  def __le__(self, value, /)
+  def __lt__(self, value, /)
+  def __ne__(self, value, /)
+  def __new__(*args, **kwargs)
+  def __reduce__(self, /)
+  def __reduce_ex__(self, protocol, /)
+  def __repr__(self)
+  def __setattr__(self, name, value)
+  def __sizeof__(self, /)
+  def __str__(self, /)
+  def __subclasshook__(?)
+  property diversity
 class Histogram:
   def __delattr__(self, name, /)
   def __dir__(self, /)
@@ -457,6 +529,32 @@ class ImpossibleCondition:
   def __subclasshook__(?)
   def add_note(?)
   def with_traceback(?)
+class IncompatibleMembers:
+  def __delattr__(self, name, /)
+  def __dir__(self, /)
+  def __eq__(self, value, /)
+  def __format__(self, format_spec, /)
+  def __ge__(self, value, /)
+  def __getattribute__(self, name, /)
+  def __getstate__(self, /)
+  def __gt__(self, value, /)
+  def __hash__(self, /)
+  def __init__(self, /, *args, **kwargs)
+  def __init_subclass__(?)
+  def __le__(self, value, /)
+  def __lt__(self, value, /)
+  def __ne__(self, value, /)
+  def __new__(*args, **kwargs)
+  def __reduce__(?)
+  def __reduce_ex__(self, protocol, /)
+  def __repr__(self, /)
+  def __setattr__(self, name, value, /)
+  def __setstate__(?)
+  def __sizeof__(self, /)
+  def __str__(self, /)
+  def __subclasshook__(?)
+  def add_note(?)
+  def with_traceback(?)
 class InternalError:
   def __delattr__(self, name, /)
   def __dir__(self, /)
@@ -484,6 +582,105 @@ class InternalError:
   def add_note(?)
   def with_traceback(?)
 class InvalidSequence:
+  def __delattr__(self, name, /)
+  def __dir__(self, /)
+  def __eq__(self, value, /)
+  def __format__(self, format_spec, /)
+  def __ge__(self, value, /)
+  def __getattribute__(self, name, /)
+  def __getstate__(self, /)
+  def __gt__(self, value, /)
+  def __hash__(self, /)
+  def __init__(self, /, *args, **kwargs)
+  def __init_subclass__(?)
+  def __le__(self, value, /)
+  def __lt__(self, value, /)
+  def __ne__(self, value, /)
+  def __new__(*args, **kwargs)
+  def __reduce__(?)
+  def __reduce_ex__(self, protocol, /)
+  def __repr__(self, /)
+  def __setattr__(self, name, value, /)
+  def __setstate__(?)
+  def __sizeof__(self, /)
+  def __str__(self, /)
+  def __subclasshook__(?)
+  def add_note(?)
+  def with_traceback(?)
+class Mixture:
+  def __delattr__(self, name, /)
+  def __dir__(self, /)
+  def __eq__(self, value, /)
+  def __format__(self, format_spec, /)
+  def __ge__(self, value, /)
+  def __getattribute__(self, name, /)
+  def __getstate__(self, /)
+  def __gt__(self, value, /)
+  def __hash__(self, /)
+  def __init__(self, models: 'Sequence[Any]', weights: 'Iterable[float] | None' = None) -> 'None'
+  def __init_subclass__(?)
+  def __le__(self, value, /)
+  def __len__(self) -> 'int'
+  def __lt__(self, value, /)
+  def __ne__(self, value, /)
+  def __new__(*args, **kwargs)
+  def __reduce__(self, /)
+  def __reduce_ex__(self, protocol, /)
+  def __repr__(self) -> 'str'
+  def __setattr__(self, name, value, /)
+  def __sizeof__(self, /)
+  def __str__(self, /)
+  def __subclasshook__(?)
+  def alpha_diversity(self, q: 'float') -> 'float'
+  def beta_diversity(self, q: 'float', *, samples: 'int' = 0, seed: 'int | None' = None) -> 'BetaDiversity'
+  property config
+  def entropy_bounds(self) -> 'EntropyBounds'
+  def entropy_estimate(self, n: 'int' = 10000, seed: 'int | None' = None) -> 'EntropyEstimate'
+  def gram_matrix(self) -> 'np.ndarray'
+  def hill_number(self, q: 'float') -> 'float'
+  def hill_numbers(self, orders: 'Iterable[float]') -> 'np.ndarray'
+  def inner_product(self, *members: 'int') -> 'float'
+  property length_distribution
+  def log_inner_product(self, *members: 'int') -> 'float'
+  def log_power_sum(self, q: 'float') -> 'float'
+  def log_pseq(self, sequence: 'str') -> 'float'
+  def log_pseq_batch(self, sequences: 'Sequence[str]') -> 'np.ndarray'
+  property max_length
+  def member_weights(self, length: 'int') -> 'np.ndarray'
+  property members
+  property n_members
+  property observed_lengths
+  def pseq(self, sequence, *, log: 'bool' = False)
+  def sample(self, n: 'int', *, seed: 'int | None' = None) -> 'list[str]'
+  def support_size(self, *, exact: 'bool' = True, cap: 'int' = 0) -> 'SupportSize'
+  property weights
+class MixtureError:
+  def __delattr__(self, name, /)
+  def __dir__(self, /)
+  def __eq__(self, value, /)
+  def __format__(self, format_spec, /)
+  def __ge__(self, value, /)
+  def __getattribute__(self, name, /)
+  def __getstate__(self, /)
+  def __gt__(self, value, /)
+  def __hash__(self, /)
+  def __init__(self, /, *args, **kwargs)
+  def __init_subclass__(?)
+  def __le__(self, value, /)
+  def __lt__(self, value, /)
+  def __ne__(self, value, /)
+  def __new__(*args, **kwargs)
+  def __reduce__(?)
+  def __reduce_ex__(self, protocol, /)
+  def __repr__(self, /)
+  def __setattr__(self, name, value, /)
+  def __setstate__(?)
+  def __sizeof__(self, /)
+  def __str__(self, /)
+  def __subclasshook__(?)
+  def add_note(?)
+  def with_traceback(?)
+class MixtureTooLarge:
   def __delattr__(self, name, /)
   def __dir__(self, /)
   def __eq__(self, value, /)
@@ -845,6 +1042,55 @@ class ScaleIndex:
   def channels(self, model, sequences) -> 'dict'
   property lengths
   def score(self, model, sequences)
+class SupportSize:
+  def __delattr__(self, name)
+  def __dir__(self, /)
+  def __eq__(self, other)
+  def __format__(self, format_spec, /)
+  def __ge__(self, value, /)
+  def __getattribute__(self, name, /)
+  def __getstate__(self, /)
+  def __gt__(self, value, /)
+  def __hash__(self)
+  def __init__(self, value: 'float | None', lower: 'float', upper: 'float', exact: 'bool', peak_states: 'int' = 0) -> None
+  def __init_subclass__(?)
+  def __le__(self, value, /)
+  def __lt__(self, value, /)
+  def __ne__(self, value, /)
+  def __new__(*args, **kwargs)
+  def __reduce__(self, /)
+  def __reduce_ex__(self, protocol, /)
+  def __repr__(self)
+  def __setattr__(self, name, value)
+  def __sizeof__(self, /)
+  def __str__(self, /)
+  def __subclasshook__(?)
+class UnsupportedOrder:
+  def __delattr__(self, name, /)
+  def __dir__(self, /)
+  def __eq__(self, value, /)
+  def __format__(self, format_spec, /)
+  def __ge__(self, value, /)
+  def __getattribute__(self, name, /)
+  def __getstate__(self, /)
+  def __gt__(self, value, /)
+  def __hash__(self, /)
+  def __init__(self, /, *args, **kwargs)
+  def __init_subclass__(?)
+  def __le__(self, value, /)
+  def __lt__(self, value, /)
+  def __ne__(self, value, /)
+  def __new__(*args, **kwargs)
+  def __reduce__(?)
+  def __reduce_ex__(self, protocol, /)
+  def __repr__(self, /)
+  def __setattr__(self, name, value, /)
+  def __setstate__(?)
+  def __sizeof__(self, /)
+  def __str__(self, /)
+  def __subclasshook__(?)
+  def add_note(?)
+  def with_traceback(?)
 class UnsupportedQuery:
   def __delattr__(self, name, /)
   def __dir__(self, /)

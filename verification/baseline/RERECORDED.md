@@ -574,3 +574,56 @@ Three more corrections from the same review, none affecting a recorded value:
     statement is "unreachable FROM PYTHON", verified by instrumentation.
 
 `numeric` and `exact` unchanged.
+
+# Why the API and inventory baselines were re-recorded for the mixture package
+
+Re-recorded 2026-09-07, adding `BEAM.mixture`. The previous files are kept
+beside them as `*.premixture.txt`.
+
+Five of the nine checks moved. **Four did not, and that is the load-bearing
+half of this note**: `numeric` (78 keys), the saved-model bytes, `thread
+independence` and `exact against enumeration` (280 quantities) all passed
+unchanged. Nothing this change touches alters a number the library already
+produced, and if any of those four had moved it would have been a defect in
+the change rather than something to re-record.
+
+What moved, and why each is additive only:
+
+1. `cbeam_methods.txt`: +3, -0
+   `mixture_check_shape`, `mixture_inner_product`, `mixture_support_union`.
+
+2. `c_symbols.txt`: +5, -0
+   The five entry points `include/beam/mixture.h` declares. `check.py` flagged
+   them as "newly external", which is its heuristic for a symbol that gained
+   external linkage without being public API. Here they ARE public API: they
+   are declared in an installed header, which is the test that heuristic
+   applies, so the note is expected rather than a warning.
+
+3. `python_api.txt`: +247, -1
+   The one removal is the `__all__` line itself, which is a single line listing
+   every export and therefore always "changes" rather than "grows". The 247
+   additions are `Mixture` and the four frozen result types; the dataclasses
+   contribute the bulk, each bringing `__eq__`, `__init__`, `__repr__` and the
+   rest of the generated surface. No pre-existing signature moved.
+
+4. `pytest_cases.txt`: 477 -> 589, -0
+   Every one of the 112 added cases is under `tests/python/mixture/`. Checked
+   rather than assumed:
+
+       diff <(sort pytest_cases.premixture.txt) <(sort pytest_cases.txt) \
+         | grep '^>' | grep -v 'mixture/'
+
+   returns nothing.
+
+5. `c_cases.txt`: +15, -0
+   Fourteen from the new `tests/native/test_mixture.c`, plus
+   `test_accumulator_max_ignores_an_earlier_threads_error` in `test_model.c`.
+   That last one is not part of the mixture package: it pins a defect the
+   mixture work uncovered in `math/extrema.c`, where
+   `beam_model_accumulator_max` read `beam_last_error()` back from an OpenMP
+   worker that had never cleared it, and so reported "a per-length sweep
+   failed" for a sweep that succeeded. It was intermittent -- it surfaced as
+   eight unrelated spectrum tests failing in a full-suite run and passing when
+   the same command was re-run. `accumulator_max_at` now clears on entry, the
+   way its sibling `beam_model_path_count` always did. The fix changes no
+   computed value, which is why `numeric` and `exact` did not move.
