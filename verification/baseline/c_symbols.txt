@@ -53,6 +53,9 @@ beam_model_expected_counts
 beam_model_expected_counts_free
 beam_model_explain
 beam_model_finalize
+beam_model_freeze_counts
+beam_model_frozen_bytes
+beam_model_frozen_table
 beam_model_hill_number
 beam_model_is_finalized
 beam_model_is_legacy_file
@@ -79,6 +82,7 @@ beam_model_path_count_total
 beam_model_positional_marginals
 beam_model_posterior
 beam_model_radix
+beam_model_release_frozen
 beam_model_sample
 beam_model_save
 beam_model_set_memory_budget
@@ -92,6 +96,7 @@ beam_model_surprisal_cumulants
 beam_model_surprisal_moments
 beam_model_surprisal_range
 beam_model_surprisal_tilt
+beam_model_thaw_counts
 beam_model_threads
 beam_model_top_k
 beam_model_topology

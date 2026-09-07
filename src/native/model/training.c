@@ -113,6 +113,14 @@ BeamError beam_model_observe(BeamModel *m,
                                 const char *const *seqs,
                                 const double *abundances,
                                 uint32_t n) {
+    /* Counts may be frozen from a previous finalize; observation writes them,
+     * so restore the mutable form first. Cheap to ask and a no-op when they
+     * are already mutable, which is every call during a normal build. */
+    {
+        const BeamError thaw = beam_model_thaw_counts(m);
+        if (thaw != BEAM_OK) return thaw;
+    }
+
     if (!m || !seqs)
         return BEAM_FAIL(BEAM_ERR_NULL_ARG, "observe: %s must not be NULL",
                         !m ? "model" : "sequences");

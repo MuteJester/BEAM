@@ -98,6 +98,12 @@ static const char *name_of(uint32_t i) {
 static bool round_trips(BeamModel *m, const char *what, uint64_t *saved,
                         uint64_t *before_total, uint64_t *after_total) {
     const uint32_t R = m->n_residues;
+    /* Finalize freezes on its own now, so restore the mutable form: this
+     * file is about the conversion itself, exercised in both directions. */
+    if (beam_model_thaw_counts(m) != BEAM_OK) {
+        printf("FAIL: %s could not thaw the model's counts\n", what);
+        fail_count++; return false;
+    }
     for (uint32_t t = 0; t < 6u; ++t) {
         BeamTableKind kind;
         BeamSparseRows *src = count_table(m, t, &kind);
@@ -293,12 +299,140 @@ done:
     beam_frozen_destroy(&f); beam_sparse_destroy(&back); beam_sparse_destroy(&t);
 }
 
+/**
+ * Every lifecycle operation, on a model whose counts are frozen.
+ *
+ * This is the test that guards the integration rather than the encoding. A
+ * consumer that forgets to thaw does not crash: `beam_count_row` returns NULL
+ * for every row and the caller's `if (!values) continue;` skips it, so a save
+ * writes an empty model and an add adds nothing. Nothing announces that. The
+ * only reliable check is to run each operation on a frozen model and compare
+ * against the same operation on one that was never frozen.
+ *
+ * Finalize freezes, so every model here arrives frozen; the control is thawed
+ * by hand first. Both must agree to the bit.
+ */
+static void test_every_lifecycle_operation_survives_frozen_counts(void) {
+    static const char *PROBE[6] = { "CASSF", "CASSYW", "CAGSFK",
+                                    "CGSSFP", "CASSLNM", "CASSQEV" };
+    const char *step = "";
+    for (int op = 0; op < 4; ++op) {
+        BeamModel *frozen = build(2500u, 4u, 12u, false);
+        BeamModel *thawed = build(2500u, 4u, 12u, false);
+        BeamModel *other  = build(2000u, 4u, 12u, false);
+        if (!frozen || !thawed || !other) {
+            printf("FAIL: models did not build\n"); fail_count++; return;
+        }
+        /* The control keeps its counts mutable throughout. */
+        if (beam_model_thaw_counts(thawed) != BEAM_OK) {
+            printf("FAIL: control did not thaw\n"); fail_count++; return;
+        }
+        if (!frozen->counts_frozen) {
+            printf("FAIL: finalize did not freeze the counts\n");
+            fail_count++; return;
+        }
+
+        BeamError ea = BEAM_OK, eb = BEAM_OK;
+        switch (op) {
+        case 0: step = "observe then re-finalize";
+            ea = beam_model_observe(frozen, PROBE, NULL, 6u);
+            eb = beam_model_observe(thawed, PROBE, NULL, 6u);
+            if (ea == BEAM_OK) ea = beam_model_finalize(frozen);
+            if (eb == BEAM_OK) eb = beam_model_finalize(thawed);
+            break;
+        case 1: step = "add";
+            ea = beam_model_add(frozen, other);
+            eb = beam_model_add(thawed, other);
+            break;
+        case 2: step = "subtract then add back";
+            ea = beam_model_subtract(frozen, other);
+            eb = beam_model_subtract(thawed, other);
+            break;
+        case 3: step = "posterior";
+            ea = beam_model_posterior(frozen, other, 100.0);
+            eb = beam_model_posterior(thawed, other, 100.0);
+            break;
+        default: break;
+        }
+        if (ea != eb) {
+            printf("FAIL: %s returned %d frozen, %d thawed\n",
+                   step, (int)ea, (int)eb);
+            fail_count++; goto cleanup;
+        }
+        if (ea != BEAM_OK) goto cleanup;   /* both refused the same way */
+
+        if (beam_model_finalize(frozen) != BEAM_OK
+            || beam_model_finalize(thawed) != BEAM_OK) {
+            printf("FAIL: %s: re-finalize failed\n", step);
+            fail_count++; goto cleanup;
+        }
+        for (uint32_t k = 0; k < 6u; ++k) {
+            const double a = beam_model_log_pseq(frozen, PROBE[k]);
+            const double b = beam_model_log_pseq(thawed, PROBE[k]);
+            if (memcmp(&a, &b, sizeof a) != 0) {
+                printf("FAIL: %s: %s scored %.17g frozen, %.17g thawed\n",
+                       step, PROBE[k], a, b);
+                fail_count++; goto cleanup;
+            }
+        }
+        /* The counts themselves, not only what they imply. */
+        if (beam_model_n_nonzero_cells(frozen)
+            != beam_model_n_nonzero_cells(thawed)) {
+            printf("FAIL: %s: %llu nonzero cells frozen, %llu thawed\n", step,
+                   (unsigned long long)beam_model_n_nonzero_cells(frozen),
+                   (unsigned long long)beam_model_n_nonzero_cells(thawed));
+            fail_count++; goto cleanup;
+        }
+    cleanup:
+        beam_model_destroy(frozen); beam_model_destroy(thawed);
+        beam_model_destroy(other);
+        if (fail_count) return;
+    }
+    PASS();
+}
+
+/**
+ * Saving reads the frozen counts directly, so the bytes it writes must be the
+ * ones it would have written from the mutable form -- byte for byte, because
+ * the saved-model baseline is compared as bytes.
+ */
+static void test_saving_a_frozen_model_writes_the_same_bytes(void) {
+    BeamModel *frozen = build(2500u, 4u, 12u, false);
+    BeamModel *thawed = build(2500u, 4u, 12u, false);
+    ASSERT_MSG(frozen && thawed, "models did not build");
+    ASSERT_MSG(beam_model_thaw_counts(thawed) == BEAM_OK, "control did not thaw");
+    ASSERT_MSG(frozen->counts_frozen, "finalize did not freeze");
+
+    const char *pa = "/tmp/beam_frozen_a.beam", *pb = "/tmp/beam_frozen_b.beam";
+    ASSERT_MSG(beam_model_save(frozen, pa) == BEAM_OK, "frozen save failed");
+    ASSERT_MSG(beam_model_save(thawed, pb) == BEAM_OK, "thawed save failed");
+
+    FILE *fa = fopen(pa, "rb"), *fb = fopen(pb, "rb");
+    ASSERT_MSG(fa && fb, "saved files did not open");
+    int same = 1; long n = 0;
+    for (;;) {
+        const int ca = fgetc(fa), cb = fgetc(fb);
+        if (ca != cb) { same = 0; break; }
+        if (ca == EOF) break;
+        n++;
+    }
+    fclose(fa); fclose(fb);
+    remove(pa); remove(pb);
+    beam_model_destroy(frozen); beam_model_destroy(thawed);
+    if (!same) { printf("FAIL: saved bytes differ at offset %ld\n", n);
+                 fail_count++; return; }
+    ASSERT_MSG(n > 1000, "the saved files were suspiciously small");
+    PASS();
+}
+
 int main(void) {
     printf("\nfrozen counts\n");
     RUN_TEST(test_integer_counts_round_trip);
     RUN_TEST(test_fractional_counts_round_trip);
     RUN_TEST(test_posterior_counts_round_trip);
     RUN_TEST(test_every_tier_boundary);
+    RUN_TEST(test_every_lifecycle_operation_survives_frozen_counts);
+    RUN_TEST(test_saving_a_frozen_model_writes_the_same_bytes);
 
     printf("\n  %d passed, %d failed\n\n", pass_count, fail_count);
     return fail_count == 0 ? 0 : 1;

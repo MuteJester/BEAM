@@ -232,6 +232,7 @@ static void test_rows_that_differ_are_kept_apart(void) {
 static void test_what_cannot_be_interned_is_left_alone(void) {
     BeamModel *m = build(2000u, 3u, 10u);
     ASSERT_MSG(m != NULL, "model did not build");
+    ASSERT_MSG(beam_model_thaw_counts(m) == BEAM_OK, "counts did not thaw");
 
     BeamSparseRows *cnt = &m->sp_cnt_wide[BEAM_FWD];
     const uint64_t cb = beam_sparse_memory_bytes(cnt);
@@ -267,6 +268,10 @@ static void test_what_cannot_be_interned_is_left_alone(void) {
 static void test_a_pooled_row_is_still_log_of_its_counts(void) {
     BeamModel *m = build(6000u, 4u, 14u);
     ASSERT_MSG(m != NULL, "model did not build");
+    /* Finalize freezes the counts, and this test reads them. Restore the
+     * mutable form rather than reading NULL rows and quietly comparing
+     * nothing. */
+    ASSERT_MSG(beam_model_thaw_counts(m) == BEAM_OK, "counts did not thaw");
     const uint32_t R = m->n_residues;
 
     uint64_t compared = 0;

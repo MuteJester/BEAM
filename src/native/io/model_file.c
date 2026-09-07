@@ -179,14 +179,33 @@ static bool write_count_table(FILE *f, const BeamModel *m, uint32_t dir,
         return write_all(f, p, (size_t)nr * row_bytes, crc);
     }
 
+    /*
+     * Frozen counts are already what this loop wants: the occupied rows, in
+     * ascending dense order, which is the order the format stores them in.
+     * Reading them directly avoids thawing 95 MB back into memory purely to
+     * write it out, and replaces a probe of all 7,390,278 dense rows with a
+     * walk of the 597,373 that exist.
+     */
+    const BeamFrozenCounts *fz = m->counts_frozen
+                               ? beam_model_frozen_table(m, dir, kind) : NULL;
     const BeamSparseRows *t = beam_sparse_count_table_const(m, dir, kind);
-    const uint64_t occupied = beam_sparse_n_rows(t);
+    const uint64_t occupied = fz ? (uint64_t)fz->n_rows : beam_sparse_n_rows(t);
     if (!write_all(f, &occupied, sizeof occupied, crc)) return false;
     uint64_t written = 0;
     unsigned char block[BEAM_SPARSE_IO_ROWS * BEAM_SPARSE_RECORD_MAX];
+    double decoded[BEAM_MAX_RESIDUES];
     uint32_t buffered = 0;
-    for (uint32_t row = 0; row < nr; ++row) {
-        const double *values = beam_count_row(m, dir, kind, row);
+    const uint32_t iterations = fz ? fz->n_rows : nr;
+    for (uint32_t idx = 0; idx < iterations; ++idx) {
+        uint32_t row = idx;
+        const double *values;
+        if (fz) {
+            row = fz->row_id[idx];
+            beam_frozen_row(fz, idx, decoded);
+            values = decoded;
+        } else {
+            values = beam_count_row(m, dir, kind, row);
+        }
         if (!values) continue;
         unsigned char *record = block + (size_t)buffered * rec;
         memcpy(record, &row, sizeof row);

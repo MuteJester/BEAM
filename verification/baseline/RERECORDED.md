@@ -793,3 +793,26 @@ This commit adds the representation and its tests but does not yet route the
 model through it, so no numeric gate could move: nothing in a model's
 lifecycle calls it. It is committed separately because the exactness argument
 is worth reviewing on its own, before the lifecycle changes that will use it.
+
+---
+
+## 2026-09-07, routing the model through frozen counts
+
+Re-recorded once more; previous pair kept as `*.prewire.txt`. Five model-level
+`beam_model_*frozen*`/`*_counts` symbols and two tests added, all internal.
+
+**`saved-model bytes` is the gate that matters here** and it did not move.
+`write_count_table` now reads the frozen counts directly instead of thawing
+them, so it produces those bytes through a different path; the baseline says
+it produces the same ones. `test_saving_a_frozen_model_writes_the_same_bytes`
+says so a second way, by comparing a frozen model's file against an
+identically built model whose counts were thawed by hand.
+
+The other new test is the one that guards the integration rather than the
+encoding. A consumer that forgets to thaw does not crash -- `beam_count_row`
+returns NULL for every row and the caller's `if (!values) continue;` skips it,
+so a save would write an empty model and an add would add nothing, silently.
+`test_every_lifecycle_operation_survives_frozen_counts` runs observe,
+re-finalize, add, subtract and posterior on a frozen model and on a control
+that was thawed by hand, and requires identical scores and identical nonzero
+cell counts.

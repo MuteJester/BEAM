@@ -315,6 +315,9 @@ static void test_layer_max_is_unchanged_after_sealing(void) {
 static void test_what_cannot_be_sealed_is_left_alone(void) {
     BeamModel *m = saturated();
     ASSERT_MSG(m != NULL, "model did not build");
+    /* Finalize freezes the counts, which releases the mutable tables this
+     * case is about. Restore them so there is a mutable table to refuse. */
+    ASSERT_MSG(beam_model_thaw_counts(m) == BEAM_OK, "counts did not thaw");
 
     /* A count table is mutable. */
     BeamSparseRows *cnt = &m->sp_cnt_wide[BEAM_FWD];

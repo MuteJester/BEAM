@@ -8,6 +8,13 @@
 
 
 BeamError beam_model_subtract(BeamModel *m, const BeamModel *o) {
+    {   /* Both operands are read and `m` is written, so both must be mutable. */
+        const BeamError ta = beam_model_thaw_counts(m);
+        if (ta != BEAM_OK) return ta;
+        const BeamError tb = beam_model_thaw_counts((BeamModel *)o);
+        if (tb != BEAM_OK) return tb;
+    }
+
     if (!m || !o)
         return BEAM_FAIL(BEAM_ERR_NULL_ARG, "subtract: %s must not be NULL",
                         !m ? "model" : "operand");
@@ -102,6 +109,13 @@ BeamError beam_model_subtract(BeamModel *m, const BeamModel *o) {
 }
 
 BeamError beam_model_add(BeamModel *m, const BeamModel *o) {
+    {   /* Both operands are read and `m` is written, so both must be mutable. */
+        const BeamError ta = beam_model_thaw_counts(m);
+        if (ta != BEAM_OK) return ta;
+        const BeamError tb = beam_model_thaw_counts((BeamModel *)o);
+        if (tb != BEAM_OK) return tb;
+    }
+
     if (!m || !o) return BEAM_ENULL(!m ? "model" : "operand");
     /* The live cache is a projection of the finalized tables; anything
      * that changes the counts or rebuilds the tables makes it a record of

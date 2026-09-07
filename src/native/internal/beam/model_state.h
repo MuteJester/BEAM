@@ -13,6 +13,7 @@
 #include "beam/model.h"
 #include "beam/alphabet.h"
 #include "beam/sparse_rows.h"
+#include "beam/frozen_counts.h"
 
 
 /* ── Parallelism ─────────────────────────────────────────────── */
@@ -105,6 +106,22 @@ struct BeamModel_ {
     BeamSparseRows sp_lp_wide[BEAM_DIRS];
     BeamSparseRows sp_lp_mid[BEAM_DIRS];
     BeamSparseRows sp_lp_len[BEAM_DIRS];
+
+    /**
+     * Counts after observation stopped, or empty structs when they are still
+     * mutable. Exactly one of these and `sp_cnt_*` holds the counts at any
+     * moment; `counts_frozen` says which.
+     *
+     * Finalize freezes, and every operation that needs to write counts again
+     * -- observe, add, subtract, posterior, re-finalize -- thaws first. Save
+     * reads the frozen form directly rather than thawing, because walking
+     * the sorted rows is both cheaper than a thaw and cheaper than the dense
+     * probe it replaces.
+     */
+    BeamFrozenCounts frz_wide[BEAM_DIRS];
+    BeamFrozenCounts frz_mid[BEAM_DIRS];
+    BeamFrozenCounts frz_len[BEAM_DIRS];
+    bool     counts_frozen;
 
     double *log_pi;          /* [n_len_slots] ln pi(L)                        */
     double *log_z;           /* [n_len_slots] ln Z(L)                         */

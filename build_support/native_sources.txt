@@ -50,6 +50,7 @@ src/native/mixture/support.c
 src/native/model/algebra.c
 src/native/model/config.c
 src/native/model/encoding.c
+src/native/model/freeze.c
 src/native/model/finalize.c
 src/native/model/introspection.c
 src/native/model/lifecycle.c

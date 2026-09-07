@@ -47,6 +47,18 @@ uint64_t beam_model_n_nonzero_cells(const BeamModel *m) {
         for (uint32_t d = 0; d < BEAM_DIRS; ++d) {
             for (uint32_t kind = BEAM_TABLE_WIDE;
                  kind <= BEAM_TABLE_LEN; ++kind) {
+                /* Frozen counts already know this: a cell is stored only
+                 * when it is present, so the answer is the set bits of the
+                 * masks. Counting them beats thawing 95 MB to look. */
+                if (m->counts_frozen) {
+                    const BeamFrozenCounts *f =
+                        beam_model_frozen_table(m, d, kind);
+                    for (uint32_t r = 0; r < f->n_rows; ++r)
+                        n += (uint64_t)__builtin_popcount(
+                            f->mask_tier[r]
+                            & ((1u << BEAM_FROZEN_MASK_BITS) - 1u));
+                    continue;
+                }
                 const BeamSparseRows *t = beam_sparse_count_table_const(
                     m, d, (BeamTableKind)kind);
                 for (uint32_t p = 0; p < t->n_parts; ++p) {
@@ -75,6 +87,8 @@ uint64_t beam_model_memory_bytes(const BeamModel *m) {
         uint64_t n = 0;
         for (uint32_t d = 0; d < BEAM_DIRS; ++d) {
             if (!m->compacted) {
+                /* Zero for each of these once the counts are frozen; the
+                 * frozen bytes are added below, outside the direction loop. */
                 n += beam_sparse_memory_bytes(&m->sp_cnt_wide[d]);
                 n += beam_sparse_memory_bytes(&m->sp_cnt_mid[d]);
                 n += beam_sparse_memory_bytes(&m->sp_cnt_len[d]);
@@ -85,6 +99,7 @@ uint64_t beam_model_memory_bytes(const BeamModel *m) {
                 n += beam_sparse_memory_bytes(&m->sp_lp_len[d]);
             }
         }
+        if (!m->compacted) n += beam_model_frozen_bytes(m);
         return n;
     }
     uint64_t per_dir = (uint64_t)(beam_n_wide(m) + beam_n_mid(m)

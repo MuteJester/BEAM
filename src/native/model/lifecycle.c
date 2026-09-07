@@ -11,6 +11,8 @@
 /* ── Lifecycle ───────────────────────────────────────────────── */
 
 void beam_free_counts(BeamModel *m) {
+    /* Counts live in one of two forms and this releases whichever it is. */
+    beam_model_release_frozen(m);
     for (uint32_t d = 0; d < BEAM_DIRS; ++d) {
         free(m->cnt_wide[d]); m->cnt_wide[d] = NULL;
         free(m->cnt_mid[d]);  m->cnt_mid[d]  = NULL;

@@ -114,4 +114,13 @@ uint64_t beam_frozen_memory_bytes(const BeamFrozenCounts *f);
 /** The values of one row, decoded into `out` (`stride` doubles). */
 void beam_frozen_row(const BeamFrozenCounts *f, uint32_t k, double *out);
 
+/* ── Model-level freezing ────────────────────────────────────── */
+
+BeamError beam_model_freeze_counts(BeamModel *m);
+BeamError beam_model_thaw_counts(BeamModel *m);
+void      beam_model_release_frozen(BeamModel *m);
+uint64_t  beam_model_frozen_bytes(const BeamModel *m);
+const BeamFrozenCounts *beam_model_frozen_table(const BeamModel *m,
+                                                uint32_t dir, uint32_t kind);
+
 #endif /* BEAM_INTERNAL_FROZEN_COUNTS_H */
