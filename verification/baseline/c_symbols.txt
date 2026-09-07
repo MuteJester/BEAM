@@ -30,6 +30,11 @@ beam_log_level
 beam_log_set
 beam_mellin_terms
 beam_mix
+beam_mixture_check_shape
+beam_mixture_log_inner_product
+beam_mixture_log_inner_product_by_length
+beam_mixture_support_union
+beam_mixture_support_union_by_length
 beam_model_accumulator_max
 beam_model_add
 beam_model_alphabet

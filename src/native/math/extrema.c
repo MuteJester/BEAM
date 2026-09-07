@@ -38,6 +38,25 @@ static inline uint64_t sweep_bytes(uint32_t n_states, uint32_t n_residues,
 }
 
 static double accumulator_max_at(const BeamModel *m, uint32_t len) {
+    /*
+     * Clear FIRST, like `beam_model_path_count` does on the same protocol.
+     *
+     * The driver below reads `beam_last_error()` back after each call to find
+     * out whether that sweep failed, which is only sound if the sweep starts
+     * from a clean slate. `beam_set_error` is thread-local and OpenMP reuses
+     * its threads, so without this the read-back returns whatever code that
+     * WORKER last set -- possibly in an unrelated call minutes earlier -- and
+     * a sweep that succeeded is reported as having failed.
+     *
+     * The driver clears the error itself, but only on the calling thread, so
+     * every worker but one was carrying whatever it had. The result was a
+     * `accumulator_max` that returned 0.0 with "a per-length sweep failed" for
+     * no reason, intermittently, depending on which thread the work landed on.
+     * That is a wrong spectrum grid where it is caught and an exception where
+     * it is not.
+     */
+    beam_clear_error();
+
     const uint32_t A = m->n_alphabet;
     const uint32_t R = m->n_residues;
     const uint32_t S = m->n_states;

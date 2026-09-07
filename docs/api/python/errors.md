@@ -40,6 +40,17 @@ The query engine adds three, each descending from both `QueryError` and its libr
 | `UnsupportedQuery` | no exact answer, or malformed | `BeamValueError`, `ValueError` |
 | `QueryTooLarge` | exactly answerable, and over the memory budget | `BudgetExceeded`, `MemoryError` |
 
+The mixture layer adds three more, on the same pattern:
+
+| exception | means | also a |
+|---|---|---|
+| `MixtureError` | base of every refusal from the mixture layer | `BeamError` |
+| `IncompatibleMembers` | the members cannot share a trellis: different alphabet, order, `max_length` or `depth_cap` | `ModelMismatch`, `RuntimeError` |
+| `UnsupportedOrder` | that Hill order has no exact answer for a mixture | `BeamValueError`, `ValueError` |
+| `MixtureTooLarge` | exactly answerable, and over the memory budget | `BudgetExceeded`, `MemoryError` |
+
+`UnsupportedOrder` is the one with no C counterpart. It exists because the mixture is the first object here with a quantity that is not merely expensive but has **no closed form at all** — `H(pbar)` at `q = 1` — and the library's rule is that such a question is refused, not estimated. See [`mixture.md`](mixture.md).
+
 ## The distinction worth knowing
 
 **`BudgetExceeded` is not `OutOfMemory`.** The first is BEAM refusing because you told it to; the remedy is yours — raise the budget, ask at a lower order, or ask a smaller question, and the message carries the figure needed and the budget in force. The second is the machine failing to supply memory, which raising the budget will not fix.

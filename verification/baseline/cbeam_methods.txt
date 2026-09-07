@@ -22,6 +22,9 @@ log_pseq
 log_pseq_batch
 memory_budget
 memory_bytes
+mixture_check_shape
+mixture_inner_product
+mixture_support_union
 n_cells
 n_nonzero_cells
 n_observed
