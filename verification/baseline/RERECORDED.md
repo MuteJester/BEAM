@@ -816,3 +816,29 @@ so a save would write an empty model and an add would add nothing, silently.
 re-finalize, add, subtract and posterior on a frozen model and on a control
 that was thawed by hand, and requires identical scores and identical nonzero
 cell counts.
+
+---
+
+## 2026-09-07, format 4
+
+`saved-model bytes` was re-recorded, and this is the one entry in this file
+where that is the POINT rather than a side effect. The check's own docstring
+says a new format is an intentional saved-byte change needing an explicit
+compatibility fixture rather than a silent overwrite, so:
+
+- the fixture that must keep loading is `tests/fixtures/format3_{sparse,dense}.beam`,
+  committed in 3233ef8, written by the last build that emitted format 3 and
+  never regenerated since;
+- `tests/python/model/test_format_compatibility.py` loads both and compares
+  scores as hex floats, plus total weight and nonzero cell count, and asserts
+  each fixture's own byte size so a regenerating script fails rather than
+  quietly re-records;
+- the previous `numeric.json` is kept as `numeric.preformat4.json`.
+
+The baseline fixture went from 11,762,896 bytes to 813,854 -- 14.5x -- for a
+model whose every reported value is unchanged. `numeric`, `thread
+independence` and `exact against enumeration` did not move, which is what
+says the file got smaller rather than the model getting different.
+
+`pytest_cases.txt` gains the four compatibility tests; the previous list is
+kept as `pytest_cases.preformat4.txt`.
