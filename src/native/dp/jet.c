@@ -160,9 +160,13 @@ BeamError jet_sweep(const BeamModel *m, uint32_t len, double q,
 #ifdef _OPENMP
         #pragma omp parallel for schedule(static) num_threads(beam_threads())
 #endif
-        for (int64_t k = 0; k < (int64_t)nt; ++k)
-            for (uint32_t j = 0; j < NM; ++j)
+        for (int64_t k = 0; k < (int64_t)nt; ++k) {
+            /* Moment 0 is the mass and carries the invariant; the higher
+             * moments ride along and may legitimately be zero. */
+            sw.next[tgt[k]] = beam_rescale(sw.next[tgt[k]], nmax);
+            for (uint32_t j = 1; j < NM; ++j)
                 sw.next[(size_t)j * S + tgt[k]] /= nmax;
+        }
         log_scale += log(nmax);
 
         double *tmp = sw.cur; sw.cur = sw.next; sw.next = tmp;

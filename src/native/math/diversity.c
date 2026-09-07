@@ -135,7 +135,8 @@ static BeamError tilted_log_z(const BeamModel *m, uint32_t len, double alpha,
 #ifdef _OPENMP
         #pragma omp parallel for schedule(static) num_threads(beam_threads())
 #endif
-        for (int64_t k = 0; k < (int64_t)nt; ++k) next[tgt[k]] /= nmax;
+        for (int64_t k = 0; k < (int64_t)nt; ++k)
+            next[tgt[k]] = beam_rescale(next[tgt[k]], nmax);
         log_scale += log(nmax);
         /* `next` becomes `cur`, and the old `cur` is reused as the next
          * layer's `next`. Only its reached entries will be written, so its
@@ -277,7 +278,9 @@ static BeamError expected_raw(const BeamModel *m, uint32_t len, double *out) {
         #pragma omp parallel for schedule(static) num_threads(beam_threads())
 #endif
         for (int64_t q = 0; q < (int64_t)nt; ++q) {
-            const uint32_t s = tgt[q]; na[s] /= nmax; nb[s] /= nmax;
+            const uint32_t s = tgt[q];
+            na[s] = beam_rescale(na[s], nmax);   /* the mass */
+            nb[s] /= nmax;                       /* may be negative */
         }
         /* Clear what becomes the next layer's scratch: only reached entries
          * are written, so values from two layers back would survive. */

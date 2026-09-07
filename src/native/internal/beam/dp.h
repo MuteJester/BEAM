@@ -14,6 +14,41 @@
 #include "beam/model_state.h"
 #include "beam/table_access.h"
 
+/* ── The per-layer rescale ───────────────────────────────────── */
+
+/**
+ * Crossings of the one invariant the linear sweeps depend on, since the last
+ * reset. Zero at all times on every configuration measured; see rescale.c for
+ * why that is checked rather than assumed, and for how little margin there is.
+ *
+ * A test hook, not a diagnostic for callers, and not thread-safe to read while
+ * a sweep is running.
+ */
+unsigned long long beam_rescale_flushes(void);
+void beam_rescale_flush_reset(void);
+void beam_rescale_note_flush(void);
+
+/**
+ * Divide one accumulator by its layer's scale, noticing a value that vanishes.
+ *
+ * Bit-identical to `v / nmax`, which it has to be: these sweeps are pinned to
+ * the last bit by `verification/check.py`, so a guard that computed the
+ * quotient any other way -- multiplying by a reciprocal, say -- would move
+ * every recorded number in the library and the guard would be indistinguishable
+ * from a regression.
+ *
+ * Pass only accumulators that carry MASS. A jet's higher moments and the
+ * expectation semiring's weighted sum can legitimately be zero or negative
+ * without the state being dead, and flagging those would report a loss that
+ * did not happen. Their companion mass vector is the one to guard.
+ */
+static inline double beam_rescale(double v, double nmax) {
+    const double out = v / nmax;
+    /* Predicted not-taken and never yet taken; the atomic is behind it. */
+    if (out == 0.0 && v > 0.0) beam_rescale_note_flush();
+    return out;
+}
+
 /* ── Cross-file helpers ──────────────────────────────────────── */
 
 /**

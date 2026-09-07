@@ -139,7 +139,7 @@ static BeamError by_depth_one(const BeamModel *m, uint32_t L, double q,
         }
         log_scale += qmax;
         if (!(nmax > 0.0)) break;
-        for (uint32_t s = 0; s < S; ++s) next[s] /= nmax;
+        for (uint32_t s = 0; s < S; ++s) next[s] = beam_rescale(next[s], nmax);
         log_scale += log(nmax);
         double *tmp = cur; cur = next; next = tmp;
     }

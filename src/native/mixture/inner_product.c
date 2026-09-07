@@ -235,7 +235,8 @@ BeamError beam_mixture_log_inner_product(const BeamModel *const *models,
 #ifdef _OPENMP
         #pragma omp parallel for schedule(static) num_threads(beam_threads())
 #endif
-        for (int64_t j = 0; j < (int64_t)n_nxt; ++j) next[ix_n[j]] /= nmax;
+        for (int64_t j = 0; j < (int64_t)n_nxt; ++j)
+            next[ix_n[j]] = beam_rescale(next[ix_n[j]], nmax);
         log_scale += log(nmax);
 
         /* `cur` is about to become the next layer's `next`, which is written

@@ -25,9 +25,6 @@ beam_live_cache_entries
 beam_live_lengths_desc
 beam_live_release
 beam_live_selfcheck
-beam_log_emit
-beam_log_level
-beam_log_set
 beam_mellin_terms
 beam_mix
 beam_mixture_check_shape
@@ -147,6 +144,9 @@ beam_query_resolve
 beam_query_work_alloc
 beam_query_work_free
 beam_raw_log_weight
+beam_rescale_flush_reset
+beam_rescale_flushes
+beam_rescale_note_flush
 beam_rng_seed
 beam_set_error
 beam_sparse_destroy

@@ -627,3 +627,60 @@ What moved, and why each is additive only:
    the same command was re-run. `accumulator_max_at` now clears on entry, the
    way its sibling `beam_model_path_count` always did. The fix changes no
    computed value, which is why `numeric` and `exact` did not move.
+
+# Why the C baselines were re-recorded for the rescale invariant
+
+Re-recorded 2026-09-07, adding the per-layer rescale guard. Previous files kept
+as `*.prerescale.txt`.
+
+Two of the nine checks moved, and only two:
+
+  c_cases.txt    +5  -0   the new tests/native/test_rescale.c
+  c_symbols.txt  +3  -0   beam_rescale_flushes, _flush_reset, _note_flush
+
+Those three are INTERNAL, declared in src/native/internal/beam/dp.h and in no
+installed header, so `check.py` reports them under its "newly external" note
+rather than as public API -- which is correct, and is why "C public symbols"
+still passes.
+
+`numeric`, `exact against enumeration`, the saved-model bytes and thread
+independence are ALL UNMOVED, which is the point of the change rather than an
+incidental fact about it. The guard replaces `v / nmax` with a function whose
+body is `v / nmax`, so every sweep in the library had to come back bit for bit
+identical; had `numeric` moved by a single bit, the guard would have been
+computing the quotient some other way and would itself have been the
+regression. `test_the_guard_divides_exactly_as_the_operator_does` pins that
+directly, by `memcmp` rather than by comparison.
+
+# Why the C symbol baseline was re-recorded for the dead-code deletion
+
+Re-recorded 2026-09-07, removing the logging subsystem. Previous file kept as
+`c_symbols.predeletion.txt`.
+
+ONE check moved, and it is the one that is supposed to be hard to move:
+
+  c_symbols.txt   -3   beam_log_set, beam_log_level, beam_log_emit
+
+`check.py` fails outright on a symbol going missing, rather than noting it the
+way it notes a new one, and that asymmetry is right: adding public surface is
+additive, removing it breaks callers. This removal is deliberate. The whole
+subsystem -- 35 lines of implementation and 76 of declarations -- had ZERO call
+sites in the library. Nothing ever called `BEAM_INFO`, `BEAM_WARN` or any of
+the other macros, so no message could ever be emitted and installing a callback
+did nothing. The one apparent user, `BEAM_LOGZ_FREE` in `dp/partition.c`, only
+shares the prefix; it frees the log-partition scratch.
+
+Eight error codes went with it, and they moved NO baseline at all. Nothing in
+the library raised BEAM_ERR_INVALID_VARIANT, LENGTH_MISMATCH, HAS_CYCLES,
+NO_GENE_DATA, GENE_NOT_FOUND, MISSING_EDGE, CONVERGENCE or OVERFLOW; their only
+references anywhere were the two tables in `bindings/python/common.c`. That
+`tests/python/test_error_contract.py` still passes unchanged, pinning the class
+raised by each of 22 entry points, is the evidence that no reachable path lost
+its error: a code that had been produced would have taken a row with it.
+
+`numeric`, `exact against enumeration`, the saved-model bytes and thread
+independence are unmoved, as they must be -- nothing here touches a
+computation.
+
+The retired NUMBERS are not reused; see the note in `include/beam/errors.h` for
+why, and for the fact that the next free value is 24 rather than 5.

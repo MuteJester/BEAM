@@ -56,8 +56,6 @@ static PyObject *beam_error_class(BeamError err, PyObject *fallback) {
         case BEAM_ERR_INVALID_SEQUENCE:  name = "InvalidSequence"; break;
         case BEAM_ERR_NULL_ARG:          /* == BEAM_ERR_INVALID_ARG */
         case BEAM_ERR_EMPTY_INPUT:
-        case BEAM_ERR_INVALID_VARIANT:
-        case BEAM_ERR_LENGTH_MISMATCH:
         case BEAM_ERR_PARAM_OUT_OF_RANGE: name = "BeamValueError"; break;
 
         case BEAM_ERR_NOT_BUILT:         name = "NotFinalized";    break;
@@ -70,16 +68,11 @@ static PyObject *beam_error_class(BeamError err, PyObject *fallback) {
         case BEAM_ERR_IO_CORRUPT:
         case BEAM_ERR_IO_VERSION:        name = "ModelFileError";  break;
 
-        /* Library bugs and codes nothing produces. BEAM_ERR_HAS_CYCLES is
-         * among them: a cyclic trellis would be an invariant violation, not a
-         * user error. */
-        case BEAM_ERR_INTERNAL:
-        case BEAM_ERR_HAS_CYCLES:
-        case BEAM_ERR_OVERFLOW:
-        case BEAM_ERR_CONVERGENCE:
-        case BEAM_ERR_NO_GENE_DATA:
-        case BEAM_ERR_GENE_NOT_FOUND:
-        case BEAM_ERR_MISSING_EDGE:      name = "InternalError";   break;
+        /* A library bug, not a user error: something the caller cannot have
+         * caused and cannot act on. The seven codes that used to share this
+         * arm were retired instead, none of them being reachable; see the
+         * retired-number note in include/beam/errors.h. */
+        case BEAM_ERR_INTERNAL:          name = "InternalError";   break;
 
         default:                         return fallback;
     }
@@ -118,14 +111,11 @@ PyObject *set_beam_error(BeamError err) {
         case BEAM_ERR_NULL_ARG:
         case BEAM_ERR_EMPTY_INPUT:
         case BEAM_ERR_INVALID_SEQUENCE:
-        case BEAM_ERR_INVALID_VARIANT:
-        case BEAM_ERR_LENGTH_MISMATCH:
         case BEAM_ERR_PARAM_OUT_OF_RANGE:
             builtin = PyExc_ValueError;  generic = "invalid argument";   break;
 
         case BEAM_ERR_NOT_BUILT:
         case BEAM_ERR_NO_LIVE_PATHS:
-        case BEAM_ERR_HAS_CYCLES:
             builtin = PyExc_RuntimeError; generic = "model state error"; break;
 
         case BEAM_ERR_IO_OPEN:
