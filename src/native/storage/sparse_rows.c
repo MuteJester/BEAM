@@ -343,10 +343,13 @@ void beam_sparse_shrink(BeamSparseRows *t) {
         double *new_values = (double *)malloc(value_bytes);
         if (!new_values) continue;
 
-        /* Keyed on whether the partition HAS a row map, not on whether the
-         * table is mutable: immutable tables carry one now too. Allocating
-         * only for mutable while copying whenever the map exists memcpy'd
-         * into NULL and segfaulted. */
+        /* Keyed on whether the partition HAS a row map, never on the kind of
+         * table -- the two have disagreed twice now, in both directions.
+         * Allocating only for mutable while copying whenever a map existed
+         * memcpy'd into NULL and segfaulted, back when finalized tables
+         * carried a map; they no longer do, which would have made the mirror
+         * of that assumption wrong instead. The pointer is the only fact that
+         * has stayed true. */
         const bool has_map = (t->row_ids && t->row_ids[part]);
         uint32_t *new_row_ids = NULL;
         if (has_map) {
