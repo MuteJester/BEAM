@@ -116,60 +116,86 @@ Raw counts pasted in as weights, and a member dropped from one list but not the 
 
 Negative, non-finite, and wrong-length weight vectors are refused too. A weight of exactly zero is allowed: excluding a member is meaningful.
 
-## Cost, because it decides what M you can use
+## Cost, and how to spend it
 
-Every `q = 2` quantity is `M(M+1)/2` inner products. Measured on this machine (16 threads):
+Every `q = 2` quantity is `M(M+1)/2` inner products. The honest unit is
+**core-seconds per pair**, because the wall clock depends entirely on which
+axis you parallelise:
 
-| models | per pair | `M = 8` (36 pairs) | `M = 64` (2,080 pairs) |
-|---|---|---|---|
-| donor-sized (30k sequences, order 4, `max_length` 27) | **0.03–0.05 s** | 1.4 s | ~70 s |
-| the 927M-sequence foundation model (same config) | **3.3 s** | 2 min | ~1.9 h |
+| models | core-seconds per pair |
+|---|---|
+| donor-sized (30k sequences, order 4, `max_length` 27) | **0.11–0.15** |
+| the 927M-sequence foundation model (same config) | ~3.3 |
 
-Measured: 36 pairs in 1.4 s at `M = 8`, 136 pairs in 4.5 s at `M = 16`.
+**Ask for the whole matrix, not its entries.** A single inner product spreads
+over the model's ~25 lengths and stops paying almost immediately — measured,
+110 ms of core time per pair at one thread, 107 ms at four, and **399 ms at
+sixteen**: 3.6× the work for 4.4× the wall clock. `log_gram_matrix()` instead
+hands one pair to each thread:
 
-The eighty-fold spread is the live fraction of the trellis, not the model size as such: a per-donor model reaches a fraction of a percent of the state space, and the sweep only visits states both members reach. Pooled models are the expensive case.
+```
+16 donors, order 4, 136 pairs
+  threads=1    19.87s   146.1 ms/pair   speedup 1.00x   efficiency 100%
+  threads=4     4.64s    34.1 ms/pair   speedup 4.28x   efficiency 107%
+  threads=16    2.65s    19.5 ms/pair   speedup 7.50x   efficiency  47%
+```
 
-There is no shortcut. `sum_i w_i P_i(s)` does not factor over edges, which is exactly why the mixture needs this machinery. Measure a single `log_inner_product` on your own models before building a Gram matrix.
+Better than the length axis at every thread count, but **not linear**: the
+sweep is memory-bandwidth bound, so one host saturates around 7–8× whichever
+axis you use. Across separate machines it does scale linearly — each has its
+own memory system — so a cohort-scale Gram matrix is a cluster job sized in
+**node-days**, not a core count on one box.
 
-`gram_matrix()` and `hill_number(q)` share one cache, so asking for both costs one set of sweeps.
+Worked, for a 38,538-repertoire cohort: 742,607,991 pairs at 0.146 core-seconds
+is **3.4 core-years**, which is ~170 days on one 16-core node and ~5 days on 32
+of them. The single-core figure is real, but it is not the wall clock.
+
+There is no shortcut. `sum_i w_i P_i(s)` does not factor over edges, and
+carrying an `M × M` accumulator per trellis state would fuse the pairs into one
+sweep with exactly the same operation count and a state vector nobody can
+afford.
+
+Two things are **not** `O(M²)` and are often billed as if they were:
+
+- `alpha_diversity(q)` is the power mean of each member's own Hill number —
+  `O(M)`, no pairs at all.
+- `entropy_bounds()` is `O(M)` — per-member entropies and `H(w)`.
 
 ## What limits `M`
 
-The mask is a `uint64_t`, so **64 members is structural**. It is not what binds
-in practice, and this was measured rather than assumed.
+**Only `q = 0`.** The union sweep carries one bit per member in a `uint64_t`,
+so 64 members is structural there. Nothing else has that bound: the inner
+product never distinguishes the members it multiplies, so `q >= 2`,
+`alpha_diversity` and `entropy_bounds` work at any size.
 
-The union sweep's cost is the number of distinct `(state, member-set)` pairs
-alive per layer — the quantity that could in principle reach `2^M`. Measured on
-donors of 6,000 sequences at order 2, `max_length` 12, varying how much the
-members disagree by giving each a random sub-alphabet:
+That was not always true. The ceiling used to sit on `Mixture` itself, so a
+256-member cohort could not be constructed at all and every quantity went with
+it — including the three that have nothing to do with the bitmask.
 
-| members drawn from | peak pairs at `M = 8` | at `M = 32` | at `M = 64` | growth per doubling of `M` |
+```python
+Mixture(models_256).hill_number(2.0)            # fine
+Mixture(models_256).alpha_diversity(2.0)        # fine
+Mixture(models_256).support_size()              # BeamValueError, naming the sweep
+Mixture(models_256).support_size(exact=False)   # bounds, free, any M
+```
+
+Within 64 members, what binds the union is the number of distinct
+`(state, member-set)` pairs alive per layer — the quantity that could in
+principle reach `2^M`. Measured on donors of 6,000 sequences at order 2,
+`max_length` 12, varying how much the members disagree:
+
+| members drawn from | peak at `M = 8` | at `M = 32` | at `M = 64` | growth per doubling |
 |---|---|---|---|---|
 | 18 of 20 residues (near-identical) | 8,860 | 34,957 | 69,628 | ×1.99 — linear |
 | 12 of 20 (moderate) | 7,024 | 28,549 | 58,733 | ×2.00 → ×2.06 |
-| 7 of 20 (strongly disjoint) | 3,105 | 25,716 | 104,037 | ×2.20 → ×4.05 — accelerating |
+| 7 of 20 (strongly disjoint) | 3,105 | 25,716 | 104,037 | ×2.20 → ×4.05 |
 
-So the `2^M` blow-up is real but slow: it only appears once the members
-genuinely disagree, and even then `M = 64` peaks near 100,000 pairs — about
-5 MB of table against a default budget of 4.29 GB. Every regime tested reaches
-the structural limit comfortably, in under a second.
+So the `2^M` blow-up is real but slow, and `M = 64` peaks near 100,000 pairs —
+about 5 MB against a default budget of 4.29 GB. `support_size()` reports the
+peak it reached in `peak_states`.
 
-**What actually runs out first is holding the models at all.** An order-4,
-`max_length` 27 donor model is ~218 MB, so 32 of them is 7 GB and a 12 GB
-ceiling refuses the 33rd during construction — long before any mixture sweep is
-reached.
-
-`support_size()` reports the peak it hit, so a caller can see where it stands
-rather than guess:
-
-```python
-s = mix.support_size()
-s.value, s.exact, s.peak_states
-```
-
-Exceeding the ceiling raises `MixtureTooLarge` rather than returning a degraded
-count. `support_size(exact=False)` returns the free bounds —
-`max_i D0(i) <= D0(union) <= sum_i D0(i)` — and does no work.
+**What runs out before any of this** is holding the models: an order-4,
+`max_length` 27 donor model is ~218 MB, so 32 of them is 7 GB.
 
 ## Refusals
 

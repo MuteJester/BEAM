@@ -323,23 +323,48 @@ class Mixture:
         """:meth:`log_inner_product` on the linear scale. Exactly 0.0 when disjoint."""
         return math.exp(self.log_inner_product(*members))
 
+    def log_gram_matrix(self) -> np.ndarray:
+        """``ln <P_i, P_j>`` for every pair, computed ONE PAIR PER THREAD.
+
+        The log scale is the useful one at cohort size: members that share no
+        sequence give ``-inf`` here and exactly ``0.0`` in
+        :meth:`gram_matrix`, and a matrix of underflowed zeros cannot be told
+        apart from one of genuine disjointness.
+
+        Symmetric to the last bit: one triangle is computed and mirrored,
+        because the sweep sums the members' edge weights in the order it is
+        handed them.
+
+        This is where the parallelism belongs. One inner product spreads over
+        the model's ~25 lengths and stops scaling at about four threads --
+        measured, 110 ms of core time per pair at one thread and 399 ms at
+        sixteen -- whereas pairs are independent, equal-sized and there are
+        ``M(M+1)/2`` of them. Asking for the whole matrix at once is therefore
+        much faster than asking for its entries: at 512 members it is minutes
+        rather than hours.
+
+        Every entry is cached, so :meth:`log_inner_product` and
+        :meth:`hill_number` are free afterwards.
+        """
+        n = self.n_members
+        try:
+            raw = _c.mixture_gram(self._caps)
+        except (ValueError, RuntimeError, MemoryError) as exc:
+            raise _translate(exc) from None
+        g = np.frombuffer(raw, dtype=np.float64).reshape(n, n).copy()
+        for i in range(n):
+            for j in range(i, n):
+                self._ip_cache[(i, j)] = float(g[i, j])
+        return g
+
     def gram_matrix(self) -> np.ndarray:
         """``G[i, j] = <P_i, P_j>``, the members' pairwise overlap.
 
-        Symmetric BY CONSTRUCTION: one triangle is computed and mirrored. The
-        kernel sums the members' edge weights in the order it is given them, so
-        computing both triangles could differ in the last bit and produce a
-        matrix that is not exactly symmetric -- a nuisance for anything that
-        eigendecomposes it.
+        The linear scale of :meth:`log_gram_matrix`, and symmetric for the same
+        reason. A pair that shares no sequence reads exactly ``0.0``; use the
+        log form if you need to tell that apart from underflow.
         """
-        n = self.n_members
-        g = np.empty((n, n), dtype=np.float64)
-        for i in range(n):
-            for j in range(i, n):
-                v = self.inner_product(i, j)
-                g[i, j] = v
-                g[j, i] = v
-        return g
+        return np.exp(self.log_gram_matrix())
 
     def _check_member(self, i: int) -> int:
         k = int(i)
@@ -390,6 +415,8 @@ class Mixture:
                 "log_power_sum is the q>=2 engine; q=0 is the support union, "
                 "see support_size()")
         n = self.n_members
+        if qi == 2:
+            return self._log_power_sum_2()
         fact = [math.factorial(k) for k in range(qi + 1)]
         terms: list[float] = []
         for combo in itertools.combinations_with_replacement(range(n), qi):
@@ -407,6 +434,31 @@ class Mixture:
         if not terms:
             return -math.inf
         return float(_logsumexp(np.array(terms, dtype=np.float64)))
+
+    def _log_power_sum_2(self) -> float:
+        """``ln sum_s pbar^2``, from the whole Gram matrix in one call.
+
+        The q-tuple loop above is correct at every order but walks the pairs
+        one at a time from Python, which at cohort size is the difference
+        between minutes and hours: it serialises the only axis that scales.
+        q = 2 is the order that is actually used, so it gets the driver that
+        hands one pair to each thread, and the arithmetic afterwards is a
+        single vectorised reduction.
+
+        The off-diagonal is doubled rather than summed twice, which is the
+        whole content of the q = 2 expansion and the easiest thing to get wrong
+        when assembling this by hand.
+        """
+        g = self.log_gram_matrix()
+        lw = self._logw
+        terms = g + lw[:, None] + lw[None, :]
+        iu = np.triu_indices(self.n_members, k=1)
+        off = terms[iu] + math.log(2.0)
+        allt = np.concatenate([np.diag(terms), off])
+        allt = allt[np.isfinite(allt)]
+        if allt.size == 0:
+            return -math.inf
+        return float(_logsumexp(allt))
 
     def hill_number(self, q: float) -> float:
         """Effective number of sequences at order ``q``. Exact, or it raises.

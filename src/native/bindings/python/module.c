@@ -73,6 +73,7 @@ static PyMethodDef module_methods[] = {
     {"log_mellin",         py_log_mellin,                    METH_VARARGS, NULL},
     {"mixture_check_shape", py_mixture_check_shape,            METH_O, NULL},
     {"mixture_inner_product", py_mixture_inner_product,        METH_VARARGS, NULL},
+    {"mixture_gram",        py_mixture_gram,                  METH_VARARGS, NULL},
     {"mixture_support_union", py_mixture_support_union,        METH_VARARGS, NULL},
     {"surprisal_moments",  py_surprisal_moments,             METH_VARARGS, NULL},
     {"surprisal_cumulants", py_surprisal_cumulants,          METH_VARARGS, NULL},

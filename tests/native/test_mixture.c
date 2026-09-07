@@ -325,17 +325,81 @@ static void test_an_unfinalized_member_is_refused(void) {
     PASS();
 }
 
-static void test_too_many_members_are_refused(void) {
+static void test_the_union_ceiling_binds_only_the_union(void) {
+    /*
+     * The 64-member bitmask is the union sweep's limit, and used to be the
+     * shape gate's too. That refused a cohort-scale mixture AT CONSTRUCTION and
+     * took every other quantity with it -- the inner product never
+     * distinguishes the members it multiplies and has no such bound. The gate
+     * now passes, the union alone refuses.
+     */
     BeamModel *m = build(TRAIN_A, WEIGHT_A, N_A, 2);
     ASSERT_MSG(m, "model did not build");
-    const BeamModel *many[BEAM_MIXTURE_MAX_MEMBERS + 1];
-    for (uint32_t i = 0; i <= BEAM_MIXTURE_MAX_MEMBERS; ++i) many[i] = m;
-    const BeamError e = beam_mixture_check_shape(many,
-                                                 BEAM_MIXTURE_MAX_MEMBERS + 1u);
-    const BeamError e0 = beam_mixture_check_shape(many, 0);
+    const uint32_t over = BEAM_MIXTURE_MAX_MEMBERS + 1u;
+    const BeamModel **many =
+        (const BeamModel **)malloc((size_t)over * sizeof(*many));
+    ASSERT_MSG(many, "allocation");
+    for (uint32_t i = 0; i < over; ++i) many[i] = m;
+
+    const BeamError shape = beam_mixture_check_shape(many, over);
+    const BeamError empty = beam_mixture_check_shape(many, 0);
+
+    double lip = 0.0, u = 0.0;
+    const BeamError prod =
+        beam_mixture_log_inner_product_by_length(many, over, NULL, &lip);
+    const BeamError uni =
+        beam_mixture_support_union_by_length(many, over, 0, NULL, &u, NULL);
+
+    free(many);
     beam_model_destroy(m);
-    ASSERT_MSG(e == BEAM_ERR_PARAM_OUT_OF_RANGE, "the 64-member bound is not enforced");
-    ASSERT_MSG(e0 == BEAM_ERR_EMPTY_INPUT, "an empty mixture was accepted");
+    ASSERT_MSG(shape == BEAM_OK, "the shape gate still enforces 64");
+    ASSERT_MSG(empty == BEAM_ERR_EMPTY_INPUT, "an empty mixture was accepted");
+    ASSERT_MSG(prod == BEAM_OK && isfinite(lip),
+               "the inner product refused a mixture larger than 64");
+    ASSERT_MSG(uni == BEAM_ERR_PARAM_OUT_OF_RANGE,
+               "the union did not enforce its own bitmask limit");
+    PASS();
+}
+
+static void test_the_gram_matrix_matches_the_pairs_one_at_a_time(void) {
+    /*
+     * The driver exists for its parallelism, so what has to be checked is that
+     * parallelism changed no answer: every entry must equal the sweep run on
+     * that pair alone, and the matrix must be symmetric to the bit rather than
+     * approximately -- one triangle is computed and mirrored precisely because
+     * the sweep sums the members' weights in the order it is handed them.
+     */
+    BeamModel *a = build(TRAIN_A, WEIGHT_A, N_A, 2);
+    BeamModel *b = build(TRAIN_B, WEIGHT_B, N_B, 2);
+    BeamModel *c = build_with_shared(TRAIN_A, WEIGHT_A, N_A, 2);
+    ASSERT_MSG(a && b && c, "a model did not build");
+    const BeamModel *v[3] = {a, b, c};
+
+    double g[9];
+    const BeamError e = beam_mixture_gram(v, 3u, g);
+    if (e != BEAM_OK) {
+        beam_model_destroy(a); beam_model_destroy(b); beam_model_destroy(c);
+        ASSERT_MSG(0, "the gram driver failed");
+    }
+    for (uint32_t i = 0; i < 3u; ++i)
+        for (uint32_t j = 0; j < 3u; ++j) {
+            const BeamModel *pair[2] = {v[i], v[j]};
+            double want = 0.0;
+            (void)beam_mixture_log_inner_product_by_length(pair, 2u, NULL, &want);
+            if (memcmp(&g[i * 3u + j], &want, sizeof want) != 0) {
+                beam_model_destroy(a); beam_model_destroy(b);
+                beam_model_destroy(c);
+                ASSERT_MSG(0, "a gram entry differs from the pair alone");
+            }
+        }
+    for (uint32_t i = 0; i < 3u; ++i)
+        for (uint32_t j = 0; j < 3u; ++j)
+            if (memcmp(&g[i * 3u + j], &g[j * 3u + i], sizeof g[0]) != 0) {
+                beam_model_destroy(a); beam_model_destroy(b);
+                beam_model_destroy(c);
+                ASSERT_MSG(0, "the gram matrix is not exactly symmetric");
+            }
+    beam_model_destroy(a); beam_model_destroy(b); beam_model_destroy(c);
     PASS();
 }
 
@@ -363,7 +427,8 @@ int main(void) {
     printf("\n[the shape gate]\n");
     RUN_TEST(test_members_of_different_shapes_are_refused);
     RUN_TEST(test_an_unfinalized_member_is_refused);
-    RUN_TEST(test_too_many_members_are_refused);
+    RUN_TEST(test_the_union_ceiling_binds_only_the_union);
+    RUN_TEST(test_the_gram_matrix_matches_the_pairs_one_at_a_time);
 
     printf("\n==============================================================\n");
     printf("Results: %d passed, %d failed\n", pass_count, fail_count);

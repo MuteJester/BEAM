@@ -73,18 +73,36 @@ extern "C" {
 #endif
 
 /**
- * Most members any entry point here accepts.
+ * Most members `beam_mixture_support_union` accepts.
  *
- * The union sweep carries one BIT per member in a `uint64_t`, so 64 is a hard
- * structural ceiling rather than a tuning choice. The inner product has no
- * such limit -- it never distinguishes the members it is multiplying -- but it
- * shares the bound so that "how many models may I pass" has one answer.
+ * The union sweep carries one BIT per member in a `uint64_t`, so this is a
+ * hard structural ceiling rather than a tuning choice. Its PRACTICAL ceiling
+ * is usually lower and is set by how many distinct bitmasks survive per state,
+ * which is data-dependent.
  *
- * The PRACTICAL ceiling for the union is far lower and is set by how many
- * distinct bitmasks survive per state, which is data-dependent; see
- * `beam_mixture_support_union`.
+ * IT APPLIES ONLY TO THE UNION. The inner product never distinguishes the
+ * members it multiplies -- it sums their edge weights into one accumulator --
+ * so it has no such limit and now enforces none.
+ *
+ * It used to. The bound was shared by both, and by `beam_mixture_check_shape`
+ * with it, so that "how many models may I pass" had one answer. That tidiness
+ * cost more than it bought: a mixture of 256 repertoires was refused AT
+ * CONSTRUCTION, and with it every quantity that has nothing to do with the
+ * bitmask -- q >= 2, the alpha diversity, the q = 1 bounds. The limit now sits
+ * on the one sweep that cannot exceed it.
  */
 #define BEAM_MIXTURE_MAX_MEMBERS 64u
+
+/**
+ * Most members any other entry point accepts.
+ *
+ * Not a structural limit; a guard against an argument that is obviously a
+ * mistake, and a bound on what the per-member scratch arrays may reach. The
+ * Gram matrix of M members is M(M+1)/2 sweeps, so anything near this ceiling
+ * is a compute-farm job rather than a call -- but that is the caller's
+ * arithmetic to do, not this library's to refuse.
+ */
+#define BEAM_MIXTURE_MAX_PRODUCT_MEMBERS 65536u
 
 /**
  * `ln sum_s prod_f P_f(s)` over every sequence of length `len`, exactly.
@@ -126,6 +144,19 @@ BeamError beam_mixture_log_inner_product(const BeamModel *const *models,
 BeamError beam_mixture_log_inner_product_by_length(
         const BeamModel *const *models, uint32_t k,
         double *out_by_length, double *out_total);
+
+/**
+ * Every pairwise log inner product, computed one pair per thread.
+ *
+ * `out` receives `k * k` doubles, row-major; `out[i * k + j]` is
+ * `ln <P_i, P_j>` and the matrix is exactly symmetric. This is the object the
+ * q = 2 quantities are built from, and the reason it exists rather than being
+ * a loop in the caller is that the parallel axis matters: a single inner
+ * product stops scaling at about four threads, while pairs scale with the
+ * machine. See the definition for the measurements.
+ */
+BeamError beam_mixture_gram(const BeamModel *const *models, uint32_t k,
+                            double *out);
 
 /**
  * Sequences of length `len` that AT LEAST ONE member can produce, exactly.

@@ -67,6 +67,7 @@ PyObject *py_prism_explain(PyObject *self, PyObject *args);
 PyObject *py_memory_budget(PyObject *self, PyObject *arg);
 PyObject *py_mixture_check_shape(PyObject *self, PyObject *arg);
 PyObject *py_mixture_inner_product(PyObject *self, PyObject *args);
+PyObject *py_mixture_gram(PyObject *self, PyObject *args);
 PyObject *py_mixture_support_union(PyObject *self, PyObject *args);
 PyObject *py_memory_bytes(PyObject *self, PyObject *arg);
 PyObject *py_n_cells(PyObject *self, PyObject *arg);

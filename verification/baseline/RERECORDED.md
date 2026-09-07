@@ -684,3 +684,37 @@ computation.
 
 The retired NUMBERS are not reused; see the note in `include/beam/errors.h` for
 why, and for the fact that the next free value is 24 rather than 5.
+
+# Why the baselines moved for the mixture scale work
+
+Re-recorded 2026-09-07, splitting the 64-member ceiling and adding a Gram
+driver that parallelises over pairs. Previous files kept as `*.prescale.txt`.
+
+  cbeam_methods.txt   +1   -0   mixture_gram
+  c_symbols.txt       +1   -0   beam_mixture_gram
+  python_api.txt      +1   -0   Mixture.log_gram_matrix
+  pytest_cases.txt   +12   -0   589 -> 601, all under tests/python/mixture/
+  c_cases.txt         +2   -1
+
+The one REMOVAL is `test_too_many_members_are_refused`, and it is a removal
+because what it asserted stopped being true on purpose. It required
+`beam_mixture_check_shape` to refuse 65 members. That gate runs for every entry
+point, so enforcing the union sweep's `uint64` bitmask there refused a
+cohort-scale mixture AT CONSTRUCTION and took q >= 2, the alpha diversity and
+the q = 1 bounds with it -- none of which involve a bitmask. Two tests replace
+it: `test_the_union_ceiling_binds_only_the_union`, which requires the gate to
+pass at 65 while the union alone refuses, and
+`test_the_gram_matrix_matches_the_pairs_one_at_a_time`.
+
+`numeric`, `exact against enumeration`, the saved-model bytes and thread
+independence are unmoved. The Gram driver runs the same sweep as
+`beam_mixture_log_inner_product`, one pair per thread instead of one at a time,
+and a C test compares every entry against that sweep run alone by `memcmp`
+rather than by tolerance.
+
+A collection error caught here is worth recording: the new tests were first
+`tests/python/mixture/test_scale.py`, which collides with
+`tests/python/analytics/test_scale.py` because the suite has no `__init__.py`
+and pytest imports by basename. The mixture group alone passed; the full suite
+would not collect. Renamed to `test_many_members.py`. Test basenames must stay
+unique across the whole tree.
