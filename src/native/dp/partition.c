@@ -214,7 +214,7 @@ BeamError beam_compute_log_z(BeamModel *m, uint32_t len, double *out) {
             for (uint32_t x = 0; x < R; ++x) {
                 const size_t t = base + x;
                 if (next[t] == 0.0) continue;
-                next[t] /= nmax;
+                next[t] = beam_rescale(next[t], nmax);
                 nxt[nnew++] = (uint32_t)t;
             }
         }

@@ -147,6 +147,9 @@ beam_query_resolve
 beam_query_work_alloc
 beam_query_work_free
 beam_raw_log_weight
+beam_rescale_flush_reset
+beam_rescale_flushes
+beam_rescale_note_flush
 beam_rng_seed
 beam_set_error
 beam_sparse_destroy
