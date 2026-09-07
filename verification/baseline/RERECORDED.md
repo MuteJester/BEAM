@@ -842,3 +842,19 @@ says the file got smaller rather than the model getting different.
 
 `pytest_cases.txt` gains the four compatibility tests; the previous list is
 kept as `pytest_cases.preformat4.txt`.
+
+---
+
+## 2026-09-08, dictionary-indexed log cells
+
+`beam_sparse_pack_cells` added, `beam_sparse_row_final` removed -- the kernels
+take a `BeamLogRow` now, because a packed table has no array of contiguous
+rows to hand back a pointer into. Five tests added. Previous pair kept as
+`*.prepack.txt`.
+
+`numeric`, `saved-model bytes`, `thread independence` and the 280 enumeration
+quantities did not move. They could not: a dictionary holds the same bit
+patterns, and what changed is which of them a lookup walks through.
+
+This one carries a real runtime cost and the commit message records it rather
+than burying it here.

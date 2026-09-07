@@ -130,6 +130,33 @@ typedef struct {
      */
     uint32_t  *pool_id;
     uint32_t   n_pool;      /* distinct payload rows; 0 when not interned    */
+
+    /**
+     * The payload as a dictionary of values rather than an array of them.
+     * NULL together when the table stores plain 20-double rows.
+     *
+     * Every value in a finalized table is `log(c / t)` for integers c <= t,
+     * and a repertoire's counts are small -- 80% of cells are at most 255 --
+     * so the reachable values are the logs of a bounded set of small
+     * rationals. Measured on real repertoires, 1,175,396 finite cells take
+     * 59,008 distinct values: 95% of the stored doubles repeat one already
+     * stored elsewhere.
+     *
+     * Row interning above collapses rows identical in ALL twenty cells. That
+     * is the same idea one level too coarse: two rows differing in a single
+     * residue share nineteen values and it catches neither. The numbers above
+     * are what remains AFTER it runs.
+     *
+     * So: one bit per residue saying whether the cell exists, a two-byte
+     * index per existing cell, and the distinct values once each. Exact --
+     * the dictionary holds the same bit patterns -- and 5.35x smaller.
+     */
+    uint32_t  *cell_mask;   /* [n_cell_rows] residue presence, bit per x     */
+    uint32_t  *cell_start;  /* [n_cell_rows + 1] first index of each row     */
+    uint16_t  *cell_index;  /* [cell_start[n]] positions in `dict`           */
+    double    *dict;        /* [n_dict] the distinct values, once each       */
+    uint32_t   n_dict;
+    uint32_t   n_cell_rows; /* payload rows the three arrays above describe  */
     /**
      * `values[0]` cached, for the read-only lookup below. Maintained wherever
      * `values[0]` is assigned, and NULL on a mutable table -- which is what
@@ -194,8 +221,100 @@ BeamError beam_sparse_seal_rank(BeamSparseRows *t);
  * the indirection, or when the table cannot be interned at all.
  */
 BeamError beam_sparse_intern_rows(BeamSparseRows *t);
+/**
+ * Replace a finalized table's plain rows with mask-and-dictionary cells.
+ *
+ * Exact: the dictionary stores the same bit patterns, so every value handed
+ * back is the one that was there. Declines -- reporting OK -- when the table
+ * cannot take it or the value set is too large for a two-byte index, which is
+ * how a corpus with many distinct counts keeps the plain rows it is better
+ * served by.
+ */
+BeamError beam_sparse_pack_cells(BeamSparseRows *t);
+
+/** The most distinct values a packed table may hold, so an index is two bytes. */
+#define BEAM_PACK_MAX_DICT 65536u
 uint64_t beam_sparse_memory_bytes(const BeamSparseRows *t);
 uint64_t beam_sparse_n_rows(const BeamSparseRows *t);
+
+/**
+ * A finalized row, in whichever form the table holds it.
+ *
+ * The kernels used to take a `const double *` and index it, which only a
+ * table of contiguous twenty-double rows can supply. A packed table has no
+ * such array to point at, so what they take now is this: either that pointer,
+ * or the three things a packed row needs to answer the same question.
+ *
+ * `dense` is the discriminator and it is uniform for the life of a table, so
+ * the branch in `beam_log_cell` is the same way every time it is reached in a
+ * given run -- which is the only reason it is acceptable in that loop.
+ */
+typedef struct {
+    const double   *dense;   /* stride contiguous doubles, or NULL if packed */
+    const uint16_t *index;   /* this row's dictionary positions, if packed   */
+    const double   *dict;
+    uint32_t        mask;    /* residues present, if packed                  */
+    bool            present; /* false when the table holds no such row       */
+} BeamLogRow;
+
+/**
+ * All `stride` residues of `r` at once.
+ *
+ * The forward kernel wants a whole row, and asking `beam_log_cell` for each
+ * residue would rank the same mask twenty times. A packed row's indices are
+ * stored in ascending residue order, so one walk does it with no popcount at
+ * all.
+ */
+static inline void beam_log_row_into(const BeamLogRow *r, uint32_t stride,
+                                     double *out) {
+    if (r->dense) {
+        for (uint32_t x = 0; x < stride; ++x) out[x] = r->dense[x];
+        return;
+    }
+    const uint16_t *ix = r->index;
+    const uint32_t mask = r->mask;
+    for (uint32_t x = 0; x < stride; ++x)
+        out[x] = ((mask >> x) & 1u) ? r->dict[*ix++] : -INFINITY;
+}
+
+/** Residue `x` of `r`, or `-INFINITY` when this row never emitted it. */
+static inline double beam_log_cell(const BeamLogRow *r, uint32_t x) {
+    if (r->dense) return r->dense[x];
+    if (!((r->mask >> x) & 1u)) return -INFINITY;
+    return r->dict[r->index[__builtin_popcount(r->mask & ((1u << x) - 1u))]];
+}
+
+/**
+ * One cell of a packed payload row, or `-INFINITY` when it is absent.
+ *
+ * `slot` is a payload row -- what the directory returns, after any pool
+ * mapping. Used where the caller wants a single residue rather than a row,
+ * which is what the backward half of the edge kernel does: it reads one
+ * residue from each of twenty different wide rows, and today drags 160 bytes
+ * through the cache to use eight of them.
+ */
+static inline double beam_sparse_cell(const BeamSparseRows *t, uint32_t slot,
+                                      uint32_t x) {
+    const uint32_t mask = t->cell_mask[slot];
+    if (!((mask >> x) & 1u)) return -INFINITY;
+    const uint32_t at = t->cell_start[slot]
+                      + (uint32_t)__builtin_popcount(mask & ((1u << x) - 1u));
+    return t->dict[t->cell_index[at]];
+}
+
+/**
+ * A whole packed row, expanded into `out` (`stride` doubles).
+ *
+ * The indices of a row are stored in ascending residue order, so this walks
+ * them once rather than computing a rank per residue.
+ */
+static inline void beam_sparse_row_into(const BeamSparseRows *t, uint32_t slot,
+                                        uint32_t stride, double *out) {
+    const uint32_t mask = t->cell_mask[slot];
+    const uint16_t *ix = t->cell_index + t->cell_start[slot];
+    for (uint32_t x = 0; x < stride; ++x)
+        out[x] = ((mask >> x) & 1u) ? t->dict[*ix++] : -INFINITY;
+}
 
 /**
  * Does this table hold `row`? Answered by whichever directory it carries.
@@ -217,51 +336,40 @@ static inline bool beam_sparse_present(const BeamSparseRows *t, uint32_t row) {
 }
 
 /**
- * A finalized table's row, without the validation `beam_sparse_row` performs.
- *
- * That function is written for BOTH generations, so it re-establishes on every
- * call what only a mutable table can violate: seven null and range tests, a
- * `double **` indirection, and two loads from one-element `size` and
- * `capacity` arrays. A finalized table is immutable, has exactly one partition
- * (`beam_sparse_init` refuses any other), and has `capacity == size` after
- * `beam_sparse_shrink`, so not one of those tests can fail -- and this is the
- * innermost lookup of every dynamic program in the library, so re-proving it
- * tens of millions of times per analytic is most of what the lookup costs.
- * Measured at 1.53-2.26x on the directory and 1.03-1.40x on the whole layer
- * kernel, for the identical bytes.
- *
- * `values0` is NULL on a mutable table, so the fallback is not a convenience:
- * it is what keeps a caller that reaches here with the wrong table generation
- * correct rather than fast and wrong.
- *
- * The caller guarantees `row < n_dense_rows`, which every `beam_lp_*_row`
- * addressing helper does by construction. A table holding no rows at all has
- * every index entry MISSING, so `values0` is never dereferenced when it would
- * be NULL for that reason.
+ * `beam_sparse_row_final` as a reference rather than a pointer, so a packed
+ * table can answer it too. Same directory work; only what it hands back
+ * differs.
  */
-static inline const double *beam_sparse_row_final(const BeamSparseRows *t,
-                                                      uint32_t row) {
-    if (!t->values0) return beam_sparse_row(t, row, 0u);
+static inline BeamLogRow beam_sparse_log_row(const BeamSparseRows *t,
+                                             uint32_t row) {
+    BeamLogRow r = { NULL, NULL, NULL, 0u, false };
     uint32_t slot;
     if (t->rank) {
-        /* One block is 40 bytes and the whole directory is about a megabyte,
-         * so this lands in cache where the 28 MiB direct array does not --
-         * which is why the extra popcount is not the cost it looks like. */
         const BeamRankBlock *b = &t->rank[row >> 8];
         const uint32_t ofs  = row & 255u;
         const uint32_t w    = ofs >> 6;
         const uint64_t word = b->bits[w];
         const uint64_t bit  = 1ull << (ofs & 63u);
-        if (!(word & bit)) return NULL;
+        if (!(word & bit)) return r;
         const uint32_t sub = w ? ((b->sub >> (9u * (w - 1u))) & 511u) : 0u;
         slot = b->rank + sub
              + (uint32_t)__builtin_popcountll(word & (bit - 1ull));
     } else {
+        if (!t->index) return r;
         slot = t->index[row];
-        if (slot == BEAM_ROW_MISSING) return NULL;
+        if (slot == BEAM_ROW_MISSING) return r;
     }
     if (t->pool_id) slot = t->pool_id[slot];
-    return t->values0 + (size_t)slot * t->stride;
+    r.present = true;
+    if (t->cell_mask) {
+        r.mask  = t->cell_mask[slot];
+        r.index = t->cell_index + t->cell_start[slot];
+        r.dict  = t->dict;
+    } else {
+        r.dense = t->values0 + (size_t)slot * t->stride;
+    }
+    return r;
 }
+
 
 #endif /* BEAM_INTERNAL_SPARSE_ROWS_H */

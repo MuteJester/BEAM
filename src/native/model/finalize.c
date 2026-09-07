@@ -365,7 +365,23 @@ static BeamError finalize_sparse_table(BeamModel *m, uint32_t dir,
      * it points several slots at one row. Ordered the other way the seal
      * would refuse, correctly, and the directory would stay 28.19 MiB.
      */
-    return beam_sparse_intern_rows(out);
+    const BeamError ie = beam_sparse_intern_rows(out);
+    if (ie != BEAM_OK) return ie;
+
+    /*
+     * Finally, replace the values themselves with indices into the distinct
+     * ones. Every cell here is `log(c / t)` for integers c <= t, and a
+     * repertoire's counts are small, so after interning has removed the
+     * repeated ROWS, 95% of the remaining cells are still a value stored
+     * somewhere else: 1,175,396 cells take 59,008 distinct values on a
+     * 197,139-sequence donor.
+     *
+     * Last, because it is the step that gives up the contiguous twenty-double
+     * row. Sealing and interning both still address rows; from here on a row
+     * is a mask and a run of indices, and `beam_sparse_log_row` is what hands
+     * either form to a caller.
+     */
+    return beam_sparse_pack_cells(out);
 }
 
 static BeamError finalize_sparse_direction(BeamModel *m, uint32_t dir) {

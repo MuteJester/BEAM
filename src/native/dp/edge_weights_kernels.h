@@ -171,10 +171,10 @@ static inline void BEAM_KFN(state_weights_sparse)(const BeamModel *m, uint32_t i
     const uint32_t n3 = m->n_ctx_mid;
     const uint32_t nw = m->n_ctx_wide;
 
-    const double *fw = beam_lp_wide_row(m, BEAM_FWD, i, s % nw);
-    const double *fm = beam_lp_mid_row(m, BEAM_FWD, i, s % n3);
-    const double *fl = beam_lp_len_row(m, BEAM_FWD, len, i, s % n2);
-    if (!fw || !fm || !fl) {
+    const BeamLogRow fw = beam_lp_wide_row(m, BEAM_FWD, i, s % nw);
+    const BeamLogRow fm = beam_lp_mid_row(m, BEAM_FWD, i, s % n3);
+    const BeamLogRow fl = beam_lp_len_row(m, BEAM_FWD, len, i, s % n2);
+    if (!fw.present || !fm.present || !fl.present) {
         for (uint32_t x = 0; x < R; ++x) row[x] = -INFINITY;
     } else {
         /*
@@ -190,8 +190,16 @@ static inline void BEAM_KFN(state_weights_sparse)(const BeamModel *m, uint32_t i
          * order-3 strict model. The sparse BACKWARD half below was already
          * guarded, and that asymmetry is what gave this away.
          */
+        /* Decoded once each rather than ranked per residue: this loop reads
+         * every cell of all three rows, and a packed row's indices are in
+         * residue order, so one walk beats twenty popcounts. */
+        double fwv[BEAM_MAX_RESIDUES], fmv[BEAM_MAX_RESIDUES],
+               flv[BEAM_MAX_RESIDUES];
+        beam_log_row_into(&fw, R, fwv);
+        beam_log_row_into(&fm, R, fmv);
+        beam_log_row_into(&fl, R, flv);
         for (uint32_t x = 0; x < R; ++x) {
-            const double f = mix_values(m, fw[x], fm[x], fl[x]);
+            const double f = mix_values(m, fwv[x], fmv[x], flv[x]);
             row[x] = (f == -INFINITY) ? -INFINITY : m->cfg.weight_forward * f;
         }
     }
@@ -248,9 +256,9 @@ static inline void BEAM_KFN(state_weights_sparse)(const BeamModel *m, uint32_t i
     if (K > 3u && m->order == K) {
         const uint32_t cm = beam_ctx_backward_from_state(s, 0u, K, 3u, A);
         const uint32_t cl = beam_ctx_backward_from_state(s, 0u, K, 2u, A);
-        const double *bm = beam_lp_mid_row(m, BEAM_BWD, r, cm);
-        const double *bl = beam_lp_len_row(m, BEAM_BWD, len, r, cl);
-        if (!bm || !bl) {
+        const BeamLogRow bm = beam_lp_mid_row(m, BEAM_BWD, r, cm);
+        const BeamLogRow bl = beam_lp_len_row(m, BEAM_BWD, len, r, cl);
+        if (!bm.present || !bl.present) {
             for (uint32_t x = 0; x < R; ++x) row[x] = -INFINITY;
             return;
         }
@@ -258,9 +266,11 @@ static inline void BEAM_KFN(state_weights_sparse)(const BeamModel *m, uint32_t i
             s, 0u, m->state_shift, K, m->order, A);
         for (uint32_t x = 0; x < R; ++x) {
             if (row[x] == -INFINITY) continue;
-            const double *bw = beam_lp_wide_row(m, BEAM_BWD, r, cw0 + x);
-            const double b = !bw ? -INFINITY
-                           : mix_values(m, bw[scored], bm[scored], bl[scored]);
+            const BeamLogRow bw = beam_lp_wide_row(m, BEAM_BWD, r, cw0 + x);
+            const double b = !bw.present ? -INFINITY
+                           : mix_values(m, beam_log_cell(&bw, scored),
+                                        beam_log_cell(&bm, scored),
+                                        beam_log_cell(&bl, scored));
             row[x] = (b == -INFINITY) ? -INFINITY
                                       : row[x] + m->cfg.weight_backward * b;
         }
@@ -273,12 +283,14 @@ static inline void BEAM_KFN(state_weights_sparse)(const BeamModel *m, uint32_t i
             s, x, m->state_shift, K, m->order, A);
         const uint32_t cm = beam_ctx_backward_from_state(s, x, K, 3u, A);
         const uint32_t cl = beam_ctx_backward_from_state(s, x, K, 2u, A);
-        const double *bw = beam_lp_wide_row(m, BEAM_BWD, r, cw);
-        const double *bm = beam_lp_mid_row(m, BEAM_BWD, r, cm);
-        const double *bl = beam_lp_len_row(m, BEAM_BWD, len, r, cl);
-        const double b = (!bw || !bm || !bl)
+        const BeamLogRow bw = beam_lp_wide_row(m, BEAM_BWD, r, cw);
+        const BeamLogRow bm = beam_lp_mid_row(m, BEAM_BWD, r, cm);
+        const BeamLogRow bl = beam_lp_len_row(m, BEAM_BWD, len, r, cl);
+        const double b = (!bw.present || !bm.present || !bl.present)
                        ? -INFINITY
-                       : mix_values(m, bw[scored], bm[scored], bl[scored]);
+                       : mix_values(m, beam_log_cell(&bw, scored),
+                                    beam_log_cell(&bm, scored),
+                                    beam_log_cell(&bl, scored));
         row[x] = (b == -INFINITY) ? -INFINITY
                                   : row[x] + m->cfg.weight_backward * b;
     }
@@ -446,7 +458,7 @@ static void BEAM_KFN(layer_weights_live)(const BeamModel *m, uint32_t i, uint32_
                  * no such row, which is why this is worth 3.4x there -- and
                  * it writes the identical bytes, so the outputs do not move.
                  */
-                if (!beam_lp_wide_row(m, BEAM_FWD, i, s % nw_fwd)) {
+                if (!beam_lp_wide_row(m, BEAM_FWD, i, s % nw_fwd).present) {
                     for (uint32_t x = 0; x < R; ++x) row[x] = -INFINITY;
                     continue;
                 }

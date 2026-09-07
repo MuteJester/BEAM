@@ -198,6 +198,7 @@ void beam_sparse_destroy(BeamSparseRows *t) {
     free(t->index);
     free(t->rank);
     free(t->pool_id);
+    free(t->cell_mask); free(t->cell_start); free(t->cell_index); free(t->dict);
     free(t->values);
     free(t->row_ids);
     free(t->size);
@@ -596,6 +597,18 @@ uint64_t beam_sparse_memory_bytes(const BeamSparseRows *t) {
         bytes = sparse_add_saturating(
             bytes, sparse_mul_saturating(beam_rank_blocks(t->n_dense_rows),
                                          sizeof(*t->rank)));
+    if (t->cell_mask) {
+        bytes = sparse_add_saturating(
+            bytes, sparse_mul_saturating(t->n_cell_rows, sizeof(*t->cell_mask)));
+        bytes = sparse_add_saturating(
+            bytes, sparse_mul_saturating((uint64_t)t->n_cell_rows + 1u,
+                                         sizeof(*t->cell_start)));
+        bytes = sparse_add_saturating(
+            bytes, sparse_mul_saturating(t->cell_start[t->n_cell_rows],
+                                         sizeof(*t->cell_index)));
+        bytes = sparse_add_saturating(
+            bytes, sparse_mul_saturating(t->n_dict, sizeof(*t->dict)));
+    }
     if (t->values)
         bytes = sparse_add_saturating(
             bytes, sparse_mul_saturating(t->n_parts, sizeof(*t->values)));

@@ -76,4 +76,5 @@ src/native/query/posterior.c
 src/native/query/product.c
 
 src/native/storage/frozen_counts.c
+src/native/storage/packed_rows.c
 src/native/storage/sparse_rows.c

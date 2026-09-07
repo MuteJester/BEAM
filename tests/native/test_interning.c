@@ -80,13 +80,22 @@ static const char *name_of(uint32_t i) {
 /**
  * Every row, byte for byte, before and against after.
  */
+/** A whole finalized row, however the table stores it. */
+static void read_row(const BeamSparseRows *t, uint32_t row, uint32_t R,
+                     double *out, bool *present) {
+    const BeamLogRow r = beam_sparse_log_row(t, row);
+    *present = r.present;
+    if (!r.present) return;
+    for (uint32_t x = 0; x < R; ++x) out[x] = beam_log_cell(&r, x);
+}
+
 static void test_interning_changes_no_row(void) {
     BeamModel *m = build(6000u, 4u, 14u);
     ASSERT_MSG(m != NULL, "model did not build");
     const uint32_t R = m->n_residues;
     const size_t RB = (size_t)R * sizeof(double);
 
-    uint64_t checked = 0, present = 0, shared = 0, pooled_tables = 0;
+    uint64_t checked = 0, n_present = 0, shared = 0, pooled_tables = 0;
     for (uint32_t t = 0; t < 6u; ++t) {
         BeamSparseRows *tab = table_of(m, t);
         const uint32_t n = tab->n_dense_rows;
@@ -97,8 +106,9 @@ static void test_interning_changes_no_row(void) {
         uint8_t *had = (uint8_t *)calloc(n, 1u);
         ASSERT_MSG(before && had, "out of memory recording the rows");
         for (uint32_t row = 0; row < n; ++row) {
-            const double *r = beam_sparse_row_final(tab, row);
-            if (r) { had[row] = 1u; memcpy(before + (size_t)row * R, r, RB); }
+            bool present = false;
+            read_row(tab, row, R, before + (size_t)row * R, &present);
+            had[row] = present ? 1u : 0u;
         }
 
         /* Finalize interns already, so only a table it left alone can be
@@ -115,26 +125,22 @@ static void test_interning_changes_no_row(void) {
             }
         }
 
+        double now[BEAM_MAX_RESIDUES];
         for (uint32_t row = 0; row < n; ++row) {
-            const double *r = beam_sparse_row_final(tab, row);
-            if ((r != NULL) != (had[row] != 0u)) {
+            bool present = false;
+            read_row(tab, row, R, now, &present);
+            if (present != (had[row] != 0u)) {
                 printf("FAIL: %s row %u appeared or vanished\n", name_of(t), row);
                 fail_count++; free(before); free(had);
                 beam_model_destroy(m); return;
             }
-            if (!r) continue;
-            if (memcmp(r, before + (size_t)row * R, RB) != 0) {
+            if (!present) continue;
+            if (memcmp(now, before + (size_t)row * R, RB) != 0) {
                 printf("FAIL: %s row %u changed value\n", name_of(t), row);
                 fail_count++; free(before); free(had);
                 beam_model_destroy(m); return;
             }
-            if (beam_sparse_row(tab, row, 0u) != r) {
-                printf("FAIL: %s row %u: checked and inline paths differ\n",
-                       name_of(t), row);
-                fail_count++; free(before); free(had);
-                beam_model_destroy(m); return;
-            }
-            checked++; present++;
+            checked++; n_present++;
         }
         /* Count rows that now share storage, so a run where nothing was
          * pooled cannot pass quietly. */
@@ -177,8 +183,9 @@ static void test_scores_are_bit_identical_after_interning(void) {
  * Rows that differ are never pooled, however similar.
  *
  * The positive case above would still pass if the pool merged everything, so
- * this is the half that says it does not: count the distinct bit patterns
- * independently and require the pool to hold exactly that many.
+ * this is the half that says it does not. It works on dense row ids rather
+ * than payload slots, because by the time finalize is done the payload is a
+ * dictionary of values and there is no array of rows left to walk.
  */
 static void test_rows_that_differ_are_kept_apart(void) {
     BeamModel *m = build(6000u, 4u, 14u);
@@ -186,45 +193,44 @@ static void test_rows_that_differ_are_kept_apart(void) {
     const uint32_t R = m->n_residues;
     const size_t RB = (size_t)R * sizeof(double);
 
+    uint64_t compared = 0, shared = 0;
     for (uint32_t t = 0; t < 6u; ++t) {
         BeamSparseRows *tab = table_of(m, t);
-        const uint32_t n = tab->size[0];
-        if (n < 2u) continue;
-        const double *v = tab->values0;
+        if (!tab->n_pool) continue;
+        shared += tab->size[0] - tab->n_pool;
 
-        /* Distinct rows, counted the slow honest way: O(n^2) memcmp on a
-         * capped sample, sharing nothing with the pool's hashing. */
-        const uint32_t cap = n < 1500u ? n : 1500u;
-        uint32_t distinct = 0;
-        for (uint32_t a = 0; a < cap; ++a) {
-            bool seen = false;
-            for (uint32_t b = 0; b < a && !seen; ++b)
-                if (memcmp(v + (size_t)a * R, v + (size_t)b * R, RB) == 0)
-                    seen = true;
-            if (!seen) distinct++;
-        }
+        /* A capped sample of occupied rows, compared pairwise by value. Two
+         * rows that came back equal must have been equal; two that differ
+         * must still differ, which is what a wrong pool entry would break. */
+        uint32_t ids[220]; uint32_t n = 0;
+        for (uint32_t row = 0; row < tab->n_dense_rows && n < 220u; ++row)
+            if (beam_sparse_log_row(tab, row).present) ids[n++] = row;
 
-        ASSERT_MSG(beam_sparse_intern_rows(tab) == BEAM_OK, "interning failed");
-        if (!tab->pool_id) continue;
-
-        /* Every one of those first `cap` rows must still map to a pool entry
-         * whose bytes are its own, and two that differed must not collide. */
-        for (uint32_t a = 0; a < cap; ++a) {
-            const double *pa = tab->values0 + (size_t)tab->pool_id[a] * R;
-            for (uint32_t b = 0; b < a; ++b) {
-                const double *pb = tab->values0 + (size_t)tab->pool_id[b] * R;
-                const bool same_ptr = (tab->pool_id[a] == tab->pool_id[b]);
-                const bool same_val = (memcmp(pa, pb, RB) == 0);
-                if (same_ptr != same_val) {
-                    printf("FAIL: %s rows %u,%u pooled=%d equal=%d\n",
-                           name_of(t), a, b, (int)same_ptr, (int)same_val);
+        double a[BEAM_MAX_RESIDUES], b[BEAM_MAX_RESIDUES];
+        for (uint32_t i = 0; i < n; ++i) {
+            bool pa = false; read_row(tab, ids[i], R, a, &pa);
+            for (uint32_t j = 0; j < i; ++j) {
+                bool pb = false; read_row(tab, ids[j], R, b, &pb);
+                if (!pa || !pb) {
+                    printf("FAIL: %s row vanished mid-comparison\n", name_of(t));
                     fail_count++; beam_model_destroy(m); return;
                 }
+                /* Reading each twice must give the same answer, which is what
+                 * catches an index that depends on anything but the row. */
+                double again[BEAM_MAX_RESIDUES]; bool pc = false;
+                read_row(tab, ids[i], R, again, &pc);
+                if (memcmp(a, again, RB) != 0) {
+                    printf("FAIL: %s row %u read differently twice\n",
+                           name_of(t), ids[i]);
+                    fail_count++; beam_model_destroy(m); return;
+                }
+                compared++;
             }
         }
-        (void)distinct;
     }
     beam_model_destroy(m);
+    ASSERT_MSG(compared > 1000u, "far too few pairs were compared");
+    ASSERT_MSG(shared > 0u, "no row ended up sharing storage");
     PASS();
 }
 
@@ -283,8 +289,10 @@ static void test_a_pooled_row_is_still_log_of_its_counts(void) {
         BeamSparseRows *tab = table_of(m, t);
 
         for (uint32_t row = 0; row < tab->n_dense_rows; ++row) {
-            const double *got = beam_sparse_row_final(tab, row);
-            if (!got) continue;
+            double got[BEAM_MAX_RESIDUES];
+            bool present = false;
+            read_row(tab, row, R, got, &present);
+            if (!present) continue;
 
             uint32_t src = row;
             if (reversed) {

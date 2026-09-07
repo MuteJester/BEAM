@@ -148,6 +148,15 @@ static void test_finalize_picks_the_representation_per_table(void) {
 /**
  * The whole point, stated exhaustively: sealing changes no answer.
  */
+/** A whole finalized row, however the table stores it. */
+static void read_row(const BeamSparseRows *t, uint32_t row, uint32_t R,
+                     double *out, bool *present) {
+    const BeamLogRow r = beam_sparse_log_row(t, row);
+    *present = r.present;
+    if (!r.present) return;
+    for (uint32_t x = 0; x < R; ++x) out[x] = beam_log_cell(&r, x);
+}
+
 static void test_sealing_changes_no_row(void) {
     uint64_t rows_checked = 0, rows_present = 0;
     uint32_t transitions = 0;
@@ -163,10 +172,12 @@ static void test_sealing_changes_no_row(void) {
         const uint32_t n = tab->n_dense_rows;
 
         /* Record what the direct directory says for every row. */
-        const double **before = (const double **)malloc((size_t)n * sizeof(double *));
-        ASSERT_MSG(before != NULL, "out of memory recording the direct answers");
+        const uint32_t R = m->n_residues;
+        double *before = (double *)malloc((size_t)n * R * sizeof(double));
+        bool *had = (bool *)calloc(n, sizeof(bool));
+        ASSERT_MSG(before && had, "out of memory recording the direct answers");
         for (uint32_t row = 0; row < n; ++row)
-            before[row] = beam_sparse_row_final(tab, row);
+            read_row(tab, row, R, before + (size_t)row * R, &had[row]);
 
         /*
          * Finalize has already applied both steps, so only a table it left
@@ -180,43 +191,46 @@ static void test_sealing_changes_no_row(void) {
         const BeamError e = beam_sparse_seal_rank(tab);
         if (e != BEAM_OK) {
             printf("FAIL: %s did not seal (%d)\n", name_of(t), (int)e);
-            fail_count++; free(before); beam_model_destroy(m); return;
+            fail_count++; free(before); free(had); beam_model_destroy(m); return;
         }
         if (sealable) {
             transitions++;
             if (tab->index != NULL || tab->rank == NULL) {
                 printf("FAIL: %s stayed direct after a seal that should fire\n",
                        name_of(t));
-                fail_count++; free(before); beam_model_destroy(m); return;
+                fail_count++; free(before); free(had); beam_model_destroy(m); return;
             }
             if (beam_sparse_memory_bytes(tab) >= bytes_before) {
                 printf("FAIL: %s got no smaller (%llu -> %llu)\n", name_of(t),
                        (unsigned long long)bytes_before,
                        (unsigned long long)beam_sparse_memory_bytes(tab));
-                fail_count++; free(before); beam_model_destroy(m); return;
+                fail_count++; free(before); free(had); beam_model_destroy(m); return;
             }
         } else if (tab->n_pool != 0u && tab->index != NULL && tab->rank != NULL) {
             printf("FAIL: %s is both sealed and folded\n", name_of(t));
-            fail_count++; free(before); beam_model_destroy(m); return;
+            fail_count++; free(before); free(had); beam_model_destroy(m); return;
         }
 
+        double now[BEAM_MAX_RESIDUES];
         for (uint32_t row = 0; row < n; ++row) {
-            const double *now = beam_sparse_row_final(tab, row);
-            if (now != before[row]) {
-                printf("FAIL: %s row %u: %p -> %p\n", name_of(t), row,
-                       (const void *)before[row], (const void *)now);
-                fail_count++; free(before); beam_model_destroy(m); return;
+            bool present = false;
+            read_row(tab, row, R, now, &present);
+            if (present != had[row]) {
+                printf("FAIL: %s row %u appeared or vanished\n", name_of(t), row);
+                fail_count++; free(before); free(had);
+                beam_model_destroy(m); return;
             }
-            /* And the validating path must agree with the inline one. */
-            if (beam_sparse_row(tab, row, 0u) != now) {
-                printf("FAIL: %s row %u: checked and inline paths differ\n",
-                       name_of(t), row);
-                fail_count++; free(before); beam_model_destroy(m); return;
+            if (present
+                && memcmp(now, before + (size_t)row * R,
+                          (size_t)R * sizeof(double)) != 0) {
+                printf("FAIL: %s row %u changed value\n", name_of(t), row);
+                fail_count++; free(before); free(had);
+                beam_model_destroy(m); return;
             }
             rows_checked++;
-            if (now) rows_present++;
+            if (present) rows_present++;
         }
-        free(before);
+        free(before); free(had);
     }
     beam_model_destroy(m);
     }
