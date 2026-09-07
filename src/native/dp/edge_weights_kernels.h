@@ -335,35 +335,45 @@ static double BEAM_KFN(layer_max)(const BeamModel *m, uint32_t i, uint32_t len) 
         return hi;
     }
 
-    uint32_t n_rows = 0;
-    const uint32_t *rows =
-        beam_sparse_rows(&m->sp_lp_wide[BEAM_FWD], 0u, &n_rows);
-    if (!rows) return -INFINITY;
-
-    /* Rows carry the depth bucket in their high digits; only this layer's
-     * bucket can contribute. The map is ascending, so the bucket is a
-     * contiguous run, but a scan is already proportional to the occupied
-     * rows and costs nothing worth a binary search. */
+    /*
+     * Rows carry the depth bucket in their high digits, so this layer's rows
+     * are exactly the directory slice [want * nw, (want + 1) * nw). Walking
+     * the slice reaches the same rows in the same ascending order as filtering
+     * the whole slot -> row map did, and visits n_ctx_wide entries instead of
+     * every occupied row in the table -- 194,481 rather than 1,846,623 on the
+     * foundation, at any depth.
+     *
+     * That map was this function's only reader anywhere in the library, so
+     * reading the directory instead is also what lets a finalized table stop
+     * carrying one. The values are pinned in tests/native/test_layer_max.c
+     * against the DEFINITION -- every state, no shortcut -- rather than
+     * against whichever row source came before.
+     */
+    const BeamSparseRows *fw = &m->sp_lp_wide[BEAM_FWD];
     const uint32_t want = beam_depth_part(m, i);
+    const uint32_t base = want * nw;
+    if ((!fw->index && !fw->rank)
+        || (uint64_t)base + nw > (uint64_t)fw->n_dense_rows)
+        return -INFINITY;
+
     const uint32_t stride = S / nw;      /* 1 when order == state_order */
 
     double hi = -INFINITY;
 #ifdef _OPENMP
     #pragma omp parallel for schedule(static) reduction(max:hi) \
-            num_threads(beam_threads()) if(n_rows > 4096)
+            num_threads(beam_threads()) if(nw > 4096)
 #endif
-    for (int64_t k = 0; k < (int64_t)n_rows; ++k) {
-        const uint32_t row = rows[k];
-        if (row / nw != want) continue;
-        const uint32_t ctx = row % nw;
+    for (int64_t c = 0; c < (int64_t)nw; ++c) {
+        if (!beam_sparse_present(fw, base + (uint32_t)c)) continue;
+        const uint32_t ctx = (uint32_t)c;
         double buf[BEAM_MAX_RESIDUES];
         /* One wide context can back several states when the state carries
          * more residues than the wide expert's order. */
         for (uint32_t rep = 0; rep < stride; ++rep) {
             const uint32_t st = rep * nw + ctx;
             if (st >= S) break;
-            /* These states came FROM the occupied row map, so the forward
-             * wide row is present by construction; no probe needed here. */
+            /* The directory just said this row is present, so the sparse
+             * scorer needs no probe of its own here. */
             BEAM_KFN(state_weights_sparse)(m, i, len, st, settle_back, r, buf);
             for (uint32_t x = 0; x < R; ++x) if (buf[x] > hi) hi = buf[x];
         }

@@ -718,3 +718,46 @@ A collection error caught here is worth recording: the new tests were first
 and pytest imports by basename. The mixture group alone passed; the full suite
 would not collect. Renamed to `test_many_members.py`. Test basenames must stay
 unique across the whole tree.
+
+---
+
+## 2026-09-07, the occupancy-selected row directory
+
+Re-recorded `c_symbols.txt` and `c_cases.txt` on branch `memory-optimization`.
+The previous files are kept beside them as `c_symbols.prerank.txt` and
+`c_cases.prerank.txt`.
+
+**Nothing numeric moved.** `numeric` (78 hex-float keys over order 2/3/4 x
+open/strict), `saved-model bytes`, `thread independence` and `exact against
+enumeration` (280 quantities) all matched without being touched, which is the
+point: this work changes how a row is FOUND, never what it contains.
+
+Two differences, both intended:
+
+1. `beam_sparse_rows` removed, `beam_sparse_seal_rank` added.
+
+   `beam_sparse_rows` listed a table's occupied rows. Exactly one caller ever
+   used it -- `beam_layer_max`, on one of the six finalized tables -- and it
+   now reads the directory slice for the depth bucket it wants instead, which
+   reaches the same rows in the same order. With its last reader gone the
+   accessor was deleted and finalized tables stopped carrying the slot -> row
+   map it returned (16.32 MiB on the foundation).
+
+   `beam_sparse_seal_rank` replaces a finalized table's uint32-per-dense-row
+   directory with a bitmap-and-rank one when at most one row in eight is
+   occupied. Both are declared only under `src/native/internal/`; neither is
+   public API.
+
+2. Fifteen tests added, none replacing anything, in three new files:
+
+   - `test_layer_max.c` (5) pins `beam_layer_max` against its DEFINITION --
+     every state, no shortcut -- rather than against whichever row source it
+     happens to use, so the source can change again without the test moving.
+   - `test_live_alias.c` (4) covers `live[i]` now aliasing `reached[i]` where
+     the two lists are equal: that the alias is taken exactly then, that the
+     byte accounting stops charging for it, and that dropping the cache frees
+     each list once. Checked under ASan/UBSan via `verification/bounded-rss`.
+   - `test_rank_directory.c` (6) requires a sealed directory to return the
+     same NULL or the same row pointer as the direct one for EVERY dense row
+     of every table, that finalize applies the threshold per table, and that a
+     table numbered out of order is refused rather than silently mis-sealed.

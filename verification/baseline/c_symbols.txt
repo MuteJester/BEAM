@@ -62,12 +62,12 @@ beam_model_log_pseq_batch
 beam_model_memory_budget
 beam_model_memory_bytes
 beam_model_n_cells
+beam_model_new
 beam_model_n_nonzero_cells
 beam_model_n_observed
 beam_model_n_residues
 beam_model_n_skipped
 beam_model_n_states
-beam_model_new
 beam_model_observe
 beam_model_path_count
 beam_model_path_count_total
@@ -145,8 +145,8 @@ beam_query_resolve
 beam_query_work_alloc
 beam_query_work_free
 beam_raw_log_weight
-beam_rescale_flush_reset
 beam_rescale_flushes
+beam_rescale_flush_reset
 beam_rescale_note_flush
 beam_rng_seed
 beam_set_error
@@ -157,7 +157,7 @@ beam_sparse_memory_bytes
 beam_sparse_n_rows
 beam_sparse_row
 beam_sparse_row_mut
-beam_sparse_rows
+beam_sparse_seal_rank
 beam_sparse_shrink
 beam_state_weights
 beam_tail_weights

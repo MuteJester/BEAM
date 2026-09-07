@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# Run a command under a hard RESIDENT-memory ceiling and a wall-clock timeout.
+#
+# The sibling `bounded` uses `ulimit -v`, which caps ADDRESS SPACE. That is the
+# right instrument for BEAM itself, because an oversized model asks for its
+# address space up front and a clean failure at the ask is exactly what is
+# wanted.
+#
+# It cannot be used for a sanitizer build. AddressSanitizer reserves about
+# 16 TiB of shadow address space at startup and touches almost none of it, so
+# `ulimit -v` rejects the mapping before main() runs:
+#
+#   ==...==ERROR: AddressSanitizer failed to allocate 0xdfff0001000 bytes
+#
+# This script bounds what actually causes the harm instead -- resident pages --
+# with a cgroup, so a large sparse reservation is allowed while a runaway
+# working set is still stopped before the OOM killer starts choosing processes
+# on the machine. `MemorySwapMax=0` keeps the process from buying room by
+# swapping the desktop out instead.
+#
+#   verification/bounded-rss [-m GB] [-t SECONDS] -- command...
+set -u
+MEM_GB=${BEAM_BOUND_GB:-8}
+SECS=${BEAM_BOUND_SECS:-900}
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -m) MEM_GB=$2; shift 2 ;;
+    -t) SECS=$2; shift 2 ;;
+    --) shift; break ;;
+    *)  break ;;
+  esac
+done
+[ $# -gt 0 ] || {
+  echo "usage: verification/bounded-rss [-m GB] [-t SECS] -- cmd..." >&2
+  exit 2
+}
+command -v systemd-run >/dev/null 2>&1 || {
+  echo "bounded-rss: no systemd-run; refusing to run a sanitizer build unbounded" >&2
+  exit 3
+}
+exec systemd-run --user --scope --quiet \
+     -p MemoryMax="${MEM_GB}G" -p MemorySwapMax=0 -- \
+     timeout --signal=TERM --kill-after=30 "$SECS" "$@"

@@ -334,6 +334,23 @@ static BeamError finalize_sparse_table(BeamModel *m, uint32_t dir,
     }
     free(rows);
     beam_sparse_shrink(out);
+
+    /*
+     * A table almost none of whose rows exist spends nearly all of itself on
+     * a directory of absences: 28.19 MiB per generation at order 4 whether the
+     * corpus was nine hundred million sequences or nine hundred. Below the
+     * measured threshold, swap that directory for the rank form -- see
+     * BEAM_RANK_SEAL_MAX_OCCUPANCY_DENOM for what was measured and why the
+     * line is where it is.
+     *
+     * Sealing is exact: the same rows, the same slots, the same doubles. It
+     * happens here, before `beam_compute_log_z` reads these tables, so the
+     * partition functions are computed against the representation the model
+     * will actually keep rather than against one it is about to discard.
+     */
+    const uint32_t occupied = out->size ? out->size[0] : 0u;
+    if ((uint64_t)occupied * BEAM_RANK_SEAL_MAX_OCCUPANCY_DENOM <= (uint64_t)nr)
+        return beam_sparse_seal_rank(out);
     return BEAM_OK;
 }
 

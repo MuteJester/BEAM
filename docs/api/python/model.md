@@ -288,11 +288,23 @@ A strict zero-backoff model uses sparse storage by default. Its resident size
 tracks occupied rows rather than all 147.8 million cells; `n_cells` still
 reports the conceptual dense shape, while `n_nonzero_cells` reports actual
 occupancy and `memory_bytes` reports the representation's resident storage.
-At the default dimensions the six uint32 row directories consume about 28.2
-MiB per table set (56.4 MiB while counts and finalized probabilities coexist);
-everything beyond that fixed addressing layer is proportional to occupied
-20-value rows. A one-sequence strict model therefore uses about 59 MB rather
-than allocating the 2.4 GB dense count-plus-probability payload.
+
+Row addressing is the one part that is not proportional to what was observed,
+and the two generations resolve it differently. **Counts** stay on a uint32
+directory over every dense row -- about 28.2 MiB per table set at the default
+dimensions -- because they are mutable and a row can still appear. **Finalized
+probabilities** are built once, so when at most one row in eight is occupied
+they are sealed into a bitmap-and-rank directory of about 1.1 MiB instead, a
+25x reduction that returns the same rows and the same doubles. Everything
+beyond the addressing layer is proportional to occupied 20-value rows.
+
+Which form a table gets is chosen per table at finalize, from its own
+occupancy, and `memory_bytes` reflects the choice. Per-repertoire models fall
+well under the threshold and are sealed; a corpus large enough to fill most of
+the row space -- 57.90% for the 927-million-sequence foundation -- keeps the
+direct directory, where it is faster. A one-sequence strict model therefore
+uses about 31 MB, and 1.2 MB after `compact()`, rather than allocating the
+2.4 GB dense count-plus-probability payload.
 Pass `sparse=False` to build the bit-identical dense form for a comparison.
 `compact()` makes `subtract`, `add`, `save`, `n_nonzero_cells` and re-finalize
 unavailable, and each of those raises rather than returning a plausible wrong

@@ -64,13 +64,12 @@ static bool sparse_grow_partition(BeamSparseRows *t, uint32_t part,
     double *new_values = (double *)malloc(value_bytes);
     if (!new_values) return false;
 
-    /* Recorded for IMMUTABLE tables as well as mutable ones. A finalized
-     * table's rows are added in ascending dense-row order, so the map comes
-     * out sorted for free -- and without it the only way to learn which rows
-     * a sparse table holds is to scan all n_dense_rows, which is the O(S)
-     * cost the sparse layout exists to avoid. Four bytes per occupied row. */
+    /* Mutable tables only -- `t->row_ids` is NULL on a finalized one, and
+     * that pointer is the discriminator every site here reads, rather than
+     * `mutable_rows`. See beam_sparse_init for why a finalized table has no
+     * map to grow. */
     uint32_t *new_row_ids = NULL;
-    {
+    if (t->row_ids) {
         size_t row_id_bytes;
         if (!sparse_array_bytes((size_t)new_capacity,
                                 sizeof(*new_row_ids), &row_id_bytes)) {
@@ -100,7 +99,7 @@ static bool sparse_grow_partition(BeamSparseRows *t, uint32_t part,
     free(t->values[part]);
     t->values[part] = new_values;
     if (!t->mutable_rows && part == 0u) t->values0 = new_values;
-    {
+    if (t->row_ids) {
         free(t->row_ids[part]);
         t->row_ids[part] = new_row_ids;
     }
@@ -157,14 +156,27 @@ BeamError beam_sparse_init(BeamSparseRows *t, uint32_t n_dense_rows,
     t->size = (uint32_t *)calloc((size_t)n_parts, sizeof(*t->size));
     t->capacity = (uint32_t *)calloc((size_t)n_parts,
                                      sizeof(*t->capacity));
-    /* Allocated for immutable tables too: their slot -> row map is what lets
-     * a caller list the rows a finalized table holds without scanning all
-     * n_dense_rows. */
-    t->row_ids = (uint32_t **)calloc((size_t)n_parts,
-                                         sizeof(*t->row_ids));
+    /*
+     * Mutable tables only.
+     *
+     * A finalized table used to carry one so a caller could list its occupied
+     * rows without scanning all n_dense_rows. Exactly one caller ever did --
+     * `beam_layer_max` -- and it now walks the directory slice holding the
+     * depth bucket it wants, which reaches the same rows in the same order
+     * while reading 194,481 entries where the map made it read 1,846,623.
+     *
+     * So on a finalized table the map is four bytes per occupied row that
+     * nothing loads: 16.32 MiB across the foundation's six of them. A mutable
+     * table still needs its own, to recover a moved row's identity after an
+     * erase and to make a wrong-partition lookup a miss rather than an alias.
+     */
+    if (mutable_rows) {
+        t->row_ids = (uint32_t **)calloc((size_t)n_parts,
+                                             sizeof(*t->row_ids));
+        if (!t->row_ids) goto alloc_failed;
+    }
 
-    if (!t->values || !t->size || !t->capacity ||
-        (mutable_rows && !t->row_ids))
+    if (!t->values || !t->size || !t->capacity)
         goto alloc_failed;
     return BEAM_OK;
 
@@ -184,6 +196,7 @@ void beam_sparse_destroy(BeamSparseRows *t) {
             free(t->row_ids[part]);
     }
     free(t->index);
+    free(t->rank);
     free(t->values);
     free(t->row_ids);
     free(t->size);
@@ -191,13 +204,31 @@ void beam_sparse_destroy(BeamSparseRows *t) {
     memset(t, 0, sizeof(*t));
 }
 
+/**
+ * The slot a sealed directory gives `row`, or BEAM_ROW_MISSING.
+ *
+ * The same arithmetic as the inline finalized lookup in the header; kept here
+ * for the validating path, which is not hot and does not justify a second
+ * copy in every translation unit.
+ */
+static uint32_t sparse_rank_slot(const BeamSparseRows *t, uint32_t row) {
+    const BeamRankBlock *b = &t->rank[row >> 8];
+    const uint32_t ofs  = row & 255u;
+    const uint32_t w    = ofs >> 6;
+    const uint64_t word = b->bits[w];
+    const uint64_t bit  = 1ull << (ofs & 63u);
+    if (!(word & bit)) return BEAM_ROW_MISSING;
+    const uint32_t sub = w ? ((b->sub >> (9u * (w - 1u))) & 511u) : 0u;
+    return b->rank + sub + (uint32_t)__builtin_popcountll(word & (bit - 1ull));
+}
+
 const double *beam_sparse_row(const BeamSparseRows *t, uint32_t row,
                                   uint32_t part) {
-    if (!t || row >= t->n_dense_rows || part >= t->n_parts || !t->index ||
-        !t->values || !t->size || !t->capacity)
+    if (!t || row >= t->n_dense_rows || part >= t->n_parts ||
+        (!t->index && !t->rank) || !t->values || !t->size || !t->capacity)
         return NULL;
 
-    const uint32_t slot = t->index[row];
+    const uint32_t slot = t->rank ? sparse_rank_slot(t, row) : t->index[row];
     if (slot == BEAM_ROW_MISSING || slot >= t->size[part] ||
         slot >= t->capacity[part] || !t->values[part])
         return NULL;
@@ -219,7 +250,8 @@ const double *beam_sparse_row(const BeamSparseRows *t, uint32_t row,
 double *beam_sparse_row_mut(BeamSparseRows *t, uint32_t row,
                                 uint32_t part, bool create) {
     if (!t || row >= t->n_dense_rows || part >= t->n_parts || !t->index ||
-        !t->values || !t->size || !t->capacity || !t->row_ids ||
+        !t->values || !t->size || !t->capacity ||
+        (t->mutable_rows && !t->row_ids) ||
         (!t->mutable_rows && part != 0u))
         return NULL;
 
@@ -342,6 +374,71 @@ void beam_sparse_shrink(BeamSparseRows *t) {
     }
 }
 
+BeamError beam_sparse_seal_rank(BeamSparseRows *t) {
+    if (!t) return BEAM_ENULL("sparse table");
+    /* Sealing is an optimisation. A table that cannot take it is not an
+     * error; it simply keeps the directory it has. */
+    if (t->mutable_rows || t->rank || !t->index || t->n_dense_rows == 0u)
+        return BEAM_OK;
+
+    const uint32_t occupied = t->size ? t->size[0] : 0u;
+    const uint32_t n_blocks = beam_rank_blocks(t->n_dense_rows);
+    BeamRankBlock *blocks = (BeamRankBlock *)calloc((size_t)n_blocks,
+                                                    sizeof(*blocks));
+    if (!blocks) return BEAM_EALLOC("a rank directory");
+
+    /*
+     * Build the bitmap and the prefix counts in one ascending pass, and
+     * CHECK the invariant the whole form rests on rather than assuming it:
+     * a finalized table hands out slots in ascending row order, so a row's
+     * slot must equal the number of occupied rows before it. If that is ever
+     * untrue the rank directory would silently return another row's values,
+     * which is the worst failure this file could have, so it is worth one
+     * comparison per occupied row to refuse instead.
+     */
+    uint32_t seen = 0;
+    for (uint32_t blk = 0; blk < n_blocks; ++blk) {
+        blocks[blk].rank = seen;
+        uint32_t within = 0;
+        for (uint32_t w = 0; w < 4u; ++w) {
+            if (w) {
+                /* At most 192 before word 3, so nine bits are exact. */
+                blocks[blk].sub |= (within & 511u) << (9u * (w - 1u));
+            }
+            const uint32_t base = blk * BEAM_RANK_BLOCK_ROWS + w * 64u;
+            uint64_t bits = 0;
+            for (uint32_t k = 0; k < 64u; ++k) {
+                const uint32_t row = base + k;
+                if (row >= t->n_dense_rows) break;
+                const uint32_t slot = t->index[row];
+                if (slot == BEAM_ROW_MISSING) continue;
+                if (slot != seen + within) {   /* not ascending: refuse */
+                    free(blocks);
+                    return BEAM_ERANGE(
+                        "%s: finalized slot %u for row %u is not the %u rows "
+                        "before it; the table was not filled in ascending "
+                        "order and cannot be sealed",
+                        __func__, slot, row, seen + within);
+                }
+                bits |= 1ull << k;
+                within++;
+            }
+            blocks[blk].bits[w] = bits;
+        }
+        seen += within;
+    }
+    if (seen != occupied) {
+        free(blocks);
+        return BEAM_ERANGE("%s: directory holds %u rows but the payload has %u",
+                           __func__, seen, occupied);
+    }
+
+    t->rank = blocks;
+    free(t->index);
+    t->index = NULL;
+    return BEAM_OK;
+}
+
 static uint64_t sparse_add_saturating(uint64_t a, uint64_t b) {
     return UINT64_MAX - a < b ? UINT64_MAX : a + b;
 }
@@ -358,6 +455,10 @@ uint64_t beam_sparse_memory_bytes(const BeamSparseRows *t) {
         bytes = sparse_add_saturating(
             bytes, sparse_mul_saturating(t->n_dense_rows,
                                          sizeof(*t->index)));
+    if (t->rank)
+        bytes = sparse_add_saturating(
+            bytes, sparse_mul_saturating(beam_rank_blocks(t->n_dense_rows),
+                                         sizeof(*t->rank)));
     if (t->values)
         bytes = sparse_add_saturating(
             bytes, sparse_mul_saturating(t->n_parts, sizeof(*t->values)));
@@ -396,24 +497,4 @@ uint64_t beam_sparse_n_rows(const BeamSparseRows *t) {
     for (uint32_t part = 0; part < t->n_parts; ++part)
         rows += t->size[part];
     return rows;
-}
-
-
-/**
- * The dense row ids this table holds, in ASCENDING order, for one partition.
- *
- * Finalized tables are filled in ascending dense-row order, so the map is
- * already sorted and callers can walk it directly. Mutable count tables are
- * filled in observation order and are NOT sorted; a caller needing order must
- * sort a copy.
- *
- * Returns NULL and sets `*n` to zero when the partition holds nothing.
- */
-const uint32_t *beam_sparse_rows(const BeamSparseRows *t, uint32_t part,
-                                     uint32_t *n) {
-    if (n) *n = 0u;
-    if (!t || part >= t->n_parts || !t->row_ids || !t->row_ids[part] || !t->size)
-        return NULL;
-    if (n) *n = t->size[part];
-    return t->row_ids[part];
 }
