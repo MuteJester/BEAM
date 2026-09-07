@@ -58,14 +58,5 @@
 #define BEAM_ENOPATHS(what)                                               \
     BEAM_FAIL(BEAM_ERR_NO_LIVE_PATHS, "%s: %s", __func__, (what))
 
-/**
- * CRC-32C, hardware-accelerated where the running CPU offers it.
- *
- * Identical in value to `beam_crc32c_update`, which it falls back to; the only
- * difference is that a gigabyte of counts checksums in a fifth of the time.
- * Exposed here rather than kept static in io.c so the equivalence can be
- * tested directly.
- */
-uint32_t beam_model_crc32c(uint32_t crc, const void *data, size_t len);
 
 #endif /* BEAM_INTERNAL_ERROR_MACROS_H */

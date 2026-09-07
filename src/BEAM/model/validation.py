@@ -7,6 +7,7 @@ from typing import Any
 import numpy as np
 
 from .._simulation_result import SimulationResult
+from ..errors import BeamTypeError, BeamValueError
 
 
 def _check_int(name: str, value: Any, lo: int, hi: int) -> int:
@@ -21,9 +22,15 @@ def _check_int(name: str, value: Any, lo: int, hi: int) -> int:
     try:
         v = int(value)
     except (TypeError, ValueError):
-        raise TypeError(f"{name} must be an integer, got {value!r}") from None
+        # BeamTypeError, which IS a TypeError, so `except TypeError` around a
+        # build keeps working and `except BEAM.BeamTypeError` starts working.
+        # This is the one place in the library that raises it: the C layer has
+        # no code for a type error, because by the time a value reaches C it
+        # has already been converted.
+        raise BeamTypeError(
+            f"{name} must be an integer, got {value!r}") from None
     if not lo <= v <= hi:
-        raise ValueError(f"{name} must be between {lo} and {hi}, got {v}")
+        raise BeamValueError(f"{name} must be between {lo} and {hi}, got {v}")
     return v
 
 

@@ -50,6 +50,14 @@ def model():
         order=3, max_length=14, strict=True)
 
 
+def _refusing_calls(m):
+    """The drivers above, including two `_calls` does not carry."""
+    d = dict(_calls(m))
+    d["length_marginals"] = lambda: m.length_marginals()
+    d["length_derivatives"] = lambda: m.length_moments(q=1.0, order=2)
+    return d
+
+
 def _calls(m):
     """Every entry point that runs a per-length dynamic program."""
     return {
@@ -220,18 +228,36 @@ def test_the_reported_figure_matches_an_independent_calculation(
         f"sizing expression and the allocation have drifted apart\n{text}")
 
 
-#: Every entry point whose driver refuses UP FRONT, before its parallel region.
-#: These are the returns that leaked: each had allocated its per-length work
-#: arrays before the refusal, and five of the seven returned without freeing
-#: them. Listed separately from GUARDED because what is being pinned is a
-#: different property -- that the refusal path is reachable and repeatable,
-#: which is what a leak checker needs in order to see it at all.
-REFUSING_DRIVERS = ["hill_number", "log_mellin", "surprisal_moments",
-                    "surprisal_cumulants", "entropy"]
+#: Entry points that reach an up-front driver refusal, paired with the budget
+#: that gets them there.
+#:
+#: The first version of this list claimed to cover "the returns that leaked".
+#: It did not, and the claim was never measured. At a 2 kB budget both moment
+#: drivers refuse inside `beam_mellin_terms`, which they call first, so they
+#: never reach their own guard -- three of the seven fixed returns were
+#: exercised and four were not. That is the same mistake as the leaks
+#: themselves: treating sites that look alike as though they behave alike.
+#:
+#: The middle tier is what separates them. At ~1.8 MB a Mellin jet fits and a
+#: moment jet does not, so `moments.c` refuses on its own account. The message
+#: is asserted for exactly this reason -- it is the only evidence available
+#: from Python about WHICH return ran.
+REFUSING_DRIVERS = [
+    # (entry point, budget, the refusal that must be reached)
+    ("hill_number",         2048,    "a tilted forward sweep"),      # diversity.c
+    ("entropy",             2048,    "an expected-weight sweep"),    # diversity.c
+    ("log_mellin",          2048,    "a tilted per-length sweep"),   # mellin.c
+    ("length_marginals",    2048,    "a per-length marginal sweep"), # marginals.c
+    ("cgf_jet",             2048,    "a tilted cumulant sweep"),     # tilt.c
+    ("surprisal_moments",   1800000, "a moment sweep"),              # moments.c
+    ("length_derivatives",  1800000, "a moment sweep"),              # moments.c (via length_moments)
+]
 
 
-@pytest.mark.parametrize("name", REFUSING_DRIVERS)
-def test_a_refusal_can_be_repeated_without_growing(model, restore_budget, name):
+@pytest.mark.parametrize("name,budget,expected", REFUSING_DRIVERS,
+                         ids=[r[0] for r in REFUSING_DRIVERS])
+def test_a_refusal_can_be_repeated_without_growing(
+        model, restore_budget, name, budget, expected):
     """The refusal path is reachable, repeatable, and frees what it allocated.
 
     Five of these seven returns leaked their per-length work arrays. The
@@ -245,8 +271,8 @@ def test_a_refusal_can_be_repeated_without_growing(model, restore_budget, name):
     execute. Under a plain run it pins that the refusal is deterministic and
     does not degrade; run the suite under LSan and it becomes the leak test.
     """
-    call = _calls(model)[name]
-    BEAM.set_memory_budget(STARVED)
+    call = _refusing_calls(model)[name]
+    BEAM.set_memory_budget(budget)
 
     first = None
     for _ in range(50):                 # enough that a per-call leak is visible
@@ -260,3 +286,9 @@ def test_a_refusal_can_be_repeated_without_growing(model, restore_budget, name):
                 f"{name}: the refusal message changed between identical calls, "
                 f"which means the path is carrying state across them")
     assert "memory budget" in first
+    # WHICH return ran, not merely that one did. Without this the moment
+    # drivers pass by refusing inside beam_mellin_terms, leaving their own
+    # returns -- two of the seven that leaked -- untouched.
+    assert expected in first, (
+        f"{name} at a {budget}-byte budget reached {first.split(' at length')[0]!r}, "
+        f"not {expected!r}: this test is no longer exercising the return it names")

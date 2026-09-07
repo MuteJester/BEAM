@@ -66,11 +66,17 @@
  * names it, and listed here so nobody writes a handler for a failure that
  * cannot happen.
  *
- * BEAM_ERR_NULL_ARG is a subtler case: it is unreachable under its own name,
- * because every binding resolves its capsule and returns before C sees a NULL.
- * The only live producers of its value are two BEAM_ERR_INVALID_ARG alias
- * sites in model/prism.c, which mean "parameter out of range" rather than
- * "null argument".
+ * BEAM_ERR_NULL_ARG is a subtler case, and worth stating precisely because an
+ * earlier version of this comment got it wrong. It is produced in plenty of
+ * places -- every BEAM_ENULL expands to it, and there are dozens -- but it is
+ * unreachable FROM PYTHON, because every binding resolves its capsule and
+ * returns before C is ever handed a NULL. Instrumenting `beam_set_error` and
+ * running the full suite shows it firing zero times across 475 tests. The
+ * only producers Python can reach are two BEAM_ERR_INVALID_ARG alias sites in
+ * model/prism.c, which mean "parameter out of range" rather than "null
+ * argument". So the guards are worth keeping for C callers and are dead
+ * weight for the bindings, which is a different statement from the code being
+ * unused.
  */
 #ifndef BEAM_ERRORS_H
 #define BEAM_ERRORS_H

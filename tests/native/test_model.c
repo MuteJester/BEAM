@@ -22,6 +22,7 @@
 
 #include "beam/common.h"
 #include "beam/model.h"
+#include "beam/io_internal.h"
 #include "beam/crc32c.h"
 
 /*

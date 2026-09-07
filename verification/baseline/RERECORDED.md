@@ -532,3 +532,45 @@ line inlined 18 times). Both builds now compile with ZERO warnings, down from
 23. `numeric` and `exact` are unchanged, which is the evidence that the clamp
 never fires: if it did, a context index would move and every recorded quantity
 with it.
+
+## Amended 2026-09-07, after review, before merge
+
+    pytest_cases.txt    475 -> 477   (+3, -1)
+
+Superseded file kept as `pytest_cases.prereview.txt`. A pre-merge review found
+four defects, three of them in claims rather than in code. The one removal is
+deliberate, not a deletion:
+
+  - REMOVED `[surprisal_cumulants]`. It was redundant. At a 2 kB budget it
+    refuses inside `beam_mellin_terms`, which `[log_mellin]` already covers,
+    so it exercised no return of its own.
+  - ADDED `[cgf_jet]`, which reaches `tilt.c`; `[length_marginals]`, which
+    reaches `marginals.c`; and `[length_derivatives]`, which reaches
+    `moments.c`. None of those three returns was executed by any test before.
+
+The finding behind it: the list's own comment claimed to cover "the returns
+that leaked", and that was never measured. At 2 kB BOTH moment drivers refuse
+inside `beam_mellin_terms` -- they call it first -- so three of the seven
+fixed returns were exercised and four were not. The list is now a table of
+(entry point, budget, expected refusal), and the test asserts WHICH refusal
+fired. The 1.8 MB tier is what separates them: a Mellin jet fits there and a
+moment jet does not.
+
+Three more corrections from the same review, none affecting a recorded value:
+
+  - `make test` was NOT at zero warnings, though the previous commit said so:
+    `beam_model_crc32c` was declared in the error-macro header this branch
+    renamed, `test_alphabet.c` did not follow, and the call fell back to an
+    implicit int -- a hard error on GCC 14, which is the exact argument that
+    commit used to justify the `const char **` fix. The declaration now has
+    its own home in `beam/io_internal.h`; a checksum in an errors header is
+    what let it go missing.
+  - `BeamTypeError` was exported and documented while nothing could raise it.
+    It is now raised by the shared Python validator, which is the only place
+    that can: the C layer has no code for a type error because a value is
+    converted before it reaches C.
+  - `include/beam/errors.h` claimed BEAM_ERR_NULL_ARG was "unreachable under
+    its own name". There are 56 BEAM_ENULL sites and 13 direct ones. The true
+    statement is "unreachable FROM PYTHON", verified by instrumentation.
+
+`numeric` and `exact` unchanged.

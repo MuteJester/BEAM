@@ -75,11 +75,19 @@ class BeamValueError(BeamError, ValueError):
 
 
 class BeamTypeError(BeamError, TypeError):
-    """An argument of the wrong type.
+    """An argument of the wrong type, as opposed to the wrong value.
 
-    Separate from :class:`BeamValueError` because eight entry points raise
-    ``TypeError`` today and collapsing them would break every
-    ``pytest.raises(TypeError)`` that guards them.
+    Separate from :class:`BeamValueError` because the distinction is real and
+    because collapsing the two would break every ``pytest.raises(TypeError)``
+    guarding an entry point that checks a type.
+
+    Raised by the Python layer's own argument checks. The C layer has no error
+    code for a type error -- by the time a value reaches C it has already been
+    converted -- so nothing in the code-to-class table produces this, and a
+    ``TypeError`` from CPython's own argument parsing stays a plain
+    ``TypeError``. It was exported and documented before anything raised it,
+    which made ``except BeamTypeError`` catch nothing while the documentation
+    advertised it.
     """
 
 
