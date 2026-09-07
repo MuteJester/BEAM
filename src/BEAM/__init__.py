@@ -35,6 +35,9 @@ from ._model import (
 from ._publicness import PublicnessModel
 from .analytics.scale import Attribution, ScaleIndex, attribute
 from .prism import Prism, PrismScorer
+from .mixture import (BetaDiversity, EntropyBounds, EntropyEstimate,
+                      IncompatibleMembers, Mixture, MixtureError,
+                      MixtureTooLarge, SupportSize, UnsupportedOrder)
 from .query import BeamQuery, Condition
 from .query.errors import (ImpossibleCondition, QueryError, QueryTooLarge,
                            UnsupportedQuery)
@@ -46,6 +49,8 @@ __all__ = [
     "InternalError", "InvalidSequence", "ModelFileError", "ModelMismatch", "NoLivePaths",
     "NotFinalized", "OutOfMemory",
     "QueryError", "ImpossibleCondition", "UnsupportedQuery", "QueryTooLarge",
+    "MixtureError", "IncompatibleMembers", "UnsupportedOrder",
+    "MixtureTooLarge",
 
     "BeamModel", "Atoms", "Builder", "Calibration", "Histogram",
     "PseqAnalysis", "effective_threads", "memory_budget",
@@ -54,5 +59,7 @@ __all__ = [
     "Attribution", "ScaleIndex", "attribute",
     "Prism", "PrismScorer",
     "BeamQuery", "Condition",
+    "Mixture", "BetaDiversity", "EntropyBounds", "EntropyEstimate",
+    "SupportSize",
 ]
 __version__ = "0.1.0"

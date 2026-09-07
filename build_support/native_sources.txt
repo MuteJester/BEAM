@@ -43,6 +43,10 @@ src/native/math/spectrum.c
 src/native/math/surprisal.c
 src/native/math/tilt.c
 
+src/native/mixture/inner_product.c
+src/native/mixture/shape.c
+src/native/mixture/support.c
+
 src/native/model/algebra.c
 src/native/model/config.c
 src/native/model/encoding.c
