@@ -761,3 +761,23 @@ Two differences, both intended:
      same NULL or the same row pointer as the direct one for EVERY dense row
      of every table, that finalize applies the threshold per table, and that a
      table numbered out of order is refused rather than silently mis-sealed.
+
+---
+
+## 2026-09-07, finalized row interning
+
+Re-recorded `c_symbols.txt` and `c_cases.txt` again on `memory-optimization`;
+the previous pair is kept as `*.preintern.txt`.
+
+**Nothing numeric moved**, on the same four gates as the entry above.
+Interning shares storage between rows that were ALREADY equal to the byte, so
+every caller receives the same doubles it received before.
+
+- `beam_sparse_intern_rows` added; internal, declared only under
+  `src/native/internal/`.
+- Five tests added in `tests/native/test_interning.c`. The load-bearing one is
+  `test_a_pooled_row_is_still_log_of_its_counts`: it recomputes every
+  finalized row from the counts it came from and compares bit patterns,
+  through the rank directory and the shared pool both. The before/after form
+  used elsewhere loses its force here, because finalize now interns on its own
+  and there is no un-interned "before" left to compare against.

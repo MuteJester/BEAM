@@ -349,9 +349,23 @@ static BeamError finalize_sparse_table(BeamModel *m, uint32_t dir,
      * will actually keep rather than against one it is about to discard.
      */
     const uint32_t occupied = out->size ? out->size[0] : 0u;
-    if ((uint64_t)occupied * BEAM_RANK_SEAL_MAX_OCCUPANCY_DENOM <= (uint64_t)nr)
-        return beam_sparse_seal_rank(out);
-    return BEAM_OK;
+    if ((uint64_t)occupied * BEAM_RANK_SEAL_MAX_OCCUPANCY_DENOM <= (uint64_t)nr) {
+        const BeamError se = beam_sparse_seal_rank(out);
+        if (se != BEAM_OK) return se;
+    }
+
+    /*
+     * Then share storage between rows that are already byte-identical. A
+     * context seen once normalises to one residue at 0.0 and nineteen at
+     * -inf, and only twenty such rows can exist, so a repertoire model is
+     * about half copies of twenty rows: 73-79% of a donor's rows repeat.
+     *
+     * After sealing, not before. Sealing requires each row's slot to be the
+     * count of rows before it, and interning is precisely what breaks that --
+     * it points several slots at one row. Ordered the other way the seal
+     * would refuse, correctly, and the directory would stay 28.19 MiB.
+     */
+    return beam_sparse_intern_rows(out);
 }
 
 static BeamError finalize_sparse_direction(BeamModel *m, uint32_t dir) {

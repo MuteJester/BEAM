@@ -168,28 +168,36 @@ static void test_sealing_changes_no_row(void) {
         for (uint32_t row = 0; row < n; ++row)
             before[row] = beam_sparse_row_final(tab, row);
 
-        /* Finalize may already have sealed this one; only a table that still
-         * carries a direct directory can be observed making the transition. */
-        const bool was_direct = (tab->index != NULL);
+        /*
+         * Finalize has already applied both steps, so only a table it left
+         * both direct AND un-interned can be watched making the transition.
+         * An interned table declines -- correctly: its directory now names
+         * pooled rows, which is exactly the ascending-slot property sealing
+         * needs, so the two cannot be applied in that order.
+         */
+        const bool sealable = (tab->index != NULL) && (tab->n_pool == 0u);
         const uint64_t bytes_before = beam_sparse_memory_bytes(tab);
         const BeamError e = beam_sparse_seal_rank(tab);
         if (e != BEAM_OK) {
             printf("FAIL: %s did not seal (%d)\n", name_of(t), (int)e);
             fail_count++; free(before); beam_model_destroy(m); return;
         }
-        if (tab->index != NULL || tab->rank == NULL) {
-            printf("FAIL: %s sealed but kept a direct directory\n", name_of(t));
-            fail_count++; free(before); beam_model_destroy(m); return;
-        }
-        const uint64_t bytes_after = beam_sparse_memory_bytes(tab);
-        if (was_direct) {
+        if (sealable) {
             transitions++;
-            if (bytes_after >= bytes_before) {
-                printf("FAIL: %s got no smaller (%llu -> %llu)\n", name_of(t),
-                       (unsigned long long)bytes_before,
-                       (unsigned long long)bytes_after);
+            if (tab->index != NULL || tab->rank == NULL) {
+                printf("FAIL: %s stayed direct after a seal that should fire\n",
+                       name_of(t));
                 fail_count++; free(before); beam_model_destroy(m); return;
             }
+            if (beam_sparse_memory_bytes(tab) >= bytes_before) {
+                printf("FAIL: %s got no smaller (%llu -> %llu)\n", name_of(t),
+                       (unsigned long long)bytes_before,
+                       (unsigned long long)beam_sparse_memory_bytes(tab));
+                fail_count++; free(before); beam_model_destroy(m); return;
+            }
+        } else if (tab->n_pool != 0u && tab->index != NULL && tab->rank != NULL) {
+            printf("FAIL: %s is both sealed and folded\n", name_of(t));
+            fail_count++; free(before); beam_model_destroy(m); return;
         }
 
         for (uint32_t row = 0; row < n; ++row) {
@@ -264,9 +272,14 @@ static void test_layer_max_is_unchanged_after_sealing(void) {
     BeamModel *m = saturated();
     ASSERT_MSG(m != NULL, "model did not build");
 
-    double before[12 * 12];
+    /* Bounded by the MODEL's max_length, not by a literal. `beam_layer_max`
+     * takes `row < n_dense_rows` as a caller guarantee and the finalized
+     * lookup does not re-check it, so a longer length is undefined behaviour
+     * rather than a -inf: it indexes the length table past its end. */
+    const uint32_t ML = m->max_len;
+    double before[BEAM_MAX_LENGTH * BEAM_MAX_LENGTH];
     uint32_t n = 0, finite = 0;
-    for (uint32_t len = 1; len <= 12u; ++len)
+    for (uint32_t len = 1; len <= ML; ++len)
         for (uint32_t i = 0; i < len; ++i) {
             before[n] = beam_layer_max(m, i, len);
             if (before[n] != -INFINITY) finite++;
@@ -279,7 +292,7 @@ static void test_layer_max_is_unchanged_after_sealing(void) {
                    "a table did not seal");
 
     uint32_t k = 0;
-    for (uint32_t len = 1; len <= 12u; ++len)
+    for (uint32_t len = 1; len <= ML; ++len)
         for (uint32_t i = 0; i < len; ++i, ++k) {
             const double now = beam_layer_max(m, i, len);
             if (memcmp(&now, &before[k], sizeof now) != 0) {

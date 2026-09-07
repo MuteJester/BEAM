@@ -72,6 +72,22 @@ typedef struct {
  */
 #define BEAM_RANK_SEAL_MAX_OCCUPANCY_DENOM 8u
 
+/**
+ * Intern a finalized table's rows when at least this fraction repeat.
+ *
+ * Measured on the Emerson cohort, order 4: 73.1-79.1% of a donor's finalized
+ * rows are byte-identical to another row, and 49-56% are the same twenty
+ * bytes -- one residue at exactly 0.0 and nineteen at -inf -- of which only
+ * twenty distinct ones can exist. A 197k-sequence donor holds 597,373 rows
+ * that are 158,872 distinct.
+ *
+ * The foundation is the other case: 411,757 of 4,278,736 rows repeat, 9.6%,
+ * which does not pay for the indirection interning adds. So this is decided
+ * per table from what that table actually contains, like the directory above.
+ */
+#define BEAM_INTERN_MIN_DUPLICATE_NUM   1u
+#define BEAM_INTERN_MIN_DUPLICATE_DENOM 4u
+
 /** Blocks needed to cover `n_dense_rows`. */
 static inline uint32_t beam_rank_blocks(uint32_t n_dense_rows) {
     return (n_dense_rows + BEAM_RANK_BLOCK_ROWS - 1u) / BEAM_RANK_BLOCK_ROWS;
@@ -101,6 +117,19 @@ typedef struct {
      * table is sparse enough that the trade is worth taking.
      */
     BeamRankBlock *rank;
+    /**
+     * Dense position -> row in a shared pool, or NULL when rows are not
+     * interned.
+     *
+     * The directory answers "which of the occupied rows is this", 0..size-1.
+     * Without a pool that IS the payload row. With one it is an index into
+     * this map, whose entries name `n_pool` distinct payload rows that
+     * several dense positions may share. One extra load, and the rows a
+     * caller receives are bit-identical either way -- interning shares
+     * storage between rows that were already equal to the byte.
+     */
+    uint32_t  *pool_id;
+    uint32_t   n_pool;      /* distinct payload rows; 0 when not interned    */
     /**
      * `values[0]` cached, for the read-only lookup below. Maintained wherever
      * `values[0]` is assigned, and NULL on a mutable table -- which is what
@@ -156,6 +185,15 @@ void beam_sparse_shrink(BeamSparseRows *t);
  * reported OK: sealing is an optimisation, not a state callers depend on.
  */
 BeamError beam_sparse_seal_rank(BeamSparseRows *t);
+/**
+ * Share storage between a finalized table's byte-identical rows.
+ *
+ * Exact by construction: two rows are pooled only when all `stride * 8` bytes
+ * match, so every caller receives the same doubles it received before. Leaves
+ * the table alone -- and reports OK -- when too few rows repeat to pay for
+ * the indirection, or when the table cannot be interned at all.
+ */
+BeamError beam_sparse_intern_rows(BeamSparseRows *t);
 uint64_t beam_sparse_memory_bytes(const BeamSparseRows *t);
 uint64_t beam_sparse_n_rows(const BeamSparseRows *t);
 
@@ -204,6 +242,7 @@ static inline bool beam_sparse_present(const BeamSparseRows *t, uint32_t row) {
 static inline const double *beam_sparse_row_final(const BeamSparseRows *t,
                                                       uint32_t row) {
     if (!t->values0) return beam_sparse_row(t, row, 0u);
+    uint32_t slot;
     if (t->rank) {
         /* One block is 40 bytes and the whole directory is about a megabyte,
          * so this lands in cache where the 28 MiB direct array does not --
@@ -215,12 +254,13 @@ static inline const double *beam_sparse_row_final(const BeamSparseRows *t,
         const uint64_t bit  = 1ull << (ofs & 63u);
         if (!(word & bit)) return NULL;
         const uint32_t sub = w ? ((b->sub >> (9u * (w - 1u))) & 511u) : 0u;
-        const uint32_t slot = b->rank + sub
-                            + (uint32_t)__builtin_popcountll(word & (bit - 1ull));
-        return t->values0 + (size_t)slot * t->stride;
+        slot = b->rank + sub
+             + (uint32_t)__builtin_popcountll(word & (bit - 1ull));
+    } else {
+        slot = t->index[row];
+        if (slot == BEAM_ROW_MISSING) return NULL;
     }
-    const uint32_t slot = t->index[row];
-    if (slot == BEAM_ROW_MISSING) return NULL;
+    if (t->pool_id) slot = t->pool_id[slot];
     return t->values0 + (size_t)slot * t->stride;
 }
 

@@ -197,6 +197,7 @@ void beam_sparse_destroy(BeamSparseRows *t) {
     }
     free(t->index);
     free(t->rank);
+    free(t->pool_id);
     free(t->values);
     free(t->row_ids);
     free(t->size);
@@ -228,10 +229,17 @@ const double *beam_sparse_row(const BeamSparseRows *t, uint32_t row,
         (!t->index && !t->rank) || !t->values || !t->size || !t->capacity)
         return NULL;
 
-    const uint32_t slot = t->rank ? sparse_rank_slot(t, row) : t->index[row];
-    if (slot == BEAM_ROW_MISSING || slot >= t->size[part] ||
-        slot >= t->capacity[part] || !t->values[part])
+    uint32_t slot = t->rank ? sparse_rank_slot(t, row) : t->index[row];
+    if (slot == BEAM_ROW_MISSING || slot >= t->size[part] || !t->values[part])
         return NULL;
+    /* The directory names a dense position; a pooled table then maps that to
+     * the row several positions share. Both are range-checked, because a
+     * corrupt pool entry would otherwise read another row's values. */
+    if (t->pool_id) {
+        slot = t->pool_id[slot];
+        if (slot >= t->n_pool) return NULL;
+    }
+    if (slot >= t->capacity[part]) return NULL;
 
     /* Mutable tables may have several payloads.  The reverse map makes a
      * caller supplying the wrong partition a clean miss rather than an alias
@@ -377,11 +385,137 @@ void beam_sparse_shrink(BeamSparseRows *t) {
     }
 }
 
+/** 64-bit mix, for hashing a row's bytes. Bit patterns only: two rows are
+ *  interchangeable exactly when all their bytes match. */
+static inline uint64_t sparse_mix(uint64_t x) {
+    x ^= x >> 33; x *= 0xff51afd7ed558ccdULL;
+    x ^= x >> 33; x *= 0xc4ceb9fe1a85ec53ULL;
+    return x ^ (x >> 33);
+}
+
+BeamError beam_sparse_intern_rows(BeamSparseRows *t) {
+    if (!t) return BEAM_ENULL("sparse table");
+    /* Like sealing, this is an optimisation: a table that cannot take it
+     * keeps what it has and reports OK. */
+    if (t->mutable_rows || t->pool_id || !t->values || !t->values[0]
+        || !t->size || !t->capacity)
+        return BEAM_OK;
+    const uint32_t n = t->size[0];
+    const uint32_t R = t->stride;
+    if (n < 2u || R == 0u) return BEAM_OK;
+    const size_t RB = (size_t)R * sizeof(double);
+
+    size_t slots = 1u;
+    while (slots < (size_t)n * 2u) {
+        if (slots > SIZE_MAX / 2u) return BEAM_OK;      /* absurdly large */
+        slots <<= 1;
+    }
+    uint32_t *ht = (uint32_t *)malloc(slots * sizeof(*ht));
+    uint32_t *pool_id = (uint32_t *)malloc((size_t)n * sizeof(*pool_id));
+    if (!ht || !pool_id) {
+        free(ht); free(pool_id);
+        return BEAM_EALLOC("the row-interning scratch");
+    }
+    memset(ht, 0xFF, slots * sizeof(*ht));              /* BEAM_ROW_MISSING */
+
+    /*
+     * One ascending pass. A slot whose bytes have been seen before takes the
+     * earlier row's pool index; otherwise it opens a new one. Pool indices
+     * are therefore handed out in order of FIRST appearance, which is what
+     * lets the payload below be rebuilt in one more ascending pass with no
+     * second bookkeeping array.
+     *
+     * The hash only chooses where to look. Membership is decided by memcmp
+     * over every byte, so a collision costs a comparison and can never pool
+     * two rows that differ.
+     */
+    const double *src = t->values[0];
+    uint32_t n_pool = 0;
+    for (uint32_t k = 0; k < n; ++k) {
+        const double *row = src + (size_t)k * R;
+        uint64_t h = 1469598103934665603ULL;
+        for (size_t b = 0; b < RB; b += sizeof(uint64_t)) {
+            uint64_t word;
+            memcpy(&word, (const char *)row + b, sizeof word);
+            h = sparse_mix(h ^ word);
+        }
+        size_t j = (size_t)h & (slots - 1u);
+        for (;;) {
+            const uint32_t cand = ht[j];
+            if (cand == BEAM_ROW_MISSING) {
+                ht[j] = k;
+                pool_id[k] = n_pool++;
+                break;
+            }
+            if (memcmp(src + (size_t)cand * R, row, RB) == 0) {
+                pool_id[k] = pool_id[cand];
+                break;
+            }
+            j = (j + 1u) & (slots - 1u);
+        }
+    }
+    free(ht);
+
+    /* Not enough repetition to pay for the extra load. Leave it alone. */
+    if ((uint64_t)(n - n_pool) * BEAM_INTERN_MIN_DUPLICATE_DENOM
+        < (uint64_t)n * BEAM_INTERN_MIN_DUPLICATE_NUM) {
+        free(pool_id);
+        return BEAM_OK;
+    }
+
+    double *pool = (double *)malloc((size_t)n_pool * RB);
+    if (!pool) { free(pool_id); return BEAM_EALLOC("the interned row pool"); }
+    uint32_t filled = 0;
+    for (uint32_t k = 0; k < n; ++k)
+        if (pool_id[k] == filled) {          /* the first time this row appears */
+            memcpy(pool + (size_t)filled * R, src + (size_t)k * R, RB);
+            filled++;
+        }
+    if (filled != n_pool) {                  /* cannot happen; refuse if it does */
+        free(pool); free(pool_id);
+        return BEAM_ERANGE("%s: filled %u pool rows for %u distinct",
+                           __func__, filled, n_pool);
+    }
+
+    free(t->values[0]);
+    t->values[0] = pool;
+    t->values0 = pool;
+    t->capacity[0] = n_pool;
+    t->n_pool = n_pool;
+
+    /*
+     * A table that still has a direct directory needs no second array and no
+     * second load: its entry per dense row can name the pooled row outright.
+     * Only a sealed table needs the map, because rank(row) is inherently the
+     * count of rows before this one and cannot be renumbered.
+     */
+    if (t->index) {
+        for (uint32_t row = 0; row < t->n_dense_rows; ++row) {
+            const uint32_t slot = t->index[row];
+            if (slot != BEAM_ROW_MISSING) t->index[row] = pool_id[slot];
+        }
+        free(pool_id);
+    } else {
+        t->pool_id = pool_id;
+    }
+    return BEAM_OK;
+}
+
 BeamError beam_sparse_seal_rank(BeamSparseRows *t) {
     if (!t) return BEAM_ENULL("sparse table");
-    /* Sealing is an optimisation. A table that cannot take it is not an
-     * error; it simply keeps the directory it has. */
-    if (t->mutable_rows || t->rank || !t->index || t->n_dense_rows == 0u)
+    /*
+     * Sealing is an optimisation. A table that cannot take it is not an
+     * error; it simply keeps the directory it has.
+     *
+     * `n_pool` covers an already-interned table, and covers it whichever way
+     * the pool was attached -- a direct table folds the pool into `index`,
+     * which is exactly the ascending-slot property this form needs, so the
+     * check below would otherwise refuse with a confusing message rather than
+     * decline. Interning after sealing is the supported order; see
+     * finalize_sparse_table.
+     */
+    if (t->mutable_rows || t->rank || t->n_pool || !t->index
+        || t->n_dense_rows == 0u)
         return BEAM_OK;
 
     const uint32_t occupied = t->size ? t->size[0] : 0u;
@@ -478,6 +612,9 @@ uint64_t beam_sparse_memory_bytes(const BeamSparseRows *t) {
     if (t->capacity) {
         for (uint32_t part = 0; part < t->n_parts; ++part) {
             const uint64_t capacity = t->capacity[part];
+            if (part == 0u && t->pool_id)
+                bytes = sparse_add_saturating(
+                    bytes, sparse_mul_saturating(t->size[0], sizeof(uint32_t)));
             if (t->values && t->values[part]) {
                 bytes = sparse_add_saturating(
                     bytes, sparse_mul_saturating(
