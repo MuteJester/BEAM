@@ -14,6 +14,11 @@ beam_encode
 beam_error_message
 beam_free_counts
 beam_free_tables
+beam_frozen_destroy
+beam_frozen_freeze
+beam_frozen_memory_bytes
+beam_frozen_row
+beam_frozen_thaw
 beam_last_error
 beam_layer_max
 beam_layer_weights

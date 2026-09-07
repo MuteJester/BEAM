@@ -781,3 +781,15 @@ every caller receives the same doubles it received before.
   through the rank directory and the shared pool both. The before/after form
   used elsewhere loses its force here, because finalize now interns on its own
   and there is no un-interned "before" left to compare against.
+
+---
+
+## 2026-09-07, the frozen count representation
+
+Re-recorded again; previous pair kept as `*.prefrozen.txt`. Five
+`beam_frozen_*` symbols and four tests added, all internal.
+
+This commit adds the representation and its tests but does not yet route the
+model through it, so no numeric gate could move: nothing in a model's
+lifecycle calls it. It is committed separately because the exactness argument
+is worth reviewing on its own, before the lifecycle changes that will use it.

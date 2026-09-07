@@ -62,6 +62,7 @@
  * specific headers it needs; this umbrella goes away when none remain. */
 #include "beam/model_state.h"
 #include "beam/sparse_rows.h"
+#include "beam/frozen_counts.h"
 #include "beam/live_frontier.h"
 #include "beam/error_macros.h"
 #include "beam/alphabet.h"
