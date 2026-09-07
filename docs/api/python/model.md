@@ -298,13 +298,25 @@ they are sealed into a bitmap-and-rank directory of about 1.1 MiB instead, a
 25x reduction that returns the same rows and the same doubles. Everything
 beyond the addressing layer is proportional to occupied 20-value rows.
 
+Finalized rows are then de-duplicated. A context seen once normalises to one
+residue at exactly `0.0` and nineteen at `-inf`, and only twenty such rows can
+exist, so a repertoire model is largely copies of a few: measured on real
+repertoires, 73-79% of a donor's finalized rows are byte-identical to another
+and about half are one-hot. When at least a quarter repeat, the table keeps one
+copy of each distinct row and the directory names it. Rows are pooled only when
+all their bytes match, so every caller receives the same doubles; the cost is
+one extra load on a sealed table, and none on a direct one, which folds the
+pool into the directory it already has.
+
 Which form a table gets is chosen per table at finalize, from its own
-occupancy, and `memory_bytes` reflects the choice. Per-repertoire models fall
+occupancy and its own repetition, and `memory_bytes` reflects the choice. Per-repertoire models fall
 well under the threshold and are sealed; a corpus large enough to fill most of
 the row space -- 57.90% for the 927-million-sequence foundation -- keeps the
 direct directory, where it is faster. A one-sequence strict model therefore
-uses about 31 MB, and 1.2 MB after `compact()`, rather than allocating the
-2.4 GB dense count-plus-probability payload.
+uses about 30 MB, and 1.2 MB after `compact()`, rather than allocating the
+2.4 GB dense count-plus-probability payload. On a 197,000-sequence repertoire
+the two together take a compacted model from 125 MB to 34 MB, at a measured
+cost of about 12% on scoring and 10% on a mixture inner product.
 Pass `sparse=False` to build the bit-identical dense form for a comparison.
 `compact()` makes `subtract`, `add`, `save`, `n_nonzero_cells` and re-finalize
 unavailable, and each of those raises rather than returning a plausible wrong
