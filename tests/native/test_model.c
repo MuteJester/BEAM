@@ -1586,6 +1586,45 @@ static void test_spectrum_totals_and_identity(void) {
     PASS();
 }
 
+static void test_accumulator_max_ignores_an_earlier_threads_error(void) {
+    /*
+     * A regression, and a subtle one. `beam_model_accumulator_max` runs its
+     * per-length sweeps in parallel and asks `beam_last_error()` after each
+     * one whether that sweep failed. `beam_set_error` is thread-local and
+     * OpenMP reuses its threads, so a code left on a worker by an UNRELATED
+     * earlier call was read back as this sweep's own failure: the function
+     * returned 0.0 and reported "a per-length sweep failed" when every sweep
+     * had succeeded.
+     *
+     * It only fired when the work reached a worker other than the caller,
+     * which made it intermittent -- it surfaced as eight unrelated spectrum
+     * tests failing in a full suite run and passing on a re-run of the same
+     * command.
+     *
+     * The stale code is planted here rather than waited for. Anything that
+     * reports a per-item refusal inside a parallel region leaves one behind;
+     * what matters is that a later, successful call is not affected by it.
+     */
+    BeamModel *m = build(3, 27);
+    ASSERT_MSG(m != NULL, "build");
+    const double clean = beam_model_accumulator_max(m);
+    ASSERT_MSG(clean > 0.0 && beam_last_error() == BEAM_OK,
+               "the undisturbed call must succeed");
+
+#ifdef _OPENMP
+    #pragma omp parallel
+    { beam_set_error(BEAM_ERR_INVALID_SEQUENCE, "stale, from an earlier call"); }
+#endif
+
+    const double after = beam_model_accumulator_max(m);
+    beam_model_destroy(m);
+    ASSERT_MSG(beam_last_error() == BEAM_OK,
+               "a stale error on a worker was reported as this call's failure");
+    ASSERT_MSG(after == clean,
+               "a stale error on a worker changed the answer");
+    PASS();
+}
+
 static void test_accumulator_max_is_not_the_surprisal(void) {
     BeamModel *m = build(3, 27);
     ASSERT_MSG(m != NULL, "build");
@@ -2498,6 +2537,7 @@ int main(void) {
 
     RUN_TEST(test_spectrum_totals_and_identity);
     RUN_TEST(test_accumulator_max_is_not_the_surprisal);
+    RUN_TEST(test_accumulator_max_ignores_an_earlier_threads_error);
 
     RUN_TEST(test_sampling);
     RUN_TEST(test_sampling_is_reproducible);
