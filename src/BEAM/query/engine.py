@@ -27,7 +27,10 @@ import numpy as np
 from .. import _cbeam as _c
 from ..model import alphabets
 from .conditions import Condition
-from .errors import ImpossibleCondition, QueryTooLarge, UnsupportedQuery
+from ..errors import (BeamValueError, BudgetExceeded, NoLivePaths,
+                      NotFinalized)
+from .errors import (ImpossibleCondition, QueryError, QueryTooLarge,
+                     UnsupportedQuery)
 
 __all__ = ["BeamQuery"]
 
@@ -41,20 +44,38 @@ def _row_entropy(rows: np.ndarray) -> np.ndarray:
 
 
 def _translate(exc: BaseException) -> BaseException:
-    """Narrow a binding's built-in exception to this package's own.
+    """Narrow a binding's exception to this package's own.
 
-    The C layer already distinguishes these cases; the bindings widen them onto
-    built-ins because that is the right thing for the rest of the library.
-    Narrowing here loses nothing, because each new class keeps the built-in as
-    a base.
+    This used to guess from the built-in type -- MemoryError meant
+    QueryTooLarge, RuntimeError meant ImpossibleCondition -- and its docstring
+    claimed "narrowing here loses nothing". That was false in two ways. A model
+    that was not finalized is a RuntimeError, so it was reported as
+    `ImpossibleCondition`, which documents the opposite of what happened; and a
+    genuine allocation failure was reported as `QueryTooLarge`, whose docstring
+    promises the question is "exactly answerable, and too large", which a
+    failed malloc is not.
+
+    The bindings now raise named classes, so the mapping is by MEANING rather
+    than by which built-in the failure happens to share. Anything already
+    specific enough is passed through untouched.
+
+    Reconstructing rather than re-raising is deliberate and narrow: only the
+    message is carried, so a class holding structured state must be added to
+    the pass-through above rather than left to fall through here.
     """
+    if isinstance(exc, QueryError):
+        return exc                       # already ours
     msg = str(exc)
-    if isinstance(exc, MemoryError):
+    if isinstance(exc, BudgetExceeded):
         return QueryTooLarge(msg)
-    if isinstance(exc, RuntimeError):
+    if isinstance(exc, NoLivePaths):
         return ImpossibleCondition(msg)
-    if isinstance(exc, ValueError):
+    if isinstance(exc, (BeamValueError, ValueError)):
         return UnsupportedQuery(msg)
+    if isinstance(exc, MemoryError):
+        return exc                       # a real OOM is not a query problem
+    if isinstance(exc, NotFinalized):
+        return exc                       # not a property of the question
     return exc
 
 

@@ -59,10 +59,13 @@ BeamError beam_model_surprisal_moments(const BeamModel *m, double q,
      * refuses with the better message, so run one and report that. */
     const uint32_t conc = beam_budget_concurrency(
         beam_jet_sweep_bytes(m->n_states, m->n_residues, NM), nw ? nw : 1u);
-    if (nw && conc == 0u)
-        return beam_budget_refuse("a moment sweep", work[0],
-                                  beam_jet_sweep_bytes(m->n_states,
-                                                       m->n_residues, NM));
+    if (nw && conc == 0u) {
+        const uint32_t at = work[0];
+        const uint64_t need = beam_jet_sweep_bytes(m->n_states,
+                                                   m->n_residues, NM);
+        free(mom); free(acc); free(terms); free(jets); free(work);
+        return beam_budget_refuse("a moment sweep", at, need);
+    }
 
     int failed = BEAM_OK;
 #ifdef _OPENMP
@@ -163,10 +166,13 @@ BeamError beam_model_length_derivatives(const BeamModel *m, double q,
      * refuses with the better message, so run one and report that. */
     const uint32_t conc = beam_budget_concurrency(
         beam_jet_sweep_bytes(m->n_states, m->n_residues, NM), nw ? nw : 1u);
-    if (nw && conc == 0u)
-        return beam_budget_refuse("a moment sweep", work[0],
-                                  beam_jet_sweep_bytes(m->n_states,
-                                                       m->n_residues, NM));
+    if (nw && conc == 0u) {
+        const uint32_t at = work[0];
+        const uint64_t need = beam_jet_sweep_bytes(m->n_states,
+                                                   m->n_residues, NM);
+        free(terms); free(jets); free(work);
+        return beam_budget_refuse("a moment sweep", at, need);
+    }
 
     int failed = BEAM_OK;
 #ifdef _OPENMP

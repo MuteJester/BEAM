@@ -9,6 +9,8 @@ import random
 import numpy as np
 import pytest
 
+import BEAM
+
 from BEAM import BeamModel
 
 from _helpers import (AA, J_MOTIFS, make_corpus, ANALYSIS_BINS)
@@ -104,7 +106,7 @@ def test_a_budget_below_one_sweep_is_refused(small):
     before = memory_budget()
     try:
         set_memory_budget(1)
-        with pytest.raises(Exception) as exc:
+        with pytest.raises(BEAM.BudgetExceeded) as exc:
             small.spectra_by_length(bins=ANALYSIS_BINS, spacing=spacing)
     finally:
         set_memory_budget(before)

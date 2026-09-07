@@ -104,7 +104,7 @@ static BeamError mw_alloc(const BeamModel *m, uint32_t n_aut, MomentWork *k) {
         const char *nu, *bu;
         const double nv = beam_budget_scaled(need, &nu);
         const double bv = beam_budget_scaled(budget, &bu);
-        return BEAM_FAIL(BEAM_ERR_ALLOC,
+        return BEAM_FAIL(BEAM_ERR_BUDGET,
                         "a moment sweep over %u trellis states times %u "
                         "automaton states needs about %.2f %s, and the memory "
                         "budget is %.2f %s; raise it with "

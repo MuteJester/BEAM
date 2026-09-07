@@ -6,6 +6,19 @@ indexed by its distance from the back. The two readings are combined
 log-linearly and normalised per length by an exact forward dynamic program
 over a layered DAG. Nothing is sampled and nothing is pruned.
 """
+from .errors import (
+    BeamError,
+    BeamTypeError,
+    BeamValueError,
+    BudgetExceeded,
+    InternalError,
+    InvalidSequence,
+    ModelFileError,
+    ModelMismatch,
+    NoLivePaths,
+    NotFinalized,
+    OutOfMemory,
+)
 from ._model import (
     BeamModel,
     Atoms,
@@ -23,8 +36,17 @@ from ._publicness import PublicnessModel
 from .analytics.scale import Attribution, ScaleIndex, attribute
 from .prism import Prism, PrismScorer
 from .query import BeamQuery, Condition
+from .query.errors import (ImpossibleCondition, QueryError, QueryTooLarge,
+                           UnsupportedQuery)
 
 __all__ = [
+    # Exceptions. Exported here because a caller cannot catch what it cannot
+    # import, and until now the query classes lived three packages deep.
+    "BeamError", "BeamTypeError", "BeamValueError", "BudgetExceeded",
+    "InternalError", "InvalidSequence", "ModelFileError", "ModelMismatch", "NoLivePaths",
+    "NotFinalized", "OutOfMemory",
+    "QueryError", "ImpossibleCondition", "UnsupportedQuery", "QueryTooLarge",
+
     "BeamModel", "Atoms", "Builder", "Calibration", "Histogram",
     "PseqAnalysis", "effective_threads", "memory_budget",
     "threads", "set_memory_budget", "set_threads",

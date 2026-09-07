@@ -421,3 +421,156 @@ OSError contract is what users and tests depend on.
 
 `numeric` did not move and `exact` held at 280 quantities: every change here
 is to how a failure is REPORTED, not to any computed value.
+
+## Amended 2026-09-06, for the error-contract pin test
+
+    pytest_cases.txt    448 -> 470   (+22, -0)
+
+Superseded file kept as `pytest_cases.precontract.txt`. Purely additive:
+`tests/python/test_error_contract.py`.
+
+The error system is being restructured to give failures a real Python
+exception hierarchy, and the danger is a failure silently changing class --
+every `except ValueError` in a user's pipeline stops catching and nothing says
+so. That already happened once: making BEAM_ERR_IO_CORRUPT and
+BEAM_ERR_IO_VERSION reachable converted three `beam_model_load` failures from
+OSError to ValueError, because the switch mapping them had never run.
+
+This file generalises the three tests that caught it. It pins
+(ENTRY POINT -> class), deliberately not (code -> class): one code does not
+imply one class, and assuming it does is how that regression happened.
+BEAM_ERR_NO_LIVE_PATHS reaches Python as a ValueError from
+`positional_marginals`, as an `ImpossibleCondition` from `BeamQuery`, and as a
+plain -inf return from `log_clamp_probability` -- all three deliberate, all
+three pinned.
+
+Verified to bite: re-introducing the IO_CORRUPT regression fails exactly the
+three rows that describe it.
+
+Two uncomfortable facts are pinned as facts rather than left as claims: a
+`beam_model_load` failure is NOT always an OSError (a budget refusal is a
+MemoryError, so the invariant asserted in an earlier commit message was
+already false), and several `PyErr_NoMemory()` sites raise with an empty
+message and no error code at all, so a future `except BeamMemoryError` will
+not catch them.
+
+Also in this commit: the two remaining refusal messages that still hardcoded
+gigabytes, in `query/engine.c` and `math/positional.c`. The previous commit
+fixed three such sites by name without grepping for the shape, so these two
+survived reading "0.0 GB".
+
+## Amended 2026-09-06, for the Python exception hierarchy
+
+    python_api.txt      489 -> 879   (+390)
+
+Superseded file kept as `python_api.prehierarchy.txt`. Purely additive: 15
+exception classes, each contributing exactly 26 lines (a `class` header plus
+the 25 inherited BaseException members the snapshot records). 15 x 26 = 390,
+which is the whole delta -- it matched the figure predicted before the change
+was made, which is the cross-check that nothing unintended was exported.
+
+Before this, `BEAM.__all__` exported no exception at all. The query package
+had the library's only hierarchy and it was not reachable from the root: a
+caller had to know to write `from BEAM.query.errors import QueryTooLarge`.
+Everything else raised bare built-ins, so the only way to tell a memory-budget
+refusal from a genuine out-of-memory was to match on the text of the message --
+which is exactly what `tests/python/analytics/test_memory_budget.py` had to do.
+
+Every class keeps the built-in it replaces as a second base, so this is
+additive rather than breaking: `except ValueError` catches everything it caught
+before. That is verified rather than asserted -- the full suite passes
+unchanged at 470, and `tests/python/test_error_contract.py` pins the observed
+class per entry point and is untouched by this commit.
+
+The built-in is chosen PER CLASS, not uniformly. Collapsing everything onto
+`BeamValueError` would have been tidier and would have broken the eight
+`pytest.raises(TypeError)` sites that guard entry points where the argument's
+type is wrong rather than its value.
+
+`python_api.txt` is the only baseline that moved. `numeric`, `exact`,
+`pytest_cases`, `c_symbols` and the rest are untouched: no computed value
+changed and no test was added or renamed.
+
+## Amended 2026-09-07, for the budget-refusal leaks
+
+    pytest_cases.txt    470 -> 475   (+5, -0)
+
+Superseded file kept as `pytest_cases.preleak.txt`. Purely additive: five
+parametrised cases of `test_a_refusal_can_be_repeated_without_growing`.
+
+A warning-and-defensive audit found SEVEN memory leaks on the memory-budget
+refusal path, all introduced by the commit that added the up-front driver
+refusals, all reachable from Python, and all proven under ASan+LSan rather than
+inferred. The pattern is worth recording because it is a process failure, not
+a typo:
+
+  - the three sites written BY HAND (surprisal.c, extrema.c, path_count.c)
+    free their per-length arrays before returning;
+  - the five generated with a UNIFORM SCRIPT (mellin.c, tilt.c, marginals.c,
+    moments.c x2, diversity.c x2) do not.
+
+The script inserted an identical refusal at each site. The cleanup obligation
+differs at every one of them -- mellin.c holds two arrays, tilt.c holds five,
+marginals.c holds one -- and a template cannot see that. The sites were chosen
+for scripting precisely BECAUSE they looked alike, which is the trap: they were
+alike at the point of insertion and different everywhere around them.
+`topology.c:28` already carried a comment warning about this exact hazard.
+
+Why nothing caught it: a full ASan+UBSan+LSan run over all 201 C tests is
+completely clean, because no test lowers the budget far enough to execute a
+refusal RETURN. `budget.h` predicted the blind spot in so many words --
+"removing a sweep's own guard does not fail the suite where a driver refuses
+first". The five new cases are the missing shape: they call each refusing
+driver fifty times under a starved budget, which makes those returns execute.
+Under a plain run they pin that the refusal is deterministic; under LSan they
+are the leak test.
+
+Also in this commit, and the reason no baseline but this one moved: the
+`const char **edge_borrow_strings` prototype (5 warnings, and a hard error on
+GCC 14 / Clang 16) and a one-line read clamp in `indexing.h` (18 warnings, one
+line inlined 18 times). Both builds now compile with ZERO warnings, down from
+23. `numeric` and `exact` are unchanged, which is the evidence that the clamp
+never fires: if it did, a context index would move and every recorded quantity
+with it.
+
+## Amended 2026-09-07, after review, before merge
+
+    pytest_cases.txt    475 -> 477   (+3, -1)
+
+Superseded file kept as `pytest_cases.prereview.txt`. A pre-merge review found
+four defects, three of them in claims rather than in code. The one removal is
+deliberate, not a deletion:
+
+  - REMOVED `[surprisal_cumulants]`. It was redundant. At a 2 kB budget it
+    refuses inside `beam_mellin_terms`, which `[log_mellin]` already covers,
+    so it exercised no return of its own.
+  - ADDED `[cgf_jet]`, which reaches `tilt.c`; `[length_marginals]`, which
+    reaches `marginals.c`; and `[length_derivatives]`, which reaches
+    `moments.c`. None of those three returns was executed by any test before.
+
+The finding behind it: the list's own comment claimed to cover "the returns
+that leaked", and that was never measured. At 2 kB BOTH moment drivers refuse
+inside `beam_mellin_terms` -- they call it first -- so three of the seven
+fixed returns were exercised and four were not. The list is now a table of
+(entry point, budget, expected refusal), and the test asserts WHICH refusal
+fired. The 1.8 MB tier is what separates them: a Mellin jet fits there and a
+moment jet does not.
+
+Three more corrections from the same review, none affecting a recorded value:
+
+  - `make test` was NOT at zero warnings, though the previous commit said so:
+    `beam_model_crc32c` was declared in the error-macro header this branch
+    renamed, `test_alphabet.c` did not follow, and the call fell back to an
+    implicit int -- a hard error on GCC 14, which is the exact argument that
+    commit used to justify the `const char **` fix. The declaration now has
+    its own home in `beam/io_internal.h`; a checksum in an errors header is
+    what let it go missing.
+  - `BeamTypeError` was exported and documented while nothing could raise it.
+    It is now raised by the shared Python validator, which is the only place
+    that can: the C layer has no code for a type error because a value is
+    converted before it reaches C.
+  - `include/beam/errors.h` claimed BEAM_ERR_NULL_ARG was "unreachable under
+    its own name". There are 56 BEAM_ENULL sites and 13 direct ones. The true
+    statement is "unreachable FROM PYTHON", verified by instrumentation.
+
+`numeric` and `exact` unchanged.

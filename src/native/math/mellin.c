@@ -40,9 +40,12 @@ BeamError beam_mellin_terms(const BeamModel *m, double q, double *terms,
      * itself refuses with the better message, so run one and report that. */
     const uint32_t conc = beam_budget_concurrency(
         beam_jet_sweep_bytes(m->n_states, m->n_residues, 1u), nw ? nw : 1u);
-    if (nw && conc == 0u)
-        return beam_budget_refuse("a tilted per-length sweep", work[0],
-                                  beam_jet_sweep_bytes(m->n_states, m->n_residues, 1u));
+    if (nw && conc == 0u) {
+        const uint32_t at = work[0];
+        const uint64_t need = beam_jet_sweep_bytes(m->n_states, m->n_residues, 1u);
+        free(work); free(lzs);
+        return beam_budget_refuse("a tilted per-length sweep", at, need);
+    }
 
 #ifdef _OPENMP
     #pragma omp parallel for schedule(dynamic, 1) reduction(max:failed) \

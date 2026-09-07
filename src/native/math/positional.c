@@ -260,14 +260,17 @@ static BeamError fb_alloc(const BeamModel *m, uint32_t len, FBWork *k) {
     const uint64_t need = ((uint64_t)len + 1u) * S * sizeof(double)
                         + (uint64_t)S * (R + 3u) * sizeof(double);
     const uint64_t budget = beam_model_memory_budget();
-    if (need > budget)
-        return BEAM_FAIL(BEAM_ERR_ALLOC,
+    if (need > budget) {
+        const char *nu, *bu;
+        const double nv = beam_budget_scaled(need, &nu);
+        const double bv = beam_budget_scaled(budget, &bu);
+        return BEAM_FAIL(BEAM_ERR_BUDGET,
                         "a forward-backward sweep at length %u needs about "
-                        "%.1f GB for the backward field of %u states, and the "
-                        "memory budget is %.1f GB; raise it with "
+                        "%.2f %s for the backward field of %u states, and the "
+                        "memory budget is %.2f %s; raise it with "
                         "BEAM.set_memory_budget, or ask at a lower order",
-                        (unsigned)len, (double)need / 1e9, (unsigned)S,
-                        (double)budget / 1e9);
+                        (unsigned)len, nv, nu, (unsigned)S, bv, bu);
+    }
 
     k->beta = (double **)calloc((size_t)len + 1u, sizeof(double *));
     if (!k->beta) return BEAM_EALLOC("the backward-value layer table");

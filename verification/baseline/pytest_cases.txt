@@ -42,6 +42,13 @@ tests/python/analytics/test_liveness.py::test_live_structure_is_rebuilt_after_ev
 tests/python/analytics/test_liveness.py::test_topology_matches_an_enumerated_trellis[False]
 tests/python/analytics/test_liveness.py::test_topology_matches_an_enumerated_trellis[True]
 tests/python/analytics/test_memory_budget.py::test_a_reduced_budget_changes_no_answer
+tests/python/analytics/test_memory_budget.py::test_a_refusal_can_be_repeated_without_growing[cgf_jet]
+tests/python/analytics/test_memory_budget.py::test_a_refusal_can_be_repeated_without_growing[entropy]
+tests/python/analytics/test_memory_budget.py::test_a_refusal_can_be_repeated_without_growing[hill_number]
+tests/python/analytics/test_memory_budget.py::test_a_refusal_can_be_repeated_without_growing[length_derivatives]
+tests/python/analytics/test_memory_budget.py::test_a_refusal_can_be_repeated_without_growing[length_marginals]
+tests/python/analytics/test_memory_budget.py::test_a_refusal_can_be_repeated_without_growing[log_mellin]
+tests/python/analytics/test_memory_budget.py::test_a_refusal_can_be_repeated_without_growing[surprisal_moments]
 tests/python/analytics/test_memory_budget.py::test_every_heavy_entry_point_refuses_under_a_starved_budget[cgf_jet]
 tests/python/analytics/test_memory_budget.py::test_every_heavy_entry_point_refuses_under_a_starved_budget[entropy]
 tests/python/analytics/test_memory_budget.py::test_every_heavy_entry_point_refuses_under_a_starved_budget[hill_number]
@@ -446,3 +453,25 @@ tests/python/query/test_query.py::test_probability_matches_enumeration
 tests/python/query/test_query.py::test_the_automaton_tier_is_visible
 tests/python/query/test_query.py::test_the_information_matrix_obeys_its_identities
 tests/python/query/test_query.py::test_total_correlation_is_the_gap_the_pairs_do_not_see
+tests/python/test_error_contract.py::test_a_load_failure_is_not_always_an_OSError
+tests/python/test_error_contract.py::test_one_error_code_reaches_python_three_different_ways
+tests/python/test_error_contract.py::test_some_failures_carry_no_code_and_no_message
+tests/python/test_error_contract.py::test_the_observed_exception_class_is_unchanged[build over budget]
+tests/python/test_error_contract.py::test_the_observed_exception_class_is_unchanged[entropy on an unfinalized model]
+tests/python/test_error_contract.py::test_the_observed_exception_class_is_unchanged[explain an unreadable sequence]
+tests/python/test_error_contract.py::test_the_observed_exception_class_is_unchanged[facade explain, same input]
+tests/python/test_error_contract.py::test_the_observed_exception_class_is_unchanged[finalize with nothing observed]
+tests/python/test_error_contract.py::test_the_observed_exception_class_is_unchanged[load a file with a bad checksum]
+tests/python/test_error_contract.py::test_the_observed_exception_class_is_unchanged[load a missing file]
+tests/python/test_error_contract.py::test_the_observed_exception_class_is_unchanged[load a non-model file]
+tests/python/test_error_contract.py::test_the_observed_exception_class_is_unchanged[load an unknown format]
+tests/python/test_error_contract.py::test_the_observed_exception_class_is_unchanged[load a truncated file]
+tests/python/test_error_contract.py::test_the_observed_exception_class_is_unchanged[load over budget]
+tests/python/test_error_contract.py::test_the_observed_exception_class_is_unchanged[path_count_total on an unfinalized model]
+tests/python/test_error_contract.py::test_the_observed_exception_class_is_unchanged[positional_marginals over budget]
+tests/python/test_error_contract.py::test_the_observed_exception_class_is_unchanged[prism omega out of range]
+tests/python/test_error_contract.py::test_the_observed_exception_class_is_unchanged[sample length not generated]
+tests/python/test_error_contract.py::test_the_observed_exception_class_is_unchanged[save to a full device]
+tests/python/test_error_contract.py::test_the_observed_exception_class_is_unchanged[subtract across alphabets]
+tests/python/test_error_contract.py::test_the_observed_exception_class_is_unchanged[topology length out of range]
+tests/python/test_error_contract.py::test_the_query_facade_narrows_builtins_to_its_own_classes

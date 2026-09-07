@@ -53,7 +53,7 @@
 #include <stdint.h>
 
 #include "beam/model.h"
-#include "beam/errors.h"
+#include "beam/error_macros.h"
 
 /** True when a working set of `need` bytes fits the budget in force. */
 static inline bool beam_budget_fits(uint64_t need) {
@@ -89,7 +89,7 @@ static inline BeamError beam_budget_refuse(const char *what, uint32_t length,
     const char *nu, *bu;
     const double nv = beam_budget_scaled(need, &nu);
     const double bv = beam_budget_scaled(beam_model_memory_budget(), &bu);
-    return BEAM_FAIL(BEAM_ERR_ALLOC,
+    return BEAM_FAIL(BEAM_ERR_BUDGET,
                      "%s at length %u needs about %.2f %s of scratch and the "
                      "memory budget is %.2f %s; raise it with "
                      "BEAM.set_memory_budget, or ask at a lower order",
@@ -108,7 +108,7 @@ static inline BeamError beam_budget_refuse_bytes(const char *what,
     const char *nu, *bu;
     const double nv = beam_budget_scaled(need, &nu);
     const double bv = beam_budget_scaled(beam_model_memory_budget(), &bu);
-    return BEAM_FAIL(BEAM_ERR_ALLOC,
+    return BEAM_FAIL(BEAM_ERR_BUDGET,
                      "%s needs about %.2f %s of scratch and the memory budget "
                      "is %.2f %s; raise it with BEAM.set_memory_budget",
                      what, nv, nu, bv, bu);

@@ -14,6 +14,7 @@
 
 #include "beam/common.h"
 #include "beam/model.h"
+#include "beam/io_internal.h"
 #include "beam/alphabet.h"
 #include "beam/model_build.h"   /* beam_config_valid */
 

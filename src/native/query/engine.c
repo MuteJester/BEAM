@@ -59,15 +59,19 @@ BeamError beam_query_work_alloc(const BeamModel *m, uint32_t length,
     const uint64_t need   = beam_query_sweep_bytes(S, n_aut, R, length,
                                                    want_forward);
     const uint64_t budget = beam_model_memory_budget();
-    if (need > budget)
-        return BEAM_FAIL(BEAM_ERR_ALLOC,
-                        "a constrained sweep at length %u needs about %.1f GB "
+    if (need > budget) {
+        const char *nu, *bu;
+        const double nv = beam_budget_scaled(need, &nu);
+        const double bv = beam_budget_scaled(budget, &bu);
+        return BEAM_FAIL(BEAM_ERR_BUDGET,
+                        "a constrained sweep at length %u needs about %.2f %s "
                         "for the backward field of %u trellis states times %u "
-                        "automaton states, and the memory budget is %.1f GB; "
+                        "automaton states, and the memory budget is %.2f %s; "
                         "raise it with BEAM.set_memory_budget, ask at a lower "
                         "order, or use a simpler constraint",
-                        (unsigned)length, (double)need / 1e9, (unsigned)S,
-                        (unsigned)n_aut, (double)budget / 1e9);
+                        (unsigned)length, nv, nu, (unsigned)S,
+                        (unsigned)n_aut, bv, bu);
+    }
 
     k->beta = (double **)calloc((size_t)length + 1u, sizeof(double *));
     if (!k->beta) return BEAM_EALLOC("the backward-value layer table");

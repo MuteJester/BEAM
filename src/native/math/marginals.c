@@ -39,9 +39,12 @@ BeamError beam_model_length_marginals(const BeamModel *m,
      */
     const uint32_t conc = beam_budget_concurrency(
         beam_jet_sweep_bytes(m->n_states, m->n_residues, 3u), nw ? nw : 1u);
-    if (nw && conc == 0u)
-        return beam_budget_refuse("a per-length marginal sweep", work[0],
-                                  beam_jet_sweep_bytes(m->n_states, m->n_residues, 3u));
+    if (nw && conc == 0u) {
+        const uint32_t at = work[0];
+        const uint64_t need = beam_jet_sweep_bytes(m->n_states, m->n_residues, 3u);
+        free(work);
+        return beam_budget_refuse("a per-length marginal sweep", at, need);
+    }
 
 #ifdef _OPENMP
     #pragma omp parallel for schedule(dynamic, 1) reduction(max:failed) \

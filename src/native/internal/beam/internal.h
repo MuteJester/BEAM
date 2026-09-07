@@ -63,7 +63,7 @@
 #include "beam/model_state.h"
 #include "beam/sparse_rows.h"
 #include "beam/live_frontier.h"
-#include "beam/errors.h"
+#include "beam/error_macros.h"
 #include "beam/alphabet.h"
 #include "beam/indexing.h"
 #include "beam/table_access.h"

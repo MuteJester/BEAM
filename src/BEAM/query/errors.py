@@ -12,18 +12,33 @@ built-in Python types -- ``RuntimeError``, ``ValueError``, ``MemoryError``.
 Those are too broad to catch selectively, so this layer narrows them while
 keeping the built-in as a base class: existing code that catches ``ValueError``
 around a query keeps working.
+
+Each class also inherits the library-wide equivalent from :mod:`BEAM.errors`,
+so ``except BEAM.errors.BudgetExceeded`` catches a query refused by the memory
+budget just as it catches a model that will not fit. ``QueryError`` itself
+descends directly from ``BeamError``, which carries no built-in of its own --
+deliberately, because re-basing it onto one would make every query refusal a
+subclass of that built-in and silently widen what an existing
+``except ValueError`` around a query swallows.
 """
 from __future__ import annotations
+
+from BEAM.errors import (BeamError, BeamValueError, BudgetExceeded,
+                         NoLivePaths)
 
 __all__ = ["QueryError", "ImpossibleCondition", "UnsupportedQuery",
            "QueryTooLarge"]
 
 
-class QueryError(Exception):
-    """Base for every refusal from the query engine."""
+class QueryError(BeamError):
+    """Base for every refusal from the query engine.
+
+    A direct child of ``BeamError``, which carries no built-in base. Anything
+    else here would push a built-in onto every query refusal at once.
+    """
 
 
-class ImpossibleCondition(QueryError, RuntimeError):
+class ImpossibleCondition(QueryError, NoLivePaths):
     """The condition selects no sequence, so the conditional does not exist.
 
     Distinct from a probability of zero, which is an ANSWER and is returned as
@@ -32,7 +47,7 @@ class ImpossibleCondition(QueryError, RuntimeError):
     """
 
 
-class UnsupportedQuery(QueryError, ValueError):
+class UnsupportedQuery(QueryError, BeamValueError):
     """The question has no exact answer, or is malformed.
 
     Only quantities that decompose over the trellis are computable in closed
@@ -41,7 +56,7 @@ class UnsupportedQuery(QueryError, ValueError):
     """
 
 
-class QueryTooLarge(QueryError, MemoryError):
+class QueryTooLarge(QueryError, BudgetExceeded):
     """Exactly answerable, and too large to answer within the memory budget.
 
     The message carries the figure and the knob: raise the budget, ask at a

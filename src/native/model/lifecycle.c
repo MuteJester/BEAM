@@ -165,7 +165,7 @@ BeamModel *beam_model_new(const BeamModelConfig *cfg) {
             const char *nu, *bu;
             const double nv = beam_budget_scaled(need, &nu);
             const double bv = beam_budget_scaled(budget, &bu);
-            beam_set_error(BEAM_ERR_ALLOC,
+            beam_set_error(BEAM_ERR_BUDGET,
                           "this %s configuration needs about %.2f %s for its "
                           "tables (order %u, max_length %u, depth_cap %u, %s) "
                           "and the memory budget is %.2f %s; raise it with "
