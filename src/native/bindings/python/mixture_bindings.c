@@ -37,11 +37,14 @@ static const BeamModel **borrow_models(PyObject *seq, uint32_t *out_n) {
                         "a mixture needs at least one member, got none");
         return NULL;
     }
-    if ((uint64_t)n > (uint64_t)BEAM_MIXTURE_MAX_MEMBERS) {
+    /* The union's 64-member bitmask is enforced by the union sweep itself, not
+     * here: this helper serves every entry point, and most of them have no
+     * such bound. */
+    if ((uint64_t)n > (uint64_t)BEAM_MIXTURE_MAX_PRODUCT_MEMBERS) {
         Py_DECREF(fast);
         PyErr_Format(PyExc_ValueError,
                      "a mixture holds at most %u members and %zd were given",
-                     (unsigned)BEAM_MIXTURE_MAX_MEMBERS, n);
+                     (unsigned)BEAM_MIXTURE_MAX_PRODUCT_MEMBERS, n);
         return NULL;
     }
     const BeamModel **v =
@@ -133,4 +136,27 @@ PyObject *py_mixture_support_union(PyObject *self, PyObject *args) {
     PyMem_Free(by);
     if (!b) return NULL;
     return Py_BuildValue("(dNK)", total, b, (unsigned long long)peak);
+}
+
+PyObject *py_mixture_gram(PyObject *self, PyObject *args) {
+    (void)self;
+    PyObject *seq;
+    if (!PyArg_ParseTuple(args, "O", &seq)) return NULL;
+    uint32_t n = 0;
+    const BeamModel **v = borrow_models(seq, &n);
+    if (!v) return NULL;
+
+    double *g = (double *)PyMem_Malloc((size_t)n * n * sizeof(double));
+    if (!g) { PyMem_Free(v); return PyErr_NoMemory(); }
+
+    BeamError err;
+    Py_BEGIN_ALLOW_THREADS
+    err = beam_mixture_gram(v, n, g);
+    Py_END_ALLOW_THREADS
+    PyMem_Free(v);
+    if (err != BEAM_OK) { PyMem_Free(g); return set_beam_error(err); }
+
+    PyObject *b = edge_doubles_to_bytes(g, (size_t)n * n);
+    PyMem_Free(g);
+    return b;
 }

@@ -641,6 +641,7 @@ class Mixture:
   def hill_numbers(self, orders: 'Iterable[float]') -> 'np.ndarray'
   def inner_product(self, *members: 'int') -> 'float'
   property length_distribution
+  def log_gram_matrix(self) -> 'np.ndarray'
   def log_inner_product(self, *members: 'int') -> 'float'
   def log_power_sum(self, q: 'float') -> 'float'
   def log_pseq(self, sequence: 'str') -> 'float'

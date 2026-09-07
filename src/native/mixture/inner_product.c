@@ -132,12 +132,24 @@ BeamError beam_mixture_log_inner_product(const BeamModel *const *models,
     BEAM_BUDGET_OR_REFUSE("a mixture inner-product sweep", len,
                           product_sweep_bytes(S, R));
 
-    LiveHandle h[BEAM_MIXTURE_MAX_MEMBERS];
-    const BeamLive *L[BEAM_MIXTURE_MAX_MEMBERS];
+    /*
+     * On the heap, not the stack. These were fixed arrays sized by the union's
+     * 64-member ceiling, which was fine while the inner product shared that
+     * ceiling and is not now that it does not: at a few thousand members the
+     * same arrays would be megabytes of automatic storage, and a stack
+     * overflow is the one failure this library cannot turn into an error code.
+     */
+    LiveHandle *h = (LiveHandle *)malloc((size_t)k * sizeof(LiveHandle));
+    const BeamLive **L = (const BeamLive **)malloc((size_t)k * sizeof(*L));
+    if (!h || !L) {
+        free(h); free((void *)L);
+        return BEAM_EALLOC("the per-member frontier handles");
+    }
     uint32_t got = 0;
     for (uint32_t f = 0; f < k; ++f) {
         if (beam_live_acquire(models[f], len, &h[f]) != BEAM_OK) {
             for (uint32_t g = 0; g < got; ++g) beam_live_release(&h[g]);
+            free(h); free((void *)L);
             return BEAM_EALLOC("the forward frontier");
         }
         L[f] = h[f].L;
@@ -159,6 +171,7 @@ BeamError beam_mixture_log_inner_product(const BeamModel *const *models,
         free(w); free(wt); free(cur); free(next); free(tail); free(tt);
         free(am); free(am_n); free(ix); free(ix_n);
         for (uint32_t g = 0; g < got; ++g) beam_live_release(&h[g]);
+        free(h); free((void *)L);
         return BEAM_EALLOC("the mixture inner-product buffers");
     }
 
@@ -276,11 +289,13 @@ BeamError beam_mixture_log_inner_product(const BeamModel *const *models,
     free(w); free(wt); free(cur); free(next); free(tail); free(tt);
     free(am); free(am_n); free(ix); free(ix_n);
     for (uint32_t g = 0; g < got; ++g) beam_live_release(&h[g]);
+    free(h); free((void *)L);
     return BEAM_OK;
 dead:
     free(w); free(wt); free(cur); free(next); free(tail); free(tt);
     free(am); free(am_n); free(ix); free(ix_n);
     for (uint32_t g = 0; g < got; ++g) beam_live_release(&h[g]);
+    free(h); free((void *)L);
     *out = -INFINITY;                 /* an answer: the supports never meet */
     return BEAM_OK;
 }
@@ -360,5 +375,106 @@ BeamError beam_mixture_log_inner_product_by_length(
         for (uint32_t Lx = 0; Lx < n; ++Lx) out_by_length[Lx] = val[Lx];
 
     free(val); free(work);
+    return BEAM_OK;
+}
+
+
+/**
+ * Every pairwise log inner product at once, ONE PAIR PER THREAD.
+ *
+ * `out` receives `k * k` doubles, row-major, with `out[i * k + j]` the natural
+ * log of `<P_i, P_j>`. The matrix is symmetric by construction: one triangle
+ * is computed and mirrored, because the sweep sums the members' edge weights
+ * in the order it is given them and computing both triangles independently
+ * could differ in the last bit.
+ *
+ * ## Why the parallelism is here and not inside the sweep
+ *
+ * A single inner product parallelises over the ~25 lengths, and that axis runs
+ * out almost immediately. Measured on donor-sized models at amino-acid order
+ * 4: 110 ms of core time per pair at one thread, 107 ms at four -- and 399 ms
+ * at sixteen, which is 3.6x the work to get 4.4x the wall clock. Past four
+ * threads the length loop is buying nothing and paying for it.
+ *
+ * Pairs are a far better axis: there are `k(k+1)/2` of them, they share
+ * nothing, and each is the same size. So this driver hands one pair to each
+ * thread and lets the sweep inside run serial, which is what OpenMP does on
+ * its own -- nested parallelism is off by default, so the inner regions
+ * collapse when they open inside this one.
+ *
+ * That distinction is the difference between a Gram matrix that scales with
+ * the machine and one that stops at four cores. For 512 members it is 131,328
+ * sweeps: about four hours one pair at a time, about fifteen minutes with the
+ * cores of an ordinary host behind it.
+ *
+ * ## What it costs
+ *
+ * `k(k+1)/2` sweeps, and no less. `sum_i w_i P_i(s)` does not factor over
+ * edges, so there is no reformulation that avoids the pairs; carrying a `k x k`
+ * accumulator per trellis state would fuse them into one sweep with exactly
+ * the same operation count and a state vector nobody can afford. Budget the
+ * time from a single `beam_mixture_log_inner_product` on your own models.
+ */
+BeamError beam_mixture_gram(const BeamModel *const *models, uint32_t k,
+                            double *out) {
+    if (!out) return BEAM_ENULL("output buffer");
+    const BeamError shape = beam_mixture_check_shape(models, k);
+    if (shape != BEAM_OK) return shape;
+
+    const BeamModel *m0 = models[0];
+    /*
+     * Refused here, on the calling thread, before any worker opens. A sweep
+     * that refuses inside the region reaches this function as a bare code with
+     * its message lost, `beam_set_error` being thread-local -- the same reason
+     * every by-length driver in the library checks its budget up front.
+     */
+    const uint64_t per = product_sweep_bytes(m0->n_states, m0->n_residues);
+    const uint32_t conc = beam_budget_concurrency(
+        per, k ? (uint32_t)((uint64_t)k * (k + 1u) / 2u) : 1u);
+    if (conc == 0u)
+        return beam_budget_refuse("a mixture inner-product sweep", 0u, per);
+
+    int failed = BEAM_OK;
+    const int64_t n_pairs = (int64_t)k * ((int64_t)k + 1) / 2;
+    /*
+     * By PAIR, not by row. Rows were the obvious unit and they are the wrong
+     * one: row 0 holds `k` pairs and the last holds 1, so the longest row is
+     * the critical path however many threads are free. At 16 members that
+     * capped the speedup at 1.67x on 16 threads -- measured, before this was
+     * changed -- because one thread was still walking 16 sweeps while the rest
+     * had finished. Every pair is the same size, so handing them out
+     * individually is what actually fills the machine.
+     *
+     * The flat index is inverted by binary search rather than by the closed
+     * form, which needs a square root and starts disagreeing with itself near
+     * the row boundaries once `k` is large. Ten comparisons against a 110 ms
+     * sweep is not a cost worth being clever about.
+     */
+#ifdef _OPENMP
+    #pragma omp parallel for schedule(static) reduction(max:failed) \
+            num_threads((int)conc)
+#endif
+    for (int64_t idx = 0; idx < n_pairs; ++idx) {
+        /* Pairs before row i number `i*k - i*(i-1)/2`, which rises with i. */
+        int64_t lo = 0, hi = (int64_t)k - 1, i = 0;
+        while (lo <= hi) {
+            const int64_t mid = (lo + hi) / 2;
+            const int64_t off = mid * (int64_t)k - mid * (mid - 1) / 2;
+            if (off <= idx) { i = mid; lo = mid + 1; } else { hi = mid - 1; }
+        }
+        const int64_t off_i = i * (int64_t)k - i * (i - 1) / 2;
+        const int64_t j = i + (idx - off_i);
+
+        const BeamModel *pair[2] = {models[i], models[j]};
+        double v = 0.0;
+        const BeamError e =
+            beam_mixture_log_inner_product_by_length(pair, 2u, NULL, &v);
+        if (e != BEAM_OK) { if ((int)e > failed) failed = (int)e; v = 0.0; }
+        out[(size_t)i * k + (size_t)j] = v;
+        out[(size_t)j * k + (size_t)i] = v;
+    }
+    if (failed != BEAM_OK)
+        return BEAM_FAIL((BeamError)failed,
+                         "mixture gram: a pairwise sweep failed");
     return BEAM_OK;
 }

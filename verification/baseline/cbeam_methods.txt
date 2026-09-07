@@ -23,6 +23,7 @@ log_pseq_batch
 memory_budget
 memory_bytes
 mixture_check_shape
+mixture_gram
 mixture_inner_product
 mixture_support_union
 n_cells

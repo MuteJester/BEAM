@@ -26,12 +26,21 @@ BeamError beam_mixture_check_shape(const BeamModel *const *models,
     if (n_models == 0u)
         return BEAM_FAIL(BEAM_ERR_EMPTY_INPUT,
                          "a mixture needs at least one member, got none");
-    if (n_models > BEAM_MIXTURE_MAX_MEMBERS)
+    /*
+     * The union's 64-member bitmask is NOT enforced here, deliberately. This
+     * gate runs for every entry point, and refusing a 256-member mixture
+     * because one of the five things you can ask it cannot be answered would
+     * refuse the other four with it -- which is exactly what happened: a
+     * cohort-scale mixture could not be constructed at all, so q >= 2, the
+     * alpha diversity and the q = 1 bounds were unreachable for a reason that
+     * belongs to q = 0 alone. `beam_mixture_support_union` enforces its own
+     * limit, and says which sweep the limit belongs to.
+     */
+    if (n_models > BEAM_MIXTURE_MAX_PRODUCT_MEMBERS)
         return BEAM_FAIL(BEAM_ERR_PARAM_OUT_OF_RANGE,
                          "a mixture holds at most %u members and %u were "
-                         "given; the union sweep carries one bit per member "
-                         "in a 64-bit mask, so this is a structural limit",
-                         (unsigned)BEAM_MIXTURE_MAX_MEMBERS,
+                         "given",
+                         (unsigned)BEAM_MIXTURE_MAX_PRODUCT_MEMBERS,
                          (unsigned)n_models);
 
     for (uint32_t i = 0; i < n_models; ++i) {
