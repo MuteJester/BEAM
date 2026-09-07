@@ -97,22 +97,14 @@ typedef enum {
     BEAM_ERR_NULL_ARG           = 2,   /* required pointer is NULL          */
     BEAM_ERR_EMPTY_INPUT        = 3,   /* empty sequence list or array      */
     BEAM_ERR_INVALID_SEQUENCE   = 4,   /* bad characters or length          */
-    BEAM_ERR_INVALID_VARIANT    = 5,   /* unknown BeamVariant value         */
-    BEAM_ERR_LENGTH_MISMATCH    = 6,   /* array lengths don't match         */
     BEAM_ERR_PARAM_OUT_OF_RANGE = 7,   /* parameter outside valid range     */
 
     /* Graph state */
     BEAM_ERR_NOT_BUILT          = 8,   /* graph not yet built/finalized     */
     BEAM_ERR_NO_LIVE_PATHS      = 9,   /* no live initial states exist      */
-    BEAM_ERR_HAS_CYCLES         = 10,  /* graph is not a DAG                */
-
-    /* Gene data */
-    BEAM_ERR_NO_GENE_DATA       = 11,  /* gene op on graph without genes    */
-    BEAM_ERR_GENE_NOT_FOUND     = 12,  /* gene name not in string pool      */
 
     /* Graph operations */
     BEAM_ERR_VARIANT_MISMATCH   = 13,  /* set op on different variants      */
-    BEAM_ERR_MISSING_EDGE       = 14,  /* walk requires a missing edge      */
 
     /* IO */
     BEAM_ERR_IO_OPEN            = 15,  /* cannot open file                  */
@@ -121,11 +113,7 @@ typedef enum {
     BEAM_ERR_IO_CORRUPT         = 18,  /* CRC mismatch or bad structure     */
     BEAM_ERR_IO_VERSION         = 19,  /* unsupported format version        */
 
-    /* Numerical */
-    BEAM_ERR_CONVERGENCE        = 20,  /* iterative method did not converge */
-
     /* Internal (library bugs — should never reach the user) */
-    BEAM_ERR_OVERFLOW           = 21,  /* fixed-size buffer exceeded        */
     BEAM_ERR_INTERNAL           = 22,  /* invariant violation (report!)     */
 
     /*
@@ -142,7 +130,27 @@ typedef enum {
      */
     BEAM_ERR_BUDGET             = 23,  /* refused by the memory budget      */
 
-    /* Append new codes HERE, above the aliases, taking the next free value. */
+    /*
+     * RETIRED NUMBERS: 5, 6, 10, 11, 12, 14, 20, 21.
+     *
+     * Eight codes were removed once it was established that nothing in the
+     * library raised them. Four described a graph library BEAM was split out
+     * of and have no meaning for a sequence model -- a missing gene, a missing
+     * edge, a cyclic graph, an unknown variant -- and the rest described
+     * failures these algorithms cannot have: a length mismatch between arrays
+     * that are no longer paired, an iterative method that does not converge in
+     * a library with no iterative methods, a fixed-size buffer that no longer
+     * exists.
+     *
+     * Their numbers are NOT reused, and the gaps are left visible so that is
+     * obvious. A retired value handed back by an old build, or named in old
+     * code, must fail to match rather than quietly mean something new: reusing
+     * 12 for a fresh condition would turn "gene not in the string pool" into
+     * that condition everywhere the old number still travels.
+     *
+     * Append new codes HERE, above the aliases, taking the next free value --
+     * which is 24, not 5.
+     */
 
     /* Backward compatibility aliases (map old codes to new) */
     BEAM_ERR_INVALID_ARG   = BEAM_ERR_NULL_ARG,

@@ -651,3 +651,36 @@ identical; had `numeric` moved by a single bit, the guard would have been
 computing the quotient some other way and would itself have been the
 regression. `test_the_guard_divides_exactly_as_the_operator_does` pins that
 directly, by `memcmp` rather than by comparison.
+
+# Why the C symbol baseline was re-recorded for the dead-code deletion
+
+Re-recorded 2026-09-07, removing the logging subsystem. Previous file kept as
+`c_symbols.predeletion.txt`.
+
+ONE check moved, and it is the one that is supposed to be hard to move:
+
+  c_symbols.txt   -3   beam_log_set, beam_log_level, beam_log_emit
+
+`check.py` fails outright on a symbol going missing, rather than noting it the
+way it notes a new one, and that asymmetry is right: adding public surface is
+additive, removing it breaks callers. This removal is deliberate. The whole
+subsystem -- 35 lines of implementation and 76 of declarations -- had ZERO call
+sites in the library. Nothing ever called `BEAM_INFO`, `BEAM_WARN` or any of
+the other macros, so no message could ever be emitted and installing a callback
+did nothing. The one apparent user, `BEAM_LOGZ_FREE` in `dp/partition.c`, only
+shares the prefix; it frees the log-partition scratch.
+
+Eight error codes went with it, and they moved NO baseline at all. Nothing in
+the library raised BEAM_ERR_INVALID_VARIANT, LENGTH_MISMATCH, HAS_CYCLES,
+NO_GENE_DATA, GENE_NOT_FOUND, MISSING_EDGE, CONVERGENCE or OVERFLOW; their only
+references anywhere were the two tables in `bindings/python/common.c`. That
+`tests/python/test_error_contract.py` still passes unchanged, pinning the class
+raised by each of 22 entry points, is the evidence that no reachable path lost
+its error: a code that had been produced would have taken a row with it.
+
+`numeric`, `exact against enumeration`, the saved-model bytes and thread
+independence are unmoved, as they must be -- nothing here touches a
+computation.
+
+The retired NUMBERS are not reused; see the note in `include/beam/errors.h` for
+why, and for the fact that the next free value is 24 rather than 5.

@@ -18,7 +18,6 @@ src/native/core/alphabet_aa.c
 src/native/core/alphabet_nt.c
 src/native/core/crc32c.c
 src/native/core/errors.c
-src/native/core/logging.c
 src/native/core/rng.c
 src/native/core/runtime.c
 
