@@ -337,10 +337,12 @@ BeamError beam_model_entropy(const BeamModel *m, double *out) {
      * length here, only on the state space. */
     const uint32_t conc_e = beam_budget_concurrency(
         sweep_bytes(m->n_states, m->n_residues, 6u), nw ? nw : 1u);
-    if (nw && conc_e == 0u)
-        return beam_budget_refuse("an expected-weight sweep", work[0],
-                                  sweep_bytes(m->n_states,
-                                              m->n_residues, 6u));
+    if (nw && conc_e == 0u) {
+        const uint32_t at = work[0];
+        const uint64_t need = sweep_bytes(m->n_states, m->n_residues, 6u);
+        free(work); free(per);
+        return beam_budget_refuse("an expected-weight sweep", at, need);
+    }
 
     int failed = BEAM_OK;
 #ifdef _OPENMP
@@ -404,10 +406,12 @@ BeamError beam_model_hill_number(const BeamModel *m, double alpha,
     const uint32_t nw = beam_live_lengths_desc(m, work);
     const uint32_t conc_z = beam_budget_concurrency(
         sweep_bytes(m->n_states, m->n_residues, 4u), nw ? nw : 1u);
-    if (nw && conc_z == 0u)
-        return beam_budget_refuse("a tilted forward sweep", work[0],
-                                  sweep_bytes(m->n_states,
-                                              m->n_residues, 4u));
+    if (nw && conc_z == 0u) {
+        const uint32_t at = work[0];
+        const uint64_t need = sweep_bytes(m->n_states, m->n_residues, 4u);
+        free(terms); free(work); free(za);
+        return beam_budget_refuse("a tilted forward sweep", at, need);
+    }
 
     int failed = BEAM_OK;
 #ifdef _OPENMP

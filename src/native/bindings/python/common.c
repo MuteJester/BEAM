@@ -153,7 +153,7 @@ void capsule_destructor(PyObject *capsule) {
 BeamModel *edge_from_capsule(PyObject *capsule) {
     return (BeamModel *)PyCapsule_GetPointer(capsule, BEAM_CAPSULE_NAME);
 }
-char **edge_borrow_strings(PyObject *seq, Py_ssize_t *out_n) {
+const char **edge_borrow_strings(PyObject *seq, Py_ssize_t *out_n) {
     if (!PyList_Check(seq)) {
         PyErr_SetString(PyExc_TypeError, "expected a list of strings");
         return NULL;

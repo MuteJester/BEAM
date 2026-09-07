@@ -42,6 +42,11 @@ tests/python/analytics/test_liveness.py::test_live_structure_is_rebuilt_after_ev
 tests/python/analytics/test_liveness.py::test_topology_matches_an_enumerated_trellis[False]
 tests/python/analytics/test_liveness.py::test_topology_matches_an_enumerated_trellis[True]
 tests/python/analytics/test_memory_budget.py::test_a_reduced_budget_changes_no_answer
+tests/python/analytics/test_memory_budget.py::test_a_refusal_can_be_repeated_without_growing[entropy]
+tests/python/analytics/test_memory_budget.py::test_a_refusal_can_be_repeated_without_growing[hill_number]
+tests/python/analytics/test_memory_budget.py::test_a_refusal_can_be_repeated_without_growing[log_mellin]
+tests/python/analytics/test_memory_budget.py::test_a_refusal_can_be_repeated_without_growing[surprisal_cumulants]
+tests/python/analytics/test_memory_budget.py::test_a_refusal_can_be_repeated_without_growing[surprisal_moments]
 tests/python/analytics/test_memory_budget.py::test_every_heavy_entry_point_refuses_under_a_starved_budget[cgf_jet]
 tests/python/analytics/test_memory_budget.py::test_every_heavy_entry_point_refuses_under_a_starved_budget[entropy]
 tests/python/analytics/test_memory_budget.py::test_every_heavy_entry_point_refuses_under_a_starved_budget[hill_number]

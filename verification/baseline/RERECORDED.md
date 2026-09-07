@@ -490,3 +490,45 @@ type is wrong rather than its value.
 `python_api.txt` is the only baseline that moved. `numeric`, `exact`,
 `pytest_cases`, `c_symbols` and the rest are untouched: no computed value
 changed and no test was added or renamed.
+
+## Amended 2026-09-07, for the budget-refusal leaks
+
+    pytest_cases.txt    470 -> 475   (+5, -0)
+
+Superseded file kept as `pytest_cases.preleak.txt`. Purely additive: five
+parametrised cases of `test_a_refusal_can_be_repeated_without_growing`.
+
+A warning-and-defensive audit found SEVEN memory leaks on the memory-budget
+refusal path, all introduced by the commit that added the up-front driver
+refusals, all reachable from Python, and all proven under ASan+LSan rather than
+inferred. The pattern is worth recording because it is a process failure, not
+a typo:
+
+  - the three sites written BY HAND (surprisal.c, extrema.c, path_count.c)
+    free their per-length arrays before returning;
+  - the five generated with a UNIFORM SCRIPT (mellin.c, tilt.c, marginals.c,
+    moments.c x2, diversity.c x2) do not.
+
+The script inserted an identical refusal at each site. The cleanup obligation
+differs at every one of them -- mellin.c holds two arrays, tilt.c holds five,
+marginals.c holds one -- and a template cannot see that. The sites were chosen
+for scripting precisely BECAUSE they looked alike, which is the trap: they were
+alike at the point of insertion and different everywhere around them.
+`topology.c:28` already carried a comment warning about this exact hazard.
+
+Why nothing caught it: a full ASan+UBSan+LSan run over all 201 C tests is
+completely clean, because no test lowers the budget far enough to execute a
+refusal RETURN. `budget.h` predicted the blind spot in so many words --
+"removing a sweep's own guard does not fail the suite where a driver refuses
+first". The five new cases are the missing shape: they call each refusing
+driver fifty times under a starved budget, which makes those returns execute.
+Under a plain run they pin that the refusal is deterministic; under LSan they
+are the leak test.
+
+Also in this commit, and the reason no baseline but this one moved: the
+`const char **edge_borrow_strings` prototype (5 warnings, and a hard error on
+GCC 14 / Clang 16) and a one-line read clamp in `indexing.h` (18 warnings, one
+line inlined 18 times). Both builds now compile with ZERO warnings, down from
+23. `numeric` and `exact` are unchanged, which is the evidence that the clamp
+never fires: if it did, a context index would move and every recorded quantity
+with it.
