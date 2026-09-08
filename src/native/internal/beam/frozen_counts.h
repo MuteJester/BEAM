@@ -53,38 +53,122 @@
  * zeros the mask implies.
  */
 
-/** Rows per offset block. One `uint16` sub-offset can address any block. */
+/** Rows per block. A block is what makes random access possible at all. */
 #define BEAM_FROZEN_BLOCK_ROWS 256u
 
-/** How a row's present values are stored. Ascending width; f64 is exact. */
-typedef enum {
-    BEAM_FROZEN_U8  = 0,
-    BEAM_FROZEN_U16 = 1,
-    BEAM_FROZEN_U32 = 2,
-    BEAM_FROZEN_F64 = 3
-} BeamFrozenTier;
+/** Bits of the row header given to the value width. */
+#define BEAM_FROZEN_MASK_BITS  20u
+#define BEAM_FROZEN_WIDTH_SHIFT BEAM_FROZEN_MASK_BITS
+#define BEAM_FROZEN_WIDTH_MASK 63u
 
-/** Bits 0..19 are the residue mask; bits 20..21 are the tier. */
-#define BEAM_FROZEN_MASK_BITS 20u
-#define BEAM_FROZEN_TIER_SHIFT BEAM_FROZEN_MASK_BITS
+/**
+ * A row whose values are not integers keeps them as they are.
+ *
+ * The width field is otherwise the number of bits one value occupies, at most
+ * 53 because that is the largest integer binary64 holds exactly. 63 is not a
+ * width; it says the row's values are raw binary64 and 64 bits each.
+ */
+#define BEAM_FROZEN_WIDTH_F64  63u
 
+/** Words in a presence bitmap over `n` dense rows. */
+static inline uint32_t beam_frozen_bitwords(uint32_t n) {
+    return (n + 63u) / 64u;
+}
+
+/** Is a bitmap over `n_dense_rows` smaller than a list of `n_rows` ids? */
+static inline bool beam_frozen_prefers_bitmap(uint32_t n_dense_rows,
+                                              uint32_t n_rows) {
+    return (uint64_t)beam_frozen_bitwords(n_dense_rows) * sizeof(uint64_t)
+         < (uint64_t)n_rows * sizeof(uint32_t);
+}
+
+/** Blocks needed to cover `n_rows` occupied rows. */
+static inline uint32_t beam_frozen_blocks(uint32_t n_rows) {
+    return (n_rows + BEAM_FROZEN_BLOCK_ROWS - 1u) / BEAM_FROZEN_BLOCK_ROWS;
+}
+
+/**
+ * Counts after observation stops.
+ *
+ * Four arrays, and each of them exists because a whole class of consumer
+ * asked for it. Nothing here supports random access to a cell, because
+ * nothing reads counts that way: `beam_frozen_thaw`, `write_frozen_count_table`
+ * and `beam_model_n_nonzero_cells` all walk rows in order, and every other
+ * count consumer -- observe, add, subtract, posterior, re-finalize -- thaws
+ * first.
+ *
+ * `present`  one bit per DENSE row, replacing a sorted array of row ids.
+ *            The ids were four bytes each for rows that are already
+ *            identified by their position: 17,114,944 bytes on the
+ *            foundation against 923,792 for the bitmap.
+ *
+ * `mask_width` per occupied row, a 20-bit residue mask and a 6-bit value
+ *            width. The mask is which residues this row emitted; the width is
+ *            how many bits one of its values takes, which is the row's own
+ *            largest value rather than a tier rounded up to a byte.
+ *
+ * `values`   the present values, `width` bits each, packed end to end with no
+ *            padding between rows. Byte tiers cost 104,992,360 bytes on the
+ *            foundation; the widths the rows actually need cost about
+ *            74,000,000.
+ *
+ * `block_bit` where each 256-row block's values begin. A sequential walk does
+ *            not need it -- the cursor carries its own position -- but
+ *            reaching row k without walking from zero does.
+ *
+ * The escape is not decoration. `beam_model_observe` takes arbitrary positive
+ * doubles and `beam_model_posterior` contributes `kappa * normalise(prior)`,
+ * so integer counts are a property of a corpus and never of BEAM. A row
+ * holding anything an integer cannot represent exactly is stored as the
+ * binary64 it already was, and the round trip is bit-exact either way.
+ */
+/**
+ * Which way a table identifies its occupied rows.
+ *
+ * A bitmap costs one bit per DENSE row whatever the occupancy; a sorted list
+ * costs four bytes per OCCUPIED row. They cross at one row in thirty-two, and
+ * both sides of that line are real here: the foundation occupies 57.90% of
+ * its rows and the bitmap is 18x smaller, while a per-repertoire model
+ * occupies a fraction of a percent and the bitmap is several times larger.
+ *
+ * Chosen per table from its own occupancy, like the finalized directory and
+ * for the same reason. Exactly one of `present` and `row_id` is non-NULL.
+ */
 typedef struct {
-    uint32_t      *row_id;      /**< [n_rows] ascending dense row ids       */
-    uint32_t      *mask_tier;   /**< [n_rows] residue mask plus tier        */
-    uint16_t      *sub_offset;  /**< [n_rows] value offset within its block */
-    uint64_t      *block_base;  /**< [n_blocks + 1] block value offsets     */
-    unsigned char *values;      /**< packed present values, per-row tier    */
+    uint64_t      *present;     /**< [bitwords(n_dense_rows)], or NULL     */
+    uint32_t      *row_id;      /**< [n_rows] ascending, or NULL           */
+    uint32_t      *mask_width;  /**< [n_rows] 20-bit mask, 6-bit width     */
+    uint64_t      *block_bit;   /**< [n_blocks + 1] value bit offsets      */
+    unsigned char *values;      /**< bit-packed, no padding between rows   */
     uint32_t       n_rows;
     uint32_t       n_blocks;
-    uint64_t       n_value_bytes;
-    uint32_t       stride;      /**< residues per row                       */
+    uint32_t       n_dense_rows;
+    uint32_t       stride;      /**< residues per row                      */
+    uint64_t       n_value_bits;
 } BeamFrozenCounts;
 
-/** Bytes one present value occupies in each tier. */
-static inline uint32_t beam_frozen_tier_width(uint32_t tier) {
-    static const uint32_t w[4] = { 1u, 2u, 4u, 8u };
-    return w[tier & 3u];
-}
+/**
+ * A walk over the occupied rows in ascending dense order.
+ *
+ * The only shape any consumer wants, and the reason `sub_offset` is gone: a
+ * walker carries its own position in the value stream, so storing one per row
+ * was two bytes apiece to avoid arithmetic nobody was doing.
+ */
+typedef struct {
+    const BeamFrozenCounts *f;
+    uint32_t k;        /**< rows already yielded                          */
+    uint32_t widx;     /**< bitmap word `bits` was taken from             */
+    uint64_t bits;     /**< that word, with yielded rows cleared          */
+    uint64_t bit;      /**< where the next row's values start             */
+} BeamFrozenCursor;
+
+void beam_frozen_cursor_init(BeamFrozenCursor *c, const BeamFrozenCounts *f);
+
+/**
+ * The next occupied row, decoded into `out` (`stride` doubles, zeros
+ * included). False when there are none left.
+ */
+bool beam_frozen_cursor_next(BeamFrozenCursor *c, uint32_t *row, double *out);
 
 /**
  * Freeze every occupied row of `src` into `out`.
@@ -111,8 +195,17 @@ BeamError beam_frozen_thaw(const BeamFrozenCounts *src, uint32_t n_dense_rows,
 void beam_frozen_destroy(BeamFrozenCounts *f);
 uint64_t beam_frozen_memory_bytes(const BeamFrozenCounts *f);
 
-/** The values of one row, decoded into `out` (`stride` doubles). */
+/**
+ * Row `k`'s values, decoded into `out`, without walking from row zero.
+ *
+ * Reaches the block that holds `k` in one step and walks at most 255 rows
+ * inside it. For a pass over every row use the cursor: this would make one
+ * O(n) into O(n * 256).
+ */
 void beam_frozen_row(const BeamFrozenCounts *f, uint32_t k, double *out);
+
+/** The dense row id of occupied row `k`. Same cost as `beam_frozen_row`. */
+uint32_t beam_frozen_row_id(const BeamFrozenCounts *f, uint32_t k);
 
 /* ── Model-level freezing ────────────────────────────────────── */
 

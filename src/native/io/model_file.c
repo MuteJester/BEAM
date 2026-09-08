@@ -33,7 +33,8 @@
  * rebuilt. */
 #define BEAM_MAGIC        0x4245414Du   /* "BEAM" */
 #define BEAM_MAGIC_LEGACY 0x45444745u   /* "EDGE", pre-split; rejected */
-#define BEAM_FORMAT   4u
+#define BEAM_FORMAT   5u
+#define BEAM_FORMAT_V4       4u
 #define BEAM_FORMAT_V3       3u
 #define BEAM_FORMAT_V2       2u
 #define BEAM_FORMAT_DENSE_V1 1u
@@ -180,18 +181,27 @@ static bool read_all(FILE *f, void *p, size_t n, uint32_t *crc) {
  */
 static bool write_frozen_count_table(FILE *f, const BeamFrozenCounts *z,
                                      uint32_t *crc) {
-    const uint64_t rows = z->n_rows;
-    const uint64_t blocks = z->n_blocks;
-    const uint64_t vbytes = z->n_value_bytes;
+    const uint64_t rows = z->n_rows, blocks = z->n_blocks;
+    const uint64_t vbits = z->n_value_bits, dense = z->n_dense_rows;
     if (!write_all(f, &rows, sizeof rows, crc)) return false;
+    if (!write_all(f, &dense, sizeof dense, crc)) return false;
     if (!write_all(f, &blocks, sizeof blocks, crc)) return false;
-    if (!write_all(f, &vbytes, sizeof vbytes, crc)) return false;
+    if (!write_all(f, &vbits, sizeof vbits, crc)) return false;
     if (rows == 0u) return true;
-    return write_all(f, z->row_id, (size_t)rows * sizeof(uint32_t), crc)
-        && write_all(f, z->mask_tier, (size_t)rows * sizeof(uint32_t), crc)
-        && write_all(f, z->sub_offset, (size_t)rows * sizeof(uint16_t), crc)
-        && write_all(f, z->block_base, ((size_t)blocks + 1u) * sizeof(uint64_t), crc)
-        && (vbytes == 0u || write_all(f, z->values, (size_t)vbytes, crc));
+    /* Which form identifies the rows. Chosen by occupancy at freeze time, so
+     * the file has to say which one it holds rather than let the reader guess
+     * from dimensions that may not reproduce the same choice. */
+    const uint64_t form = z->present ? 1u : 0u;
+    if (!write_all(f, &form, sizeof form, crc)) return false;
+    const size_t vbytes = (size_t)((vbits + 7u) / 8u);
+    return (form
+            ? write_all(f, z->present,
+                        (size_t)beam_frozen_bitwords(z->n_dense_rows)
+                        * sizeof(uint64_t), crc)
+            : write_all(f, z->row_id, (size_t)rows * sizeof(uint32_t), crc))
+        && write_all(f, z->mask_width, (size_t)rows * sizeof(uint32_t), crc)
+        && write_all(f, z->block_bit, ((size_t)blocks + 1u) * sizeof(uint64_t), crc)
+        && (vbytes == 0u || write_all(f, z->values, vbytes, crc));
 }
 
 static bool write_count_table(FILE *f, const BeamModel *m, uint32_t dir,
@@ -240,76 +250,163 @@ static bool write_count_table(FILE *f, const BeamModel *m, uint32_t dir,
     return wrote;
 }
 
+/**
+ * Read a format-5 frozen count table straight into the model.
+ *
+ * A file is not a trusted input, so everything the encoding rests on is
+ * checked before anything dereferences it: the row count against the table,
+ * the bitmap's population against the row count, each row's width against the
+ * widths that exist, every block offset against the running position, and the
+ * total the headers imply against the total the file declares. A file failing
+ * any of them is refused rather than decoded into whatever the bytes happen
+ * to address.
+ */
 static bool read_frozen_count_table(FILE *f, BeamModel *m, uint32_t dir,
                                     BeamTableKind kind, uint32_t *crc) {
     const uint32_t nr = beam_count_n_rows(m, kind);
+    uint64_t rows = 0, dense = 0, blocks = 0, vbits = 0;
+    if (!read_all(f, &rows, sizeof rows, crc)
+        || !read_all(f, &dense, sizeof dense, crc)
+        || !read_all(f, &blocks, sizeof blocks, crc)
+        || !read_all(f, &vbits, sizeof vbits, crc))
+        return false;
+    if (rows > nr || dense != nr) return false;
+
+    BeamFrozenCounts z;
+    memset(&z, 0, sizeof z);
+    z.stride = m->n_residues;
+    z.n_dense_rows = nr;
+    if (rows == 0u) {
+        *(BeamFrozenCounts *)beam_model_frozen_table(m, dir, kind) = z;
+        return true;
+    }
+    if (blocks != beam_frozen_blocks((uint32_t)rows)) return false;
+
+    uint64_t form = 0;
+    if (!read_all(f, &form, sizeof form, crc) || form > 1u) return false;
+    z.n_rows = (uint32_t)rows;
+    z.n_blocks = (uint32_t)blocks;
+    z.n_value_bits = vbits;
+    const uint32_t words = beam_frozen_bitwords(nr);
+    const size_t vbytes = (size_t)((vbits + 7u) / 8u);
+    if (form) z.present = (uint64_t *)malloc((size_t)words * sizeof(uint64_t));
+    else      z.row_id  = (uint32_t *)malloc((size_t)rows * sizeof(uint32_t));
+    z.mask_width = (uint32_t *)malloc((size_t)rows * sizeof(uint32_t));
+    z.block_bit  = (uint64_t *)malloc(((size_t)blocks + 1u) * sizeof(uint64_t));
+    /* Padded like the freeze path: the word-at-a-time reader touches up to
+     * eight bytes past the last value. */
+    z.values     = (unsigned char *)calloc(vbytes + 16u, 1u);
+    if ((form ? (void *)z.present : (void *)z.row_id) == NULL
+        || !z.mask_width || !z.block_bit || !z.values) {
+        beam_frozen_destroy(&z); return false;
+    }
+    if (!(form
+          ? read_all(f, z.present, (size_t)words * sizeof(uint64_t), crc)
+          : read_all(f, z.row_id, (size_t)rows * sizeof(uint32_t), crc))
+        || !read_all(f, z.mask_width, (size_t)rows * sizeof(uint32_t), crc)
+        || !read_all(f, z.block_bit, ((size_t)blocks + 1u) * sizeof(uint64_t), crc)
+        || (vbytes && !read_all(f, z.values, vbytes, crc))) {
+        beam_frozen_destroy(&z); return false;
+    }
+
+    uint64_t at = 0;
+    if (form) {
+        uint64_t seen = 0;
+        for (uint32_t w = 0; w < words; ++w)
+            seen += (uint64_t)__builtin_popcountll(z.present[w]);
+        if (seen != rows) { beam_frozen_destroy(&z); return false; }
+    } else {
+        for (uint64_t i = 0; i < rows; ++i)
+            if (z.row_id[i] >= nr || (i && z.row_id[i] <= z.row_id[i - 1u])) {
+                beam_frozen_destroy(&z); return false;
+            }
+    }
+    const uint32_t stride_mask = (m->n_residues >= 32u)
+                               ? UINT32_MAX : ((1u << m->n_residues) - 1u);
+    for (uint64_t i = 0; i < rows; ++i) {
+        const uint32_t h = z.mask_width[i];
+        const uint32_t mask = h & ((1u << BEAM_FROZEN_MASK_BITS) - 1u);
+        const uint32_t width = (h >> BEAM_FROZEN_WIDTH_SHIFT)
+                             & BEAM_FROZEN_WIDTH_MASK;
+        if (mask == 0u || (mask & ~stride_mask)) {
+            beam_frozen_destroy(&z); return false;
+        }
+        if (width == 0u || (width > 53u && width != BEAM_FROZEN_WIDTH_F64)) {
+            beam_frozen_destroy(&z); return false;
+        }
+        if (i % BEAM_FROZEN_BLOCK_ROWS == 0u
+            && z.block_bit[i / BEAM_FROZEN_BLOCK_ROWS] != at) {
+            beam_frozen_destroy(&z); return false;
+        }
+        at += (uint64_t)__builtin_popcount(mask)
+            * (width == BEAM_FROZEN_WIDTH_F64 ? 64u : width);
+        if (at > vbits) { beam_frozen_destroy(&z); return false; }
+    }
+    if (at != vbits || z.block_bit[blocks] != vbits) {
+        beam_frozen_destroy(&z); return false;
+    }
+
+    *(BeamFrozenCounts *)beam_model_frozen_table(m, dir, kind) = z;
+    return true;
+}
+
+/**
+ * Read the format-4 frozen encoding into the MUTABLE tables.
+ *
+ * Format 4 packed values into byte tiers with a per-row byte offset; format 5
+ * packs them at the width each row actually needs. Rather than translate one
+ * frozen encoding into the other, this decodes format 4 the way every
+ * pre-frozen format is read -- into count rows -- and lets finalize freeze
+ * them into the current form afterwards. A legacy path is exercised once per
+ * file and should be the simplest thing that is correct, not the fastest.
+ */
+static bool read_frozen_count_table_v4(FILE *f, BeamModel *m, uint32_t dir,
+                                       BeamTableKind kind, uint32_t *crc) {
+    const uint32_t nr = beam_count_n_rows(m, kind);
+    const uint32_t R = m->n_residues;
     uint64_t rows = 0, blocks = 0, vbytes = 0;
     if (!read_all(f, &rows, sizeof rows, crc)
         || !read_all(f, &blocks, sizeof blocks, crc)
         || !read_all(f, &vbytes, sizeof vbytes, crc))
         return false;
     if (rows > nr) return false;
+    if (rows == 0u) return true;
+    if (blocks != (rows + 255u) / 256u) return false;
 
-    BeamFrozenCounts z;
-    memset(&z, 0, sizeof z);
-    z.stride = m->n_residues;
-    if (rows == 0u) {
-        *(BeamFrozenCounts *)beam_model_frozen_table(m, dir, kind) = z;
-        return true;
-    }
-    if (blocks != (rows + BEAM_FROZEN_BLOCK_ROWS - 1u) / BEAM_FROZEN_BLOCK_ROWS)
-        return false;
+    uint32_t *row_id = (uint32_t *)malloc((size_t)rows * sizeof *row_id);
+    uint32_t *mask_tier = (uint32_t *)malloc((size_t)rows * sizeof *mask_tier);
+    uint16_t *sub = (uint16_t *)malloc((size_t)rows * sizeof *sub);
+    uint64_t *base = (uint64_t *)malloc(((size_t)blocks + 1u) * sizeof *base);
+    unsigned char *vals = (unsigned char *)malloc(vbytes ? (size_t)vbytes : 1u);
+    bool ok = row_id && mask_tier && sub && base && vals
+        && read_all(f, row_id, (size_t)rows * sizeof *row_id, crc)
+        && read_all(f, mask_tier, (size_t)rows * sizeof *mask_tier, crc)
+        && read_all(f, sub, (size_t)rows * sizeof *sub, crc)
+        && read_all(f, base, ((size_t)blocks + 1u) * sizeof *base, crc)
+        && (vbytes == 0u || read_all(f, vals, (size_t)vbytes, crc));
 
-    z.n_rows = (uint32_t)rows;
-    z.n_blocks = (uint32_t)blocks;
-    z.n_value_bytes = vbytes;
-    z.row_id     = (uint32_t *)malloc((size_t)rows * sizeof(uint32_t));
-    z.mask_tier  = (uint32_t *)malloc((size_t)rows * sizeof(uint32_t));
-    z.sub_offset = (uint16_t *)malloc((size_t)rows * sizeof(uint16_t));
-    z.block_base = (uint64_t *)malloc(((size_t)blocks + 1u) * sizeof(uint64_t));
-    z.values     = (unsigned char *)malloc(vbytes ? (size_t)vbytes : 1u);
-    if (!z.row_id || !z.mask_tier || !z.sub_offset || !z.block_base
-        || !z.values) { beam_frozen_destroy(&z); return false; }
-
-    if (!read_all(f, z.row_id, (size_t)rows * sizeof(uint32_t), crc)
-        || !read_all(f, z.mask_tier, (size_t)rows * sizeof(uint32_t), crc)
-        || !read_all(f, z.sub_offset, (size_t)rows * sizeof(uint16_t), crc)
-        || !read_all(f, z.block_base, ((size_t)blocks + 1u) * sizeof(uint64_t), crc)
-        || (vbytes && !read_all(f, z.values, (size_t)vbytes, crc))) {
-        beam_frozen_destroy(&z); return false;
-    }
-
-    /* Validate before anything can dereference it. */
-    const uint32_t mask_limit = (m->n_residues >= 32u)
-                              ? UINT32_MAX
-                              : ((1u << m->n_residues) - 1u);
-    if (z.block_base[blocks] != vbytes) { beam_frozen_destroy(&z); return false; }
-    uint64_t running = 0;
-    for (uint64_t i = 0; i < rows; ++i) {
-        if (z.row_id[i] >= nr) { beam_frozen_destroy(&z); return false; }
-        if (i > 0 && z.row_id[i] <= z.row_id[i - 1u]) {
-            beam_frozen_destroy(&z); return false;
+    static const uint32_t V4_WIDTH[4] = { 1u, 2u, 4u, 8u };
+    for (uint64_t i = 0; ok && i < rows; ++i) {
+        const uint32_t id = row_id[i];
+        const uint32_t mt = mask_tier[i];
+        const uint32_t mask = mt & 0xFFFFFu, tier = (mt >> 20u) & 3u;
+        if (id >= nr || mask == 0u) { ok = false; break; }
+        const unsigned char *src = vals + base[i / 256u] + sub[i];
+        double *dst = beam_count_row_mut(m, dir, kind, id, true);
+        if (!dst) { ok = false; break; }
+        for (uint32_t x = 0; x < R; ++x) {
+            if (!((mask >> x) & 1u)) { dst[x] = 0.0; continue; }
+            switch (tier) {
+            case 0u: { uint8_t  t; memcpy(&t, src, 1); dst[x] = (double)t; break; }
+            case 1u: { uint16_t t; memcpy(&t, src, 2); dst[x] = (double)t; break; }
+            case 2u: { uint32_t t; memcpy(&t, src, 4); dst[x] = (double)t; break; }
+            default: {                memcpy(&dst[x], src, 8);             break; }
+            }
+            src += V4_WIDTH[tier];
         }
-        const uint32_t mt = z.mask_tier[i];
-        const uint32_t mask = mt & ((1u << BEAM_FROZEN_MASK_BITS) - 1u);
-        const uint32_t tier = mt >> BEAM_FROZEN_TIER_SHIFT;
-        if (tier > BEAM_FROZEN_F64 || mask == 0u || (mask & ~mask_limit)) {
-            beam_frozen_destroy(&z); return false;
-        }
-        const uint64_t blk = i / BEAM_FROZEN_BLOCK_ROWS;
-        if (blk > blocks || z.block_base[blk] > vbytes) {
-            beam_frozen_destroy(&z); return false;
-        }
-        const uint64_t at = z.block_base[blk] + z.sub_offset[i];
-        if (at != running) { beam_frozen_destroy(&z); return false; }
-        running += (uint64_t)__builtin_popcount(mask)
-                 * beam_frozen_tier_width(tier);
-        if (running > vbytes) { beam_frozen_destroy(&z); return false; }
     }
-    if (running != vbytes) { beam_frozen_destroy(&z); return false; }
-
-    *(BeamFrozenCounts *)beam_model_frozen_table(m, dir, kind) = z;
-    return true;
+    free(row_id); free(mask_tier); free(sub); free(base); free(vals);
+    return ok;
 }
 
 static bool read_sparse_count_table(FILE *f, BeamModel *m, uint32_t dir,
@@ -467,6 +564,7 @@ BeamModel *beam_model_load(const char *path) {
     if (!read_all(f, &h, BEAM_HEADER_V2_BYTES, &crc)
         || h.magic != BEAM_MAGIC
         || (h.format != BEAM_FORMAT
+            && h.format != BEAM_FORMAT_V4
             && h.format != BEAM_FORMAT_V3
             && h.format != BEAM_FORMAT_V2
             && h.format != BEAM_FORMAT_DENSE_V1)) {
@@ -550,12 +648,17 @@ BeamModel *beam_model_load(const char *path) {
      * the same shape a finalized one is in rather than being expanded and
      * frozen again. */
     const bool frozen_on_disk = (h.format >= BEAM_FORMAT) && m->cfg.sparse;
+    const bool frozen_v4 = (h.format == BEAM_FORMAT_V4) && m->cfg.sparse;
     bool ok = true;
     for (uint32_t d = 0; d < BEAM_DIRS && ok; ++d) {
         if (frozen_on_disk) {
             ok = read_frozen_count_table(f, m, d, BEAM_TABLE_WIDE, &crc)
               && read_frozen_count_table(f, m, d, BEAM_TABLE_MID, &crc)
               && read_frozen_count_table(f, m, d, BEAM_TABLE_LEN, &crc);
+        } else if (frozen_v4) {
+            ok = read_frozen_count_table_v4(f, m, d, BEAM_TABLE_WIDE, &crc)
+              && read_frozen_count_table_v4(f, m, d, BEAM_TABLE_MID, &crc)
+              && read_frozen_count_table_v4(f, m, d, BEAM_TABLE_LEN, &crc);
         } else if (m->cfg.sparse) {
             ok = read_sparse_count_table(f, m, d, BEAM_TABLE_WIDE, &crc)
               && read_sparse_count_table(f, m, d, BEAM_TABLE_MID, &crc)

@@ -909,3 +909,24 @@ format-3-specific test names, which are now parametrised over both formats;
 the previous list is kept as `pytest_cases.prefmt5.txt`. No library code
 changed in that commit -- it records bytes, before the encoding they were
 written by is replaced.
+
+---
+
+## 2026-09-08, format 5: the frozen counts re-encoded
+
+`saved-model bytes` re-recorded, and again that is the point rather than a
+side effect. The compatibility fixtures that had to exist first are
+`tests/fixtures/format4_*.beam` from 6781dda, alongside the format-3 pair, and
+`test_format_compatibility.py` is parametrised over both.
+
+The baseline fixture went 813,854 -> 519,329 bytes for a model whose every
+reported value is unchanged. `numeric`, `thread independence` and the 280
+enumeration quantities did not move.
+
+Worth recording because it nearly went the other way: the first version
+identified rows with a presence bitmap only, which costs one bit per DENSE row
+however few are occupied. That is 18x smaller than a list of ids on the
+foundation and several times LARGER on a small model -- this fixture grew 40%,
+to 1,142,777 bytes, and that growth is the only thing that said so. The form
+is now chosen per table from its own occupancy and the file records which it
+holds.

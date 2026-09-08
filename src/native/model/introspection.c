@@ -55,7 +55,7 @@ uint64_t beam_model_n_nonzero_cells(const BeamModel *m) {
                         beam_model_frozen_table(m, d, kind);
                     for (uint32_t r = 0; r < f->n_rows; ++r)
                         n += (uint64_t)__builtin_popcount(
-                            f->mask_tier[r]
+                            f->mask_width[r]
                             & ((1u << BEAM_FROZEN_MASK_BITS) - 1u));
                     continue;
                 }

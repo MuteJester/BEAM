@@ -5,8 +5,58 @@
 #include "beam/internal.h"
 #include "beam/frozen_counts.h"
 
-/* A cell is present when its bits are not those of +0.0. Bitwise, not `!= 0`,
- * so a -0.0 survives the round trip as the distinct value it is. */
+/* ── Bits ────────────────────────────────────────────────────── */
+
+/* Values are packed with no padding, so one can straddle a byte and a row can
+ * start mid-byte. These are the only two places that knows, and both work a
+ * byte at a time rather than assuming an alignment the packing does not have. */
+
+/*
+ * A value can straddle a byte and a row can start mid-byte, so both of these
+ * work on the two 64-bit words a value can touch rather than on one bit at a
+ * time. The bit-at-a-time version of this was 23% of a foundation load.
+ *
+ * Reading eight bytes from an arbitrary offset runs past the last value, so
+ * the payload carries BEAM_FROZEN_PAD bytes of slack. They are never read as
+ * data -- `n_value_bits` says where the values stop.
+ */
+#define BEAM_FROZEN_PAD 16u
+
+static inline void put_bits(unsigned char *dst, uint64_t at, uint64_t v,
+                            uint32_t width) {
+    if (width == 0u) return;
+    const uint64_t byte = at >> 3;
+    const uint32_t off = (uint32_t)(at & 7u);
+    uint64_t lo;
+    memcpy(&lo, dst + byte, sizeof lo);
+    lo |= v << off;
+    memcpy(dst + byte, &lo, sizeof lo);
+    if (off != 0u && off + width > 64u) {
+        uint64_t hi;
+        memcpy(&hi, dst + byte + 8u, sizeof hi);
+        hi |= v >> (64u - off);
+        memcpy(dst + byte + 8u, &hi, sizeof hi);
+    }
+}
+
+static inline uint64_t get_bits(const unsigned char *src, uint64_t at,
+                                uint32_t width) {
+    if (width == 0u) return 0u;
+    const uint64_t byte = at >> 3;
+    const uint32_t off = (uint32_t)(at & 7u);
+    uint64_t lo;
+    memcpy(&lo, src + byte, sizeof lo);
+    uint64_t v = lo >> off;
+    if (off != 0u && off + width > 64u) {
+        uint64_t hi;
+        memcpy(&hi, src + byte + 8u, sizeof hi);
+        v |= hi << (64u - off);
+    }
+    return width == 64u ? v : (v & ((1ull << width) - 1u));
+}
+
+/* A cell is present when its bits are not those of +0.0. Bitwise, not
+ * `!= 0`, so a -0.0 survives the round trip as the distinct value it is. */
 static inline bool cell_present(double v) {
     uint64_t bits, zero = 0u;
     const double pz = 0.0;
@@ -15,92 +65,173 @@ static inline bool cell_present(double v) {
     return bits != zero;
 }
 
+static inline uint64_t bits_of(double v) {
+    uint64_t b; memcpy(&b, &v, sizeof b); return b;
+}
+
 /**
- * The narrowest tier that stores every present cell of this row EXACTLY.
+ * The mask and width one row needs.
  *
- * An integer tier is offered only to a value that is a whole number of at
- * least one, so a fraction, a negative, a -0.0 or a NaN all fall through to
- * binary64 and are stored as the bits they already are. That is what keeps
- * fractional abundances and posterior pseudo-counts exact.
+ * An integer width is offered only to a whole number of at least one that
+ * binary64 holds exactly, so a fraction, a negative, a -0.0, a NaN or
+ * anything past 2^53 all fall to the escape and keep their own bits.
  */
-static uint32_t row_tier(const double *row, uint32_t stride, uint32_t *out_mask,
-                         uint32_t *out_present) {
-    uint32_t mask = 0u, present = 0u, tier = BEAM_FROZEN_U8;
+static uint32_t row_header(const double *row, uint32_t stride,
+                           uint32_t *out_present) {
+    uint32_t mask = 0u, present = 0u, width = 1u;
+    bool integral = true;
     for (uint32_t x = 0; x < stride; ++x) {
         if (!cell_present(row[x])) continue;
         mask |= 1u << x;
         present++;
         const double v = row[x];
-        if (!(v >= 1.0) || v != floor(v)) { tier = BEAM_FROZEN_F64; continue; }
-        if (tier == BEAM_FROZEN_F64) continue;
-        const uint32_t need = (v <= 255.0) ? BEAM_FROZEN_U8
-                            : (v <= 65535.0) ? BEAM_FROZEN_U16
-                            : (v <= 4294967295.0) ? BEAM_FROZEN_U32
-                            : BEAM_FROZEN_F64;
-        if (need > tier) tier = need;
+        if (!(v >= 1.0) || v != floor(v) || v > 9007199254740992.0) {
+            integral = false;
+            continue;
+        }
+        if (!integral) continue;
+        const uint64_t u = (uint64_t)v;
+        const uint32_t need = 64u - (uint32_t)__builtin_clzll(u);
+        if (need > width) width = need;
     }
-    *out_mask = mask;
+    if (!integral) width = BEAM_FROZEN_WIDTH_F64;
     *out_present = present;
-    return tier;
+    return mask | (width << BEAM_FROZEN_WIDTH_SHIFT);
 }
 
-static void encode_row(const double *row, uint32_t stride, uint32_t mask,
-                       uint32_t tier, unsigned char *dst) {
+static inline uint32_t header_mask(uint32_t h) {
+    return h & ((1u << BEAM_FROZEN_MASK_BITS) - 1u);
+}
+static inline uint32_t header_width(uint32_t h) {
+    return (h >> BEAM_FROZEN_WIDTH_SHIFT) & BEAM_FROZEN_WIDTH_MASK;
+}
+/** Bits one row's values occupy. */
+static inline uint64_t row_bits(uint32_t h) {
+    const uint32_t w = header_width(h);
+    return (uint64_t)__builtin_popcount(header_mask(h))
+         * (w == BEAM_FROZEN_WIDTH_F64 ? 64u : w);
+}
+
+static void encode_row(const double *row, uint32_t stride, uint32_t h,
+                       unsigned char *dst, uint64_t at) {
+    const uint32_t mask = header_mask(h), width = header_width(h);
+    const bool raw = (width == BEAM_FROZEN_WIDTH_F64);
     for (uint32_t x = 0; x < stride; ++x) {
-        if (!(mask & (1u << x))) continue;
-        const double v = row[x];
-        switch (tier) {
-        case BEAM_FROZEN_U8:  { uint8_t  t = (uint8_t)v;  memcpy(dst, &t, 1); dst += 1; break; }
-        case BEAM_FROZEN_U16: { uint16_t t = (uint16_t)v; memcpy(dst, &t, 2); dst += 2; break; }
-        case BEAM_FROZEN_U32: { uint32_t t = (uint32_t)v; memcpy(dst, &t, 4); dst += 4; break; }
-        default:              {                           memcpy(dst, &v, 8); dst += 8; break; }
-        }
+        if (!((mask >> x) & 1u)) continue;
+        const uint64_t v = raw ? bits_of(row[x]) : (uint64_t)row[x];
+        put_bits(dst, at, v, raw ? 64u : width);
+        at += raw ? 64u : width;
     }
+}
+
+static void decode_row(const BeamFrozenCounts *f, uint32_t h, uint64_t at,
+                       double *out) {
+    const uint32_t mask = header_mask(h), width = header_width(h);
+    const bool raw = (width == BEAM_FROZEN_WIDTH_F64);
+    const uint32_t w = raw ? 64u : width;
+    for (uint32_t x = 0; x < f->stride; ++x) {
+        if (!((mask >> x) & 1u)) { out[x] = 0.0; continue; }
+        const uint64_t v = get_bits(f->values, at, w);
+        if (raw) memcpy(&out[x], &v, sizeof out[x]);
+        else out[x] = (double)v;
+        at += w;
+    }
+}
+
+/* ── Walking ─────────────────────────────────────────────────── */
+
+void beam_frozen_cursor_init(BeamFrozenCursor *c, const BeamFrozenCounts *f) {
+    c->f = f; c->k = 0u; c->widx = 0u; c->bit = 0u;
+    c->bits = (f && f->present && f->n_dense_rows) ? f->present[0] : 0u;
+}
+
+bool beam_frozen_cursor_next(BeamFrozenCursor *c, uint32_t *row, double *out) {
+    const BeamFrozenCounts *f = c->f;
+    if (!f || c->k >= f->n_rows) return false;
+    uint32_t id;
+    if (f->row_id) {
+        id = f->row_id[c->k];
+    } else {
+        const uint32_t words = beam_frozen_bitwords(f->n_dense_rows);
+        while (c->bits == 0u) {
+            if (++c->widx >= words) return false;
+            c->bits = f->present[c->widx];
+        }
+        const uint32_t b = (uint32_t)__builtin_ctzll(c->bits);
+        c->bits &= c->bits - 1u;                   /* clear the lowest set bit */
+        id = c->widx * 64u + b;
+    }
+    const uint32_t h = f->mask_width[c->k];
+    if (row) *row = id;
+    if (out) decode_row(f, h, c->bit, out);
+    c->bit += row_bits(h);
+    c->k++;
+    return true;
+}
+
+/** Where block `blk` starts, and which row that is. */
+static void seek_block(const BeamFrozenCounts *f, uint32_t k,
+                       uint32_t *out_first, uint64_t *out_bit) {
+    const uint32_t blk = k / BEAM_FROZEN_BLOCK_ROWS;
+    *out_first = blk * BEAM_FROZEN_BLOCK_ROWS;
+    *out_bit = f->block_bit[blk];
 }
 
 void beam_frozen_row(const BeamFrozenCounts *f, uint32_t k, double *out) {
-    const uint32_t mt = f->mask_tier[k];
-    const uint32_t mask = mt & ((1u << BEAM_FROZEN_MASK_BITS) - 1u);
-    const uint32_t tier = mt >> BEAM_FROZEN_TIER_SHIFT;
-    const unsigned char *src = f->values
-                             + f->block_base[k / BEAM_FROZEN_BLOCK_ROWS]
-                             + f->sub_offset[k];
-    for (uint32_t x = 0; x < f->stride; ++x) {
-        if (!(mask & (1u << x))) { out[x] = 0.0; continue; }
-        switch (tier) {
-        case BEAM_FROZEN_U8:  { uint8_t  t; memcpy(&t, src, 1); src += 1; out[x] = (double)t; break; }
-        case BEAM_FROZEN_U16: { uint16_t t; memcpy(&t, src, 2); src += 2; out[x] = (double)t; break; }
-        case BEAM_FROZEN_U32: { uint32_t t; memcpy(&t, src, 4); src += 4; out[x] = (double)t; break; }
-        default:              { double   t; memcpy(&t, src, 8); src += 8; out[x] = t;         break; }
+    if (!f || k >= f->n_rows) return;
+    uint32_t i; uint64_t at;
+    seek_block(f, k, &i, &at);
+    for (; i < k; ++i) at += row_bits(f->mask_width[i]);
+    decode_row(f, f->mask_width[k], at, out);
+}
+
+uint32_t beam_frozen_row_id(const BeamFrozenCounts *f, uint32_t k) {
+    if (!f || k >= f->n_rows) return BEAM_ROW_MISSING;
+    if (f->row_id) return f->row_id[k];
+    /* Select the (k+1)-th set bit, starting from the block's first row so the
+     * scan is bounded by the block rather than by the table. */
+    const uint32_t first = (k / BEAM_FROZEN_BLOCK_ROWS) * BEAM_FROZEN_BLOCK_ROWS;
+    const uint32_t words = beam_frozen_bitwords(f->n_dense_rows);
+    uint32_t seen = 0u;
+    for (uint32_t w = 0; w < words; ++w) {
+        uint64_t bits = f->present[w];
+        const uint32_t pc = (uint32_t)__builtin_popcountll(bits);
+        if (seen + pc <= first) { seen += pc; continue; }
+        while (bits) {
+            const uint32_t b = (uint32_t)__builtin_ctzll(bits);
+            if (seen == k) return w * 64u + b;
+            bits &= bits - 1u;
+            seen++;
         }
     }
+    return BEAM_ROW_MISSING;
 }
 
-/* One occupied row, carried with its payload so freezing never has to ask
- * which partition owns it -- that is a fact about the model's table kind,
- * not about the table. */
-typedef struct { uint32_t id; const double *values; } FrozenRow;
-
-static int cmp_frozen_row(const void *a, const void *b) {
-    const uint32_t x = ((const FrozenRow *)a)->id;
-    const uint32_t y = ((const FrozenRow *)b)->id;
-    return (x > y) - (x < y);
-}
+/* ── Lifecycle ───────────────────────────────────────────────── */
 
 void beam_frozen_destroy(BeamFrozenCounts *f) {
     if (!f) return;
-    free(f->row_id); free(f->mask_tier); free(f->sub_offset);
-    free(f->block_base); free(f->values);
+    free(f->present); free(f->row_id);
+    free(f->mask_width); free(f->block_bit); free(f->values);
     memset(f, 0, sizeof *f);
 }
 
 uint64_t beam_frozen_memory_bytes(const BeamFrozenCounts *f) {
     if (!f) return 0u;
-    return (uint64_t)f->n_rows * (sizeof(uint32_t) + sizeof(uint32_t)
-                                  + sizeof(uint16_t))
+    return (f->present
+            ? (uint64_t)beam_frozen_bitwords(f->n_dense_rows) * sizeof(uint64_t)
+            : (uint64_t)f->n_rows * sizeof(uint32_t))
+         + (uint64_t)f->n_rows * sizeof(uint32_t)
          + (uint64_t)(f->n_blocks + 1u) * sizeof(uint64_t)
-         + f->n_value_bytes
+         + (f->n_value_bits + 7u) / 8u
          + sizeof(BeamFrozenCounts);
+}
+
+typedef struct { uint32_t id; const double *values; } FrozenRow;
+static int cmp_frozen_row(const void *a, const void *b) {
+    const uint32_t x = ((const FrozenRow *)a)->id;
+    const uint32_t y = ((const FrozenRow *)b)->id;
+    return (x > y) - (x < y);
 }
 
 BeamError beam_frozen_freeze(const BeamSparseRows *src, uint32_t n_parts,
@@ -112,6 +243,7 @@ BeamError beam_frozen_freeze(const BeamSparseRows *src, uint32_t n_parts,
         return BEAM_ERANGE("%s: stride %u does not fit a %u-bit mask",
                            __func__, stride, BEAM_FROZEN_MASK_BITS);
     out->stride = stride;
+    out->n_dense_rows = src->n_dense_rows;
 
     uint64_t total = 0;
     for (uint32_t p = 0; p < n_parts && p < src->n_parts; ++p)
@@ -120,10 +252,10 @@ BeamError beam_frozen_freeze(const BeamSparseRows *src, uint32_t n_parts,
     if (total > UINT32_MAX) return BEAM_ERANGE("%s: too many rows", __func__);
     const uint32_t n = (uint32_t)total;
 
-    /* Rows in ascending dense order, each carrying its payload. Observation
-     * filled the partitions in arrival order, so this is where that order is
-     * discarded -- safe because nothing reads a count table by slot:
-     * write_count_table walks dense rows and finalize sorts by destination. */
+    /* Rows ascending, each carrying its payload. Observation filled the
+     * partitions in arrival order; that order is discarded here, which is safe
+     * because nothing reads a count table by slot -- write_count_table walks
+     * dense rows and finalize sorts by destination. */
     FrozenRow *rows = (FrozenRow *)malloc((size_t)n * sizeof *rows);
     if (!rows) return BEAM_EALLOC("the frozen row list");
     uint32_t k = 0;
@@ -140,58 +272,60 @@ BeamError beam_frozen_freeze(const BeamSparseRows *src, uint32_t n_parts,
                                                  __func__, k, n); }
     qsort(rows, n, sizeof *rows, cmp_frozen_row);
 
-    uint32_t *ids = (uint32_t *)malloc((size_t)n * sizeof *ids);
-    if (!ids) { free(rows); return BEAM_EALLOC("the frozen row list"); }
-    for (uint32_t i = 0; i < n; ++i) ids[i] = rows[i].id;
-
-    const uint32_t n_blocks = (n + BEAM_FROZEN_BLOCK_ROWS - 1u)
-                            / BEAM_FROZEN_BLOCK_ROWS;
-    uint32_t *mask_tier = (uint32_t *)malloc((size_t)n * sizeof *mask_tier);
-    uint16_t *sub = (uint16_t *)malloc((size_t)n * sizeof *sub);
-    uint64_t *base = (uint64_t *)malloc(((size_t)n_blocks + 1u) * sizeof *base);
-    if (!mask_tier || !sub || !base) {
-        free(rows); free(ids); free(mask_tier); free(sub); free(base);
+    const uint32_t words = beam_frozen_bitwords(src->n_dense_rows);
+    const uint32_t n_blocks = beam_frozen_blocks(n);
+    const bool bitmap = beam_frozen_prefers_bitmap(src->n_dense_rows, n);
+    uint64_t *present = bitmap
+        ? (uint64_t *)calloc(words, sizeof *present) : NULL;
+    uint32_t *ids = bitmap
+        ? NULL : (uint32_t *)malloc((size_t)n * sizeof *ids);
+    uint32_t *mask_width = (uint32_t *)malloc((size_t)n * sizeof *mask_width);
+    uint64_t *block_bit = (uint64_t *)malloc(((size_t)n_blocks + 1u)
+                                             * sizeof *block_bit);
+    if ((bitmap ? (void *)present : (void *)ids) == NULL
+        || !mask_width || !block_bit) {
+        free(rows); free(present); free(ids); free(mask_width); free(block_bit);
         return BEAM_EALLOC("the frozen row index");
     }
 
-    /* Pass one: classify each row and lay out its bytes. */
-    uint64_t bytes = 0, block_start = 0;
+    /* Pass one: headers, the presence bitmap, and where each block starts. */
+    uint64_t bits = 0;
     for (uint32_t i = 0; i < n; ++i) {
-        if (i % BEAM_FROZEN_BLOCK_ROWS == 0u) {
-            base[i / BEAM_FROZEN_BLOCK_ROWS] = bytes;
-            block_start = bytes;
+        if (i % BEAM_FROZEN_BLOCK_ROWS == 0u)
+            block_bit[i / BEAM_FROZEN_BLOCK_ROWS] = bits;
+        const uint32_t id = rows[i].id;
+        if (id >= src->n_dense_rows) {
+            free(rows); free(present); free(ids); free(mask_width);
+            free(block_bit);
+            return BEAM_ERANGE("%s: row %u is outside the table", __func__, id);
         }
-        const double *row = rows[i].values;
-        uint32_t mask = 0, present = 0;
-        const uint32_t tier = row_tier(row, stride, &mask, &present);
-        mask_tier[i] = mask | (tier << BEAM_FROZEN_TIER_SHIFT);
-        const uint64_t off = bytes - block_start;
-        if (off > UINT16_MAX) { free(rows); free(ids); free(mask_tier);
-            free(sub); free(base);
-            return BEAM_ERANGE("%s: block offset %llu overflows",
-                               __func__, (unsigned long long)off); }
-        sub[i] = (uint16_t)off;
-        bytes += (uint64_t)present * beam_frozen_tier_width(tier);
+        if (bitmap) present[id >> 6] |= 1ull << (id & 63u);
+        else ids[i] = id;
+        uint32_t np = 0;
+        mask_width[i] = row_header(rows[i].values, stride, &np);
+        bits += row_bits(mask_width[i]);
     }
-    base[n_blocks] = bytes;
+    block_bit[n_blocks] = bits;
 
-    unsigned char *values = (unsigned char *)malloc(bytes ? (size_t)bytes : 1u);
-    if (!values) { free(rows); free(ids); free(mask_tier); free(sub); free(base);
-                   return BEAM_EALLOC("the frozen value payload"); }
+    const size_t vbytes = (size_t)((bits + 7u) / 8u);
+    unsigned char *values = (unsigned char *)calloc(vbytes + BEAM_FROZEN_PAD, 1u);
+    if (!values) {
+        free(rows); free(present); free(ids); free(mask_width); free(block_bit);
+        return BEAM_EALLOC("the frozen value payload");
+    }
 
-    /* Pass two: write them. */
+    /* Pass two: the values. calloc above matters -- put_bits only ever sets
+     * bits, so the zeros it leaves are the zero bits of every value. */
+    uint64_t at = 0;
     for (uint32_t i = 0; i < n; ++i) {
-        const uint32_t mt = mask_tier[i];
-        encode_row(rows[i].values, stride,
-                   mt & ((1u << BEAM_FROZEN_MASK_BITS) - 1u),
-                   mt >> BEAM_FROZEN_TIER_SHIFT,
-                   values + base[i / BEAM_FROZEN_BLOCK_ROWS] + sub[i]);
+        encode_row(rows[i].values, stride, mask_width[i], values, at);
+        at += row_bits(mask_width[i]);
     }
     free(rows);
 
-    out->row_id = ids; out->mask_tier = mask_tier; out->sub_offset = sub;
-    out->block_base = base; out->values = values;
-    out->n_rows = n; out->n_blocks = n_blocks; out->n_value_bytes = bytes;
+    out->present = present; out->row_id = ids; out->mask_width = mask_width;
+    out->block_bit = block_bit; out->values = values;
+    out->n_rows = n; out->n_blocks = n_blocks; out->n_value_bits = bits;
     return BEAM_OK;
 }
 
@@ -204,9 +338,11 @@ BeamError beam_frozen_thaw(const BeamFrozenCounts *src, uint32_t n_dense_rows,
     if (e != BEAM_OK) return e;
     double *row = (double *)malloc((size_t)src->stride * sizeof *row);
     if (!row) { beam_sparse_destroy(out); return BEAM_EALLOC("a thaw buffer"); }
-    for (uint32_t i = 0; i < src->n_rows; ++i) {
-        beam_frozen_row(src, i, row);
-        const uint32_t id = src->row_id[i];
+
+    BeamFrozenCursor c;
+    beam_frozen_cursor_init(&c, src);
+    uint32_t id = 0;
+    while (beam_frozen_cursor_next(&c, &id, row)) {
         double *dst = beam_sparse_row_mut(out, id, part_of(id, ctx), true);
         if (!dst) { free(row); beam_sparse_destroy(out);
                     return BEAM_EALLOC("a thawed count row"); }

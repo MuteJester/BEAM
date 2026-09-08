@@ -234,6 +234,11 @@ static void test_every_tier_boundary(void) {
         { 4294967296.0, 9007199254740992.0,          /* 2^32, 2^53     */
           0.5,        1.0 / 3.0 },                          /* f64     */
     };
+    /* The width each group's largest value demands: 255 needs 8 bits,
+     * 65,535 needs 16, 4,294,967,295 needs 32, and the fractional group must
+     * fall to the escape however large its integers are. */
+    static const uint32_t WANT_WIDTH[4] = { 8u, 16u, 32u,
+                                            BEAM_FROZEN_WIDTH_F64 };
     const uint32_t R = 20u, NR = 64u, NROWS = 1024u;
 
     BeamSparseRows t;
@@ -277,19 +282,23 @@ static void test_every_tier_boundary(void) {
                 fail_count++; goto done;
             }
         /* Frozen rows are sorted by dense id and the ids ascend with r, so
-         * frozen entry r is this row. Require the tier the values demand. */
-        const uint32_t tier = f.mask_tier[r] >> BEAM_FROZEN_TIER_SHIFT;
-        if (tier != r % 4u) {
-            printf("FAIL: boundary row %u took tier %u, wanted %u\n",
-                   id, tier, r % 4u);
+         * frozen entry r is this row. The width must be the one the row's
+         * largest value needs -- or the escape, for a row an integer cannot
+         * hold. */
+        const uint32_t w = (f.mask_width[r] >> BEAM_FROZEN_WIDTH_SHIFT)
+                         & BEAM_FROZEN_WIDTH_MASK;
+        const uint32_t want_w = WANT_WIDTH[r % 4u];
+        if (w != want_w) {
+            printf("FAIL: boundary row %u took width %u, wanted %u\n",
+                   id, w, want_w);
             fail_count++; goto done;
         }
-        seen_tiers |= 1u << tier;
+        seen_tiers |= 1u << (r % 4u);
     }
     /* All four tiers must actually have occurred, or the boundaries that
      * matter were never encoded. */
     if (seen_tiers != 0xFu) {
-        printf("FAIL: only tiers 0x%x occurred; wanted all four\n", seen_tiers);
+        printf("FAIL: only groups 0x%x occurred; wanted all four\n", seen_tiers);
         fail_count++; goto done;
     }
     beam_frozen_destroy(&f); beam_sparse_destroy(&back); beam_sparse_destroy(&t);
@@ -425,12 +434,111 @@ static void test_saving_a_frozen_model_writes_the_same_bytes(void) {
     PASS();
 }
 
+/**
+ * Rows are identified whichever way is smaller, and both ways round-trip.
+ *
+ * A bitmap costs one bit per DENSE row however few are occupied; a sorted
+ * list costs four bytes per OCCUPIED row. They cross at one row in
+ * thirty-two, and both sides are real: the foundation occupies 57.90% and the
+ * bitmap is 18x smaller, while a small model occupies a fraction of a percent
+ * and a bitmap is several times LARGER -- which is what this originally
+ * shipped as, and what the saved-bytes baseline caught by growing 40%.
+ */
+static void test_rows_are_identified_the_cheaper_way(void) {
+    /* Sparse: a large row space barely touched -> a list must win.
+     * Saturated: a small row space well filled -> a bitmap must win. */
+    struct { const char *label; BeamModel *m; } cases[2];
+    /* The helper emits sequences of seven to thirteen residues, so
+     * max_length must admit them. Order 4 over a barely-touched row space
+     * against order 2 over a much smaller one, well filled. */
+    struct { uint32_t n; uint8_t order; uint32_t ml; } cfg[2] =
+        { { 200u, 4u, 14u }, { 20000u, 2u, 14u } };
+    cases[0].label = "sparse";
+    cases[0].m = build(cfg[0].n, cfg[0].order, cfg[0].ml, false);
+    cases[1].label = "saturated";
+    cases[1].m = build(cfg[1].n, cfg[1].order, cfg[1].ml, false);
+
+    uint32_t seen_bitmap = 0, seen_list = 0;
+    for (uint32_t c = 0; c < 2u; ++c) {
+        BeamModel *m = cases[c].m;
+        if (!m) { printf("FAIL: %s did not build\n", cases[c].label);
+                  fail_count++; goto out; }
+        if (beam_model_thaw_counts(m) != BEAM_OK) {
+            printf("FAIL: %s did not thaw\n", cases[c].label);
+            fail_count++; goto out;
+        }
+        for (uint32_t t = 0; t < 6u; ++t) {
+            BeamTableKind kind;
+            BeamSparseRows *src = count_table(m, t, &kind);
+            BeamFrozenCounts f;
+            if (beam_frozen_freeze(src, src->n_parts, &f) != BEAM_OK) {
+                printf("FAIL: %s %s did not freeze\n", cases[c].label, name_of(t));
+                fail_count++; goto out;
+            }
+            if (f.n_rows == 0u) { beam_frozen_destroy(&f); continue; }
+
+            /* Exactly one form, and it must be the smaller one. */
+            const bool bm = (f.present != NULL);
+            if (bm == (f.row_id != NULL)) {
+                printf("FAIL: %s %s has %s form\n", cases[c].label, name_of(t),
+                       bm ? "both" : "neither");
+                fail_count++; beam_frozen_destroy(&f); goto out;
+            }
+            const uint64_t as_bitmap =
+                (uint64_t)beam_frozen_bitwords(f.n_dense_rows) * sizeof(uint64_t);
+            const uint64_t as_list = (uint64_t)f.n_rows * sizeof(uint32_t);
+            if (bm != (as_bitmap < as_list)) {
+                printf("FAIL: %s %s chose %s: bitmap %llu, list %llu\n",
+                       cases[c].label, name_of(t), bm ? "bitmap" : "list",
+                       (unsigned long long)as_bitmap,
+                       (unsigned long long)as_list);
+                fail_count++; beam_frozen_destroy(&f); goto out;
+            }
+            if (bm) seen_bitmap++; else seen_list++;
+
+            /* And whichever it chose, the rows come back. */
+            BeamSparseRows back;
+            PartCtx ctx = { m, kind };
+            if (beam_frozen_thaw(&f, beam_count_n_rows(m, kind), src->n_parts,
+                                 part_of, &ctx, &back) != BEAM_OK) {
+                printf("FAIL: %s %s did not thaw back\n",
+                       cases[c].label, name_of(t));
+                fail_count++; beam_frozen_destroy(&f); goto out;
+            }
+            for (uint32_t row = 0; row < beam_count_n_rows(m, kind); ++row) {
+                const uint32_t pp = beam_count_part_for_row(m, kind, row);
+                const double *a = beam_sparse_row(src, row, pp);
+                const double *b = beam_sparse_row(&back, row, pp);
+                if ((a != NULL) != (b != NULL)
+                    || (a && memcmp(a, b, (size_t)m->n_residues * sizeof(double)))) {
+                    printf("FAIL: %s %s row %u differs after the round trip\n",
+                           cases[c].label, name_of(t), row);
+                    fail_count++; beam_frozen_destroy(&f);
+                    beam_sparse_destroy(&back); goto out;
+                }
+            }
+            beam_frozen_destroy(&f); beam_sparse_destroy(&back);
+        }
+    }
+    if (!seen_bitmap || !seen_list) {
+        printf("FAIL: only %s occurred; both forms must be exercised\n",
+               seen_bitmap ? "bitmaps" : "lists");
+        fail_count++; goto out;
+    }
+    beam_model_destroy(cases[0].m); beam_model_destroy(cases[1].m);
+    PASS();
+    return;
+out:
+    beam_model_destroy(cases[0].m); beam_model_destroy(cases[1].m);
+}
+
 int main(void) {
     printf("\nfrozen counts\n");
     RUN_TEST(test_integer_counts_round_trip);
     RUN_TEST(test_fractional_counts_round_trip);
     RUN_TEST(test_posterior_counts_round_trip);
     RUN_TEST(test_every_tier_boundary);
+    RUN_TEST(test_rows_are_identified_the_cheaper_way);
     RUN_TEST(test_every_lifecycle_operation_survives_frozen_counts);
     RUN_TEST(test_saving_a_frozen_model_writes_the_same_bytes);
 
