@@ -899,3 +899,13 @@ performance choice, so a model finalized under a budget admitting two
 concurrent sweeps and one admitting sixteen must produce the same log_z and
 the same scores, bit for bit. That is the property that makes lowering the
 budget safe rather than merely possible.
+
+---
+
+## 2026-09-08, format-4 fixtures recorded
+
+`pytest_cases.txt` gains the format-4 compatibility cases and loses the
+format-3-specific test names, which are now parametrised over both formats;
+the previous list is kept as `pytest_cases.prefmt5.txt`. No library code
+changed in that commit -- it records bytes, before the encoding they were
+written by is replaced.
