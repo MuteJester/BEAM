@@ -223,7 +223,7 @@ uint64_t beam_frozen_memory_bytes(const BeamFrozenCounts *f) {
             : (uint64_t)f->n_rows * sizeof(uint32_t))
          + (uint64_t)f->n_rows * sizeof(uint32_t)
          + (uint64_t)(f->n_blocks + 1u) * sizeof(uint64_t)
-         + (f->n_value_bits + 7u) / 8u
+         + (f->n_value_bits + 7u) / 8u + BEAM_FROZEN_PAD
          + sizeof(BeamFrozenCounts);
 }
 

@@ -24,7 +24,8 @@
  * The direct directory spends four bytes on EVERY dense row, occupied or not.
  * That is 28.19 MiB per generation at order 4 whatever the corpus, which is
  * fine for the foundation -- it occupies 57.90% of its rows -- and is most of
- * a per-repertoire model, which occupies about 3%. This form spends 1.25 bits
+ * a per-repertoire model, which occupies far less -- 8.08% on P00322, and
+ * 0.86% to 31.23% across the donors measured below. This form spends 1.25 bits
  * per row instead: 40 bytes per 256 rows, 1.10 MiB for the same directory.
  *
  * It works only because a finalized table assigns slots in ascending row
