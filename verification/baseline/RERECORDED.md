@@ -858,3 +858,13 @@ patterns, and what changed is which of them a lookup walks through.
 
 This one carries a real runtime cost and the commit message records it rather
 than burying it here.
+
+---
+
+## 2026-09-08, streaming parquet reads
+
+`pytest_cases.txt` gains six tests in `tests/python/io/test_parquet_streaming.py`;
+the previous list is kept as `pytest_cases.preparquet.txt`. Nothing else moved,
+and nothing else could: the change is which buffers pyarrow keeps while
+handing BEAM the same rows in the same order. The two foundation artifacts
+built either side of it are byte-identical.
