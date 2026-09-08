@@ -167,6 +167,7 @@ beam_sparse_intern_rows
 beam_sparse_memory_bytes
 beam_sparse_n_rows
 beam_sparse_pack_cells
+beam_sparse_reserve
 beam_sparse_row
 beam_sparse_row_mut
 beam_sparse_seal_rank

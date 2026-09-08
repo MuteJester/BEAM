@@ -202,6 +202,20 @@ const double *beam_sparse_row(const BeamSparseRows *t, uint32_t row,
 double *beam_sparse_row_mut(BeamSparseRows *t, uint32_t row,
                                 uint32_t part, bool create);
 bool beam_sparse_erase(BeamSparseRows *t, uint32_t row, uint32_t part);
+/**
+ * Give a partition room for exactly `rows` rows, now.
+ *
+ * For a caller that already knows how many rows it is about to add. Filling
+ * after this never grows, so it never allocates a second payload to copy the
+ * first into, and leaves no slack for `beam_sparse_shrink` to reclaim.
+ * Growth from nothing to 1,846,623 rows otherwise doubles twenty-one times,
+ * copying every row already written each time and overshooting the answer by
+ * up to a factor of two.
+ *
+ * Never shrinks: a partition already larger than `rows` is left alone.
+ */
+BeamError beam_sparse_reserve(BeamSparseRows *t, uint32_t part, uint32_t rows);
+
 void beam_sparse_shrink(BeamSparseRows *t);
 /**
  * Replace a finalized table's direct directory with the rank form.

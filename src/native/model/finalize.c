@@ -314,6 +314,23 @@ static BeamError finalize_sparse_table(BeamModel *m, uint32_t dir,
         }
     }
 
+    /*
+     * The answer is already known: `n_rows` rows, listed and sorted above.
+     * Saying so means the fill below never grows -- no second payload to copy
+     * the first into, twenty-one times over on the foundation's wide table --
+     * and leaves no slack for the shrink at the end to reclaim.
+     *
+     * It is an upper bound rather than the exact count, because a row whose
+     * counts sum to zero is skipped below. That cannot happen on a model that
+     * was only ever observed into, but subtraction can produce one, so the
+     * shrink stays: it has nothing to do in the ordinary case and is still
+     * there for the case that has something.
+     */
+    if (rows && n_rows) {
+        const BeamError re = beam_sparse_reserve(out, 0u, n_rows);
+        if (re != BEAM_OK) { free(rows); return re; }
+    }
+
     for (uint32_t idx = 0; idx < (rows ? n_rows : nr); ++idx) {
         const uint32_t dst_row = rows ? rows[idx] : idx;
         uint32_t src_row = dst_row;

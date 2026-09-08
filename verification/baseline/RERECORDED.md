@@ -868,3 +868,19 @@ the previous list is kept as `pytest_cases.preparquet.txt`. Nothing else moved,
 and nothing else could: the change is which buffers pyarrow keeps while
 handing BEAM the same rows in the same order. The two foundation artifacts
 built either side of it are byte-identical.
+
+---
+
+## 2026-09-08, exact-capacity reserve at finalize
+
+`beam_sparse_reserve` added, four tests with it; previous pair kept as
+`*.prereserve.txt`. Nothing numeric moved and nothing could: the rows, the
+slots and the bytes are the same, and the only difference is that the payload
+holding them was allocated once at its final size instead of being doubled
+into twenty-one times.
+
+`test_a_reserved_table_holds_what_a_grown_one_holds` is the one that says so,
+by filling the same rows both ways and comparing every dense row's presence,
+every cell's bits, and every directory slot -- slots included because the
+finalized directory hands out slot k to the k-th row added, and sealing later
+depends on exactly that.

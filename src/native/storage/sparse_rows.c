@@ -22,42 +22,22 @@ static bool sparse_value_bytes(uint32_t rows, uint32_t stride, size_t *out) {
 }
 
 /**
- * Grow one independently-owned partition without exposing a half-grown pair
- * of arrays.  In particular, realloc cannot be used here: values may move
- * successfully and the matching row-id allocation may then fail.  Allocate
- * both replacements, copy the occupied prefix, and only then commit them.
+ * Install buffers of exactly `new_capacity` rows on one partition, keeping
+ * the occupied prefix.
+ *
+ * realloc cannot be used here: the values may move successfully and the
+ * matching row-id allocation then fail, leaving the table describing an array
+ * it no longer owns. Both replacements are allocated and filled first, and
+ * only then committed, so a failure anywhere leaves the partition exactly as
+ * it was.
+ *
+ * Separated from the decision of WHAT capacity to install, because there are
+ * two callers with opposite information: growth is discovered a row at a time
+ * and doubles, while `beam_sparse_reserve` is told the answer up front.
  */
-static bool sparse_grow_partition(BeamSparseRows *t, uint32_t part,
-                                  uint32_t needed) {
-    if (!t || part >= t->n_parts || !t->values || !t->size ||
-        !t->capacity || needed == 0u || needed > t->n_dense_rows)
-        return false;
-
-    const uint32_t old_capacity = t->capacity[part];
+static bool sparse_set_capacity(BeamSparseRows *t, uint32_t part,
+                                uint32_t new_capacity) {
     const uint32_t occupied = t->size[part];
-    if (occupied > old_capacity) return false;
-    if (old_capacity >= needed) return true;
-    if (occupied != 0u && !t->values[part]) return false;
-    if (t->mutable_rows &&
-        (!t->row_ids || (occupied != 0u && !t->row_ids[part])))
-        return false;
-
-    uint32_t new_capacity = old_capacity;
-    if (new_capacity == 0u) {
-        new_capacity = t->n_dense_rows < BEAM_SPARSE_INITIAL_CAPACITY
-            ? t->n_dense_rows : BEAM_SPARSE_INITIAL_CAPACITY;
-    }
-    while (new_capacity < needed) {
-        if (new_capacity > UINT32_MAX / 2u) {
-            new_capacity = needed;
-            break;
-        }
-        new_capacity *= 2u;
-        if (new_capacity > t->n_dense_rows)
-            new_capacity = t->n_dense_rows;
-    }
-    if (new_capacity < needed) return false;
-
     size_t value_bytes;
     if (!sparse_value_bytes(new_capacity, t->stride, &value_bytes)) return false;
 
@@ -105,6 +85,64 @@ static bool sparse_grow_partition(BeamSparseRows *t, uint32_t part,
     }
     t->capacity[part] = new_capacity;
     return true;
+}
+
+/** Shared entry checks for both capacity paths. */
+static bool sparse_capacity_precheck(const BeamSparseRows *t, uint32_t part,
+                                     uint32_t needed) {
+    if (!t || part >= t->n_parts || !t->values || !t->size ||
+        !t->capacity || needed == 0u || needed > t->n_dense_rows)
+        return false;
+    const uint32_t occupied = t->size[part];
+    if (occupied > t->capacity[part]) return false;
+    if (occupied != 0u && !t->values[part]) return false;
+    if (t->mutable_rows &&
+        (!t->row_ids || (occupied != 0u && !t->row_ids[part])))
+        return false;
+    return true;
+}
+
+/**
+ * Grow a partition to hold at least `needed` rows, doubling.
+ *
+ * Doubling is what an incremental filler needs: it discovers rows one at a
+ * time and cannot be told the total. A caller that DOES know the total should
+ * say so with `beam_sparse_reserve` and avoid both the slack and the copies.
+ */
+static bool sparse_grow_partition(BeamSparseRows *t, uint32_t part,
+                                  uint32_t needed) {
+    if (!sparse_capacity_precheck(t, part, needed)) return false;
+    const uint32_t old_capacity = t->capacity[part];
+    if (old_capacity >= needed) return true;
+
+    uint32_t new_capacity = old_capacity;
+    if (new_capacity == 0u) {
+        new_capacity = t->n_dense_rows < BEAM_SPARSE_INITIAL_CAPACITY
+            ? t->n_dense_rows : BEAM_SPARSE_INITIAL_CAPACITY;
+    }
+    while (new_capacity < needed) {
+        if (new_capacity > UINT32_MAX / 2u) {
+            new_capacity = needed;
+            break;
+        }
+        new_capacity *= 2u;
+        if (new_capacity > t->n_dense_rows)
+            new_capacity = t->n_dense_rows;
+    }
+    if (new_capacity < needed) return false;
+    return sparse_set_capacity(t, part, new_capacity);
+}
+
+BeamError beam_sparse_reserve(BeamSparseRows *t, uint32_t part,
+                              uint32_t rows) {
+    if (rows == 0u) return BEAM_OK;
+    if (!sparse_capacity_precheck(t, part, rows))
+        return BEAM_ERANGE("%s: cannot reserve %u rows of %u", __func__,
+                           rows, t ? t->n_dense_rows : 0u);
+    if (t->capacity[part] >= rows) return BEAM_OK;   /* already big enough */
+    if (!sparse_set_capacity(t, part, rows))
+        return BEAM_EALLOC("an exact-capacity sparse partition");
+    return BEAM_OK;
 }
 
 BeamError beam_sparse_init(BeamSparseRows *t, uint32_t n_dense_rows,
