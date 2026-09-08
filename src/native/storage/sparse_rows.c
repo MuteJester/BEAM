@@ -168,6 +168,7 @@ BeamError beam_sparse_init(BeamSparseRows *t, uint32_t n_dense_rows,
     }
 
     t->n_dense_rows = n_dense_rows;
+    t->plane_step = 1u;          /* row-major until something says otherwise */
     t->n_parts = n_parts;
     t->stride = stride;
     t->mutable_rows = mutable_rows;
@@ -537,6 +538,32 @@ BeamError beam_sparse_intern_rows(BeamSparseRows *t) {
     } else {
         t->pool_id = pool_id;
     }
+    return BEAM_OK;
+}
+
+BeamError beam_sparse_plane_transpose(BeamSparseRows *t) {
+    if (!t) return BEAM_ENULL("sparse table");
+    /* Like the other representation choices: a table that cannot take this
+     * keeps what it has and reports OK. A packed table has no array of rows
+     * to transpose -- its cells are dictionary positions. */
+    if (t->mutable_rows || t->cell_mask || t->plane_step > 1u
+        || !t->values || !t->values[0] || !t->size || !t->capacity)
+        return BEAM_OK;
+    const uint32_t rows = t->n_pool ? t->n_pool : t->size[0];
+    const uint32_t R = t->stride;
+    if (rows < 2u || R < 2u) return BEAM_OK;
+
+    double *planes = (double *)malloc((size_t)rows * R * sizeof *planes);
+    if (!planes) return BEAM_EALLOC("a plane-major payload");
+    const double *src = t->values[0];
+    for (uint32_t s = 0; s < rows; ++s)
+        for (uint32_t x = 0; x < R; ++x)
+            planes[(size_t)x * rows + s] = src[(size_t)s * R + x];
+
+    free(t->values[0]);
+    t->values[0] = planes;
+    t->values0 = planes;
+    t->plane_step = rows;
     return BEAM_OK;
 }
 

@@ -179,7 +179,7 @@ static inline BeamLogRow beam_lp_wide_row(const BeamModel *m,
     const uint32_t d = beam_depth_part(m, depth);
     const uint32_t row = d * m->n_ctx_wide + ctx;
     if (m->cfg.sparse) return beam_sparse_log_row(&m->sp_lp_wide[dir], row);
-    BeamLogRow r = { m->lp_wide[dir] + (size_t)row * m->n_residues, NULL, NULL, 0u, true };
+    BeamLogRow r = { m->lp_wide[dir] + (size_t)row * m->n_residues, NULL, NULL, 1u, 0u, true };
     return r;
 }
 
@@ -189,7 +189,7 @@ static inline BeamLogRow beam_lp_mid_row(const BeamModel *m,
                                                  uint32_t ctx) {
     const uint32_t row = depth * m->n_ctx_mid + ctx;
     if (m->cfg.sparse) return beam_sparse_log_row(&m->sp_lp_mid[dir], row);
-    BeamLogRow r = { m->lp_mid[dir] + (size_t)row * m->n_residues, NULL, NULL, 0u, true };
+    BeamLogRow r = { m->lp_mid[dir] + (size_t)row * m->n_residues, NULL, NULL, 1u, 0u, true };
     return r;
 }
 
@@ -199,7 +199,7 @@ static inline BeamLogRow beam_lp_len_row(const BeamModel *m,
                                                  uint32_t ctx) {
     const uint32_t row = (len * m->max_len + depth) * m->n_ctx_len + ctx;
     if (m->cfg.sparse) return beam_sparse_log_row(&m->sp_lp_len[dir], row);
-    BeamLogRow r = { m->lp_len[dir] + (size_t)row * m->n_residues, NULL, NULL, 0u, true };
+    BeamLogRow r = { m->lp_len[dir] + (size_t)row * m->n_residues, NULL, NULL, 1u, 0u, true };
     return r;
 }
 

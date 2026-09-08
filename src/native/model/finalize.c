@@ -398,7 +398,27 @@ static BeamError finalize_sparse_table(BeamModel *m, uint32_t dir,
      * is a mask and a run of indices, and `beam_sparse_log_row` is what hands
      * either form to a caller.
      */
-    return beam_sparse_pack_cells(out);
+    const BeamError pe = beam_sparse_pack_cells(out);
+    if (pe != BEAM_OK) return pe;
+
+    /*
+     * A backward table that still holds plain rows is laid out by residue.
+     *
+     * Nothing reads a backward row whole -- `beam_log_row_into` is called only
+     * on the three forward rows -- and the backward half of the edge kernel
+     * reads ONE residue from each of twenty rows whose dense ids are
+     * consecutive. Measured on the foundation: 78,538 of 148,176 such tiles
+     * have all twenty rows present, they hold 85.2% of the occupied rows, and
+     * in every one of them the slots are consecutive too. By row that is
+     * fifty cache lines to use a hundred and sixty bytes; by residue those
+     * bytes are contiguous.
+     *
+     * Declined for a packed table, which has no array of rows to transpose,
+     * and for the forward tables, which are read whole and want the rows
+     * exactly as they are.
+     */
+    if (dir == BEAM_BWD) return beam_sparse_plane_transpose(out);
+    return BEAM_OK;
 }
 
 static BeamError finalize_sparse_direction(BeamModel *m, uint32_t dir) {

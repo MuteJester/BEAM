@@ -151,6 +151,21 @@ typedef struct {
      * index per existing cell, and the distinct values once each. Exact --
      * the dictionary holds the same bit patterns -- and 5.35x smaller.
      */
+    /**
+     * Doubles between one residue of a row and the next: 1 when the row is
+     * twenty contiguous doubles, or the payload's row count when the table is
+     * stored plane-major.
+     *
+     * A table read one residue at a time wants the latter. The backward half
+     * of the edge kernel reads exactly one residue from each of twenty rows
+     * whose dense ids are consecutive -- and, measured on the foundation, whose
+     * SLOTS are consecutive in every one of the 78,538 tiles where all twenty
+     * are present. Laid out by row that is fifty cache lines to use a hundred
+     * and sixty bytes; laid out by residue it is those bytes contiguous.
+     *
+     * 1 for every other table, which leaves them exactly as they were.
+     */
+    uint32_t   plane_step;
     uint32_t  *cell_mask;   /* [n_cell_rows] residue presence, bit per x     */
     uint32_t  *cell_start;  /* [n_cell_rows + 1] first index of each row     */
     uint16_t  *cell_index;  /* [cell_start[n]] positions in `dict`           */
@@ -246,6 +261,15 @@ BeamError beam_sparse_intern_rows(BeamSparseRows *t);
  */
 BeamError beam_sparse_pack_cells(BeamSparseRows *t);
 
+/**
+ * Re-lay a finalized payload by residue rather than by row.
+ *
+ * For a table read one residue at a time. Declines -- reporting OK -- for a
+ * table that is packed, mutable, already transposed or empty, so a caller may
+ * ask without checking.
+ */
+BeamError beam_sparse_plane_transpose(BeamSparseRows *t);
+
 /** The most distinct values a packed table may hold, so an index is two bytes. */
 #define BEAM_PACK_MAX_DICT 65536u
 uint64_t beam_sparse_memory_bytes(const BeamSparseRows *t);
@@ -264,9 +288,10 @@ uint64_t beam_sparse_n_rows(const BeamSparseRows *t);
  * given run -- which is the only reason it is acceptable in that loop.
  */
 typedef struct {
-    const double   *dense;   /* stride contiguous doubles, or NULL if packed */
+    const double   *dense;   /* the row's residue 0, or NULL if packed       */
     const uint16_t *index;   /* this row's dictionary positions, if packed   */
     const double   *dict;
+    uint32_t        step;    /* doubles between residues: 1, or one plane    */
     uint32_t        mask;    /* residues present, if packed                  */
     bool            present; /* false when the table holds no such row       */
 } BeamLogRow;
@@ -282,7 +307,8 @@ typedef struct {
 static inline void beam_log_row_into(const BeamLogRow *r, uint32_t stride,
                                      double *out) {
     if (r->dense) {
-        for (uint32_t x = 0; x < stride; ++x) out[x] = r->dense[x];
+        const double *v = r->dense;
+        for (uint32_t x = 0; x < stride; ++x, v += r->step) out[x] = *v;
         return;
     }
     const uint16_t *ix = r->index;
@@ -293,7 +319,7 @@ static inline void beam_log_row_into(const BeamLogRow *r, uint32_t stride,
 
 /** Residue `x` of `r`, or `-INFINITY` when this row never emitted it. */
 static inline double beam_log_cell(const BeamLogRow *r, uint32_t x) {
-    if (r->dense) return r->dense[x];
+    if (r->dense) return r->dense[(size_t)x * r->step];
     if (!((r->mask >> x) & 1u)) return -INFINITY;
     return r->dict[r->index[__builtin_popcount(r->mask & ((1u << x) - 1u))]];
 }
@@ -356,7 +382,7 @@ static inline bool beam_sparse_present(const BeamSparseRows *t, uint32_t row) {
  */
 static inline BeamLogRow beam_sparse_log_row(const BeamSparseRows *t,
                                              uint32_t row) {
-    BeamLogRow r = { NULL, NULL, NULL, 0u, false };
+    BeamLogRow r = { NULL, NULL, NULL, 1u, 0u, false };
     uint32_t slot;
     if (t->rank) {
         const BeamRankBlock *b = &t->rank[row >> 8];
@@ -379,8 +405,12 @@ static inline BeamLogRow beam_sparse_log_row(const BeamSparseRows *t,
         r.mask  = t->cell_mask[slot];
         r.index = t->cell_index + t->cell_start[slot];
         r.dict  = t->dict;
+    } else if (t->plane_step > 1u) {
+        r.dense = t->values0 + slot;          /* residue x is `step` further on */
+        r.step  = t->plane_step;
     } else {
         r.dense = t->values0 + (size_t)slot * t->stride;
+        r.step  = 1u;
     }
     return r;
 }

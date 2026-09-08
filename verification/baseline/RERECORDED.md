@@ -930,3 +930,18 @@ foundation and several times LARGER on a small model -- this fixture grew 40%,
 to 1,142,777 bytes, and that growth is the only thing that said so. The form
 is now chosen per table from its own occupancy and the file records which it
 holds.
+
+---
+
+## 2026-09-08, backward tables laid out by residue
+
+`beam_sparse_plane_transpose` added, five tests with it; previous pair kept as
+`*.preplanes.txt`.
+
+Nothing numeric moved and nothing could: the same doubles are at different
+addresses. `test_a_transposed_table_reads_back_identically` says so on a
+hand-built table -- hand-built because a per-repertoire model's backward
+tables are packed and never reach this path, so a test that waited for
+finalize to produce one would have been silently vacuous. It was: the first
+version asserted "nothing was transposed" and failed, which is how the
+vacuity was found rather than shipped.
