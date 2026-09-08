@@ -27,17 +27,10 @@ BeamError beam_compute_log_z(BeamModel *m, uint32_t len, double *out) {
     const uint32_t S  = m->n_states;
     const uint32_t SK = m->state_shift;
 
-    /*
-     * Refused before allocating. The layer of edge weights dominates: `S * R`
-     * doubles is 31 MB on an order-4 amino-acid model and grows with the
-     * alphabet's ceiling order, while the four state vectors and the six
-     * frontier index arrays are linear in `S`.
-     */
-    const uint64_t need = (uint64_t)S * R * sizeof(double)
-                        + 3ull * S * sizeof(double)
-                        + 3ull * S * sizeof(uint32_t)
-                        + 2ull * SK * sizeof(uint32_t)
-                        + ((uint64_t)SK + 1u) * sizeof(uint32_t);
+    /* Refused before allocating, from the sizing function `beam_model_finalize`
+     * also divides the budget by, so the two cannot disagree about what a
+     * length costs. */
+    const uint64_t need = beam_logz_sweep_bytes(S, R, SK);
     BEAM_BUDGET_OR_REFUSE("the partition-function trellis", len, need);
 
     double *w    = (double *)malloc((size_t)S * R * sizeof(double));

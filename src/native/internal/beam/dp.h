@@ -206,6 +206,31 @@ BeamError jet_sweep(const BeamModel *m, uint32_t len, double q,
                           double *out_log_z);
 
 /**
+ * Peak bytes one `beam_compute_log_z` sweep holds, from the same expression
+ * it allocates from.
+ *
+ * Here rather than beside the allocation because there are now two callers
+ * that must agree: the sweep, which refuses a length it cannot fit, and
+ * `beam_model_finalize`, which divides the budget across the lengths it runs
+ * concurrently. Two copies of this arithmetic would drift, and the direction
+ * they would drift in is a driver that admits more lengths than the sweep
+ * will accept.
+ *
+ * The layer of edge weights dominates: `S * R` doubles is 31 MB on an order-4
+ * amino-acid model and grows with the alphabet's ceiling order, while the
+ * state vectors and the frontier index arrays are linear in `S`.
+ */
+static inline uint64_t beam_logz_sweep_bytes(uint32_t n_states,
+                                             uint32_t n_residues,
+                                             uint32_t state_shift) {
+    return (uint64_t)n_states * n_residues * sizeof(double)
+         + 3ull * n_states * sizeof(double)
+         + 3ull * n_states * sizeof(uint32_t)
+         + 2ull * state_shift * sizeof(uint32_t)
+         + ((uint64_t)state_shift + 1u) * sizeof(uint32_t);
+}
+
+/**
  * Peak bytes one `beam_model_path_count` sweep holds: the residue-mask bits
  * and three state vectors. No layer of edge weights, because path counting
  * never asks what an edge weighs -- which is why this is so much smaller than

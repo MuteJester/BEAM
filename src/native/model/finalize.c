@@ -476,10 +476,35 @@ static BeamError finalize_tables(BeamModel *st) {
             else st->log_z[L] = -INFINITY;
         }
         st->log_z[0] = -INFINITY;
+
+        /*
+         * Lengths that run at once divide the budget, like every other
+         * by-length driver in the library. This one did not, and ran at
+         * `beam_threads()` regardless: sixteen concurrent sweeps of 31 MB
+         * apiece is 294 MB of scratch that the budget never saw and that
+         * finalize did not need -- measured, eight threads finalize the
+         * foundation in 5.26 s against 5.34 s at sixteen.
+         *
+         * Refused HERE rather than inside the loop, for the reason the budget
+         * header gives: `beam_set_error` is thread-local, so the refusal a
+         * worker raises reaches this function as a bare code with its message
+         * -- the one naming the figure and the way out -- already lost.
+         */
+        const uint64_t per_len = beam_logz_sweep_bytes(st->n_states,
+                                                       st->n_residues,
+                                                       st->state_shift);
+        const uint32_t conc = beam_budget_concurrency(per_len, nw ? nw : 1u);
+        if (nw && conc == 0u) {
+            const uint32_t at = work[0];
+            free(work);
+            return beam_budget_refuse("the partition-function trellis",
+                                      at, per_len);
+        }
+
         int failed = BEAM_OK;
 #ifdef _OPENMP
         #pragma omp parallel for schedule(dynamic, 1) reduction(max:failed) \
-                num_threads(beam_threads())
+                num_threads(conc ? (int)conc : 1)
 #endif
         for (int64_t k = 0; k < (int64_t)nw; ++k) {
             double z = 0.0;

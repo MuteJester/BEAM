@@ -884,3 +884,18 @@ by filling the same rows both ways and comparing every dense row's presence,
 every cell's bits, and every directory slot -- slots included because the
 finalized directory hands out slot k to the k-th row added, and sealing later
 depends on exactly that.
+
+---
+
+## 2026-09-08, finalize divides the memory budget
+
+Three tests added in `tests/native/test_finalize_budget.c`; the previous case
+list is kept as `c_cases.prebudget2.txt`. No symbol changed --
+`beam_logz_sweep_bytes` is a static inline in an internal header.
+
+Nothing numeric moved, and `test_a_narrow_budget_finalizes_to_the_same_bits`
+is the statement of why it could not: how many lengths run at once is a
+performance choice, so a model finalized under a budget admitting two
+concurrent sweeps and one admitting sixteen must produce the same log_z and
+the same scores, bit for bit. That is the property that makes lowering the
+budget safe rather than merely possible.
