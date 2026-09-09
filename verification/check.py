@@ -23,8 +23,16 @@ fail = []
 
 
 def public_text_names(header_text, syms):
-    """Symbols that a public header actually declares."""
-    return {s for s in syms if s in header_text}
+    """Symbols a public header actually DECLARES.
+
+    A plain `s in header_text` was a substring test over the raw header, so
+    `beam_mix` matched inside `beam_mixture_support_union` and `jet_sweep`
+    matched a prose comment -- two names counted as public API that no header
+    declares. Requiring the name to be followed by `(` at a word boundary is
+    still cheap and still text-based, and it costs those two their place.
+    """
+    return {s for s in syms
+            if re.search(r"\b" + re.escape(s) + r"\s*\(", header_text)}
 
 
 def check(name, got, want):
@@ -98,17 +106,39 @@ if lib.exists():
     # reported, not failed. A public symbol going missing still fails.
     public_text = "\n".join(h.read_text() for h in (ROOT / "include" / "beam").glob("*.h"))
     baseline = set((B / "c_symbols.txt").read_text().split())
-    public_baseline = {s for s in baseline if s in public_text}
-    check("C public symbols", sorted(syms & public_text_names(public_text, syms)),
+    #
+    # WHICH symbols were public is recorded, not recomputed from the current
+    # headers. Recomputing makes deleting a declaration self-approving: the
+    # symbol leaves both sides of the comparison and the removal disappears
+    # with it. That was tried, and it silently passed a public symbol being
+    # deleted from include/beam/ and made static.
+    #
+    public_baseline = set((B / "c_public_symbols.txt").read_text().split())
+    check("C public symbols", sorted(public_text_names(public_text, syms)),
           sorted(public_baseline))
     internal_new = sorted(syms - baseline)
     if internal_new:
         print(f"  note  {len(internal_new)} internal symbol(s) newly external: "
               f"{', '.join(internal_new)}")
-    gone = sorted(baseline - syms)
-    if gone:
-        fail.append("symbols removed")
-        print(f"  FAIL  symbols removed: {', '.join(gone)}")
+    #
+    # A symbol leaving the export table is only a failure if it was PUBLIC.
+    #
+    # This used to fail on any baseline symbol that disappeared, and the
+    # baseline pins 73 internal ones -- 13 of which are used in a single .c
+    # file and could be `static` today. Making one of them static, which is
+    # the encapsulation this check exists to encourage, produced
+    # `FAIL symbols removed` on a build that compiled and passed every test.
+    # The gate was pointed at the wrong direction: it failed the improvement
+    # and merely noted the regression.
+    #
+    gone_public = sorted(public_baseline - syms)
+    if gone_public:
+        fail.append("public symbols removed")
+        print(f"  FAIL  public symbols removed: {', '.join(gone_public)}")
+    gone_internal = sorted((baseline - public_baseline) - syms)
+    if gone_internal:
+        print(f"  note  {len(gone_internal)} internal symbol(s) no longer "
+              f"exported: {', '.join(gone_internal)}")
 else:
     print("  SKIP  C symbols (build/libbeam.a absent; run make first)")
 

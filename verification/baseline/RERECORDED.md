@@ -969,3 +969,25 @@ reorganisation that moved four files' worth of code out of core/runtime.c,
 model/introspection.c and dp/liveness.c into src/native/memory/. That is the
 evidence the move was mechanical.
 
+## Added 2026-09-09: c_public_symbols.txt
+
+A new baseline, not a re-recording: the 112 symbols that a public header
+declares, out of the 187 in `c_symbols.txt`.
+
+It exists because the symbol check could not tell public from internal at
+RECORD time, only at check time, and that made two opposite mistakes at once.
+It failed when any of the 75 internal symbols stopped being exported -- which
+is encapsulation, and 13 of them are used in a single .c file and could be
+`static` today. And when the public set was instead recomputed from the
+current headers, deleting a declaration became self-approving: the symbol left
+both sides of the comparison and the removal vanished with it.
+
+Both were demonstrated before and after. Making `beam_free_counts` static now
+passes with a note; deleting `beam_model_radix` from include/beam/ still fails
+on two checks.
+
+`public_text_names` also compared by substring, so `beam_mix` matched inside
+`beam_mixture_support_union` and `jet_sweep` matched a prose comment. Two names
+were counted as public API that no header declares; the recorded set has 112
+rather than 114.
+
