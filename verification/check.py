@@ -46,12 +46,44 @@ def check(name, got, want):
             if extra: print(f"          added   : {extra[:6]}")
 
 
+# ── The binary under test ──────────────────────────────────────────────────
+#
+# Everything below reads `BEAM._cbeam`, which is a DIFFERENT artifact from
+# build/libbeam.a. `make` builds the static library and the C tests; the
+# extension module is built separately by setup.py, and nothing rebuilds it.
+# So the C suite can pass against fresh code while every Python check here
+# validates a stale binary -- silently, with no warning, and with the numeric
+# checks below reporting that nothing changed because in that binary nothing
+# did.
+#
+# Not hypothetical. A six-hour-old .so reported a 15.01x memory ratio for a
+# change that measured 1.36x through the C benchmark, from the same source
+# tree: the fix was real and reached nobody. Checked first, because a stale
+# binary makes every result after it meaningless rather than merely wrong.
+ROOT = Path(__file__).resolve().parents[1]
+_so = Path(BEAM._cbeam.__file__)
+_newest, _newest_src = 0.0, None
+for _pat in ("src/native/**/*.c", "src/native/**/*.h", "include/beam/*.h"):
+    for _f in ROOT.glob(_pat):
+        _t = _f.stat().st_mtime
+        if _t > _newest:
+            _newest, _newest_src = _t, _f
+if _newest_src is not None and _so.stat().st_mtime < _newest:
+    fail.append("extension freshness")
+    print("  FAIL  extension freshness")
+    print(f"          {_so.name}")
+    print(f"          is older than {_newest_src.relative_to(ROOT)}")
+    print("          rebuild:  python setup.py build_ext --inplace")
+    print("          until then every check below tests the PREVIOUS binary")
+else:
+    print("  OK    extension freshness")
+
+
 # ── Public surfaces ────────────────────────────────────────────────────────
 check("_cbeam callables",
       sorted(n for n in dir(BEAM._cbeam) if not n.startswith("__")),
       (B / "cbeam_methods.txt").read_text().split())
 
-ROOT = Path(__file__).resolve().parents[1]
 lib = ROOT / "build" / "libbeam.a"
 if lib.exists():
     out = subprocess.run(["nm", "-g", "--defined-only", str(lib)],
