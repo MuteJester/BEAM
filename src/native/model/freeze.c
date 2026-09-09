@@ -83,6 +83,18 @@ BeamError beam_model_freeze_counts(BeamModel *m) {
  * frozen one is dropped, so a model that runs out of memory here still has
  * its counts.
  */
+BeamError beam_model_thaw_count_table(const BeamModel *m, uint32_t dir,
+                                      uint32_t kind, BeamSparseRows *out) {
+    if (!m || !out) return BEAM_ENULL(!m ? "model" : "destination");
+    memset(out, 0, sizeof *out);
+    if (!m->counts_frozen) return BEAM_OK;      /* nothing frozen to expand */
+    PartCtx ctx = { m, (BeamTableKind)kind };
+    return beam_frozen_thaw(frozen_table((BeamModel *)m, dir, kind),
+                            beam_count_n_rows(m, (BeamTableKind)kind),
+                            m->n_depth_wide,
+                            part_of_row, &ctx, out);
+}
+
 BeamError beam_model_thaw_counts(BeamModel *m) {
     if (!m) return BEAM_ENULL("model");
     if (!m->counts_frozen) return BEAM_OK;

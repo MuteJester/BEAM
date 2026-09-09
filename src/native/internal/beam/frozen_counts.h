@@ -211,6 +211,27 @@ uint32_t beam_frozen_row_id(const BeamFrozenCounts *f, uint32_t k);
 
 BeamError beam_model_freeze_counts(BeamModel *m);
 BeamError beam_model_thaw_counts(BeamModel *m);
+
+/**
+ * Thaw ONE count table into a caller-owned mutable table, leaving the model
+ * untouched.
+ *
+ * `beam_model_thaw_counts` expands all six at once and installs them, which
+ * is what finalize used to do: on the foundation that turns 29.6 MB of frozen
+ * counts into 731.3 MB of mutable rows, all six alive for the whole build
+ * while 714.2 MB of log tables accumulate beside them. Measured peak 1,969.5
+ * MB for a model that ends up occupying 806.7.
+ *
+ * A table is dead the moment its own log table is written, so finalize takes
+ * them one at a time through this and destroys each before the next. The
+ * model stays frozen throughout -- `counts_frozen` is a whole-model flag and
+ * a half-thawed model would contradict it, which is why this hands back a
+ * local rather than installing anything.
+ *
+ * The caller owns `out` and must `beam_sparse_destroy` it.
+ */
+BeamError beam_model_thaw_count_table(const BeamModel *m, uint32_t dir,
+                                      uint32_t kind, BeamSparseRows *out);
 void      beam_model_release_frozen(BeamModel *m);
 uint64_t  beam_model_frozen_bytes(const BeamModel *m);
 const BeamFrozenCounts *beam_model_frozen_table(const BeamModel *m,
