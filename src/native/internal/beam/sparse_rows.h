@@ -331,8 +331,14 @@ static inline double beam_log_cell(const BeamLogRow *r, uint32_t x) {
  * `slot` is a payload row -- what the directory returns, after any pool
  * mapping. Used where the caller wants a single residue rather than a row,
  * which is what the backward half of the edge kernel does: it reads one
- * residue from each of twenty different wide rows, and today drags 160 bytes
- * through the cache to use eight of them.
+ * residue from each of twenty different wide rows.
+ *
+ * A PLAIN backward table no longer pays the scatter that motivated this:
+ * `beam_sparse_plane_transpose` lays it out by residue, so those twenty
+ * values are contiguous. A packed table declines that transpose -- there is
+ * no array of rows to transpose -- so here the twenty reads remain twenty
+ * separate index runs, and this is the form that still wants a better
+ * layout.
  */
 static inline double beam_sparse_cell(const BeamSparseRows *t, uint32_t slot,
                                       uint32_t x) {

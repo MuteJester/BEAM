@@ -244,6 +244,53 @@ static void test_what_cannot_be_transposed_is_left_alone(void) {
     PASS();
 }
 
+/*
+ * `beam_sparse_row` hands back a pointer to `stride` CONTIGUOUS doubles.
+ * A plane-major payload contains no such run: the values after the first
+ * belong to OTHER rows, so the pointer would be in bounds, non-NULL, and
+ * wrong -- the same failure this file exists to catch, one level down.
+ *
+ * Built by hand and transposed explicitly, for the reason given above
+ * `test_a_transposed_table_reads_back_identically`: whether a finalized
+ * backward table stays plain depends on whether its values repeat enough to
+ * be packed instead, so a model-built table is the wrong place to test the
+ * primitive. The row-major half of the check runs FIRST, so a guard that
+ * refused everything could not pass this by refusing nothing.
+ */
+static void test_a_plane_major_table_refuses_the_row_pointer(void) {
+    const uint32_t n = 900u, step = 3u;
+    BeamSparseRows t;
+    build_plain(&t, n, step);
+    if (t.size[0] != n) { beam_sparse_destroy(&t);
+                          ASSERT_MSG(false, "table did not fill"); }
+
+    /* Row-major: the accessor must work here, or refusing below proves
+     * nothing at all. */
+    uint32_t served = 0;
+    for (uint32_t i = 0; i < 32u; ++i)
+        if (beam_sparse_row(&t, i * step, 0u)) served++;
+    if (served != 32u) { beam_sparse_destroy(&t);
+                         ASSERT_MSG(false, "row-major reads were refused"); }
+
+    if (beam_sparse_plane_transpose(&t) != BEAM_OK) {
+        beam_sparse_destroy(&t); ASSERT_MSG(false, "transpose failed"); }
+    if (t.plane_step != n) { beam_sparse_destroy(&t);
+                             ASSERT_MSG(false, "plane_step is not the row count"); }
+
+    uint32_t refused = 0, readable = 0;
+    for (uint32_t i = 0; i < 32u; ++i) {
+        const uint32_t row = i * step;
+        if (beam_sparse_row(&t, row, 0u) == NULL) refused++;
+        /* The row is still readable through the contract that knows how. */
+        const BeamLogRow r = beam_sparse_log_row(&t, row);
+        if (r.present && r.step == n) readable++;
+    }
+    beam_sparse_destroy(&t);
+    ASSERT_MSG(refused == 32u, "a plane-major table handed back a row pointer");
+    ASSERT_MSG(readable == 32u, "the rows stopped reading through log_row");
+    PASS();
+}
+
 int main(void) {
     printf("\nplane-major backward tables\n");
     RUN_TEST(test_a_transposed_table_reads_back_identically);
@@ -251,6 +298,7 @@ int main(void) {
     RUN_TEST(test_finalize_never_transposes_a_forward_table);
     RUN_TEST(test_scores_are_bit_identical_with_planes);
     RUN_TEST(test_what_cannot_be_transposed_is_left_alone);
+    RUN_TEST(test_a_plane_major_table_refuses_the_row_pointer);
 
     printf("\n  %d passed, %d failed\n\n", pass_count, fail_count);
     return fail_count == 0 ? 0 : 1;

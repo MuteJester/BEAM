@@ -268,6 +268,14 @@ const double *beam_sparse_row(const BeamSparseRows *t, uint32_t row,
     if (!t || row >= t->n_dense_rows || part >= t->n_parts ||
         (!t->index && !t->rank) || !t->values || !t->size || !t->capacity)
         return NULL;
+    /* This hands back a pointer to `stride` CONTIGUOUS doubles, which a
+     * plane-major payload does not contain: there a row's values are one
+     * plane apart, and the doubles that follow the first belong to other
+     * rows. There is no pointer that answers this question for such a table,
+     * so the honest reply is a miss -- `beam_sparse_log_row` is what reads
+     * one. Today every caller is a count table, which is never transposed,
+     * so this only forecloses a wrong answer to a future caller. */
+    if (t->plane_step > 1u) return NULL;
 
     uint32_t slot = t->rank ? sparse_rank_slot(t, row) : t->index[row];
     if (slot == BEAM_ROW_MISSING || slot >= t->size[part] || !t->values[part])
