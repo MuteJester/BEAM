@@ -55,6 +55,13 @@ PyObject *py_observe(PyObject *self, PyObject *args) {
     if (err != BEAM_OK) return set_beam_error(err);
     Py_RETURN_NONE;
 }
+PyObject *py_drop_caches(PyObject *self, PyObject *arg) {
+    (void)self;
+    BeamModel *m = edge_from_capsule(arg);
+    if (!m) return NULL;
+    beam_model_drop_caches(m);
+    Py_RETURN_NONE;
+}
 PyObject *py_finalize(PyObject *self, PyObject *arg) {
     (void)self;
     BeamModel *m = edge_from_capsule(arg);
@@ -307,6 +314,7 @@ BEAM_SCALAR(n_states,        beam_model_n_states(m),        PyLong_FromUnsignedL
 BEAM_SCALAR(n_cells,         beam_model_n_cells(m),         PyLong_FromUnsignedLongLong)
 BEAM_SCALAR(n_nonzero_cells, beam_model_n_nonzero_cells(m), PyLong_FromUnsignedLongLong)
 BEAM_SCALAR(memory_bytes,    beam_model_memory_bytes(m),    PyLong_FromUnsignedLongLong)
+BEAM_SCALAR(live_cache_bytes, beam_model_live_cache_bytes(m), PyLong_FromUnsignedLongLong)
 /*
  * Not BEAM_SCALAR, which is for accessors that cannot fail. This one reports
  * failure as 0.0 with the error set, and 0.0 is also a legitimate total, so

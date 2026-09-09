@@ -72,6 +72,8 @@ beam_model_log_pseq
 beam_model_log_pseq_batch
 beam_model_memory_budget
 beam_model_memory_bytes
+beam_model_live_cache_bytes
+beam_model_drop_caches
 beam_model_n_cells
 beam_model_new
 beam_model_n_nonzero_cells

@@ -70,6 +70,8 @@ PyObject *py_mixture_inner_product(PyObject *self, PyObject *args);
 PyObject *py_mixture_gram(PyObject *self, PyObject *args);
 PyObject *py_mixture_support_union(PyObject *self, PyObject *args);
 PyObject *py_memory_bytes(PyObject *self, PyObject *arg);
+PyObject *py_live_cache_bytes(PyObject *self, PyObject *arg);
+PyObject *py_drop_caches(PyObject *self, PyObject *arg);
 PyObject *py_n_cells(PyObject *self, PyObject *arg);
 PyObject *py_n_nonzero_cells(PyObject *self, PyObject *arg);
 PyObject *py_n_observed(PyObject *self, PyObject *arg);

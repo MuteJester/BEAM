@@ -945,3 +945,27 @@ tables are packed and never reach this path, so a test that waited for
 finalize to produce one would have been silently vacuous. It was: the first
 version asserted "nothing was transposed" and failed, which is how the
 vacuity was found rather than shipped.
+
+## Amended 2026-09-09, for the memory-management reorganisation
+
+Four baselines moved, all additive, none removed anything.
+
+`c_symbols.txt`, `cbeam_methods.txt`, `python_api.txt`
+    `beam_model_live_cache_bytes` and `beam_model_drop_caches`, and their
+    Python members. The per-length live cache was real memory no caller could
+    see or release: a model reporting 13.8 MB of tables was holding 29.2 MB,
+    and on the foundation 806.7 MB of tables carried 382.1 MB of cache.
+    `beam_model_memory_bytes` deliberately still reports the tables only --
+    folding a droppable memoisation into it would make the number mean two
+    things and change with when it was asked -- so the cache is reported
+    beside it instead.
+
+`pytest_cases.txt`
+    Six tests for the above, and nothing replaced.
+
+The check that matters did NOT move. `numeric`, `saved-model bytes`, `thread
+independence` and the 280 enumeration quantities were all unchanged across a
+reorganisation that moved four files' worth of code out of core/runtime.c,
+model/introspection.c and dp/liveness.c into src/native/memory/. That is the
+evidence the move was mechanical.
+

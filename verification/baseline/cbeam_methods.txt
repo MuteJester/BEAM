@@ -22,6 +22,8 @@ log_pseq
 log_pseq_batch
 memory_budget
 memory_bytes
+live_cache_bytes
+drop_caches
 mixture_check_shape
 mixture_gram
 mixture_inner_product

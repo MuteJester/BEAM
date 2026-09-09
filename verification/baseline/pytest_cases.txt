@@ -624,3 +624,9 @@ tests/python/model/test_weight_buffers.py::test_other_dtypes_still_build_the_sam
 tests/python/model/test_weight_buffers.py::test_a_non_contiguous_array_still_builds_the_same_model
 tests/python/model/test_weight_buffers.py::test_a_mismatched_buffer_length_is_still_refused
 tests/python/model/test_weight_buffers.py::test_a_list_of_python_floats_is_unchanged
+tests/python/model/test_cache_accounting.py::test_the_cache_is_empty_until_an_analytic_runs
+tests/python/model/test_cache_accounting.py::test_an_analytic_fills_the_cache_and_memory_bytes_does_not_move
+tests/python/model/test_cache_accounting.py::test_drop_caches_releases_it
+tests/python/model/test_cache_accounting.py::test_drop_caches_changes_no_result
+tests/python/model/test_cache_accounting.py::test_dropping_twice_is_safe
+tests/python/model/test_cache_accounting.py::test_dropping_before_any_analytic_is_safe

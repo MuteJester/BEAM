@@ -116,6 +116,7 @@ class BeamModel:
   property config
   def copy(self) -> 'BeamModel'
   def diversity_profile(self) -> 'dict[str, float]'
+  def drop_caches(self) -> 'None'
   def dynamic_range(self, *, base: 'float' = 10.0) -> 'float'
   def effective_diversity(self) -> 'float'
   property effective_threads
@@ -130,6 +131,7 @@ class BeamModel:
   def length_marginals(self) -> 'dict[str, np.ndarray]'
   def length_moments(self, *, q: 'float' = 1.0, order: 'int' = 4) -> 'dict[str, Any]'
   def length_pmf(self) -> 'np.ndarray'
+  property live_cache_bytes
   def log_clamp_probability(self, length: 'int', clamp: 'dict') -> 'float'
   def log_length_prior(self, length: 'int') -> 'float'
   def log_mellin(self, q: 'float') -> 'float'

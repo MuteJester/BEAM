@@ -460,11 +460,48 @@ bool beam_model_is_finalized(const BeamModel *m);
 BeamError beam_model_compact(BeamModel *m);
 
 /**
- * Approximate resident bytes of the model's tables. Dense models report their
+ * Approximate resident bytes of the model's TABLES. Dense models report their
  * flat count/probability payloads; sparse models report directories, allocated
  * row capacity, reverse maps, and their small metadata arrays.
+ *
+ * Measured against what the build actually allocates, this is exact to within
+ * 0.2 MB. It excludes the per-length live cache, which appears after the first
+ * analytic and can exceed this figure -- see `beam_model_live_cache_bytes`.
  */
 uint64_t beam_model_memory_bytes(const BeamModel *m);
+
+/**
+ * Bytes held by the per-length live cache, which `beam_model_memory_bytes`
+ * does NOT include.
+ *
+ * The cache is a memoisation of the trellis structure each analytic needs.
+ * Without it every analytic rebuilds that structure, which is 78% of a
+ * converted dynamic program on a small model and 52% on a large one -- so it
+ * is not an optimisation a caller would want silently disabled. But it is
+ * real memory, it appears only after the first analytic runs, and it is
+ * bounded by a quarter of `beam_model_memory_budget()` -- one gigabyte at the
+ * default -- so a caller holding several models can be holding far more than
+ * their reported sizes suggest:
+ *
+ *              memory_bytes   this   actually allocated
+ *   repertoire      13.8 MB   15.1 MB        29.2 MB
+ *   foundation     806.7 MB  382.1 MB     1,190.4 MB
+ *
+ * Zero before the first analytic, and after `beam_model_drop_caches`.
+ */
+uint64_t beam_model_live_cache_bytes(const BeamModel *m);
+
+/**
+ * Release everything the model is holding that it can rebuild.
+ *
+ * Only the live cache today. Changes no result: the next analytic rebuilds
+ * what it needs and pays the build cost again. For a caller that has finished
+ * with a model but must keep it, or that is holding more models than fit.
+ *
+ * Not safe to call while another thread is inside an analytic on the same
+ * model, which is the rule for every other mutation in this library.
+ */
+void beam_model_drop_caches(BeamModel *m);
 
 /* ── Scoring ─────────────────────────────────────────────────── */
 

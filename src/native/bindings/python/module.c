@@ -53,6 +53,8 @@ static PyMethodDef module_methods[] = {
     {"n_cells",            py_n_cells,                       METH_O, NULL},
     {"n_nonzero_cells",    py_n_nonzero_cells,               METH_O, NULL},
     {"memory_bytes",       py_memory_bytes,                  METH_O, NULL},
+    {"live_cache_bytes",   py_live_cache_bytes,              METH_O, NULL},
+    {"drop_caches",        py_drop_caches,                   METH_O, NULL},
     {"compact",            py_compact,                       METH_O, NULL},
     {"log_pseq",           py_log_pseq,                      METH_VARARGS, NULL},
     {"log_pseq_batch",     py_log_pseq_batch,                METH_VARARGS, NULL},

@@ -19,7 +19,7 @@ src/native/core/alphabet_nt.c
 src/native/core/crc32c.c
 src/native/core/errors.c
 src/native/core/rng.c
-src/native/core/runtime.c
+src/native/core/threads.c
 
 src/native/dp/backward.c
 src/native/dp/edge_weights.c
@@ -78,3 +78,10 @@ src/native/query/product.c
 src/native/storage/frozen_counts.c
 src/native/storage/packed_rows.c
 src/native/storage/sparse_rows.c
+
+# Memory management: the allocator policy, the scratch budget, what a model
+# reports about its size, and what the per-length cache keeps.
+src/native/memory/accounting.c
+src/native/memory/allocator.c
+src/native/memory/budget.c
+src/native/memory/live_cache.c
