@@ -28,6 +28,14 @@
 int beam_threads(void);
 
 /**
+ * The mmap threshold BEAM applied at start-up, or 0 if it applied none --
+ * because the caller had already set `MALLOC_MMAP_THRESHOLD_`, because
+ * `BEAM_MMAP_THRESHOLD` is 0, or because this is not glibc. See runtime.c for
+ * what it buys and what it costs.
+ */
+int beam_applied_mmap_threshold(void);
+
+/**
  * Chunks a parallel SUM is split into, fixed and independent of the thread
  * count.
  *
