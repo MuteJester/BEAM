@@ -460,11 +460,48 @@ bool beam_model_is_finalized(const BeamModel *m);
 BeamError beam_model_compact(BeamModel *m);
 
 /**
- * Approximate resident bytes of the model's tables. Dense models report their
+ * Approximate resident bytes of the model's TABLES. Dense models report their
  * flat count/probability payloads; sparse models report directories, allocated
  * row capacity, reverse maps, and their small metadata arrays.
+ *
+ * Measured against what the build actually allocates, this is exact to within
+ * 0.2 MB. It excludes the per-length live cache, which appears after the first
+ * analytic and can exceed this figure -- see `beam_model_live_cache_bytes`.
  */
 uint64_t beam_model_memory_bytes(const BeamModel *m);
+
+/**
+ * Bytes held by the per-length live cache, which `beam_model_memory_bytes`
+ * does NOT include.
+ *
+ * The cache is a memoisation of the trellis structure each analytic needs.
+ * Without it every analytic rebuilds that structure, which is 78% of a
+ * converted dynamic program on a small model and 52% on a large one -- so it
+ * is not an optimisation a caller would want silently disabled. But it is
+ * real memory, it appears only after the first analytic runs, and it is
+ * bounded by a quarter of `beam_model_memory_budget()` -- one gigabyte at the
+ * default -- so a caller holding several models can be holding far more than
+ * their reported sizes suggest:
+ *
+ *              memory_bytes   this   actually allocated
+ *   repertoire      13.8 MB   15.1 MB        29.2 MB
+ *   foundation     806.7 MB  382.1 MB     1,190.4 MB
+ *
+ * Zero before the first analytic, and after `beam_model_drop_caches`.
+ */
+uint64_t beam_model_live_cache_bytes(const BeamModel *m);
+
+/**
+ * Release everything the model is holding that it can rebuild.
+ *
+ * Only the live cache today. Changes no result: the next analytic rebuilds
+ * what it needs and pays the build cost again. For a caller that has finished
+ * with a model but must keep it, or that is holding more models than fit.
+ *
+ * Not safe to call while another thread is inside an analytic on the same
+ * model, which is the rule for every other mutation in this library.
+ */
+void beam_model_drop_caches(BeamModel *m);
 
 /* ── Scoring ─────────────────────────────────────────────────── */
 
@@ -1063,17 +1100,24 @@ int beam_model_threads(void);
 int beam_model_effective_threads(void);
 
 /**
- * Cap the scratch memory concurrent per-length dynamic programs may hold.
+ * The most scratch the library will hold at once for one operation.
  *
- * Only the spectrum is large enough to care: its per-state histogram grids
- * run to 1.6 GB at order 4 with 512 bins, so `spectra_by_length` would ask
- * for twenty-five gigabytes if it ran one length per core. It divides this
- * budget by what one length needs and runs that many at a time.
+ * Enforced two ways, both following from that one sentence. Lengths that run
+ * concurrently DIVIDE it, so the thread count cannot multiply the footprint:
+ * the spectrum's per-state histogram grids run to 1.6 GB at order 4 with 512
+ * bins, and `spectra_by_length` would ask for twenty-five gigabytes if it ran
+ * one length per core. And a single program whose working set exceeds it is
+ * REFUSED before it allocates, because the alternative protects nothing -- one
+ * forward-backward sweep is 6.6 GB on a nucleotide model at the alphabet's
+ * ceiling order, and letting that through unconditionally is how a machine
+ * dies rather than how a call fails.
  *
- * The default is 4 GB. `bytes = 0` restores it. This caps CONCURRENCY only:
- * a single length always runs whatever its size, so lowering this can never
- * turn a working call into a failing one, only a slower one. Results do not
- * depend on it.
+ * So lowering this CAN turn a working call into a failing one. That is the
+ * point of it, and the refusal names the analytic, the figure it needed and
+ * this setter. Raising it restores the call.
+ *
+ * The default is 4 GB. `bytes = 0` restores it. Results never depend on it:
+ * it changes what is refused and how much runs at once, never an answer.
  */
 void beam_model_set_memory_budget(uint64_t bytes);
 

@@ -1,10 +1,20 @@
 /**
- * @file runtime.c
- * @brief Process-wide thread and memory budget controls.
+ * @file threads.c
+ * @brief Process-wide parallelism control.
+ *
+ * Memory-side process controls -- the allocator policy and the scratch
+ * budget -- live under src/native/memory/ rather than here, so that the
+ * one file that edits global allocator state is the one place to look for
+ * it. This file deliberately edits none: the thread cap is applied by
+ * naming it in every `num_threads` clause.
  */
 #include <stdio.h>
 
 #include "beam/internal.h"
+
+#if defined(__GLIBC__)
+#include <malloc.h>
+#endif
 
 
 /* ── Parallelism ─────────────────────────────────────────────── */
@@ -41,28 +51,4 @@ int beam_threads(void) {
 
 int beam_model_effective_threads(void) {
     return beam_threads();
-}
-
-/*
- * Scratch the per-length dynamic programs may hold at once.
- *
- * Only the spectrum needs this: its per-state histogram grids are 1.6 GB at
- * order 4 with 512 bins, so running one length per core would ask for
- * twenty-five gigabytes and find the swap rather than the speed-up. Every
- * other per-length program needs tens of megabytes and is capped by the
- * thread count alone.
- *
- * Four gigabytes by default: enough for full parallelism at order 2 or 3,
- * and for two or three concurrent lengths at order 4, on a machine that can
- * hold the model at all. It is a cap on CONCURRENCY, never on what a single
- * length is allowed to allocate — one length always runs, however large.
- */
-static uint64_t g_beam_budget = 4ull << 30;
-
-void beam_model_set_memory_budget(uint64_t bytes) {
-    g_beam_budget = bytes ? bytes : (4ull << 30);
-}
-
-uint64_t beam_model_memory_budget(void) {
-    return g_beam_budget;
 }

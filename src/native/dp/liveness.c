@@ -3,6 +3,7 @@
  * @brief Forward/live frontiers, the per-length live cache, and its test hooks.
  */
 #include "beam/internal.h"
+#include "beam/memory.h"
 
 
 /* ── Frontier trim ───────────────────────────────────────────── */
@@ -73,10 +74,18 @@ static inline uint32_t live_bit_window20(const uint64_t *b, uint32_t base) {
     return (uint32_t)(v & 0xFFFFFull);
 }
 
-static void live_free(BeamLive *L) {
+void beam_live_free(BeamLive *L) {
     if (!L) return;
     if (L->mask)      { for (uint32_t i = 0; i <= L->len; ++i) free(L->mask[i]);      free(L->mask); }
-    if (L->live)      { for (uint32_t i = 0; i <= L->len; ++i) free(L->live[i]);      free(L->live); }
+    /* `live[i]` is either its own allocation or exactly `reached[i]` -- see
+     * the two build sites below -- so pointer equality is the exact test for
+     * "not mine to free", and needs no flag kept in step by hand. `reached`
+     * is still live here because it is freed on the next line, not this one. */
+    if (L->live) {
+        for (uint32_t i = 0; i <= L->len; ++i)
+            if (!L->reached || L->live[i] != L->reached[i]) free(L->live[i]);
+        free(L->live);
+    }
     if (L->reached)   { for (uint32_t i = 0; i <= L->len; ++i) free(L->reached[i]);   free(L->reached); }
     if (L->edge_bits) { for (uint32_t i = 0; i <= L->len; ++i) free(L->edge_bits[i]); free(L->edge_bits); }
     free(L->n_live); free(L->n_reached);
@@ -90,7 +99,8 @@ static uint64_t live_bytes(const BeamLive *L) {
                + (uint64_t)(L->len + 1u) * (4u * sizeof(void *) + 2u * sizeof(uint32_t));
     for (uint32_t i = 0; i <= L->len; ++i) {
         b += words * sizeof(uint64_t);
-        b += (uint64_t)L->n_live[i] * sizeof(uint32_t);
+        if (!L->live || !L->reached || L->live[i] != L->reached[i])
+            b += (uint64_t)L->n_live[i] * sizeof(uint32_t);
         b += (uint64_t)L->n_reached[i] * sizeof(uint32_t);
         if (L->edge_bits && L->edge_bits[i])
             b += (uint64_t)L->n_reached[i] * sizeof(uint32_t);
@@ -149,7 +159,7 @@ static BeamError trim_frontier(const BeamModel *m, uint32_t len, BeamLive *L) {
     double   *row  = (double *)malloc((size_t)R * sizeof(double));
 #define BEAM_FRONTIER_FAIL()                                                   \
     do { free(seen); free(buf); free(row); free(order_buf); free(bucket);     \
-         live_free(L);                                                        \
+         beam_live_free(L);                                                        \
          return BEAM_EALLOC("the frontier-trim buffers"); } while (0)
     if (!L->mask || !L->live || !L->reached || !L->edge_bits || !L->n_live
         || !L->n_reached || !seen || !buf || !row || !order_buf || !bucket)
@@ -243,7 +253,14 @@ static BeamError trim_frontier(const BeamModel *m, uint32_t len, BeamLive *L) {
             if (tail[st] != -INFINITY) { live_bit_set(L->mask[len], st); buf[n++] = st; }
         }
         L->n_live[len] = n;
-        if (n) {
+        if (n == L->n_reached[len]) {
+            /* Every reached state survived. `live` is a subset of `reached`
+             * and both are strictly ascending, so equal counts prove the two
+             * lists are equal -- alias rather than copy. Consumers only ever
+             * read through the pointer, so they cannot tell the difference;
+             * 126 of the foundation's 400 layers land here, 5.42 MiB. */
+            L->live[len] = L->reached[len];
+        } else if (n) {
             L->live[len] = (uint32_t *)malloc((size_t)n * sizeof(uint32_t));
             if (!L->live[len]) { free(tail); BEAM_FRONTIER_FAIL(); }
             memcpy(L->live[len], buf, (size_t)n * sizeof(uint32_t));
@@ -276,7 +293,9 @@ static BeamError trim_frontier(const BeamModel *m, uint32_t len, BeamLive *L) {
             }
         }
         L->n_live[i] = n;
-        if (n) {
+        if (n == nr) {
+            L->live[i] = L->reached[i];        /* equal lists; see above */
+        } else if (n) {
             L->live[i] = (uint32_t *)malloc((size_t)n * sizeof(uint32_t));
             if (!L->live[i]) BEAM_FRONTIER_FAIL();
             memcpy(L->live[i], buf, (size_t)n * sizeof(uint32_t));
@@ -289,69 +308,7 @@ static BeamError trim_frontier(const BeamModel *m, uint32_t len, BeamLive *L) {
 }
 
 
-/* ── The per-length live cache ───────────────────────────────── */
-
-/**
- * One live set per length, held on the model until something invalidates it.
- *
- * WHY THIS IS NOT AN OPTIMISATION YOU CAN SKIP. Once a dynamic program
- * iterates the live index instead of all 194,481 states, the structure build
- * becomes the largest single term left in it -- 78% of a converted DP on a
- * fifteen-thousand-sequence donor and 52% on the 927M foundation. Eight
- * analytics each rebuilding it is 3.6x and 2.1x of pure waste, and at the top
- * end it is worse than that: converting the sweeps WITHOUT sharing the
- * structure measures as a 1.4x regression against the unconverted code on the
- * foundation and 1.5x on an open-world model, because the build is repaid
- * over one sweep rather than eight.
- *
- * WHAT IT COSTS. Index lists, edge masks and a one-bit-per-state liveness
- * map, summed over every live length: 7.9 MB for a fifteen-thousand-sequence
- * donor, 388 MB for the foundation, 422 MB for a 45%-live open-world model.
- * The bound below refuses anything past a quarter of the process budget and
- * falls back to building per call, so a model whose live structure does not
- * fit stays correct and merely stops being fast.
- *
- * THREAD SAFETY. Entries are immutable once published, so concurrent readers
- * need no lock; only the publish is serialised, and it happens at most once
- * per length. Two threads racing on the same length both build, one publishes
- * and the other frees its own copy and uses the winner's. Mutating a model
- * while an analytic runs on it is unsupported here exactly as it is
- * everywhere else in the library.
- */
-struct BeamLiveCache {
-    BeamLive **slot;     /* [n_slots], NULL until a length is first asked for */
-    uint32_t   n_slots;
-    uint64_t   bytes;    /* what the published entries hold, for the bound    */
-};
-
-void beam_live_cache_drop(BeamModel *m) {
-    if (!m || !m->live_cache) return;
-    BeamLiveCache *c = m->live_cache;
-    /* Unhook first, so a caller that somehow re-enters sees no cache rather
-     * than half of one. */
-    m->live_cache = NULL;
-    for (uint32_t i = 0; i < c->n_slots; ++i) {
-        if (!c->slot[i]) continue;
-        live_free(c->slot[i]);
-        free(c->slot[i]);
-    }
-    free(c->slot);
-    free(c);
-}
-
-/**
- * Ceiling on what the cache may hold, in bytes.
- *
- * A quarter of the process memory budget. The budget's other job is capping
- * how many per-length dynamic programs run at once, and the cache is a
- * PERSISTENT claim against the same pool, so it takes a minority share rather
- * than the whole of it. At the 4 GB default that is 1 GB, which holds the
- * foundation's 388 MB and the open-world model's 422 MB with room to spare;
- * lowering the budget lowers this with it.
- */
-static uint64_t live_cache_cap(void) {
-    return beam_model_memory_budget() / 4u;
-}
+/* ── Acquiring a live set ────────────────────────────────────── */
 
 /**
  * A live set for `len`, from the cache when there is one and freshly built
@@ -359,79 +316,48 @@ static uint64_t live_cache_cap(void) {
  *
  * The caller MUST pair this with `beam_live_release`, and must not hold the
  * returned pointer across anything that could mutate the model.
+ *
+ * The cache's storage, bound and locking are in memory/live_cache.c. What
+ * stays here is the decision to build and the ownership of what was built:
+ * `beam_live_cache_publish` either adopts the set -- after which this handle
+ * must not free it -- or hands back the entry another thread published, or
+ * declines for want of budget and leaves the caller to use and free its own.
  */
-
 void beam_live_release(LiveHandle *h) {
     if (!h) return;
-    if (!h->cached) live_free(&h->scratch);
+    if (!h->cached) beam_live_free(&h->scratch);
     h->L = NULL;
 }
 
 BeamError beam_live_acquire(const BeamModel *m, uint32_t len,
                              LiveHandle *h) {
-    /* The cache is model state that read-only analytics maintain; the models
-     * they are handed are const, and this is the one place that admits it. */
-    BeamModel *mm = (BeamModel *)m;
     memset(h, 0, sizeof *h);
 
     if (len >= m->n_len_slots) {          /* callers check, but do not trust it */
         return trim_frontier(m, len, &h->scratch);
     }
 
-    const BeamLive *hit = NULL;
-#ifdef _OPENMP
-    #pragma omp critical(beam_live_cache)
-#endif
-    {
-        if (mm->live_cache && mm->live_cache->slot[len])
-            hit = mm->live_cache->slot[len];
-    }
+    const BeamLive *hit = beam_live_cache_lookup(m, len);
     if (hit) { h->L = hit; h->cached = true; return BEAM_OK; }
 
     BeamError err = trim_frontier(m, len, &h->scratch);
     if (err != BEAM_OK) return err;
 
-    const uint64_t want = live_bytes(&h->scratch);
-    BeamLive *moved = NULL;
-#ifdef _OPENMP
-    #pragma omp critical(beam_live_cache)
-#endif
-    {
-        if (!mm->live_cache) {
-            BeamLiveCache *c =
-                (BeamLiveCache *)calloc(1, sizeof(BeamLiveCache));
-            if (c) {
-                c->slot = (BeamLive **)calloc(m->n_len_slots, sizeof(BeamLive *));
-                c->n_slots = m->n_len_slots;
-                if (c->slot) mm->live_cache = c;
-                else free(c);
-            }
-        }
-        if (mm->live_cache) {
-            if (mm->live_cache->slot[len]) {
-                hit = mm->live_cache->slot[len];      /* another thread won */
-            } else if (mm->live_cache->bytes + want <= live_cache_cap()) {
-                BeamLive *e = (BeamLive *)malloc(sizeof(BeamLive));
-                if (e) {
-                    *e = h->scratch;
-                    mm->live_cache->slot[len] = e;
-                    mm->live_cache->bytes += want;
-                    moved = e;
-                }
-            }
-        }
-    }
-    if (moved) {
+    bool adopted = false;
+    const BeamLive *entry = beam_live_cache_publish(
+        m, len, &h->scratch, live_bytes(&h->scratch), &adopted);
+
+    if (adopted) {
         /* The set now belongs to the cache; the handle must not free it. */
         memset(&h->scratch, 0, sizeof h->scratch);
-        h->L = moved;
+        h->L = entry;
         h->cached = true;
-    } else if (hit) {
-        live_free(&h->scratch);
-        h->L = hit;
+    } else if (entry) {
+        beam_live_free(&h->scratch);      /* another thread published first */
+        h->L = entry;
         h->cached = true;
     } else {
-        h->L = &h->scratch;                /* over budget: build and discard */
+        h->L = &h->scratch;               /* over budget: build and discard */
         h->cached = false;
     }
     return BEAM_OK;
@@ -463,7 +389,7 @@ int beam_live_selfcheck(const BeamModel *m, uint32_t len) {
 
     int rc = 0;
     double *row = (double *)malloc((size_t)R * sizeof(double));
-    if (!row) { live_free(&L); return BEAM_LIVE_SELFCHECK_BUILD; }
+    if (!row) { beam_live_free(&L); return BEAM_LIVE_SELFCHECK_BUILD; }
 
     if (L.n_reached[0] != 1u || L.reached[0][0] != S - 1u)
         rc = BEAM_LIVE_SELFCHECK_ROOT;
@@ -513,19 +439,7 @@ int beam_live_selfcheck(const BeamModel *m, uint32_t len) {
     }
 
     free(row);
-    live_free(&L);
+    beam_live_free(&L);
     return rc;
 }
 
-uint64_t beam_live_cache_bytes(const BeamModel *m) {
-    if (!m || !m->live_cache) return 0;
-    return m->live_cache->bytes;
-}
-
-uint32_t beam_live_cache_entries(const BeamModel *m) {
-    if (!m || !m->live_cache) return 0;
-    uint32_t n = 0;
-    for (uint32_t i = 0; i < m->live_cache->n_slots; ++i)
-        if (m->live_cache->slot[i]) n++;
-    return n;
-}

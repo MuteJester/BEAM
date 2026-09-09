@@ -58,6 +58,13 @@ static bool posterior_rows(BeamModel *dst_m, const BeamModel *src_m,
 
 BeamError beam_model_posterior(BeamModel *m, const BeamModel *prior,
                                   double kappa) {
+    {   /* The prior is read and the model is written; both need count rows. */
+        const BeamError ta = beam_model_thaw_counts(m);
+        if (ta != BEAM_OK) return ta;
+        const BeamError tb = beam_model_thaw_counts((BeamModel *)prior);
+        if (tb != BEAM_OK) return tb;
+    }
+
     if (!m || !prior) return BEAM_ENULL(!m ? "model" : "prior");
     /* The live cache is a projection of the finalized tables; anything
      * that changes the counts or rebuilds the tables makes it a record of

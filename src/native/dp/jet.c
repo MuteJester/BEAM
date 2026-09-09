@@ -66,6 +66,11 @@ BeamError jet_sweep(const BeamModel *m, uint32_t len, double q,
     double bc[BEAM_MAX_MOMENT + 1][BEAM_MAX_MOMENT + 1];
     beam_binomials(bc, order);
 
+    /* Refused before allocating, from the sizing function beside the
+     * allocation so the two cannot drift apart. */
+    BEAM_BUDGET_OR_REFUSE("a jet sweep", len,
+                          beam_jet_sweep_bytes(S, R, NM));
+
     Sweep sw = {0};
     if (!sweep_alloc(&sw, S, R, NM))
         return BEAM_EALLOC("the jet-sweep scratch buffers");
@@ -110,7 +115,10 @@ BeamError jet_sweep(const BeamModel *m, uint32_t len, double q,
         }
         if (wmax == -INFINITY) { free(alive); beam_live_release(&h); sweep_free(&sw);
           *out_log_z = -INFINITY; return BEAM_OK; }
-        const double qmax = q * wmax;
+        const double qmax = beam_tilted_layer_max(sw.w, sw.cur, S, R, q,
+                                                  wmax);
+        if (qmax == -INFINITY) { free(alive); beam_live_release(&h);
+          sweep_free(&sw); *out_log_z = -INFINITY; return BEAM_OK; }
 
         memset(sw.next, 0, (size_t)NM * S * sizeof(double));
         double nmax = 0.0;
@@ -152,9 +160,13 @@ BeamError jet_sweep(const BeamModel *m, uint32_t len, double q,
 #ifdef _OPENMP
         #pragma omp parallel for schedule(static) num_threads(beam_threads())
 #endif
-        for (int64_t k = 0; k < (int64_t)nt; ++k)
-            for (uint32_t j = 0; j < NM; ++j)
+        for (int64_t k = 0; k < (int64_t)nt; ++k) {
+            /* Moment 0 is the mass and carries the invariant; the higher
+             * moments ride along and may legitimately be zero. */
+            sw.next[tgt[k]] = beam_rescale(sw.next[tgt[k]], nmax);
+            for (uint32_t j = 1; j < NM; ++j)
                 sw.next[(size_t)j * S + tgt[k]] /= nmax;
+        }
         log_scale += log(nmax);
 
         double *tmp = sw.cur; sw.cur = sw.next; sw.next = tmp;

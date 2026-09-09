@@ -278,7 +278,12 @@ def test_a_pre_split_edge_file_is_refused_by_name(tmp_path, small):
 
     junk = tmp_path / "junk.beam"
     junk.write_bytes(b"not a model at all, not even close")
-    with pytest.raises(OSError, match="not a model file, truncated, or corrupt"):
+    # The loader used to answer every failure with one sentence -- "not a model
+    # file, truncated, or corrupt" -- which is what this line pinned. It now
+    # names the cause, so the assertion moves with it. The property under test
+    # is unchanged: a junk file is refused, and refused DIFFERENTLY from an
+    # EDGE file, which is what makes the EDGE message worth having.
+    with pytest.raises(OSError, match="not a BEAM model file"):
         BeamModel.from_file(junk)
 
 

@@ -48,6 +48,18 @@ double beam_model_path_count(const BeamModel *m, uint32_t length) {
      * untouched, because `w[x] == -INFINITY` and `bit x clear` are the same
      * predicate over the same weights.
      */
+    /*
+     * Refused before allocating. This entry point reports failure as 0.0 with
+     * the error set, the same as the allocation failure below, so the refusal
+     * follows that convention rather than the BeamError one.
+     */
+    const uint64_t need = beam_path_count_bytes(S);
+    if (!beam_budget_fits(need)) {
+        beam_live_release(&h);
+        (void)beam_budget_refuse("a path-counting sweep", length, need);
+        return 0.0;
+    }
+
     uint32_t *bits = (uint32_t *)malloc((size_t)S * sizeof(uint32_t));
     double *cur  = (double *)calloc(S, sizeof(double));
     /* calloc, then cleared only where it was last written: see the loop.
@@ -145,7 +157,20 @@ uint32_t beam_live_lengths_desc(const BeamModel *m, uint32_t *out) {
 }
 
 double beam_model_path_count_total(const BeamModel *m) {
-    if (!m || !m->finalized) return 0.0;
+    /*
+     * Sets the error, like `beam_model_path_count` twelve lines above does on
+     * the identical condition. Without this the two disagreed about whether
+     * the same input is an error, and 0.0 -- indistinguishable from "this
+     * model generates nothing" -- reached Python with the error context
+     * clean, so the binding's guard could not fire.
+     */
+    if (!m || !m->finalized) {
+        if (!m) beam_set_error(BEAM_ERR_NULL_ARG,
+                              "path_count_total: model must not be NULL");
+        else    (void)BEAM_ENOTBUILT();
+        return 0.0;
+    }
+    beam_clear_error();
     const uint32_t n = m->n_len_slots;
     uint32_t *work = (uint32_t *)malloc((size_t)n * sizeof(uint32_t));
     double *per = (double *)calloc(n, sizeof(double));
@@ -158,11 +183,49 @@ double beam_model_path_count_total(const BeamModel *m) {
     /* The lengths are independent dynamic programs and this is where the
      * parallelism belongs: one whole DP per thread beats sixteen threads
      * inside one DP's layer, which has to synchronise once per layer. */
+    /*
+     * Concurrent sweeps DIVIDE the budget rather than multiplying it, and a
+     * concurrency of 0 means one does not fit at all. Refused HERE rather than
+     * inside the loop: `beam_set_error` is thread-local, so a refusal raised
+     * on a worker never reaches the caller, and this driver would return a
+     * total of 0.0 with no error set at all.
+     */
+    const uint32_t conc = beam_budget_concurrency(
+        beam_path_count_bytes(m->n_states), nw ? nw : 1u);
+    if (nw && conc == 0u) {
+        const uint64_t need = beam_path_count_bytes(m->n_states);
+        const uint32_t at = work[0];
+        free(work); free(per);
+        (void)beam_budget_refuse("a path-counting sweep", at, need);
+        return 0.0;
+    }
+
+    /*
+     * A worker's failure used to vanish. `beam_model_path_count` reports
+     * failure as 0.0, the driver summed those zeros, and the total came back
+     * silently too small with the error context clean -- a wrong answer, not
+     * a failure. `beam_set_error` is thread-local, so each iteration can read
+     * back its OWN error immediately after its own call; `max` over the codes
+     * then reduces them, BEAM_OK being zero.
+     */
+    int failed = BEAM_OK;
 #ifdef _OPENMP
-    #pragma omp parallel for schedule(dynamic, 1) num_threads(beam_threads())
+    #pragma omp parallel for schedule(dynamic, 1) reduction(max:failed) \
+            num_threads((int)conc)
 #endif
-    for (int64_t k = 0; k < (int64_t)nw; ++k)
+    for (int64_t k = 0; k < (int64_t)nw; ++k) {
         per[work[k]] = beam_model_path_count(m, work[k]);
+        const int e = (int)beam_last_error();
+        if (e > failed) failed = e;
+    }
+    if (failed != BEAM_OK) {
+        free(work); free(per);
+        (void)BEAM_FAIL((BeamError)failed,
+                       "path_count_total: a per-length sweep failed, so the "
+                       "total would be short; the per-length message is lost "
+                       "to the worker thread that raised it");
+        return 0.0;
+    }
     /* Summed in ascending length, exactly as the serial loop did. */
     double t = 0.0;
     for (uint32_t L = 1; L < n; ++L) t += per[L];

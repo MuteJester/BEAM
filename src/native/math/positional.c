@@ -59,6 +59,7 @@
  * pass over `n_states` and is only paid on the layers that are pinned.
  */
 #include "beam/internal.h"
+#include "beam/math_internal.h"
 
 #ifdef _OPENMP
 #include <omp.h>
@@ -163,70 +164,58 @@ static BeamError clamped_betas(const BeamModel *m, uint32_t len,
 /* ── The forward sweep ───────────────────────────────────────── */
 
 /**
- * The rescale a clamped layer needs: the largest weight among the edges the
- * sweep will actually sum, rather than among all of the layer's edges.
+ * Advance the LOG forward vector across one layer.
  *
- * Restricted to states the sweep has reached, because an unreachable state's
- * weight enters no sum and letting it set the scale is the same underflow the
- * layer maximum causes. Returns -inf when the layer kills every live path.
- */
-static double clamped_layer_max(const double *w, const double *cur,
-                                uint32_t S, uint32_t R,
-                                uint32_t lo, uint32_t hi) {
-    double mx = -INFINITY;
-    for (uint32_t s = 0; s < S; ++s) {
-        if (cur[s] == 0.0) continue;
-        const double *row = w + (size_t)s * R;
-        for (uint32_t x = lo; x < hi; ++x)
-            if (row[x] > mx) mx = row[x];
-    }
-    return mx;
-}
-
-/**
- * Advance the rescaled forward vector across one layer.
+ * `cur[s]` is `ln alpha_i(s)`, and on return `next` holds the same for layer
+ * `i + 1`. Accumulated by TARGET, for the reason `compute_log_z` gives: a
+ * target's twenty-one sources are its private business, so no two threads
+ * write the same accumulator.
  *
- * `cur` holds `alpha_i(s) * exp(-*log_scale)`; on return `next` holds the same
- * for layer `i + 1` and `*log_scale` has been updated to match. Accumulated by
- * TARGET, for the reason `compute_log_z` gives: a target's twenty-one sources
- * are its private business, so no two threads write the same accumulator.
+ * There is no rescale and no running scale factor, and that is the point.
+ * This sweep used to carry `alpha` linearly, renormalised once per layer by
+ * the largest edge weight in it -- and no single factor per layer can hold a
+ * trellis whose live states span more than 745 nats. At the C API's own
+ * defaults a length-60 nucleotide sweep spans that easily, and the states that
+ * underflowed to zero were not marginal: they included PINNED positions, whose
+ * row must be one-hot and came back summing to 2e-54 with BEAM_OK.
+ *
+ * Three attempts were made to choose that factor well -- over the whole layer,
+ * over edges a live path can use, and weighted by the mass each source carries
+ * -- before the factor was removed instead. The backward sweep above never had
+ * the problem, having always been log-space; now neither half does.
  *
  * Returns false when the layer leaves no mass at all, which under a clamp is a
  * real outcome rather than an error.
  */
-static bool advance(const BeamModel *m, const double *w, double wmax,
+static bool advance(const BeamModel *m, const double *w,
                     const double *cur, double *next,
-                    uint32_t lo, uint32_t hi, double *log_scale) {
+                    uint32_t lo, uint32_t hi) {
     const uint32_t A = m->n_alphabet;
     const uint32_t R = m->n_residues;
     const uint32_t S = m->n_states;
     const uint32_t SK = m->state_shift;
 
-    double nmax = 0.0;
+    bool any = false;
 #ifdef _OPENMP
-    #pragma omp parallel for schedule(static) reduction(max:nmax) \
+    #pragma omp parallel for schedule(static) reduction(||:any) \
             num_threads(beam_threads())
 #endif
     for (int64_t t = 0; t < (int64_t)S; ++t) {
         const uint32_t x = (uint32_t)t % A;
-        if (x < lo || x >= hi) { next[t] = 0.0; continue; }
+        if (x < lo || x >= hi) { next[t] = -INFINITY; continue; }
         const uint32_t rest = (uint32_t)t / A;
-        double sum = 0.0;
+        double mx = -INFINITY, sum = 0.0;
         for (uint32_t a = 0; a < A; ++a) {
             const uint32_t src = a * SK + rest;
-            if (cur[src] == 0.0) continue;
+            if (cur[src] == -INFINITY) continue;
             const double wv = w[(size_t)src * R + x];
             if (wv == -INFINITY) continue;
-            sum += cur[src] * exp(wv - wmax);
+            lse_add(&mx, &sum, cur[src] + wv);
         }
-        next[t] = sum;
-        if (sum > nmax) nmax = sum;
+        next[t] = (mx == -INFINITY) ? -INFINITY : mx + log(sum);
+        if (next[t] != -INFINITY) any = true;
     }
-    *log_scale += wmax;
-    if (!(nmax > 0.0)) return false;
-    for (uint32_t s = 0; s < S; ++s) next[s] /= nmax;
-    *log_scale += log(nmax);
-    return true;
+    return any;
 }
 
 
@@ -271,14 +260,17 @@ static BeamError fb_alloc(const BeamModel *m, uint32_t len, FBWork *k) {
     const uint64_t need = ((uint64_t)len + 1u) * S * sizeof(double)
                         + (uint64_t)S * (R + 3u) * sizeof(double);
     const uint64_t budget = beam_model_memory_budget();
-    if (need > budget)
-        return BEAM_FAIL(BEAM_ERR_ALLOC,
+    if (need > budget) {
+        const char *nu, *bu;
+        const double nv = beam_budget_scaled(need, &nu);
+        const double bv = beam_budget_scaled(budget, &bu);
+        return BEAM_FAIL(BEAM_ERR_BUDGET,
                         "a forward-backward sweep at length %u needs about "
-                        "%.1f GB for the backward field of %u states, and the "
-                        "memory budget is %.1f GB; raise it with "
+                        "%.2f %s for the backward field of %u states, and the "
+                        "memory budget is %.2f %s; raise it with "
                         "BEAM.set_memory_budget, or ask at a lower order",
-                        (unsigned)len, (double)need / 1e9, (unsigned)S,
-                        (double)budget / 1e9);
+                        (unsigned)len, nv, nu, (unsigned)S, bv, bu);
+    }
 
     k->beta = (double **)calloc((size_t)len + 1u, sizeof(double *));
     if (!k->beta) return BEAM_EALLOC("the backward-value layer table");
@@ -357,41 +349,13 @@ BeamError beam_model_positional_marginals(const BeamModel *m, uint32_t length,
     }
     if (out_log_z) *out_log_z = logz;
 
-    k.cur[S - 1u] = 1.0;                  /* the all-sentinel start state */
-    double log_scale = 0.0;
+    for (uint32_t s = 0; s < S; ++s) k.cur[s] = -INFINITY;
+    k.cur[S - 1u] = 0.0;         /* ln 1: the all-sentinel start state */
 
     for (uint32_t i = 0; i < length; ++i) {
         uint32_t lo, hi;
         clamp_range(clamp, i, R, &lo, &hi);
-        double wmax = -INFINITY;
-        beam_layer_weights(m, i, length, k.w, &wmax);
-        /*
-         * A finite `logz` says a complete path exists, so the forward sweep
-         * must still carry mass at every layer, and reaching here with none is
-         * not a state to continue from: the remaining rows would come back as
-         * zeros that read like a flat distribution.
-         *
-         * It is reachable only in principle. `cur` is rescaled so its maximum
-         * is 1 at every layer, so losing the last live state means the surviving
-         * paths sit more than ~700 nats below the layer's best -- a spread no
-         * CDR3-length trellis produces, since `surprisal_range` spans two orders
-         * of magnitude fewer nats than that over a WHOLE sequence. Guarded
-         * rather than assumed, because the cost of being wrong is a plausible
-         * table of zeros.
-         */
-        if (wmax == -INFINITY) { err = BEAM_ENOPATHS(
-            "the layer has no live edge although the trellis has a path; "
-            "the forward sweep lost the mass to underflow"); goto done; }
-        /* A pinned layer rescales by the maximum over what it actually sums;
-         * see the file header for the underflow that motivates it. */
-        if (hi - lo < R) {
-            wmax = clamped_layer_max(k.w, k.cur, S, R, lo, hi);
-            if (wmax == -INFINITY) { err = BEAM_ENOPATHS(
-                "the clamped mass underflowed the forward sweep although the "
-                "backward sweep found it; log_clamp_probability still answers "
-                "in log space"); goto done; }
-        }
-
+        beam_layer_weights(m, i, length, k.w, NULL);
         const double *bn = k.beta[i + 1];
 #ifdef _OPENMP
         #pragma omp parallel for schedule(dynamic, 1) num_threads(beam_threads())
@@ -403,8 +367,8 @@ BeamError beam_model_positional_marginals(const BeamModel *m, uint32_t length,
             const uint32_t shi =
                 (uint32_t)(((uint64_t)S * (c + 1)) / BEAM_SUM_CHUNKS);
             for (uint32_t s = slo; s < shi; ++s) {
-                if (k.cur[s] == 0.0) continue;
-                const double la = log(k.cur[s]) + log_scale - logz;
+                if (k.cur[s] == -INFINITY) continue;
+                const double la = k.cur[s] - logz;
                 const double *row = k.w + (size_t)s * R;
                 const uint32_t base = (s % SK) * A;
                 for (uint32_t x = lo; x < hi; ++x) {
@@ -421,7 +385,7 @@ BeamError beam_model_positional_marginals(const BeamModel *m, uint32_t length,
             for (uint32_t x = lo; x < hi; ++x) row_out[x] += part[x];
         }
 
-        if (!advance(m, k.w, wmax, k.cur, k.next, lo, hi, &log_scale)) {
+        if (!advance(m, k.w, k.cur, k.next, lo, hi)) {
             err = BEAM_ENOPATHS("the forward sweep reached a layer with no "
                                "mass although the trellis has a path");
             goto done;
@@ -669,25 +633,20 @@ static BeamError expected_one_length(const BeamModel *m, uint32_t len,
         return BEAM_ENOPATHS("the trellis carries no path at this length");
     }
 
-    k.cur[S - 1u] = 1.0;
-    double log_scale = 0.0;
+    for (uint32_t s = 0; s < S; ++s) k.cur[s] = -INFINITY;
+    k.cur[S - 1u] = 0.0;                            /* ln 1 */
     bool oom = false;
     bool lost = false;
 
     for (uint32_t i = 0; i < len && !oom; ++i) {
-        double wmax = -INFINITY;
-        beam_layer_weights(m, i, len, k.w, &wmax);
-        /* See the same guard in positional_marginals: a finite logz says the
-         * mass is there, so losing it means the sweep underflowed and the
-         * counts would silently come back short of `len`. */
-        if (wmax == -INFINITY) { lost = true; break; }
+        beam_layer_weights(m, i, len, k.w, NULL);
         const bool settle_back = (i >= K);
         const uint32_t r = settle_back ? (len - 1u - (i - K)) : 0u;
         const double *bn = k.beta[i + 1];
 
         for (uint32_t s = 0; s < S && !oom; ++s) {
-            if (k.cur[s] == 0.0) continue;
-            const double la = log(k.cur[s]) + log_scale - logz;
+            if (k.cur[s] == -INFINITY) continue;
+            const double la = k.cur[s] - logz;
             const double *row = k.w + (size_t)s * R;
             const uint32_t base = (s % SK) * A;
 
@@ -719,9 +678,7 @@ static BeamError expected_one_length(const BeamModel *m, uint32_t len,
             }
         }
         if (oom) break;
-        if (!advance(m, k.w, wmax, k.cur, k.next, 0u, R, &log_scale)) {
-            lost = true; break;
-        }
+        if (!advance(m, k.w, k.cur, k.next, 0u, R)) { lost = true; break; }
         double *tmp = k.cur; k.cur = k.next; k.next = tmp;
     }
 
@@ -736,9 +693,8 @@ static BeamError expected_one_length(const BeamModel *m, uint32_t len,
         beam_tail_weights(m, len, k.tail);
         const uint32_t n_tail = (K < len) ? K : len;
         for (uint32_t s = 0; s < S && !oom; ++s) {
-            if (k.cur[s] == 0.0 || k.tail[s] == -INFINITY) continue;
-            const double g = weight * exp(log(k.cur[s]) + log_scale
-                                          + k.tail[s] - logz);
+            if (k.cur[s] == -INFINITY || k.tail[s] == -INFINITY) continue;
+            const double g = weight * exp(k.cur[s] + k.tail[s] - logz);
             if (g == 0.0) continue;
             uint8_t slot[BEAM_MAX_ORDER + 1];
             uint32_t q = s;

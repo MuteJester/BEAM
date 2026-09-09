@@ -62,6 +62,39 @@ def _iter_delimited(path, *, sep, sequence_column, abundance_column,
         yield seqs, ab
 
 
+def _open_parquet_for_streaming(pq, path):
+    """A ParquetFile that does not accumulate buffers as it is read.
+
+    The reader's ``pre_buffer`` default coalesces each row group's column
+    chunks into buffers it keeps for the life of the file. That is the right
+    default for high-latency storage, where it turns many small reads into
+    few large ones. It is the wrong one here: this reader streams a file once,
+    in order, and never looks at a byte twice, so those buffers are memory
+    that grows with the file and is never read again.
+
+    Measured on the 926,909,993-row corpus, reading 200,000,000 rows, one
+    process per configuration:
+
+        batch      pre_buffer   peak Arrow pool   peak RSS
+        1,000,000  on              1,109.9 MiB     1.39 GB
+        1,000,000  off               39.9 MiB      0.35 GB
+        2,000,000  on              1,139.9 MiB     1.55 GB
+        2,000,000  off               71.4 MiB      0.54 GB
+
+    About 5.5 MB per million rows, so the whole corpus retains roughly 5 GB --
+    the larger part of the 7.9 GB peak recorded for a foundation build -- at
+    no difference in wall time.
+
+    ``pre_buffer`` reached ``ParquetFile`` in pyarrow 4.0. pyarrow is an
+    optional dependency here with no declared floor, so an older one falls
+    back rather than failing: it loses the saving, not the ability to read.
+    """
+    try:
+        return pq.ParquetFile(path, pre_buffer=False)
+    except TypeError:                                    # pragma: no cover
+        return pq.ParquetFile(path)
+
+
 def _iter_parquet(path, sequence_column, abundance_column, batch_size):
     """Yield ``(sequences, abundances_or_None)`` chunks from a parquet file."""
     try:
@@ -75,9 +108,17 @@ def _iter_parquet(path, sequence_column, abundance_column, batch_size):
     cols = [sequence_column]
     if abundance_column is not None:
         cols.append(abundance_column)
-    pf = pq.ParquetFile(os.fspath(path))
+    pf = _open_parquet_for_streaming(pq, os.fspath(path))
     for batch in pf.iter_batches(batch_size=batch_size, columns=cols):
         seqs = batch.column(sequence_column).to_pylist()
-        ab = (None if abundance_column is None
-              else [float(x) for x in batch.column(abundance_column).to_pylist()])
+        # As an array, not a list of Python floats. The column is already a
+        # contiguous integer buffer in the file; `to_pylist` plus `float(x)`
+        # built one Python object per row, `Builder.observe` rebuilt them, and
+        # the C binding then read each one back out. Four passes over a column
+        # that arrives contiguous. `observe` takes a float64 buffer directly.
+        ab = None
+        if abundance_column is not None:
+            import numpy as np
+            ab = batch.column(abundance_column).to_numpy(zero_copy_only=False)
+            ab = np.ascontiguousarray(ab, dtype=np.float64)
         yield seqs, ab

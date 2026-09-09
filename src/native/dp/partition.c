@@ -27,6 +27,12 @@ BeamError beam_compute_log_z(BeamModel *m, uint32_t len, double *out) {
     const uint32_t S  = m->n_states;
     const uint32_t SK = m->state_shift;
 
+    /* Refused before allocating, from the sizing function `beam_model_finalize`
+     * also divides the budget by, so the two cannot disagree about what a
+     * length costs. */
+    const uint64_t need = beam_logz_sweep_bytes(S, R, SK);
+    BEAM_BUDGET_OR_REFUSE("the partition-function trellis", len, need);
+
     double *w    = (double *)malloc((size_t)S * R * sizeof(double));
     double *cur  = (double *)malloc((size_t)S * sizeof(double));
     double *next = (double *)malloc((size_t)S * sizeof(double));
@@ -201,7 +207,7 @@ BeamError beam_compute_log_z(BeamModel *m, uint32_t len, double *out) {
             for (uint32_t x = 0; x < R; ++x) {
                 const size_t t = base + x;
                 if (next[t] == 0.0) continue;
-                next[t] /= nmax;
+                next[t] = beam_rescale(next[t], nmax);
                 nxt[nnew++] = (uint32_t)t;
             }
         }

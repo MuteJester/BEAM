@@ -6,6 +6,7 @@
 #include <stdlib.h>
 
 #include "beam/publicness.h"
+#include "beam/error_macros.h"
 #include "beam/occupancy_internal.h"
 
 /* 2*pi to the last representable bit; the codebase spells such constants out
@@ -33,7 +34,8 @@ static BeamError publicness_accumulate_impl(
     double tail_sigma, double tail_floor, double mass_tol,
     double *out_counts, double *out_retained_mass) {
     if (!pmf || !mean || !variance || !weight || !edges || !out_counts)
-        return BEAM_ERR_NULL_ARG;
+        return BEAM_ENULL("one of pmf, mean, variance, weight, edges or "
+                          "out_counts");
     if (n_atoms == 0 || k_fft == 0 || n_bins == 0 || n_groups_out == 0)
         return BEAM_FAIL(BEAM_ERR_EMPTY_INPUT, "empty batch or bin set");
     if (!(tail_sigma >= 0.0) || !(tail_floor >= 0.0) || !(mass_tol > 0.0))
@@ -141,7 +143,7 @@ BeamError beam_publicness_accumulate_grouped(
     const double *edges, uint32_t n_bins,
     double tail_sigma, double tail_floor, double mass_tol,
     double *out_counts, double *out_retained_mass) {
-    if (!group) return BEAM_ERR_NULL_ARG;
+    if (!group) return BEAM_ENULL("group");
     return publicness_accumulate_impl(
         pmf, n_atoms, k_fft, mean, variance, weight,
         group, n_groups_out, edges, n_bins,

@@ -23,7 +23,17 @@ extern const char *BEAM_CAPSULE_NAME;
 
 void capsule_destructor(PyObject *capsule);
 double *edge_borrow_abundances(PyObject *abund, Py_ssize_t n, bool *out_ok);
-char * *edge_borrow_strings(PyObject *seq, Py_ssize_t *out_n);
+/*
+ * `const char **`, matching the definition's own local and all four callers.
+ * The declaration said `char * *` -- note the spacing, which suggests a
+ * mechanical rewrite dropped a `const`. Not undefined behaviour: the buffer
+ * has no declared type and is only ever accessed through `const char **`
+ * lvalues. But it is a constraint violation, and GCC 14 and Clang 16 promote
+ * -Wincompatible-pointer-types to an error by default, so this would stop
+ * compiling on a newer toolchain. It is also where all five of the
+ * pointer-type warnings came from.
+ */
+const char **edge_borrow_strings(PyObject *seq, Py_ssize_t *out_n);
 PyObject *edge_doubles_to_bytes(const double *v, size_t n);
 BeamModel *edge_from_capsule(PyObject *capsule);
 PyObject *edge_moment_list(const BeamModel *m, double q, unsigned int order, int cumulants);
@@ -55,7 +65,13 @@ PyObject *py_log_pseq_batch(PyObject *self, PyObject *args);
 PyObject *py_prism_factor(PyObject *self, PyObject *args);
 PyObject *py_prism_explain(PyObject *self, PyObject *args);
 PyObject *py_memory_budget(PyObject *self, PyObject *arg);
+PyObject *py_mixture_check_shape(PyObject *self, PyObject *arg);
+PyObject *py_mixture_inner_product(PyObject *self, PyObject *args);
+PyObject *py_mixture_gram(PyObject *self, PyObject *args);
+PyObject *py_mixture_support_union(PyObject *self, PyObject *args);
 PyObject *py_memory_bytes(PyObject *self, PyObject *arg);
+PyObject *py_live_cache_bytes(PyObject *self, PyObject *arg);
+PyObject *py_drop_caches(PyObject *self, PyObject *arg);
 PyObject *py_n_cells(PyObject *self, PyObject *arg);
 PyObject *py_n_nonzero_cells(PyObject *self, PyObject *arg);
 PyObject *py_n_observed(PyObject *self, PyObject *arg);
@@ -90,6 +106,15 @@ PyObject *py_threads(PyObject *self, PyObject *arg);
 PyObject *py_top_k(PyObject *self, PyObject *args);
 PyObject *py_topology(PyObject *self, PyObject *args);
 PyObject *py_total_weight(PyObject *self, PyObject *arg);
+PyObject *py_query_cost(PyObject *self, PyObject *args);
+PyObject *py_query_entropy(PyObject *self, PyObject *args);
+PyObject *py_query_expect(PyObject *self, PyObject *args);
+PyObject *py_query_information_matrix(PyObject *self, PyObject *args);
+PyObject *py_query_marginals(PyObject *self, PyObject *args);
+PyObject *py_query_neighbours(PyObject *self, PyObject *args);
+PyObject *py_query_pair_joint(PyObject *self, PyObject *args);
+PyObject *py_query_position_entropy(PyObject *self, PyObject *args);
+PyObject *py_query_probability(PyObject *self, PyObject *args);
 void release_f64_buffers(Py_buffer *views, int n);
 PyObject *set_beam_error(BeamError err);
 

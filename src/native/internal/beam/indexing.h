@@ -81,6 +81,16 @@ static inline uint32_t beam_ctx_backward_from_state(uint32_t state,
      * the bound instead of being told to ignore it. */
     uint8_t slot[BEAM_MAX_ORDER + 1];
     if (order > BEAM_MAX_ORDER) order = BEAM_MAX_ORDER;
+    /* And the same argument for the READ below, which is the other half gcc
+     * cannot see: the fill writes slot[0..order] but the pack reads
+     * slot[1..k], and nothing in this signature bounds k by order. It is
+     * bounded at every one of the eleven call sites -- k is 2, 3, or
+     * m->order, and the `order` argument is always m->state_order, which
+     * lifecycle.c:83 defines as max(order, 3). So k <= order always, this
+     * clamp never fires, and it costs one comparison to let the compiler
+     * prove it. Without it the same inlined line raises 18 of the build's 23
+     * warnings, which is enough noise to hide a real one. */
+    if (k > order) k = order;
     uint32_t q = state;
     for (int32_t t = (int32_t)order - 1; t >= 0; --t) {
         slot[t] = (uint8_t)(q % radix);

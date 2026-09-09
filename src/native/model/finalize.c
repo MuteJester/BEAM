@@ -7,6 +7,14 @@
 #include "beam/internal.h"
 #include "beam/model_build.h"
 
+/* All five backoff coefficients zero, so no expert consults another table. */
+static inline bool beam_no_backoff(const BeamModel *m) {
+    return m->cfg.kappa[0] == 0.0 && m->cfg.kappa[1] == 0.0
+        && m->cfg.kappa[2] == 0.0 && m->cfg.kappa_wide == 0.0
+        && m->cfg.kappa_len == 0.0;
+}
+
+
 
 /* ── Finalize ────────────────────────────────────────────────── */
 
@@ -62,10 +70,7 @@ static BeamError finalize_direction(BeamModel *m, uint32_t dir) {
     /* Every backoff term is multiplied by a kappa. With all of them zero the
      * parents are dead weight, and building them is the single largest fixed
      * cost in the library. See normalise_rows above. */
-    const bool no_backoff = (m->cfg.kappa[0] == 0.0 && m->cfg.kappa[1] == 0.0
-                             && m->cfg.kappa[2] == 0.0
-                             && m->cfg.kappa_wide == 0.0
-                             && m->cfg.kappa_len == 0.0);
+    const bool no_backoff = beam_no_backoff(m);
 
     if (no_backoff) {
         /* Only the top of the mid hierarchy survives, and it is just the
@@ -266,9 +271,17 @@ static const BeamSparseRows *sparse_count_table_const(const BeamModel *m,
     return &m->sp_cnt_len[dir];
 }
 
+/*
+ * `cnt`, when non-NULL, is the count table to read INSTEAD of the model's own.
+ * Finalize passes a locally thawed one so that only a single expanded table is
+ * alive at a time; see `beam_model_thaw_count_table` for why that matters.
+ * NULL keeps the model's table, which is what a model whose counts are already
+ * mutable wants.
+ */
 static BeamError finalize_sparse_table(BeamModel *m, uint32_t dir,
                                       BeamTableKind kind,
-                                      bool reverse_wide) {
+                                      bool reverse_wide,
+                                      const BeamSparseRows *cnt) {
     const uint32_t nr = beam_count_n_rows(m, kind);
     BeamSparseRows *out = sparse_log_table(m, dir, kind);
     BeamError err = beam_sparse_init(out, nr, 1u, m->n_residues, false);
@@ -289,7 +302,7 @@ static BeamError finalize_sparse_table(BeamModel *m, uint32_t dir,
      * to stay in the order the dynamic programs scan it; the backward wide
      * table is the one place those differ.
      */
-    const BeamSparseRows *ct = sparse_count_table_const(m, dir, kind);
+    const BeamSparseRows *ct = cnt ? cnt : sparse_count_table_const(m, dir, kind);
     uint32_t *rows = NULL, n_rows = 0;
     if (m->cfg.sparse && ct && ct->row_ids && ct->size) {
         uint64_t cap = 0;
@@ -314,6 +327,23 @@ static BeamError finalize_sparse_table(BeamModel *m, uint32_t dir,
         }
     }
 
+    /*
+     * The answer is already known: `n_rows` rows, listed and sorted above.
+     * Saying so means the fill below never grows -- no second payload to copy
+     * the first into, twenty-one times over on the foundation's wide table --
+     * and leaves no slack for the shrink at the end to reclaim.
+     *
+     * It is an upper bound rather than the exact count, because a row whose
+     * counts sum to zero is skipped below. That cannot happen on a model that
+     * was only ever observed into, but subtraction can produce one, so the
+     * shrink stays: it has nothing to do in the ordinary case and is still
+     * there for the case that has something.
+     */
+    if (rows && n_rows) {
+        const BeamError re = beam_sparse_reserve(out, 0u, n_rows);
+        if (re != BEAM_OK) { free(rows); return re; }
+    }
+
     for (uint32_t idx = 0; idx < (rows ? n_rows : nr); ++idx) {
         const uint32_t dst_row = rows ? rows[idx] : idx;
         uint32_t src_row = dst_row;
@@ -322,7 +352,10 @@ static BeamError finalize_sparse_table(BeamModel *m, uint32_t dir,
             const uint32_t c = dst_row % m->n_ctx_wide;
             src_row = d * m->n_ctx_wide + beam_ctx_reverse(c, m->order, m->n_alphabet);
         }
-        const double *counts = beam_count_row(m, dir, kind, src_row);
+        const double *counts = cnt
+            ? beam_sparse_row(cnt, src_row,
+                              beam_count_part_for_row(m, kind, src_row))
+            : beam_count_row(m, dir, kind, src_row);
         if (!counts) continue;
         double tot = 0.0;
         for (uint32_t x = 0; x < m->n_residues; ++x) tot += counts[x];
@@ -334,16 +367,118 @@ static BeamError finalize_sparse_table(BeamModel *m, uint32_t dir,
     }
     free(rows);
     beam_sparse_shrink(out);
+
+    /*
+     * A table almost none of whose rows exist spends nearly all of itself on
+     * a directory of absences: 28.19 MiB per generation at order 4 whether the
+     * corpus was nine hundred million sequences or nine hundred. Below the
+     * measured threshold, swap that directory for the rank form -- see
+     * BEAM_RANK_SEAL_MAX_OCCUPANCY_DENOM for what was measured and why the
+     * line is where it is.
+     *
+     * Sealing is exact: the same rows, the same slots, the same doubles. It
+     * happens here, before `beam_compute_log_z` reads these tables, so the
+     * partition functions are computed against the representation the model
+     * will actually keep rather than against one it is about to discard.
+     */
+    const uint32_t occupied = out->size ? out->size[0] : 0u;
+    if ((uint64_t)occupied * BEAM_RANK_SEAL_MAX_OCCUPANCY_DENOM <= (uint64_t)nr) {
+        const BeamError se = beam_sparse_seal_rank(out);
+        if (se != BEAM_OK) return se;
+    }
+
+    /*
+     * Then share storage between rows that are already byte-identical. A
+     * context seen once normalises to one residue at 0.0 and nineteen at
+     * -inf, and only twenty such rows can exist, so a repertoire model is
+     * about half copies of twenty rows: 73-79% of a donor's rows repeat.
+     *
+     * After sealing, not before. Sealing requires each row's slot to be the
+     * count of rows before it, and interning is precisely what breaks that --
+     * it points several slots at one row. Ordered the other way the seal
+     * would refuse, correctly, and the directory would stay 28.19 MiB.
+     */
+    const BeamError ie = beam_sparse_intern_rows(out);
+    if (ie != BEAM_OK) return ie;
+
+    /*
+     * Finally, replace the values themselves with indices into the distinct
+     * ones. Every cell here is `log(c / t)` for integers c <= t, and a
+     * repertoire's counts are small, so after interning has removed the
+     * repeated ROWS, 95% of the remaining cells are still a value stored
+     * somewhere else: 1,175,396 cells take 59,008 distinct values on a
+     * 197,139-sequence donor.
+     *
+     * Last, because it is the step that gives up the contiguous twenty-double
+     * row. Sealing and interning both still address rows; from here on a row
+     * is a mask and a run of indices, and `beam_sparse_log_row` is what hands
+     * either form to a caller.
+     */
+    const BeamError pe = beam_sparse_pack_cells(out);
+    if (pe != BEAM_OK) return pe;
+
+    /*
+     * A backward table that still holds plain rows is laid out by residue.
+     *
+     * Nothing reads a backward row whole -- `beam_log_row_into` is called only
+     * on the three forward rows -- and the backward half of the edge kernel
+     * reads ONE residue from each of twenty rows whose dense ids are
+     * consecutive. Measured on the foundation: 78,538 of 148,176 such tiles
+     * have all twenty rows present, they hold 85.2% of the occupied rows, and
+     * in every one of them the slots are consecutive too. By row that is
+     * fifty cache lines to use a hundred and sixty bytes; by residue those
+     * bytes are contiguous.
+     *
+     * Declined for a packed table, which has no array of rows to transpose,
+     * and for the forward tables, which are read whole and want the rows
+     * exactly as they are.
+     */
+    if (dir == BEAM_BWD) return beam_sparse_plane_transpose(out);
     return BEAM_OK;
 }
 
 static BeamError finalize_sparse_direction(BeamModel *m, uint32_t dir) {
-    BeamError err = finalize_sparse_table(m, dir, BEAM_TABLE_MID, false);
+    /*
+     * One expanded count table alive at a time.
+     *
+     * Only when the model arrives frozen -- a load, or a re-finalize after
+     * freezing. A model whose counts are already mutable has nothing to
+     * expand and takes the original path.
+     *
+     * The backoff test is belt-and-braces, not load-bearing: `beam_config_ok`
+     * REFUSES sparse storage with any non-zero kappa, because backoff can
+     * populate a row that was never observed and sparse storage has nowhere
+     * to put it. So a sparse model always satisfies this. It is tested anyway
+     * because the config check guards construction, and a file could carry a
+     * header this code would otherwise trust -- and because if that rule ever
+     * relaxes, `beam_build_hierarchy` reads counts ACROSS tables and would
+     * find them gone.
+     */
+    const bool lazy = m->cfg.sparse && m->counts_frozen && beam_no_backoff(m);
+    BeamError err;
+    if (lazy) {
+        static const BeamTableKind ORDER[3] =
+            { BEAM_TABLE_WIDE, BEAM_TABLE_MID, BEAM_TABLE_LEN };
+        err = BEAM_OK;
+        for (uint32_t i = 0; i < 3u && err == BEAM_OK; ++i) {
+            const BeamTableKind k = ORDER[i];
+            BeamSparseRows local;
+            err = beam_model_thaw_count_table(m, dir, (uint32_t)k, &local);
+            if (err != BEAM_OK) break;
+            err = finalize_sparse_table(m, dir, k,
+                                        k == BEAM_TABLE_WIDE && dir == BEAM_BWD,
+                                        &local);
+            beam_sparse_destroy(&local);
+        }
+        return err;
+    }
+
+    err = finalize_sparse_table(m, dir, BEAM_TABLE_MID, false, NULL);
     if (err != BEAM_OK) return err;
-    err = finalize_sparse_table(m, dir, BEAM_TABLE_LEN, false);
+    err = finalize_sparse_table(m, dir, BEAM_TABLE_LEN, false, NULL);
     if (err != BEAM_OK) return err;
     return finalize_sparse_table(m, dir, BEAM_TABLE_WIDE,
-                                 dir == BEAM_BWD);
+                                 dir == BEAM_BWD, NULL);
 }
 
 /**
@@ -412,10 +547,35 @@ static BeamError finalize_tables(BeamModel *st) {
             else st->log_z[L] = -INFINITY;
         }
         st->log_z[0] = -INFINITY;
+
+        /*
+         * Lengths that run at once divide the budget, like every other
+         * by-length driver in the library. This one did not, and ran at
+         * `beam_threads()` regardless: sixteen concurrent sweeps of 31 MB
+         * apiece is 294 MB of scratch that the budget never saw and that
+         * finalize did not need -- measured, eight threads finalize the
+         * foundation in 5.26 s against 5.34 s at sixteen.
+         *
+         * Refused HERE rather than inside the loop, for the reason the budget
+         * header gives: `beam_set_error` is thread-local, so the refusal a
+         * worker raises reaches this function as a bare code with its message
+         * -- the one naming the figure and the way out -- already lost.
+         */
+        const uint64_t per_len = beam_logz_sweep_bytes(st->n_states,
+                                                       st->n_residues,
+                                                       st->state_shift);
+        const uint32_t conc = beam_budget_concurrency(per_len, nw ? nw : 1u);
+        if (nw && conc == 0u) {
+            const uint32_t at = work[0];
+            free(work);
+            return beam_budget_refuse("the partition-function trellis",
+                                      at, per_len);
+        }
+
         int failed = BEAM_OK;
 #ifdef _OPENMP
         #pragma omp parallel for schedule(dynamic, 1) reduction(max:failed) \
-                num_threads(beam_threads())
+                num_threads(conc ? (int)conc : 1)
 #endif
         for (int64_t k = 0; k < (int64_t)nw; ++k) {
             double z = 0.0;
@@ -490,6 +650,17 @@ BeamError beam_model_finalize(BeamModel *m) {
         return BEAM_FAIL(BEAM_ERR_NOT_BUILT,
                         "finalize: the model is compacted, so its counts are "
                         "gone and it cannot be re-finalized");
+    /* Re-finalizing reads the counts, so restore the mutable form first.
+     * A no-op on the first finalize, which is the only one most models see. */
+    {
+        /* Left frozen when `finalize_sparse_direction` will expand one table
+         * at a time; expanding all six here is what made the peak 2.4x the
+         * finished model. */
+        if (!(m->cfg.sparse && beam_no_backoff(m))) {
+            const BeamError thaw = beam_model_thaw_counts(m);
+            if (thaw != BEAM_OK) return thaw;
+        }
+    }
     if (m->n_observed == 0)
         return BEAM_FAIL(BEAM_ERR_EMPTY_INPUT,
                         "finalize: no usable sequence was observed (%llu were "
@@ -532,6 +703,39 @@ BeamError beam_model_finalize(BeamModel *m) {
             beam_sparse_shrink(&m->sp_cnt_wide[d]);
             beam_sparse_shrink(&m->sp_cnt_mid[d]);
             beam_sparse_shrink(&m->sp_cnt_len[d]);
+        }
+    }
+
+    /*
+     * Observation is over, so the counts move to the shape their remaining
+     * consumers actually want: sorted, no directory, cells that are zero
+     * costing a bit rather than eight bytes. Measured 16.4x smaller on a
+     * 197,139-sequence repertoire.
+     *
+     * Failing to freeze is not a reason to fail the finalize. The tables are
+     * built and correct at this point, and the mutable counts are a valid
+     * thing to keep carrying -- it is exactly what every model did before.
+     * So the error is cleared and the model keeps the larger form.
+     */
+    if (beam_model_freeze_counts(m) != BEAM_OK) beam_clear_error();
+
+    /*
+     * Release the mutable count tables when the frozen ones are authoritative.
+     *
+     * Nothing wrote them on the path above -- each table was expanded into a
+     * local and destroyed with it -- but the loader allocates their
+     * directories, four bytes per dense row whether or not a row exists, and
+     * `beam_model_freeze_counts` returns early on an already-frozen model
+     * rather than clearing them. That left 29,563,416 B of empty directory on
+     * the foundation, which is exactly what the thaw-then-freeze cycle used to
+     * dispose of as a side effect. Zeroed is the state that cycle left them
+     * in, and what `beam_model_thaw_counts` overwrites.
+     */
+    if (m->cfg.sparse && m->counts_frozen) {
+        for (uint32_t d = 0; d < BEAM_DIRS; ++d) {
+            beam_sparse_destroy(&m->sp_cnt_wide[d]);
+            beam_sparse_destroy(&m->sp_cnt_mid[d]);
+            beam_sparse_destroy(&m->sp_cnt_len[d]);
         }
     }
     return BEAM_OK;

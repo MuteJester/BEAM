@@ -10,6 +10,17 @@ readme = "README.md"
 requires-python = ">=3.9"
 dependencies = ["numpy>=1.21"]
 
+# Reading parquet is optional -- `from_sequence_file` and `from_dataframe`
+# need none of this. It is declared because it was NOT, and so nothing
+# noticed when pyarrow disappeared from a machine: six memory-shape tests
+# stopped running and the verification gate failed for weeks with no
+# indication of why. `pre_buffer` reached ParquetFile in pyarrow 4.0, which
+# is the floor that actually matters; below it the reader still works and
+# only loses the saving.
+[project.optional-dependencies]
+parquet = ["pyarrow>=4.0"]
+dev = ["pyarrow>=4.0", "pytest>=7"]
+
 [tool.setuptools.packages.find]
 where = ["src"]
 

@@ -18,15 +18,15 @@ src/native/core/alphabet_aa.c
 src/native/core/alphabet_nt.c
 src/native/core/crc32c.c
 src/native/core/errors.c
-src/native/core/logging.c
 src/native/core/rng.c
-src/native/core/runtime.c
+src/native/core/threads.c
 
 src/native/dp/backward.c
 src/native/dp/edge_weights.c
 src/native/dp/jet.c
 src/native/dp/liveness.c
 src/native/dp/partition.c
+src/native/dp/rescale.c
 src/native/dp/path_count.c
 src/native/dp/topology.c
 
@@ -43,9 +43,14 @@ src/native/math/spectrum.c
 src/native/math/surprisal.c
 src/native/math/tilt.c
 
+src/native/mixture/inner_product.c
+src/native/mixture/shape.c
+src/native/mixture/support.c
+
 src/native/model/algebra.c
 src/native/model/config.c
 src/native/model/encoding.c
+src/native/model/freeze.c
 src/native/model/finalize.c
 src/native/model/introspection.c
 src/native/model/lifecycle.c
@@ -60,4 +65,23 @@ src/native/occupancy/poisson_binomial/common.c
 src/native/occupancy/poisson_binomial/moments.c
 src/native/occupancy/poisson_binomial/pgf.c
 
+src/native/query/automaton.c
+src/native/query/constraint.c
+src/native/query/engine.c
+src/native/query/expectation.c
+src/native/query/indel.c
+src/native/query/information.c
+src/native/query/plan.c
+src/native/query/posterior.c
+src/native/query/product.c
+
+src/native/storage/frozen_counts.c
+src/native/storage/packed_rows.c
 src/native/storage/sparse_rows.c
+
+# Memory management: the allocator policy, the scratch budget, what a model
+# reports about its size, and what the per-length cache keeps.
+src/native/memory/accounting.c
+src/native/memory/allocator.c
+src/native/memory/budget.c
+src/native/memory/live_cache.c

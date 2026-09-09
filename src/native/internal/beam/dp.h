@@ -14,6 +14,41 @@
 #include "beam/model_state.h"
 #include "beam/table_access.h"
 
+/* ── The per-layer rescale ───────────────────────────────────── */
+
+/**
+ * Crossings of the one invariant the linear sweeps depend on, since the last
+ * reset. Zero at all times on every configuration measured; see rescale.c for
+ * why that is checked rather than assumed, and for how little margin there is.
+ *
+ * A test hook, not a diagnostic for callers, and not thread-safe to read while
+ * a sweep is running.
+ */
+unsigned long long beam_rescale_flushes(void);
+void beam_rescale_flush_reset(void);
+void beam_rescale_note_flush(void);
+
+/**
+ * Divide one accumulator by its layer's scale, noticing a value that vanishes.
+ *
+ * Bit-identical to `v / nmax`, which it has to be: these sweeps are pinned to
+ * the last bit by `verification/check.py`, so a guard that computed the
+ * quotient any other way -- multiplying by a reciprocal, say -- would move
+ * every recorded number in the library and the guard would be indistinguishable
+ * from a regression.
+ *
+ * Pass only accumulators that carry MASS. A jet's higher moments and the
+ * expectation semiring's weighted sum can legitimately be zero or negative
+ * without the state being dead, and flagging those would report a loss that
+ * did not happen. Their companion mass vector is the one to guard.
+ */
+static inline double beam_rescale(double v, double nmax) {
+    const double out = v / nmax;
+    /* Predicted not-taken and never yet taken; the atomic is behind it. */
+    if (out == 0.0 && v > 0.0) beam_rescale_note_flush();
+    return out;
+}
+
 /* ── Cross-file helpers ──────────────────────────────────────── */
 
 /**
@@ -75,6 +110,48 @@ void beam_state_weights(const BeamModel *m, uint32_t i, uint32_t len,
  */
 void beam_tail_weights(const BeamModel *m, uint32_t len, double *out);
 
+/**
+ * The largest `q * w` among the edges a tilted sweep will actually use.
+ *
+ * A tilted sweep rescales its layer by the maximum of the TILTED weights, and
+ * for `q >= 0` that is `q * wmax`, since `q * w` rises with `w`. For `q < 0`
+ * it rises as `w` FALLS, so the maximum sits at the smallest weight and
+ * `q * wmax` is a minimum instead. Rescaling by it makes every
+ * `exp(q * w - qmax)` an `exp` of a large positive number, and the layer
+ * overflows to infinity.
+ *
+ * That is not a theoretical concern. Three sweeps did exactly this, and in the
+ * open world with backoff off -- `beam_model_config_default()` with `strict`
+ * cleared -- unobserved cells sit at `ln(1e-300)`, so any `|q| > 1.03`
+ * overflowed. `beam_model_log_mellin(-5)` returned `-inf` and
+ * `beam_model_hill_number(-5)` returned `0.0`, both with BEAM_OK, where the
+ * true values are finite; and at `q = -1.5` the answer came back finite and
+ * WRONG, which is worse. `beam_betas_tilted` never had the defect because it
+ * maximises the tilted quantity directly.
+ *
+ * Free when `q >= 0`, which is every quantity BEAM computes by default: the
+ * caller has already found `wmax`, and this returns `q * wmax` without
+ * looking at the layer. Only a negative tilt pays for the scan.
+ *
+ * `cur` restricts the scan to states the sweep has reached, whose edges are
+ * the only ones that enter any sum. Returns `-INFINITY` when no reached state
+ * has a live edge.
+ */
+static inline double beam_tilted_layer_max(const double *w, const double *cur,
+                                           uint32_t n_states,
+                                           uint32_t n_residues,
+                                           double q, double wmax) {
+    if (q >= 0.0) return q * wmax;
+    double wmin = INFINITY;
+    for (uint32_t s = 0; s < n_states; ++s) {
+        if (cur && cur[s] == 0.0) continue;
+        const double *row = w + (size_t)s * n_residues;
+        for (uint32_t x = 0; x < n_residues; ++x)
+            if (row[x] != -INFINITY && row[x] < wmin) wmin = row[x];
+    }
+    return wmin == INFINITY ? -INFINITY : q * wmin;
+}
+
 /** Compute `log_z[len]`. Returns BEAM_OK or an allocation error. */
 BeamError beam_compute_log_z(BeamModel *m, uint32_t len, double *out);
 
@@ -127,5 +204,63 @@ void beam_binomials(double c[][BEAM_MAX_MOMENT + 1], uint32_t n);
 BeamError jet_sweep(const BeamModel *m, uint32_t len, double q,
                           uint32_t order, double *out_moments,
                           double *out_log_z);
+
+/**
+ * Peak bytes one `beam_compute_log_z` sweep holds, from the same expression
+ * it allocates from.
+ *
+ * Here rather than beside the allocation because there are now two callers
+ * that must agree: the sweep, which refuses a length it cannot fit, and
+ * `beam_model_finalize`, which divides the budget across the lengths it runs
+ * concurrently. Two copies of this arithmetic would drift, and the direction
+ * they would drift in is a driver that admits more lengths than the sweep
+ * will accept.
+ *
+ * The layer of edge weights dominates: `S * R` doubles is 31 MB on an order-4
+ * amino-acid model and grows with the alphabet's ceiling order, while the
+ * state vectors and the frontier index arrays are linear in `S`.
+ */
+static inline uint64_t beam_logz_sweep_bytes(uint32_t n_states,
+                                             uint32_t n_residues,
+                                             uint32_t state_shift) {
+    return (uint64_t)n_states * n_residues * sizeof(double)
+         + 3ull * n_states * sizeof(double)
+         + 3ull * n_states * sizeof(uint32_t)
+         + 2ull * state_shift * sizeof(uint32_t)
+         + ((uint64_t)state_shift + 1u) * sizeof(uint32_t);
+}
+
+/**
+ * Peak bytes one `beam_model_path_count` sweep holds: the residue-mask bits
+ * and three state vectors. No layer of edge weights, because path counting
+ * never asks what an edge weighs -- which is why this is so much smaller than
+ * every other sweep in the library.
+ */
+static inline uint64_t beam_path_count_bytes(uint32_t n_states) {
+    return (uint64_t)n_states * sizeof(uint32_t)
+         + 3ull * n_states * sizeof(double);
+}
+
+/**
+ * Peak bytes one `jet_sweep` holds, from the same expression it allocates
+ * from.
+ *
+ * Here rather than beside the allocation because four callers -- the Mellin
+ * transform, the tilted cumulants and both moment entry points -- run these
+ * sweeps concurrently over lengths and must divide the memory budget by one
+ * sweep's size. A caller computing that from its own copy of the formula is
+ * how a guard and the thing it guards drift apart.
+ *
+ * `n_moments` is `order + 1`, the width of the jet the sweep carries.
+ */
+static inline uint64_t beam_jet_sweep_bytes(uint32_t n_states,
+                                            uint32_t n_residues,
+                                            uint32_t n_moments) {
+    const uint64_t S = n_states;
+    return S * (uint64_t)n_residues * sizeof(double)     /* one layer   */
+         + S * sizeof(double)                            /* the sink    */
+         + 2ull * n_moments * S * sizeof(double)         /* cur, next   */
+         + S;                                            /* alive       */
+}
 
 #endif /* BEAM_INTERNAL_DP_H */

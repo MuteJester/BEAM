@@ -41,11 +41,12 @@ static inline double mix_sparse(const BeamModel *m, uint32_t dir,
                                 uint32_t len, uint32_t depth,
                                 uint32_t ctx_wide, uint32_t ctx_mid,
                                 uint32_t ctx_len, uint32_t x) {
-    const double *a = beam_lp_wide_row(m, dir, depth, ctx_wide);
-    const double *b = beam_lp_mid_row(m, dir, depth, ctx_mid);
-    const double *c = beam_lp_len_row(m, dir, len, depth, ctx_len);
-    if (!a || !b || !c) return -INFINITY;
-    return mix_values(m, a[x], b[x], c[x]);
+    const BeamLogRow a = beam_lp_wide_row(m, dir, depth, ctx_wide);
+    const BeamLogRow b = beam_lp_mid_row(m, dir, depth, ctx_mid);
+    const BeamLogRow c = beam_lp_len_row(m, dir, len, depth, ctx_len);
+    if (!a.present || !b.present || !c.present) return -INFINITY;
+    return mix_values(m, beam_log_cell(&a, x), beam_log_cell(&b, x),
+                      beam_log_cell(&c, x));
 }
 
 

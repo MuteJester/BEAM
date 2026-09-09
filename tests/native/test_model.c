@@ -22,6 +22,7 @@
 
 #include "beam/common.h"
 #include "beam/model.h"
+#include "beam/io_internal.h"
 #include "beam/crc32c.h"
 
 /*
@@ -789,17 +790,47 @@ static void test_spectra_by_length_equal_one_at_a_time(void) {
         ASSERT_MSG(fabs(acc[b] - pooled[b]) < 1e-15,
                    "the rows must decompose the pooled spectrum");
 
-    /* Lowering the memory budget changes only how many lengths run at once. */
+    /*
+     * The memory budget changes the SCHEDULE, not the answer -- and below the
+     * size of a single sweep it refuses rather than running anyway.
+     *
+     * This used to assert that a budget of one byte still returned BEAM_OK,
+     * pinning the old promise that "one length always runs, however large".
+     * That promise was never kept: `positional.c` and the query layer refused
+     * above the budget from the same setter, so a call that worked at 4 GB
+     * failed at 1 MB in exactly the paths the documentation said it could not.
+     * The refusing half was kept, because one sweep reaches 6.6 GB on a
+     * nucleotide model at the ceiling order and a budget that cannot say no to
+     * that protects nothing.
+     */
     const uint64_t before = beam_model_memory_budget();
-    beam_model_set_memory_budget(1u);
     double *serial = (double *)calloc((size_t)(W + 1u) * bins, sizeof(double));
     ASSERT_MSG(serial != NULL, "alloc");
+
+    /* Far below the 4 GB default, so concurrency drops, but comfortably above
+     * one sweep of this order-3 model: the answer must not move. */
+    beam_model_set_memory_budget(256ull << 20);
     ASSERT_MSG(beam_model_spectra_by_length(m, false, 0, bins, ds, serial,
-                                                NULL) == BEAM_OK, "budget 1");
+                                                NULL) == BEAM_OK,
+               "a reduced budget still runs, one length at a time");
     for (size_t i = 0; i < (size_t)(W + 1u) * bins; ++i)
         ASSERT_MSG(serial[i] == rows[i],
                    "the memory budget must not change the answer");
+
+    /* Below one sweep: refused, and refused with a diagnosable message rather
+     * than a bare code. The budget is process-global and ASSERT_MSG returns
+     * from the middle of a test, so it is restored BEFORE the assertions --
+     * leaving it starved made later, unrelated tests fail with "build". */
+    beam_model_set_memory_budget(1u);
+    const BeamError starved = beam_model_spectra_by_length(m, false, 0, bins,
+                                                           ds, serial, NULL);
+    const int named = strstr(beam_error_message(), "memory budget") != NULL;
     beam_model_set_memory_budget(before);
+
+    ASSERT_MSG(starved != BEAM_OK,
+               "a budget below a single sweep must refuse, not run anyway");
+    ASSERT_MSG(named, "and the refusal must name the budget as the cause");
+    ASSERT_MSG(beam_model_memory_budget() == before, "budget restored");
 
     free(pooled); free(rows); free(one); free(acc); free(serial);
     beam_model_destroy(m);
@@ -1430,22 +1461,69 @@ static void test_live_cache_respects_the_memory_bound(void) {
     ASSERT_MSG(beam_live_cache_entries(m) > 0, "cache should be warm");
     ASSERT_MSG(beam_live_cache_bytes(m) > 0, "a warm cache holds bytes");
 
-    beam_model_memory_budget();
-    beam_model_set_memory_budget(4u);       /* a quarter of this is 1 byte */
-    beam_live_cache_drop(m);
+    /*
+     * Two properties, and they can no longer be starved with one number.
+     *
+     * The cache cap is a quarter of the budget, and the budget now also
+     * REFUSES a sweep too large to fit. On this model an entry averages
+     * 0.26 MB, so the cache declines only below about a 1.05 MB budget, while
+     * one path-counting sweep needs 5.45 MB. There is no budget at which the
+     * cache declines and that sweep still runs -- and there should not be:
+     * at 1 MB, refusing a 5.45 MB sweep is the whole point of the setting.
+     *
+     * So the fallback and the decline are exercised separately. Dropping the
+     * cache forces the build path, which IS the code that ran before the cache
+     * existed; and a budget that starves the cap is checked against topology,
+     * which needs 0.78 MB and therefore still fits.
+     */
+    int ok_count = 1, ok_topo = 1, ok_ret = 1;
+
+    /* The fallback path, at a budget where everything runs. */
     for (uint32_t L = 1; L <= 12; ++L) {
         if (!beam_length_live(m, L)) continue;
-        ASSERT_MSG(beam_model_path_count(m, L) == cached[L],
-                   "the uncached path must give the identical count");
+        beam_live_cache_drop(m);
+        if (beam_model_path_count(m, L) != cached[L]) ok_count = 0;
+        beam_live_cache_drop(m);
         double n = 0.0, e = 0.0;
-        ASSERT_MSG(beam_model_topology(m, L, &n, &e, NULL) == BEAM_OK,
-                   "topology");
-        ASSERT_MSG(n == nodes[L] && e == edges[L],
-                   "the uncached path must give the identical topology");
+        if (beam_model_topology(m, L, &n, &e, NULL) != BEAM_OK) ok_ret = 0;
+        else if (n != nodes[L] || e != edges[L]) ok_topo = 0;
     }
-    ASSERT_MSG(beam_live_cache_entries(m) == 0,
-               "nothing may be cached under a 1-byte bound");
+
+    /* The decline, at a budget below the cap but above a topology sweep. */
+    beam_model_set_memory_budget(1000000u);   /* cap 250 kB < a 256 kB entry */
+    beam_live_cache_drop(m);
+    int ok_uncached = 1, ok_empty = 1;
+    for (uint32_t L = 1; L <= 12; ++L) {
+        if (!beam_length_live(m, L)) continue;
+        double n = 0.0, e = 0.0;
+        if (beam_model_topology(m, L, &n, &e, NULL) != BEAM_OK
+            || n != nodes[L] || e != edges[L]) ok_uncached = 0;
+    }
+    /*
+     * The invariant is that the cache never exceeds its cap, not that it is
+     * necessarily empty: entries vary in size, and a budget low enough to
+     * exclude every one of them is also too low to run the topology sweep this
+     * loop needs. Asserting "empty" was asserting an accident of these two
+     * entries averaging 256 kB against a 250 kB cap.
+     */
+    if (beam_live_cache_bytes(m) > beam_model_memory_budget() / 4u)
+        ok_empty = 0;
+
+    /*
+     * Restored BEFORE the assertions. The budget is process-global, and an
+     * ASSERT_MSG returns from the middle of the test: leaving it starved made
+     * eight later, unrelated tests fail with "build", which is how this was
+     * found.
+     */
     beam_model_set_memory_budget(saved);
+
+    ASSERT_MSG(ok_count, "the uncached path must give the identical count");
+    ASSERT_MSG(ok_ret, "topology");
+    ASSERT_MSG(ok_topo, "the uncached path must give the identical topology");
+    ASSERT_MSG(ok_uncached,
+               "declining to cache must not change the topology");
+    ASSERT_MSG(ok_empty, "the cache must stay within its cap");
+    ASSERT_MSG(beam_model_memory_budget() == saved, "budget restored");
     beam_model_destroy(m);
     PASS();
 }
@@ -1505,6 +1583,45 @@ static void test_spectrum_totals_and_identity(void) {
                "spectrum overflowed its grid");
     free(wc); free(wg);
     beam_model_destroy(m);
+    PASS();
+}
+
+static void test_accumulator_max_ignores_an_earlier_threads_error(void) {
+    /*
+     * A regression, and a subtle one. `beam_model_accumulator_max` runs its
+     * per-length sweeps in parallel and asks `beam_last_error()` after each
+     * one whether that sweep failed. `beam_set_error` is thread-local and
+     * OpenMP reuses its threads, so a code left on a worker by an UNRELATED
+     * earlier call was read back as this sweep's own failure: the function
+     * returned 0.0 and reported "a per-length sweep failed" when every sweep
+     * had succeeded.
+     *
+     * It only fired when the work reached a worker other than the caller,
+     * which made it intermittent -- it surfaced as eight unrelated spectrum
+     * tests failing in a full suite run and passing on a re-run of the same
+     * command.
+     *
+     * The stale code is planted here rather than waited for. Anything that
+     * reports a per-item refusal inside a parallel region leaves one behind;
+     * what matters is that a later, successful call is not affected by it.
+     */
+    BeamModel *m = build(3, 27);
+    ASSERT_MSG(m != NULL, "build");
+    const double clean = beam_model_accumulator_max(m);
+    ASSERT_MSG(clean > 0.0 && beam_last_error() == BEAM_OK,
+               "the undisturbed call must succeed");
+
+#ifdef _OPENMP
+    #pragma omp parallel
+    { beam_set_error(BEAM_ERR_INVALID_SEQUENCE, "stale, from an earlier call"); }
+#endif
+
+    const double after = beam_model_accumulator_max(m);
+    beam_model_destroy(m);
+    ASSERT_MSG(beam_last_error() == BEAM_OK,
+               "a stale error on a worker was reported as this call's failure");
+    ASSERT_MSG(after == clean,
+               "a stale error on a worker changed the answer");
     PASS();
 }
 
@@ -2152,6 +2269,234 @@ static void test_add_equals_counting_together(void) {
 
 /* ── Runner ──────────────────────────────────────────────────── */
 
+/* ── Positional marginals over a wide dynamic range ──────────── */
+
+/**
+ * Every row of a clamped marginal is a distribution, on a trellis whose live
+ * states span thousands of nats.
+ *
+ * Regression for a defect found by review. The forward sweep carried `alpha`
+ * linearly and renormalised it once per layer by the largest edge weight in
+ * that layer -- and no single factor per layer can hold a trellis that wide.
+ * The states that underflowed to zero were skipped from then on, so rows came
+ * back summing to 5.9e-264 while the call reported BEAM_OK. Six of sixty rows
+ * were lost here, including PINNED positions, whose row must be one-hot.
+ *
+ * Nothing exotic is needed to reach it: this is `beam_model_config_default()`
+ * with the alphabet and the length changed. The sweep now carries logarithms,
+ * as the backward half always did.
+ */
+static void test_clamped_marginals_survive_a_wide_dynamic_range(void) {
+    enum { NSEQ = 64, LEN = 60 };
+    static char store[NSEQ][72];
+    static const char *seqs[NSEQ];
+    static double ab[NSEQ];
+    /* Two periodic dialects of differing length, so the trellis is deep and
+     * its paths are very unequally weighted. */
+    for (uint32_t s = 0; s < NSEQ; ++s) {
+        const uint32_t n = 54u + (s % 11u);
+        const char *cyc = (s % 2u) ? "ACGT" : "AACCGGTT";
+        const uint32_t clen = (s % 2u) ? 4u : 8u;
+        for (uint32_t i = 0; i < n; ++i)
+            store[s][i] = cyc[(i + s) % clen];
+        store[s][n] = '\0';
+        seqs[s] = store[s];
+        ab[s] = 1.0 + (double)(s % 7u);
+    }
+
+    BeamModelConfig cfg;
+    beam_model_config_default(&cfg);
+    cfg.alphabet = BEAM_ALPHABET_NT;
+    cfg.order = 3;
+    cfg.max_length = 70;
+    cfg.strict = false;
+    BeamModel *m = beam_model_new(&cfg);
+    ASSERT_MSG(m != NULL, "nucleotide model built");
+    ASSERT_MSG(beam_model_observe(m, seqs, ab, NSEQ) == BEAM_OK, "observed");
+    ASSERT_MSG(beam_model_finalize(m) == BEAM_OK, "finalized");
+
+    const uint32_t NR = BEAM_NT_RESIDUES;
+    double *out = (double *)malloc((size_t)LEN * NR * sizeof(double));
+    uint8_t *clamp = (uint8_t *)malloc(LEN);
+    ASSERT_MSG(out && clamp, "alloc");
+    memset(clamp, BEAM_RESIDUE_INVALID, LEN);
+    clamp[7]  = 0u;   /* A */
+    clamp[52] = 2u;   /* G */
+    clamp[54] = 1u;   /* C */
+
+    double logz = 0.0;
+    ASSERT_MSG(beam_model_positional_marginals(m, LEN, clamp, out, &logz)
+               == BEAM_OK, "clamped marginals");
+    ASSERT_MSG(isfinite(logz) && logz < -100.0,
+               "the clamped mass is real and thousands of nats down");
+
+    for (uint32_t i = 0; i < LEN; ++i) {
+        double s = 0.0;
+        for (uint32_t x = 0; x < NR; ++x) s += out[(size_t)i * NR + x];
+        ASSERT_MSG(fabs(s - 1.0) < 1e-9, "every row is a distribution");
+    }
+    /*
+     * A pinned row is one-hot: that is the correct conditional, and the rows
+     * that used to come back as 5.9e-264 were pinned ones. Sixty layers of
+     * accumulation put these about 1.5e-12 from one, which is rounding; the
+     * defect this guards against was 264 orders of magnitude away.
+     */
+    ASSERT_MSG(fabs(out[(size_t)7 * NR + 0] - 1.0) < 1e-9, "x7 is A");
+    ASSERT_MSG(fabs(out[(size_t)52 * NR + 2] - 1.0) < 1e-9, "x52 is G");
+    ASSERT_MSG(fabs(out[(size_t)54 * NR + 1] - 1.0) < 1e-9, "x54 is C");
+    for (uint32_t x = 1; x < NR; ++x)
+        ASSERT_MSG(out[(size_t)7 * NR + x] == 0.0,
+                   "and carries nothing anywhere else");
+
+    free(out); free(clamp);
+    beam_model_destroy(m);
+    PASS();
+}
+
+/* ── Tilted sweeps at a negative q ────────────────────────────── */
+
+/**
+ * A negative tilt must not overflow the forward sweeps.
+ *
+ * Regression for a defect found by review, in shipped code. The tilted sweeps
+ * rescaled each layer by `q * wmax`, where `wmax` is the largest UNTILTED
+ * weight. For `q < 0` the largest tilted weight sits at the SMALLEST untilted
+ * one, so `q * wmax` is a minimum instead: every `exp(q * w - qmax)` became an
+ * `exp` of a large positive number and the layer overflowed to infinity.
+ *
+ * The trigger is ordinary -- the open world with backoff off, where unobserved
+ * cells sit at `ln(1e-300)` and any `|q| > 1.03` overflows. It was not a loud
+ * failure: `log_mellin(-5)` returned `-inf` and `hill_number(-5)` returned
+ * `0.0`, both with BEAM_OK, and at `q = -1.5` the answer came back FINITE and
+ * wrong, which is worse than either.
+ *
+ * The reference is the model scoring its own support, one sequence at a time,
+ * which shares no sweep with the quantity under test.
+ */
+static void test_a_negative_tilt_does_not_overflow_the_sweeps(void) {
+    static const char *NT_TRAIN[10] = {
+        "ACGTA", "ACGTT", "AGGTA", "ACCTA", "ACGAA",
+        "TCGTA", "ACGTG", "ACGTC", "AGGTT", "TCGAA",
+    };
+    BeamModelConfig cfg;
+    beam_model_config_default(&cfg);
+    cfg.alphabet = BEAM_ALPHABET_NT;
+    cfg.order = 3; cfg.max_length = 5; cfg.strict = false;
+    cfg.kappa[0] = cfg.kappa[1] = cfg.kappa[2] = 0.0;
+    cfg.kappa_wide = 0.0; cfg.kappa_len = 0.0;
+    BeamModel *m = beam_model_new(&cfg);
+    ASSERT_MSG(m != NULL, "model built");
+    ASSERT_MSG(beam_model_observe(m, NT_TRAIN, NULL, 10) == BEAM_OK, "observed");
+    ASSERT_MSG(beam_model_finalize(m) == BEAM_OK, "finalized");
+
+    const uint32_t NR = BEAM_NT_RESIDUES;
+    const BeamAlphabetInfo *ai = beam_alphabet_info(BEAM_ALPHABET_NT);
+    const double qs[5] = {-0.5, -1.5, -2.0, -5.0, -24.0};
+
+    for (uint32_t k = 0; k < 5u; ++k) {
+        const double q = qs[k];
+        /* ln sum_s P(s)^q over the whole support, by enumeration. */
+        double mx = -INFINITY, acc = 0.0;
+        char buf[8];
+        uint8_t idx[8];
+        for (uint32_t len = 1u; len <= 5u; ++len) {
+            for (uint32_t i = 0; i < len; ++i) idx[i] = 0u;
+            buf[len] = '\0';
+            for (;;) {
+                for (uint32_t i = 0; i < len; ++i) buf[i] = ai->idx_to_char[idx[i]];
+                const double lp = beam_model_log_pseq(m, buf);
+                if (isfinite(lp)) {
+                    const double v = q * lp;
+                    if (v > mx) { acc *= exp(mx - v); mx = v; acc += 1.0; }
+                    else acc += exp(v - mx);
+                }
+                uint32_t j = len;
+                while (j-- > 0u) {
+                    if (++idx[j] < NR) break;
+                    idx[j] = 0u;
+                    if (j == 0u) goto next_q;
+                }
+            }
+next_q:     ;
+        }
+        const double want = mx + log(acc);
+        double got = 0.0;
+        ASSERT_MSG(beam_model_log_mellin(m, q, &got) == BEAM_OK, "log_mellin");
+        ASSERT_MSG(isfinite(got),
+                   "a negative tilt has a finite answer and must not return "
+                   "-inf with a success code");
+        ASSERT_MSG(fabs(got - want) < 1e-9 * fabs(want),
+                   "and it is the answer the model's own scores give");
+    }
+    beam_model_destroy(m);
+    PASS();
+}
+
+/* ── A zero anchor weight ─────────────────────────────────────── */
+
+/**
+ * `weight_forward = 0` must not put NaNs in the edge weights.
+ *
+ * Regression for a defect found by review. A dead cell mixes to `-inf`, and
+ * the forward half formed `weight_forward * mix`, so a weight of zero made
+ * `0 * -inf` a NaN rather than the `-inf` it must be. The BACKWARD half was
+ * already guarded, and that asymmetry is what gave the defect away.
+ *
+ * Nothing rejected the weight -- the config validates only `>= 0` -- and the
+ * NaNs were latent here, because every sweep iterates reached states and
+ * skipped them. On a larger corpus they were not latent: `finalize` reported
+ * that the model could generate nothing. Measured on this model before the
+ * fix: 608,573 NaN edge weights of 1,666,980.
+ */
+/*
+ * Both storage modes, because the first version of this test checked only one
+ * and the defect survived in the other for exactly that reason.
+ *
+ * `beam_model_config_default` sets `sparse = false`, so building from the
+ * default exercised the DENSE kernel -- which the fix guarded. The Python
+ * layer selects sparse for the default closed world, so the path users
+ * actually run was the unguarded one, and it still produced 115 NaN edge
+ * weights of 3,519,180 on this model. A test that takes the default
+ * configuration tests the default configuration, not the shipped one.
+ */
+static void zero_forward_weight_one_mode(bool sparse) {
+    BeamModelConfig cfg;
+    beam_model_config_default(&cfg);
+    cfg.order = 3; cfg.max_length = 12;
+    cfg.sparse = sparse;
+    cfg.strict = sparse ? true : cfg.strict;   /* sparse is valid only strict */
+    cfg.weight_forward = 0.0; cfg.weight_backward = 1.0;
+    BeamModel *m = beam_model_new(&cfg);
+    ASSERT_MSG(m != NULL, "a zero anchor weight is a legal configuration");
+    ASSERT_MSG(beam_model_observe(m, TRAIN, WEIGHT, N_TRAIN) == BEAM_OK, "obs");
+    ASSERT_MSG(beam_model_finalize(m) == BEAM_OK,
+               "and finalizes rather than reporting the model generates nothing");
+
+    /* `A`, `R` and `NON` are macros in this file, so the locals are named
+     * around them. */
+    const uint32_t n_st = beam_model_n_states(m);
+    const uint32_t n_re = beam_model_n_residues(m);
+    double *w = (double *)malloc((size_t)n_st * n_re * sizeof(double));
+    ASSERT_MSG(w != NULL, "alloc");
+    long nans = 0;
+    for (uint32_t i = 0; i < 10u; ++i) {
+        beam_layer_weights(m, i, 10u, w, NULL);
+        for (size_t k = 0; k < (size_t)n_st * n_re; ++k)
+            if (isnan(w[k])) nans++;
+    }
+    ASSERT_MSG(nans == 0, "no edge weight is a NaN");
+    ASSERT_MSG(isfinite(beam_model_log_pseq(m, TRAIN[0])),
+               "and a training sequence still scores");
+    free(w);
+    beam_model_destroy(m);
+}
+
+static void test_a_zero_forward_weight_leaves_no_nan_edge_weights(void) {
+    zero_forward_weight_one_mode(false);   /* dense  */
+    zero_forward_weight_one_mode(true);    /* sparse */
+    PASS();
+}
+
 int main(void) {
     printf("\n=== BEAM (Ensemble of Dual Graph Experts) ===\n");
 
@@ -2192,6 +2537,7 @@ int main(void) {
 
     RUN_TEST(test_spectrum_totals_and_identity);
     RUN_TEST(test_accumulator_max_is_not_the_surprisal);
+    RUN_TEST(test_accumulator_max_ignores_an_earlier_threads_error);
 
     RUN_TEST(test_sampling);
     RUN_TEST(test_sampling_is_reproducible);
@@ -2222,6 +2568,9 @@ int main(void) {
     RUN_TEST(test_posterior_shrinks_towards_the_prior);
     RUN_TEST(test_posterior_of_a_model_with_itself_keeps_its_scores);
     RUN_TEST(test_finalize_rolls_back_on_allocation_failure);
+    RUN_TEST(test_clamped_marginals_survive_a_wide_dynamic_range);
+    RUN_TEST(test_a_negative_tilt_does_not_overflow_the_sweeps);
+    RUN_TEST(test_a_zero_forward_weight_leaves_no_nan_edge_weights);
 
     printf("\n  %d passed, %d failed\n\n", pass_count, fail_count);
     return fail_count == 0 ? 0 : 1;

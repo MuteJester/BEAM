@@ -530,8 +530,41 @@ class BeamModel:
 
     @property
     def memory_bytes(self) -> int:
-        """Approximate resident bytes of the model's tables."""
+        """Approximate resident bytes of the model's TABLES.
+
+        Exact to within 0.2 MB of what the build actually allocates. It does
+        NOT include the live cache, which appears after the first analytic and
+        can be larger than this figure -- see :attr:`live_cache_bytes`.
+        """
         return int(_c.memory_bytes(self._g))
+
+    @property
+    def live_cache_bytes(self) -> int:
+        """Bytes held by the per-length live cache, excluded from
+        :attr:`memory_bytes`.
+
+        The cache memoises the trellis structure every analytic needs; without
+        it each one rebuilds that structure, which is most of their cost. But
+        it is real memory, it appears only once an analytic has run, and it is
+        bounded by a quarter of the memory budget -- one gigabyte at the
+        default. Measured: 15.1 MB on a per-repertoire model whose tables are
+        13.8 MB, and 382.1 MB on a foundation whose tables are 806.7 MB.
+
+        Zero before the first analytic, and after :meth:`drop_caches`.
+        """
+        return int(_c.live_cache_bytes(self._g))
+
+    def drop_caches(self) -> None:
+        """Release everything the model can rebuild.
+
+        Only the live cache today. Changes no result -- the next analytic
+        rebuilds what it needs and pays the build cost again. For a caller
+        holding more models than fit, or done analysing one it must keep.
+
+        Not safe to call while another thread is inside an analytic on this
+        model, which is the rule for every other mutation here.
+        """
+        _c.drop_caches(self._g)
 
     def compact(self) -> None:
         """Drop the raw counts, keeping only the finalized tables.

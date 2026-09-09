@@ -14,4 +14,6 @@ src/native/bindings/python/scoring_bindings.c
 src/native/bindings/python/analytics_bindings.c
 src/native/bindings/python/algorithm_bindings.c
 src/native/bindings/python/publicness_bindings.c
+src/native/bindings/python/query_bindings.c
+src/native/bindings/python/mixture_bindings.c
 src/native/bindings/python/module.c

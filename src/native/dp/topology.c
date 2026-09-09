@@ -24,6 +24,14 @@ BeamError beam_model_topology(const BeamModel *m, uint32_t length,
     if (err != BEAM_OK) return err;
     const BeamLive *L = h.L;
 
+    /* Refused before allocating. The live handle is already held, so this
+     * cannot return through BEAM_BUDGET_OR_REFUSE without leaking it. */
+    const uint64_t need = (uint64_t)S * sizeof(uint32_t);
+    if (!beam_budget_fits(need)) {
+        beam_live_release(&h);
+        return beam_budget_refuse("the topology sweep", length, need);
+    }
+
     uint32_t *bits = (uint32_t *)malloc((size_t)S * sizeof(uint32_t));
     if (!bits) {
         beam_live_release(&h);

@@ -56,6 +56,30 @@ There is no auto-detection. `ACGT` is a perfectly good peptide, so a
 heuristic would quietly build the wrong model from short or low-complexity
 input; the alphabet is always named.
 
+### Combining models: counts or probabilities
+
+Two different things, and choosing the wrong one is the most consequential
+mistake this library makes easy.
+
+```python
+a.merged(b)              # ADD THE COUNTS: the model you would get by
+                         # training on the pooled corpus
+Mixture([a, b])          # MIX THE PROBABILITIES: pick a donor, then a
+                         # sequence from that donor
+```
+
+The pooled model has a strictly larger support, because a pooled path may
+splice an edge learned from one donor onto an edge learned from another and
+spell a sequence no single donor spells. Pooling 64 donors at a fixed
+30,000-sequence budget raises `D0` by 24.3% while the number of transitions
+rises 0.57%.
+
+`Mixture` is the object beta diversity between individuals is defined on, and
+`D0(union) <= D0(merged)` always. See [`docs/api/python/mixture.md`](docs/api/python/mixture.md),
+which also says which Hill orders are exact (`q = 0` and integer `q >= 2`),
+which are bounded (`q = 1`, refused rather than estimated), and what one inner
+product costs.
+
 ### Closed world by default
 
 The model holds what the sequences you gave it actually spell. A sequence no
@@ -96,15 +120,16 @@ python -m pytest tests    # Python suite
 | `src/native/model/` | Model state: config, lifecycle, training, smoothing, finalize |
 | `src/native/dp/` | The dynamic programs over the trellis |
 | `src/native/math/` | Named probability operations: Mellin, moments, spectrum, diversity |
+| `src/native/mixture/` | Probability mixtures of several models: inner products, support unions |
 | `src/native/algorithms/` | Sampling and exact top-k |
 | `src/native/occupancy/` | Poisson-binomial sharing model (`PublicnessModel`) |
 | `src/native/storage/` | Sparse row storage |
 | `src/native/io/` | Model persistence |
 | `src/native/core/` | Errors, logging, alphabet, runtime, RNG, CRC32C |
 | `src/native/bindings/python/` | The `_cbeam` extension, split by domain |
-| `src/BEAM/` | Python package: `model/`, `analytics/`, `math/`, `io/`, `publicness/` |
+| `src/BEAM/` | Python package: `model/`, `analytics/`, `math/`, `io/`, `publicness/`, `query/`, `mixture/` |
 | `build_support/` | Explicit source manifests read by both `Makefile` and `setup.py` |
-| `tests/python/` | Python suite, grouped as `model/`, `math/`, `analytics/`, `publicness/` |
+| `tests/python/` | Python suite, grouped as `model/`, `math/`, `analytics/`, `publicness/`, `query/`, `mixture/` |
 | `tests/native/` | C unit tests |
 | `tests/reference/` | An independent reimplementation, used to check the model against |
 | `docs/` | `architecture/`, `api/python/` |

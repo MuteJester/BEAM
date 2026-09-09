@@ -6,6 +6,7 @@
 #include <stdlib.h>
 
 #include "beam/publicness.h"
+#include "beam/error_macros.h"
 #include "beam/occupancy_internal.h"
 
 /* 2*pi to the last representable bit; the codebase spells such constants out
@@ -20,7 +21,9 @@ BeamError beam_publicness_moments(const double *p, uint32_t n_atoms,
                                 double *out_mean, double *out_variance) {
     BeamError err;
 
-    if (!p || !out_mean || !out_variance) return BEAM_ERR_NULL_ARG;
+    if (!p || !out_mean || !out_variance)
+        return BEAM_ENULL(!p ? "probabilities"
+                            : (!out_mean ? "mean output" : "variance output"));
     if (n_atoms == 0) return BEAM_FAIL(BEAM_ERR_EMPTY_INPUT, "no probabilities");
 
     err = publicness_check_groups(depths, multiplicity, n_groups);

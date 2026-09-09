@@ -3,6 +3,24 @@
 Sources come from the explicit manifests under build_support/ rather than from
 globs, so that a nested source layout cannot silently drop a file. Keep this
 file thin: package metadata and dependencies belong in pyproject.toml.
+
+TWO THINGS ABOUT REBUILDS, both of which have produced false test results.
+
+`make` does NOT build this extension. It builds `build/libbeam.a` for the C
+tests, from a SEPARATE object tree. Editing a .c file and running `make` leaves
+the extension that Python imports exactly as it was.
+
+And `build_ext` decides whether to rebuild by comparing the .so against source
+MTIMES, at a granularity that loses to a fast edit-build loop: an edit landing
+in the same second as the previous .so is skipped silently, leaving the OLD
+binary installed under a clean `git status`. Headers are worse -- they are not
+in `sources` at all, so touching one triggers nothing here.
+
+So any A/B experiment that edits C and compares results -- mutation testing
+above all -- must pass `--force`, and should verify the .so hash actually
+moved before trusting the verdict. A full forced rebuild takes about seven
+seconds; a verdict computed against a stale binary is worth less than nothing,
+because it is believed.
 """
 from pathlib import Path
 

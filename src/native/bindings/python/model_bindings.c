@@ -55,6 +55,13 @@ PyObject *py_observe(PyObject *self, PyObject *args) {
     if (err != BEAM_OK) return set_beam_error(err);
     Py_RETURN_NONE;
 }
+PyObject *py_drop_caches(PyObject *self, PyObject *arg) {
+    (void)self;
+    BeamModel *m = edge_from_capsule(arg);
+    if (!m) return NULL;
+    beam_model_drop_caches(m);
+    Py_RETURN_NONE;
+}
 PyObject *py_finalize(PyObject *self, PyObject *arg) {
     (void)self;
     BeamModel *m = edge_from_capsule(arg);
@@ -116,6 +123,16 @@ PyObject *py_load(PyObject *self, PyObject *arg) {
                 "%s was written by EDGE, before the split into BEAM. The "
                 "format is the same but the file identifier is not, and such "
                 "files are not loadable. Rebuild the model with BEAM.", path);
+        } else if (beam_last_error() != BEAM_OK) {
+            /*
+             * `beam_model_load` now names its own failure, and so do
+             * `beam_model_new` and `beam_model_finalize` when the file is
+             * fine but the model cannot be built -- a memory-budget refusal
+             * being the case that matters. This branch used to overwrite all
+             * of them with one sentence about corruption, which told the
+             * reader to rebuild a file that was never damaged.
+             */
+            return set_beam_error(beam_last_error());
         } else {
             PyErr_Format(PyExc_OSError,
                 "could not load a BEAM model from %s (not a model file, "
@@ -297,8 +314,54 @@ BEAM_SCALAR(n_states,        beam_model_n_states(m),        PyLong_FromUnsignedL
 BEAM_SCALAR(n_cells,         beam_model_n_cells(m),         PyLong_FromUnsignedLongLong)
 BEAM_SCALAR(n_nonzero_cells, beam_model_n_nonzero_cells(m), PyLong_FromUnsignedLongLong)
 BEAM_SCALAR(memory_bytes,    beam_model_memory_bytes(m),    PyLong_FromUnsignedLongLong)
-BEAM_SCALAR(path_count_total, beam_model_path_count_total(m), PyFloat_FromDouble)
-BEAM_SCALAR(accumulator_max, beam_model_accumulator_max(m), PyFloat_FromDouble)
+BEAM_SCALAR(live_cache_bytes, beam_model_live_cache_bytes(m), PyLong_FromUnsignedLongLong)
+/*
+ * Not BEAM_SCALAR, which is for accessors that cannot fail. This one reports
+ * failure as 0.0 with the error set, and 0.0 is also a legitimate total, so
+ * without the check a memory-budget refusal reached Python as "this model
+ * generates nothing". `beam_model_path_count_total` clears the error on entry
+ * by way of the per-length calls it makes, so a stale one cannot trip it.
+ */
+PyObject *py_path_count_total(PyObject *self, PyObject *arg) {
+    (void)self;
+    BeamModel *m = edge_from_capsule(arg);
+    if (!m) return NULL;
+    double v;
+    Py_BEGIN_ALLOW_THREADS
+    v = beam_model_path_count_total(m);
+    Py_END_ALLOW_THREADS
+    if (beam_last_error() != BEAM_OK) return set_beam_error(beam_last_error());
+    return PyFloat_FromDouble(v);
+}
+/*
+ * Not BEAM_SCALAR, for the same reason path_count_total is not: this one can
+ * fail, and it reports failure as 0.0 with the error set. Zero is also what a
+ * model that generates nothing returns, so without the check a refused sweep
+ * reached Python as a believable answer -- the reader goes to look at their
+ * corpus for a problem that is in their memory budget.
+ *
+ * `beam_model_accumulator_max` clears the error on entry, so a stale one from
+ * an earlier call cannot trip this.
+ */
+PyObject *py_accumulator_max(PyObject *self, PyObject *arg) {
+    (void)self;
+    BeamModel *m = edge_from_capsule(arg);
+    if (!m) return NULL;
+    double v;
+    Py_BEGIN_ALLOW_THREADS
+    v = beam_model_accumulator_max(m);
+    Py_END_ALLOW_THREADS
+    if (beam_last_error() != BEAM_OK) return set_beam_error(beam_last_error());
+    return PyFloat_FromDouble(v);
+}
+/*
+ * Checks the error, which the plain PyFloat_FromDouble form did not. Both
+ * wrapped functions return -INFINITY for a real answer -- the worth of a
+ * length the model does not generate -- AND for three error conditions, so
+ * the value alone cannot say which happened. The facade bounds `length`
+ * before calling, so this guard is reached only through raw `_cbeam`, which
+ * is exactly where it was missing.
+ */
 #define BEAM_LEN_FN(name, call)                                          \
     PyObject *py_##name(PyObject *self, PyObject *args) {    \
         (void)self;                                                      \
@@ -306,7 +369,10 @@ BEAM_SCALAR(accumulator_max, beam_model_accumulator_max(m), PyFloat_FromDouble)
         if (!PyArg_ParseTuple(args, "OI", &cap, &L)) return NULL;        \
         BeamModel *m = edge_from_capsule(cap);                        \
         if (!m) return NULL;                                             \
-        return PyFloat_FromDouble(call);                                 \
+        const double v_ = (call);                                        \
+        if (beam_last_error() != BEAM_OK)                                \
+            return set_beam_error(beam_last_error());                    \
+        return PyFloat_FromDouble(v_);                                   \
     }
 
 BEAM_LEN_FN(log_partition,    beam_model_log_partition(m, L))

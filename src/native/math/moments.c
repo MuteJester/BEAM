@@ -54,10 +54,23 @@ BeamError beam_model_surprisal_moments(const BeamModel *m, double q,
     uint32_t nw = 0;
     for (uint32_t L = m->n_len_slots; L-- > 1; )
         if (terms[L] != -INFINITY) work[nw++] = L;
+    /* Concurrent sweeps DIVIDE the budget rather than multiplying it. A
+     * concurrency of 0 means one sweep does not fit at all, which jet_sweep
+     * refuses with the better message, so run one and report that. */
+    const uint32_t conc = beam_budget_concurrency(
+        beam_jet_sweep_bytes(m->n_states, m->n_residues, NM), nw ? nw : 1u);
+    if (nw && conc == 0u) {
+        const uint32_t at = work[0];
+        const uint64_t need = beam_jet_sweep_bytes(m->n_states,
+                                                   m->n_residues, NM);
+        free(mom); free(acc); free(terms); free(jets); free(work);
+        return beam_budget_refuse("a moment sweep", at, need);
+    }
+
     int failed = BEAM_OK;
 #ifdef _OPENMP
     #pragma omp parallel for schedule(dynamic, 1) reduction(max:failed) \
-            num_threads(beam_threads())
+            num_threads((int)conc)
 #endif
     for (int64_t k = 0; k < (int64_t)nw; ++k) {
         double lz = 0.0;
@@ -148,10 +161,23 @@ BeamError beam_model_length_derivatives(const BeamModel *m, double q,
     uint32_t nw = 0;
     for (uint32_t L = n; L-- > 1; ) if (terms[L] != -INFINITY) work[nw++] = L;
 
+    /* Concurrent sweeps DIVIDE the budget rather than multiplying it. A
+     * concurrency of 0 means one sweep does not fit at all, which jet_sweep
+     * refuses with the better message, so run one and report that. */
+    const uint32_t conc = beam_budget_concurrency(
+        beam_jet_sweep_bytes(m->n_states, m->n_residues, NM), nw ? nw : 1u);
+    if (nw && conc == 0u) {
+        const uint32_t at = work[0];
+        const uint64_t need = beam_jet_sweep_bytes(m->n_states,
+                                                   m->n_residues, NM);
+        free(terms); free(jets); free(work);
+        return beam_budget_refuse("a moment sweep", at, need);
+    }
+
     int failed = BEAM_OK;
 #ifdef _OPENMP
     #pragma omp parallel for schedule(dynamic, 1) reduction(max:failed) \
-            num_threads(beam_threads())
+            num_threads((int)conc)
 #endif
     for (int64_t k = 0; k < (int64_t)nw; ++k) {
         double lz = 0.0;

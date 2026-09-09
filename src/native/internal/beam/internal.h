@@ -62,11 +62,13 @@
  * specific headers it needs; this umbrella goes away when none remain. */
 #include "beam/model_state.h"
 #include "beam/sparse_rows.h"
+#include "beam/frozen_counts.h"
 #include "beam/live_frontier.h"
-#include "beam/errors.h"
+#include "beam/error_macros.h"
 #include "beam/alphabet.h"
 #include "beam/indexing.h"
 #include "beam/table_access.h"
 #include "beam/dp.h"
+#include "beam/budget.h"
 
 #endif /* BEAM_MODEL_INTERNAL_H */
