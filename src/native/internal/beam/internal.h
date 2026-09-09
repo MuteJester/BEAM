@@ -64,6 +64,7 @@
 #include "beam/sparse_rows.h"
 #include "beam/frozen_counts.h"
 #include "beam/live_frontier.h"
+#include "beam/memory.h"
 #include "beam/error_macros.h"
 #include "beam/alphabet.h"
 #include "beam/indexing.h"

@@ -20,10 +20,10 @@
 /**
  * Per-length live structure of the trellis, cached on the model.
  *
- * Opaque here on purpose: `analytics.c` owns both the layout and the
- * construction, and nothing outside it may reach into a cached entry. What
- * the rest of the implementation needs to know is the lifetime rule, which is
- * absolute:
+ * Opaque here on purpose: memory/live_cache.c owns the layout, the bound and
+ * the lifetime, and nothing outside it may reach into a cached entry. Its
+ * interface is in memory.h; what belongs HERE is the one rule every caller
+ * of this file has to obey, which is absolute:
  *
  *   **Any change to the counts or to the finalized tables invalidates it.**
  *
@@ -43,7 +43,8 @@
  * NOT safe to call while another thread is inside an analytic on the same
  * model, which is the same rule the rest of the library follows for mutation.
  */
-void beam_live_cache_drop(BeamModel *m);
+/* Declared in memory.h, with the cache it belongs to. Named here because
+ * this is the file whose callers must obey the rule above. */
 
 /* ── Live-structure test hooks ───────────────────────────────── */
 
@@ -68,10 +69,8 @@ void beam_live_cache_drop(BeamModel *m);
 int beam_live_selfcheck(const BeamModel *m, uint32_t len);
 
 /** Bytes the live cache currently holds; 0 when it holds nothing. */
-uint64_t beam_live_cache_bytes(const BeamModel *m);
 
 /** Lengths the live cache currently holds. */
-uint32_t beam_live_cache_entries(const BeamModel *m);
 
 /* One bit per state. `static inline` because live_bit_get is a bit test in
  * the inner loop of the path-count and topology sweeps, called once per

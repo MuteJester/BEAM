@@ -33,7 +33,6 @@ int beam_threads(void);
  * `BEAM_MMAP_THRESHOLD` is 0, or because this is not glibc. See runtime.c for
  * what it buys and what it costs.
  */
-int beam_applied_mmap_threshold(void);
 
 /**
  * Chunks a parallel SUM is split into, fixed and independent of the thread
