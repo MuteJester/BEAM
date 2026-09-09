@@ -383,6 +383,93 @@ static inline bool beam_sparse_present(const BeamSparseRows *t, uint32_t row) {
 }
 
 /**
+ * A forward walk over the occupied rows of a half-open dense range.
+ *
+ * `beam_sparse_present` answers one row, and a caller sweeping a range asks it
+ * once per row -- including for every row that is not there. On the rank form
+ * that is a block index, a word load, a shift and a mask to discover an
+ * absence; on the foundation's forward wide table a single depth bucket asks
+ * it 194,481 times and roughly 82,000 of those find nothing.
+ *
+ * This asks the same question of sixty-four rows at a time. One word load
+ * yields every occupied row in it through `ctz`, so absent rows cost nothing
+ * beyond the bit they occupy, and a fully empty word is skipped whole. The
+ * sparser the table the larger the saving, which is the opposite of where the
+ * rank form's other costs fall.
+ *
+ * Ascending order, so a caller that also wants payload slots can keep a
+ * running counter instead of a rank lookup per row -- see
+ * `beam_row_cursor_slot0`. `layer_max` wants presence only.
+ *
+ * The direct form keeps its row-at-a-time scan: there is no bitmap to walk,
+ * and `index` is one 32-bit load per row either way.
+ */
+typedef struct {
+    const BeamSparseRows *t;
+    uint64_t word;      /* unconsumed bits of word `w`, low bit = row w*64 */
+    uint32_t w;         /* current word index, rank form only              */
+    uint32_t w_last;    /* last word index this range touches              */
+    uint32_t row;       /* next row to examine, direct form only           */
+    uint32_t end;       /* one past the last row of the range              */
+} BeamRowCursor;
+
+/** Word `w` of a sealed directory's bitmap, across the 256-row blocks. */
+static inline uint64_t beam_rank_word(const BeamSparseRows *t, uint32_t w) {
+    return t->rank[w >> 2].bits[w & 3u];
+}
+
+static inline void beam_row_cursor_init(BeamRowCursor *c,
+                                        const BeamSparseRows *t,
+                                        uint32_t first, uint32_t end) {
+    c->t = t; c->end = end; c->row = first; c->word = 0u;
+    c->w = first >> 6; c->w_last = end ? (end - 1u) >> 6 : 0u;
+    if (t->rank && first < end) {
+        /* Drop the bits below `first`; bits at or past `end` are rejected by
+         * the range test in `next`, which costs nothing on the common word. */
+        c->word = beam_rank_word(t, c->w) & (~0ull << (first & 63u));
+    }
+}
+
+/** The next occupied row at or after the cursor, or false when the range ends. */
+static inline bool beam_row_cursor_next(BeamRowCursor *c, uint32_t *out) {
+    if (c->t->rank) {
+        for (;;) {
+            while (c->word == 0ull) {
+                if (c->w >= c->w_last) return false;
+                c->word = beam_rank_word(c->t, ++c->w);
+            }
+            const uint32_t r = (c->w << 6) + (uint32_t)__builtin_ctzll(c->word);
+            c->word &= c->word - 1ull;               /* clear the low set bit */
+            if (r >= c->end) return false;
+            *out = r; return true;
+        }
+    }
+    while (c->row < c->end) {
+        const uint32_t r = c->row++;
+        if (c->t->index[r] != BEAM_ROW_MISSING) { *out = r; return true; }
+    }
+    return false;
+}
+
+/**
+ * Occupied rows strictly before `row`, which is that row's payload slot when
+ * it is occupied and the slot the next occupied row will take when it is not.
+ *
+ * Exact only on a finalized table, where slots are assigned in ascending row
+ * order. Lets a parallel walk split a range on block boundaries and recover
+ * each chunk's starting slot in constant time rather than counting up to it.
+ */
+static inline uint32_t beam_row_cursor_slot0(const BeamSparseRows *t,
+                                             uint32_t row) {
+    if (!t->rank) return 0u;                 /* direct form reads `index`   */
+    const BeamRankBlock *b = &t->rank[row >> 8];
+    const uint32_t w = (row >> 6) & 3u;
+    const uint32_t sub = w ? ((b->sub >> (9u * (w - 1u))) & 511u) : 0u;
+    return b->rank + sub
+         + (uint32_t)__builtin_popcountll(b->bits[w] & ((1ull << (row & 63u)) - 1ull));
+}
+
+/**
  * `beam_sparse_row_final` as a reference rather than a pointer, so a packed
  * table can answer it too. Same directory work; only what it hands back
  * differs.

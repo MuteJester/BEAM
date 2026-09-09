@@ -371,13 +371,31 @@ static double BEAM_KFN(layer_max)(const BeamModel *m, uint32_t i, uint32_t len) 
     const uint32_t stride = S / nw;      /* 1 when order == state_order */
 
     double hi = -INFINITY;
+    /*
+     * Chunked rather than row-per-iteration, so the walk inside a chunk can
+     * be a bitmap scan: one word load offers sixty-four rows and `ctz` picks
+     * out the occupied ones, where asking row by row paid a load, a shift and
+     * a mask for every absence. Chunks are a multiple of 64 so each begins on
+     * a word boundary and no word is examined by two threads.
+     *
+     * `hi` is a max reduction, and max over doubles is exact and
+     * order-independent, so splitting the range differently cannot move a
+     * bit of the answer.
+     */
+    const uint32_t chunk = 4096u;                 /* 64 words */
+    const int64_t n_chunks = (int64_t)((nw + chunk - 1u) / chunk);
 #ifdef _OPENMP
     #pragma omp parallel for schedule(static) reduction(max:hi) \
             num_threads(beam_threads()) if(nw > 4096)
 #endif
-    for (int64_t c = 0; c < (int64_t)nw; ++c) {
-        if (!beam_sparse_present(fw, base + (uint32_t)c)) continue;
-        const uint32_t ctx = (uint32_t)c;
+    for (int64_t ch = 0; ch < n_chunks; ++ch) {
+        const uint32_t lo   = (uint32_t)ch * chunk;
+        const uint32_t stop = (lo + chunk < nw) ? lo + chunk : nw;
+        BeamRowCursor cur;
+        beam_row_cursor_init(&cur, fw, base + lo, base + stop);
+        uint32_t got;
+        while (beam_row_cursor_next(&cur, &got)) {
+        const uint32_t ctx = got - base;
         double buf[BEAM_MAX_RESIDUES];
         /* One wide context can back several states when the state carries
          * more residues than the wide expert's order. */
@@ -388,6 +406,7 @@ static double BEAM_KFN(layer_max)(const BeamModel *m, uint32_t i, uint32_t len) 
              * scorer needs no probe of its own here. */
             BEAM_KFN(state_weights_sparse)(m, i, len, st, settle_back, r, buf);
             for (uint32_t x = 0; x < R; ++x) if (buf[x] > hi) hi = buf[x];
+        }
         }
     }
     return hi;
