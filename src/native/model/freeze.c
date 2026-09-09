@@ -76,13 +76,8 @@ BeamError beam_model_freeze_counts(BeamModel *m) {
     return BEAM_OK;
 }
 
-/**
- * Restore the mutable form, releasing the frozen one.
- *
- * Same all-or-nothing shape as freezing: every table is rebuilt before any
- * frozen one is dropped, so a model that runs out of memory here still has
- * its counts.
- */
+/* One table, into a caller-owned local; the model is not touched. The
+ * contract is in frozen_counts.h, beside the reason it exists. */
 BeamError beam_model_thaw_count_table(const BeamModel *m, uint32_t dir,
                                       uint32_t kind, BeamSparseRows *out) {
     if (!m || !out) return BEAM_ENULL(!m ? "model" : "destination");
@@ -95,6 +90,13 @@ BeamError beam_model_thaw_count_table(const BeamModel *m, uint32_t dir,
                             part_of_row, &ctx, out);
 }
 
+/**
+ * Restore the mutable form, releasing the frozen one.
+ *
+ * Same all-or-nothing shape as freezing: every table is rebuilt before any
+ * frozen one is dropped, so a model that runs out of memory here still has
+ * its counts.
+ */
 BeamError beam_model_thaw_counts(BeamModel *m) {
     if (!m) return BEAM_ENULL("model");
     if (!m->counts_frozen) return BEAM_OK;

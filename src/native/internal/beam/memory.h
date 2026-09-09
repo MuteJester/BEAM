@@ -23,6 +23,7 @@
 
 #include "beam/model.h"
 #include "beam/model_state.h"
+#include "beam/live_frontier.h"   /* BeamLive, named below */
 
 /* ── allocator.c ─────────────────────────────────────────────── */
 

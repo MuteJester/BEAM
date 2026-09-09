@@ -312,6 +312,15 @@ uint64_t beam_sparse_n_rows(const BeamSparseRows *t);
  * the branch in `beam_log_cell` is the same way every time it is reached in a
  * given run -- which is the only reason it is acceptable in that loop.
  */
+/*
+ * Initialise this DESIGNATED, never positionally. `step` and `mask` are
+ * adjacent uint32_t, so a reordering or an inserted field turns `step = 1`
+ * into `step = 0` silently -- and a zero step makes every residue of a dense
+ * row read residue 0, which is a plausible number for all twenty. `-Wall
+ * -Wextra` says nothing, because every member is still initialised with a
+ * compatible type. Three of the four initialisers live in table_access.h,
+ * where a change here is not visible.
+ */
 typedef struct {
     const double   *dense;   /* the row's residue 0, or NULL if packed       */
     const uint16_t *index;   /* this row's dictionary positions, if packed   */
@@ -500,7 +509,7 @@ static inline uint32_t beam_row_cursor_slot0(const BeamSparseRows *t,
  */
 static inline BeamLogRow beam_sparse_log_row(const BeamSparseRows *t,
                                              uint32_t row) {
-    BeamLogRow r = { NULL, NULL, NULL, 1u, 0u, false };
+    BeamLogRow r = { .step = 1u };
     uint32_t slot;
     if (t->rank) {
         const BeamRankBlock *b = &t->rank[row >> 8];
