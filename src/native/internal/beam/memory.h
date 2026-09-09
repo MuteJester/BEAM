@@ -34,6 +34,16 @@
  */
 int beam_applied_mmap_threshold(void);
 
+/**
+ * Apply the allocator policy, once per process.
+ *
+ * A constructor in allocator.c calls this, and so does model construction.
+ * Both are needed: the constructor runs earliest, but a static archive drops
+ * an object nothing references, and this file's symbols are referenced by
+ * nobody else. Idempotent.
+ */
+void beam_memory_init(void);
+
 /* ── live_cache.c ────────────────────────────────────────────── */
 
 /**

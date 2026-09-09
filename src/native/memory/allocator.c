@@ -12,6 +12,7 @@
 
 #include <stdlib.h>
 #include <limits.h>
+#include <stdbool.h>
 
 #if defined(__GLIBC__)
 #include <malloc.h>
@@ -84,12 +85,33 @@ static void beam_apply_allocator_policy(void) {
 }
 
 /*
- * A constructor rather than a call from `beam_model_new`: the ratchet is
- * raised by the first large free anywhere in the process, which may well be
- * before any model exists. runtime.c is pulled in by `beam_threads`, which
- * every parallel region names, so the object is never dropped by the linker.
+ * Applied from BOTH a constructor and an explicit call, and it needs both.
+ *
+ * The constructor runs before any model exists, which is what you want: the
+ * ratchet is raised by the first large free anywhere in the process, not by
+ * the first BEAM allocation. But a constructor only runs if its object file is
+ * LINKED, and in a static archive the linker takes only the objects that
+ * resolve a symbol somebody referenced. This file defines the policy and
+ * nothing else anyone calls, so `libbeam.a` consumers dropped it silently and
+ * got none of this -- measured, a model that should hold 27 MB held 482.
+ *
+ * That is not hypothetical either: it is what happened when this code was
+ * split out of the file holding the thread cap, whose `beam_threads` every
+ * parallel region names and which therefore always survived. The comment here
+ * still claimed that protection for three commits after it stopped applying.
+ *
+ * So `beam_memory_init` is called from model construction as well, which is
+ * always linked. Idempotent, and cheap enough to call on every model.
  */
+static bool g_applied = false;
+
+void beam_memory_init(void) {
+    if (g_applied) return;
+    g_applied = true;
+    beam_apply_allocator_policy();
+}
+
 #if defined(__GNUC__)
 __attribute__((constructor))
 #endif
-static void beam_runtime_init(void) { beam_apply_allocator_policy(); }
+static void beam_allocator_ctor(void) { beam_memory_init(); }

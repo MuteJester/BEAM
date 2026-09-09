@@ -5,6 +5,7 @@
 #include <stdio.h>
 
 #include "beam/internal.h"
+#include "beam/memory.h"
 #include "beam/model_build.h"
 
 
@@ -38,6 +39,9 @@ void beam_free_tables(BeamModel *m) {
 }
 
 BeamModel *beam_model_new(const BeamModelConfig *cfg) {
+    /* Also pulls memory/allocator.o into a static link, which a constructor
+     * alone does not: see beam_memory_init. */
+    beam_memory_init();
     BeamModelConfig c;
     if (cfg) c = *cfg; else beam_model_config_default(&c);
     /* A depth cap at or beyond the longest sequence resolves every depth

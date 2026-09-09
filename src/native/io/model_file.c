@@ -19,6 +19,7 @@
 
 #include "beam/crc32c.h"
 #include "beam/internal.h"
+#include "beam/memory.h"
 #include "beam/io_internal.h"
 
 /* 0x4245414D is 'B','E','A','M' as ASCII, most significant byte first. The
@@ -543,6 +544,7 @@ bool beam_model_is_legacy_file(const char *path) {
  * them), and overwriting those is how the information was lost.
  */
 BeamModel *beam_model_load(const char *path) {
+    beam_memory_init();       /* see beam_memory_init: static links drop it otherwise */
     if (!path) return (void)BEAM_ENULL("path"), NULL;
     beam_clear_error();
     FILE *f = fopen(path, "rb");
