@@ -151,6 +151,30 @@ typedef struct {
      * So: one bit per residue saying whether the cell exists, a two-byte
      * index per existing cell, and the distinct values once each. Exact --
      * the dictionary holds the same bit patterns -- and 5.35x smaller.
+     *
+     * IT IS NOT FREE, and the cost is on the hottest path. Measured on a
+     * 197,139-sequence per-repertoire model, all six tables packed, best of
+     * five, identical checksums either way:
+     *
+     *                       packed      plain     ratio
+     *     model          13,829,157  37,898,429   2.74x smaller
+     *     scoring            15.4 ms     8.8 ms   1.75x SLOWER
+     *     Hill sweep        357.2 ms   315.1 ms   1.13x slower
+     *     build             713 ms     672 ms     1.06x slower
+     *
+     * Scoring pays most because it reads single cells: a mask test, a
+     * popcount over the bits below the residue, then an indirection through
+     * the dictionary, where a plain row is one load. The sweeps read whole
+     * rows and amortise that over twenty cells.
+     *
+     * Kept deliberately, and the trade was reviewed with the numbers above
+     * rather than assumed: a caller holds many per-repertoire models at once
+     * and 24 MB each accumulates faster than 7 microseconds per scored
+     * sequence. A scoring-bound workload would want the opposite, which is
+     * what `beam_sparse_pack_cells` declining leaves available.
+     *
+     * The foundation is unaffected -- it declines, having more distinct
+     * values than a two-byte index can name.
      */
     /**
      * Doubles between one residue of a row and the next: 1 when the row is
