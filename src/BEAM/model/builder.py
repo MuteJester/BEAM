@@ -18,6 +18,32 @@ from .. import _cbeam as _c
 from .._simulation_result import SimulationResult
 
 
+def _as_weights(abundances):
+    """Weights for `observe`: a float64 buffer untouched, anything else listed.
+
+    A contiguous float64 array goes to C as bytes. Rebuilding it as Python
+    floats first cost four passes over the abundance column of a parquet
+    corpus -- 926,909,993 objects created and destroyed to move numbers that
+    were already contiguous. Lists, tuples and generators take the original
+    path, which is what most callers pass.
+    """
+    if abundances is None:
+        return None
+    dt = getattr(abundances, "dtype", None)
+    if dt is not None and getattr(dt, "name", None) == "float64" \
+            and getattr(abundances, "flags", None) is not None \
+            and abundances.flags.c_contiguous:
+        return abundances
+    try:
+        mv = memoryview(abundances)
+    except TypeError:
+        pass
+    else:
+        if mv.format == "d" and mv.c_contiguous:
+            return abundances
+    return [float(a) for a in abundances]
+
+
 class Builder:
     """Accumulate BeamModel counts across batches, then finalize once.
 
@@ -83,7 +109,7 @@ class Builder:
         end rather than one per batch.
         """
         seqs = list(sequences)
-        ab = None if abundances is None else [float(a) for a in abundances]
+        ab = _as_weights(abundances)
         if ab is not None and len(ab) != len(seqs):
             raise ValueError(
                 f"abundances has {len(ab)} entries but sequences has "

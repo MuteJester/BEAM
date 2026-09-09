@@ -167,6 +167,51 @@ const char **edge_borrow_strings(PyObject *seq, Py_ssize_t *out_n) {
 double *edge_borrow_abundances(PyObject *abund, Py_ssize_t n, bool *out_ok) {
     *out_ok = true;
     if (abund == Py_None) return NULL;
+
+    /*
+     * A contiguous float64 buffer is copied wholesale rather than element by
+     * element through the Python object protocol.
+     *
+     * The abundance column of a parquet corpus is already a contiguous
+     * integer buffer, and reached this function as 926,909,993 Python floats:
+     * `to_pylist` built them, `_iter_parquet` rebuilt them with `float(x)`,
+     * `Builder.observe` rebuilt them a third time, and this loop then called
+     * `PyFloat_AsDouble` on each. Four passes over the same column to recover
+     * numbers that were contiguous doubles to begin with.
+     *
+     * The sequence path below stays for lists, tuples and generators, which
+     * is what most callers pass and what every existing test uses.
+     */
+    if (PyObject_CheckBuffer(abund)) {
+        Py_buffer view;
+        if (PyObject_GetBuffer(abund, &view,
+                               PyBUF_C_CONTIGUOUS | PyBUF_FORMAT) == 0) {
+            const bool usable = view.itemsize == (Py_ssize_t)sizeof(double)
+                             && view.format && strcmp(view.format, "d") == 0;
+            if (usable && view.len / (Py_ssize_t)sizeof(double) != n) {
+                const Py_ssize_t an = view.len / (Py_ssize_t)sizeof(double);
+                PyBuffer_Release(&view);
+                PyErr_Format(PyExc_ValueError,
+                             "abundances has %zd entries but sequences has %zd",
+                             an, n);
+                *out_ok = false;
+                return NULL;
+            }
+            if (usable) {
+                double *w = (double *)PyMem_Malloc(
+                    (size_t)(n > 0 ? n : 1) * sizeof(double));
+                if (!w) { PyBuffer_Release(&view); PyErr_NoMemory();
+                          *out_ok = false; return NULL; }
+                if (n > 0) memcpy(w, view.buf, (size_t)n * sizeof(double));
+                PyBuffer_Release(&view);
+                return w;
+            }
+            PyBuffer_Release(&view);      /* wrong dtype: take the slow path */
+        } else {
+            PyErr_Clear();                /* not a buffer after all */
+        }
+    }
+
     PyObject *fast = PySequence_Fast(abund, "abundances must be a sequence");
     if (!fast) { *out_ok = false; return NULL; }
     Py_ssize_t an = PySequence_Fast_GET_SIZE(fast);

@@ -111,6 +111,14 @@ def _iter_parquet(path, sequence_column, abundance_column, batch_size):
     pf = _open_parquet_for_streaming(pq, os.fspath(path))
     for batch in pf.iter_batches(batch_size=batch_size, columns=cols):
         seqs = batch.column(sequence_column).to_pylist()
-        ab = (None if abundance_column is None
-              else [float(x) for x in batch.column(abundance_column).to_pylist()])
+        # As an array, not a list of Python floats. The column is already a
+        # contiguous integer buffer in the file; `to_pylist` plus `float(x)`
+        # built one Python object per row, `Builder.observe` rebuilt them, and
+        # the C binding then read each one back out. Four passes over a column
+        # that arrives contiguous. `observe` takes a float64 buffer directly.
+        ab = None
+        if abundance_column is not None:
+            import numpy as np
+            ab = batch.column(abundance_column).to_numpy(zero_copy_only=False)
+            ab = np.ascontiguousarray(ab, dtype=np.float64)
         yield seqs, ab
