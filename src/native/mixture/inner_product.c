@@ -49,21 +49,33 @@
 /**
  * Peak bytes one sweep holds.
  *
- * Independent of k, which is the point of accumulating the weights rather than
- * holding one layer per member. Beside the allocation it guards so the two
- * cannot drift apart, and shared with the driver's concurrency bound so what
- * is refused and what is scheduled come from one expression.
+ * The weight buffers are independent of k -- that is the point of accumulating
+ * into one layer rather than holding one per member. The two handle arrays are
+ * not, and this counted only the first group for as long as they were on the
+ * stack. When they moved to the heap the formula did not follow, and the
+ * comment here still said "independent of k, beside the allocation it guards
+ * so the two cannot drift apart" while they had already drifted: measured, the
+ * shortfall is exactly 80 bytes per member on x86-64, 5.24 MB at the 65,536
+ * ceiling, and a caller who set the budget to precisely the figure a refusal
+ * printed was admitted and then exceeded it.
+ *
+ * Shared with the driver's concurrency bound, so what is refused and what is
+ * scheduled come from one expression. `k` is the members ONE sweep holds, which
+ * is not the caller's member count everywhere: the Gram driver sweeps pairs and
+ * must pass 2.
  *
  * The per-length live frontiers are NOT counted, matching every other sweep in
  * the library: they are a cache on the model rather than scratch for the
  * program. A mixture acquires k of them at once instead of one, so a caller
  * holding many members should expect the cache, not this figure, to dominate.
  */
-static inline uint64_t product_sweep_bytes(uint32_t S, uint32_t R) {
+static inline uint64_t product_sweep_bytes(uint32_t S, uint32_t R, uint32_t k) {
     return 2ull * S * R * sizeof(double)      /* summed layer, plus scratch  */
          + 4ull * S * sizeof(double)          /* cur, next, tail, tail tmp   */
          + 2ull * S                           /* the two intersection masks  */
-         + 2ull * S * sizeof(uint32_t);       /* the two index lists         */
+         + 2ull * S * sizeof(uint32_t)        /* the two index lists         */
+         + (uint64_t)k * (sizeof(LiveHandle)  /* the per-member handles      */
+                          + sizeof(const BeamLive *));
 }
 
 /**
@@ -130,7 +142,7 @@ BeamError beam_mixture_log_inner_product(const BeamModel *const *models,
     const uint32_t SK = m0->state_shift;
 
     BEAM_BUDGET_OR_REFUSE("a mixture inner-product sweep", len,
-                          product_sweep_bytes(S, R));
+                          product_sweep_bytes(S, R, k));
 
     /*
      * On the heap, not the stack. These were fixed arrays sized by the union's
@@ -334,7 +346,7 @@ BeamError beam_mixture_log_inner_product_by_length(
      * refusal here on the calling thread: `beam_set_error` is thread-local, so
      * a refusal raised inside a worker would reach the caller as a bare code
      * with its message lost. */
-    const uint64_t per = product_sweep_bytes(m0->n_states, m0->n_residues);
+    const uint64_t per = product_sweep_bytes(m0->n_states, m0->n_residues, k);
     const uint32_t conc = beam_budget_concurrency(per, nw ? nw : 1u);
     if (nw && conc == 0u) {
         const uint32_t at = work[0];
@@ -428,7 +440,9 @@ BeamError beam_mixture_gram(const BeamModel *const *models, uint32_t k,
      * its message lost, `beam_set_error` being thread-local -- the same reason
      * every by-length driver in the library checks its budget up front.
      */
-    const uint64_t per = product_sweep_bytes(m0->n_states, m0->n_residues);
+    /* Pairs: the Gram driver hands `beam_mixture_log_inner_product_by_length`
+     * two models at a time, so a sweep here holds two handles, not k. */
+    const uint64_t per = product_sweep_bytes(m0->n_states, m0->n_residues, 2u);
     const uint32_t conc = beam_budget_concurrency(
         per, k ? (uint32_t)((uint64_t)k * (k + 1u) / 2u) : 1u);
     if (conc == 0u)
