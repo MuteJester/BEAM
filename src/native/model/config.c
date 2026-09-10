@@ -60,35 +60,94 @@ void beam_model_config_default_for(BeamAlphabet alphabet,
     cfg->weight_backward = 0.5;
 }
 
-bool beam_config_valid(const BeamModelConfig *c) {
+/*
+ * WHY a config is invalid, not merely that it is.
+ *
+ * This returned a bare `bool`, and the caller built a refusal from a
+ * hard-coded list of fields: order, max_length, depth_cap, the coefficient
+ * sum, the two weights. Every one of them printed with its value and its
+ * permitted range, and none of them was necessarily the one that failed --
+ * the kappas were not in the list at all, and neither was the rule that
+ * sparse storage requires the closed world. Asking for `sparse` on a
+ * nucleotide model produced
+ *
+ *   invalid BEAM config for the nt alphabet: order=2 (need 2..9),
+ *   max_length=24 (need 1..255), depth_cap=15 (need 1..23), coef sum=1
+ *   (need 1), weights=0.5/0.5 (need >= 0)
+ *
+ * -- five fields, all of them inside their stated ranges, and the reason
+ * absent. It cost two build cycles to diagnose during one afternoon's work,
+ * twice, because the message reads as though nothing is wrong.
+ *
+ * So each rule writes its own sentence, naming the field, the value it was
+ * given and what was required. `beam_config_valid` is this with the sentence
+ * thrown away, which is what its callers in the tests want.
+ */
+const char *beam_config_invalid_reason(const BeamModelConfig *c,
+                                       char *buf, size_t cap) {
+#define BEAM_CFG_WHY(...) do { snprintf(buf, cap, __VA_ARGS__); return buf; } while (0)
+
     /* The alphabet is checked first because the order bound below is read
      * from it. An unknown alphabet is a config that cannot be interpreted at
      * all, not merely one that is out of range. */
     const BeamAlphabetInfo *a = beam_alphabet_info(c->alphabet);
-    if (!a) return false;
+    if (!a) BEAM_CFG_WHY("alphabet id %u is not one this build knows",
+                         (unsigned)c->alphabet);
 
-    if (c->order < 2 || c->order > a->max_order) return false;
+    if (c->order < 2 || c->order > a->max_order)
+        BEAM_CFG_WHY("order=%u, and the %s alphabet permits 2..%u",
+                     (unsigned)c->order, a->name, (unsigned)a->max_order);
     /* No upper bound is tested on max_length: the field is a uint8_t and
      * BEAM_MAX_LENGTH_CEILING is 255, so the type is the bound. Every buffer
      * indexed by a length is sized by that ceiling for the same reason. */
-    if (c->max_length < 1) return false;
-    if (c->depth_cap < 1 || c->depth_cap >= c->max_length) return false;
-    if (!(c->kappa[0] >= 0.0) || !(c->kappa[1] >= 0.0) || !(c->kappa[2] >= 0.0))
-        return false;
-    if (!(c->kappa_wide >= 0.0) || !(c->kappa_len >= 0.0)) return false;
+    if (c->max_length < 1)
+        BEAM_CFG_WHY("max_length=0, and a model of no length is not a model");
+    if (c->depth_cap < 1 || c->depth_cap >= c->max_length)
+        BEAM_CFG_WHY("depth_cap=%u, and it must be at least 1 and below "
+                     "max_length=%u", (unsigned)c->depth_cap,
+                     (unsigned)c->max_length);
+    for (uint32_t i = 0; i < 3u; ++i)
+        if (!(c->kappa[i] >= 0.0))
+            BEAM_CFG_WHY("kappa[%u]=%.17g, and a backoff strength cannot be "
+                         "negative", (unsigned)i, c->kappa[i]);
+    if (!(c->kappa_wide >= 0.0))
+        BEAM_CFG_WHY("kappa_wide=%.17g, and a backoff strength cannot be "
+                     "negative", c->kappa_wide);
+    if (!(c->kappa_len >= 0.0))
+        BEAM_CFG_WHY("kappa_len=%.17g, and a backoff strength cannot be "
+                     "negative", c->kappa_len);
     /* The coefficient SUM is a cross-length calibration knob, not a free
      * parameter: moving it off 1 leaves within-length ranking untouched while
      * wrecking global ranking. Reject rather than silently mis-calibrate. */
-    double s = c->coef_wide + c->coef_mid + c->coef_len;
-    if (!(fabs(s - 1.0) < 1e-9)) return false;
-    if (!(c->weight_forward >= 0.0) || !(c->weight_backward >= 0.0)) return false;
+    const double sum = c->coef_wide + c->coef_mid + c->coef_len;
+    if (!(fabs(sum - 1.0) < 1e-9))
+        BEAM_CFG_WHY("the expert coefficients sum to %.17g and must sum to 1; "
+                     "wide=%.17g mid=%.17g len=%.17g", sum,
+                     c->coef_wide, c->coef_mid, c->coef_len);
+    if (!(c->weight_forward >= 0.0) || !(c->weight_backward >= 0.0))
+        BEAM_CFG_WHY("anchor weights are %.17g/%.17g and neither may be "
+                     "negative", c->weight_forward, c->weight_backward);
     /* An omitted count row is a dead probability row only in the fully
      * closed-world regime. Positive backoff can populate an unobserved child
      * row, so accepting sparse storage there would silently change scores. */
-    if (c->sparse
-        && (!c->strict || c->kappa[0] != 0.0 || c->kappa[1] != 0.0
-            || c->kappa[2] != 0.0 || c->kappa_wide != 0.0
-            || c->kappa_len != 0.0))
-        return false;
-    return true;
+    if (c->sparse && !c->strict)
+        BEAM_CFG_WHY("sparse storage needs strict=true: an omitted count row "
+                     "is a dead probability row only in the closed world, and "
+                     "in the open world it would silently change scores");
+    if (c->sparse && (c->kappa[0] != 0.0 || c->kappa[1] != 0.0
+                      || c->kappa[2] != 0.0 || c->kappa_wide != 0.0
+                      || c->kappa_len != 0.0))
+        BEAM_CFG_WHY("sparse storage needs every backoff strength at zero, and "
+                     "they are %.17g/%.17g/%.17g wide=%.17g len=%.17g: positive "
+                     "backoff can populate an unobserved child row, which a "
+                     "sparse table has nowhere to put",
+                     c->kappa[0], c->kappa[1], c->kappa[2],
+                     c->kappa_wide, c->kappa_len);
+    return NULL;
+#undef BEAM_CFG_WHY
+}
+
+bool beam_config_valid(const BeamModelConfig *c) {
+    char why[BEAM_CONFIG_REASON_MAX];
+    return beam_config_invalid_reason(c, why, sizeof why) == NULL;
 }

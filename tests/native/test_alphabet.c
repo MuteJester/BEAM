@@ -475,6 +475,79 @@ static void test_max_length_is_free_up_to_the_ceiling(void) {
     PASS();
 }
 
+/**
+ * Every way a config can be rejected says which rule rejected it.
+ *
+ * The refusal used to be assembled by the caller from a fixed list -- order,
+ * max_length, depth_cap, the coefficient sum, the anchor weights -- each
+ * printed with its value and its range. A rule not on that list could not be
+ * named, and two are not: the backoff strengths, and the requirement that
+ * sparse storage implies the closed world. Asking for sparse on a nucleotide
+ * model produced five fields, every one of them inside its stated range, and
+ * no reason. It cost two build cycles in one afternoon, twice, because a
+ * message that lists only valid things reads as though nothing is wrong.
+ *
+ * So this pins the property rather than the wording: for each way to make a
+ * config invalid, the reason must contain a token that belongs to THAT rule
+ * and could not have come from any other. A message naming everything would
+ * pass a test that only checked the message was non-empty.
+ */
+static void test_every_config_refusal_names_its_own_rule(void) {
+    struct { const char *what; const char *token; BeamModelConfig c; } cases[8];
+    uint32_t n = 0;
+
+    cases[n].what = "order past the alphabet ceiling"; cases[n].token = "order=";
+    cases[n].c = valid_for(BEAM_ALPHABET_AA); cases[n].c.order = 9; ++n;
+
+    cases[n].what = "a zero max_length"; cases[n].token = "max_length=";
+    cases[n].c = valid_for(BEAM_ALPHABET_AA); cases[n].c.max_length = 0; ++n;
+
+    cases[n].what = "depth_cap at max_length"; cases[n].token = "depth_cap=";
+    cases[n].c = valid_for(BEAM_ALPHABET_AA);
+    cases[n].c.max_length = 8; cases[n].c.depth_cap = 8; ++n;
+
+    cases[n].what = "a negative backoff strength"; cases[n].token = "kappa";
+    cases[n].c = valid_for(BEAM_ALPHABET_AA); cases[n].c.kappa[2] = -1.0; ++n;
+
+    cases[n].what = "coefficients off one"; cases[n].token = "coefficients";
+    cases[n].c = valid_for(BEAM_ALPHABET_AA); cases[n].c.coef_wide += 0.5; ++n;
+
+    cases[n].what = "a negative anchor weight"; cases[n].token = "anchor weights";
+    cases[n].c = valid_for(BEAM_ALPHABET_AA);
+    cases[n].c.weight_backward = -0.5; ++n;
+
+    cases[n].what = "sparse in the open world"; cases[n].token = "strict=true";
+    cases[n].c = valid_for(BEAM_ALPHABET_AA);
+    cases[n].c.sparse = true; cases[n].c.strict = false; ++n;
+
+    cases[n].what = "sparse with backoff on"; cases[n].token = "backoff strength at zero";
+    cases[n].c = valid_for(BEAM_ALPHABET_AA);
+    cases[n].c.sparse = true; cases[n].c.strict = true;
+    cases[n].c.kappa[1] = 0.5; ++n;
+
+    static char msg[512];
+    char why[BEAM_CONFIG_REASON_MAX];
+    for (uint32_t i = 0; i < n; ++i) {
+        const char *r = beam_config_invalid_reason(&cases[i].c, why, sizeof why);
+        if (!r) {
+            snprintf(msg, sizeof msg, "%s was accepted", cases[i].what);
+            ASSERT_MSG(false, msg);
+        }
+        if (!strstr(r, cases[i].token)) {
+            snprintf(msg, sizeof msg,
+                     "%s was refused without naming its rule: expected \"%s\" "
+                     "in \"%s\"", cases[i].what, cases[i].token, r);
+            ASSERT_MSG(false, msg);
+        }
+    }
+    /* And a valid config gets no sentence at all, so the reason is a reason
+     * and not something every config carries. */
+    BeamModelConfig ok = valid_for(BEAM_ALPHABET_AA);
+    ASSERT_MSG(beam_config_invalid_reason(&ok, why, sizeof why) == NULL,
+               "a valid config produced a rejection reason");
+    PASS();
+}
+
 /* ── Construction ────────────────────────────────────────────── */
 
 static void test_a_model_reports_the_alphabet_it_was_built_with(void) {
@@ -1130,6 +1203,7 @@ int main(void) {
     RUN_TEST(test_the_order_bound_is_the_alphabet_s_own);
     RUN_TEST(test_validation_refuses_an_unknown_alphabet);
     RUN_TEST(test_max_length_is_free_up_to_the_ceiling);
+    RUN_TEST(test_every_config_refusal_names_its_own_rule);
 
     printf("\n[construction]\n");
     RUN_TEST(test_a_model_reports_the_alphabet_it_was_built_with);

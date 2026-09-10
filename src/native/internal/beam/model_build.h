@@ -25,6 +25,26 @@ static inline uint32_t beam_ipow_u32(uint32_t base, uint32_t exp) {
 }
 
 /** True if the configuration is self-consistent and within its bounds. */
+/** Room for the longest sentence `beam_config_invalid_reason` can produce. */
+#define BEAM_CONFIG_REASON_MAX 320
+
+/**
+ * NULL when `c` is valid; otherwise `buf`, filled with the reason.
+ *
+ * One sentence naming the field that failed, the value it was given, and what
+ * was required. The caller supplies the buffer so this needs no state and can
+ * be called from anywhere.
+ *
+ * It exists because the refusal used to be assembled by the caller from a
+ * fixed list of fields, which could not name a rule that was not on the list:
+ * a config rejected for asking sparse storage without the closed world was
+ * reported by printing order, max_length, depth_cap, the coefficient sum and
+ * the anchor weights, all of them valid.
+ */
+const char *beam_config_invalid_reason(const BeamModelConfig *c,
+                                       char *buf, size_t cap);
+
+/** `beam_config_invalid_reason` with the sentence discarded. */
 bool beam_config_valid(const BeamModelConfig *c);
 
 /** Release the count tables, dense or sparse. */

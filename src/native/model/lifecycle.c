@@ -61,20 +61,12 @@ BeamModel *beam_model_new(const BeamModelConfig *cfg) {
         return NULL;
     }
 
-    if (!beam_config_valid(&c)) {
+    char why[BEAM_CONFIG_REASON_MAX];
+    const char *reason = beam_config_invalid_reason(&c, why, sizeof why);
+    if (reason) {
         beam_set_error(BEAM_ERR_PARAM_OUT_OF_RANGE,
-                      "invalid BEAM config for the %s alphabet: order=%u "
-                      "(need 2..%u), max_length=%u (need 1..%u), "
-                      "depth_cap=%u (need 1..%u), "
-                      "coef sum=%.17g (need 1), weights=%.17g/%.17g (need >= 0)",
-                      a->name,
-                      (unsigned)c.order, (unsigned)a->max_order,
-                      (unsigned)c.max_length,
-                      (unsigned)BEAM_MAX_LENGTH_CEILING,
-                      (unsigned)c.depth_cap,
-                      (unsigned)(c.max_length ? c.max_length - 1u : 0u),
-                      c.coef_wide + c.coef_mid + c.coef_len,
-                      c.weight_forward, c.weight_backward);
+                      "invalid BEAM config for the %s alphabet: %s",
+                      a->name, reason);
         return NULL;
     }
 
