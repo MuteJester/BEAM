@@ -13,8 +13,11 @@ the extension that Python imports exactly as it was.
 And `build_ext` decides whether to rebuild by comparing the .so against source
 MTIMES, at a granularity that loses to a fast edit-build loop: an edit landing
 in the same second as the previous .so is skipped silently, leaving the OLD
-binary installed under a clean `git status`. Headers are worse -- they are not
-in `sources` at all, so touching one triggers nothing here.
+binary installed under a clean `git status`.
+
+Headers used to be worse still: they are not in `sources`, so touching one
+triggered nothing at all. `depends` below fixes that half -- see the note there
+for what it cost to find. The mtime-granularity half remains.
 
 So any A/B experiment that edits C and compares results -- mutation testing
 above all -- must pass `--force`, and should verify the .so hash actually
@@ -45,10 +48,38 @@ def manifest(name):
     return out
 
 
+def headers():
+    """Every header the extension compiles against, for `depends`.
+
+    A GLOB, where `sources` is a manifest, and the asymmetry is deliberate.
+
+    A source missing from its manifest is missing code: the extension builds
+    and behaves differently, silently, which is what the manifests exist to
+    prevent. A header missing from `depends` is a missed REBUILD -- precisely
+    the bug this list fixes -- so a list that picks up new headers by itself is
+    the safer one, and a hand-maintained list would reintroduce the failure the
+    first time someone added a header and forgot.
+
+    What it cost to find: editing only `dp.h` and `model_state.h` and running
+    `build_ext` rebuilt nothing, leaving an .so nineteen minutes older than the
+    headers compiled into it, and every check that runs against the extension
+    testing the previous binary. `make` never had this problem -- its CFLAGS
+    carry `-MMD -MP` and it includes the generated .d files -- so the two build
+    systems disagreed about what "up to date" meant.
+    """
+    out = []
+    for d in ("include", "src/native/internal"):
+        out += [str(p.relative_to(HERE)) for p in sorted((HERE / d).rglob("*.h"))]
+    if not out:
+        raise ValueError("no headers found; depends= would be silently empty")
+    return out
+
+
 setup(
     ext_modules=[Extension(
         "BEAM._cbeam",
         sources=manifest("python_binding_sources.txt") + manifest("native_sources.txt"),
+        depends=headers(),
         include_dirs=["include", "src/native/internal"],
         extra_compile_args=["-O2", "-std=c11", "-fopenmp"],
         extra_link_args=["-fopenmp"],
