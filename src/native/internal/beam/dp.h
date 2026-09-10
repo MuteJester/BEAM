@@ -85,7 +85,8 @@ void beam_layer_weights(const BeamModel *m, uint32_t i, uint32_t len,
 
 /**
  * As above, but skipping states `alive` marks dead and filling their rows with
- * -inf. See the definition in score.c for when this is safe: only where the
+ * -inf. See the definition in `dp/edge_weights.c` for when this is safe: only
+ * where the
  * caller provably never reads a dead row, which excludes every caller that
  * asks for `out_max`.
  */
@@ -98,7 +99,8 @@ void beam_layer_weights_live(const BeamModel *m, uint32_t i, uint32_t len,
  * row of `beam_layer_weights`.
  *
  * For a consumer that visits states in an unpredictable order — the
- * best-first search in topk.c is the only one — building the whole layer to
+ * best-first search in `algorithms/top_k.c` is the only one — building the
+ * whole layer to
  * read one row of it is 3.9 million wasted edges per visit.
  */
 void beam_state_weights(const BeamModel *m, uint32_t i, uint32_t len,

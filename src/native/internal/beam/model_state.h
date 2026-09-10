@@ -30,8 +30,8 @@ int beam_threads(void);
 /**
  * The mmap threshold BEAM applied at start-up, or 0 if it applied none --
  * because the caller had already set `MALLOC_MMAP_THRESHOLD_`, because
- * `BEAM_MMAP_THRESHOLD` is 0, or because this is not glibc. See runtime.c for
- * what it buys and what it costs.
+ * `BEAM_MMAP_THRESHOLD` is 0, or because this is not glibc. See
+ * `memory/allocator.c` for what it buys and what it costs.
  */
 
 /*
@@ -145,7 +145,7 @@ struct BeamModel_ {
      * so this holds on every model the defaults produce. It is measured, not
      * assumed: `beam_to_log_inplace` reports whether it had to floor anything.
      *
-     * What it buys is the live-state trim (`trim` in analytics.c). With no
+     * What it buys is the live-state trim (`trim_frontier` in `dp/liveness.c`). With no
      * dead cell there is no dead edge, so liveness is a property of the
      * trellis rather than of the weights and the whole pass collapses to a
      * reachability sweep — no edge weights, no table reads. That halves
@@ -155,7 +155,7 @@ struct BeamModel_ {
     bool     tables_all_finite;
 
     /**
-     * Per-length live trellis structure, built on demand by `analytics.c`.
+     * Per-length live trellis structure, built on demand by `dp/liveness.c`.
      *
      * Mutable through a `const BeamModel *`, because building it is what
      * the read-only dynamic programs do and it changes no answer they give.

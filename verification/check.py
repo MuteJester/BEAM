@@ -183,6 +183,53 @@ else:
     for l in only_old: print(f"          gone : {l.strip()}")
     for l in only_new: print(f"          added: {l.strip()}")
 
+# ── Header pointers ────────────────────────────────────────────────────────
+# The headers here carry the reasoning, and the reasoning points at files:
+# "see the definition in score.c for when this is safe" was the only statement
+# of a precondition, and `score.c` did not exist. The comment is the medium
+# this codebase chose for the "why", and a pointer that no longer resolves
+# decays it silently -- a reader who goes to check finds nothing and cannot
+# tell whether the claim or the pointer is stale.
+#
+# Every `*.c` named in a header must therefore resolve against the tree, with
+# an allowlist for the ones that are deliberately historical: prose about what
+# the code used to be. Adding to that list is a claim; deleting a file a header
+# points at, without saying so, fails here.
+hist = set()
+for line in (B / "header_file_refs_historical.txt").read_text().splitlines():
+    line = line.strip()
+    if line and not line.startswith("#"):
+        hist.add(line)
+have = {p.name for p in (ROOT / "src").rglob("*.c")}
+have |= {p.name for p in (ROOT / "tests").rglob("*.c")}
+dangling, used_hist = [], set()
+for hdr in sorted(list((ROOT / "include/beam").glob("*.h"))
+                  + list((ROOT / "src/native/internal/beam").glob("*.h"))):
+    for ln, line in enumerate(hdr.read_text().splitlines(), 1):
+        for name in re.findall(r"\b[A-Za-z_0-9/]+\.c\b", line):
+            if name.split("/")[-1] in have:
+                continue
+            key = f"{hdr.name}:{name}"
+            if key in hist:
+                used_hist.add(key)
+                continue
+            dangling.append(f"{hdr.name}:{ln}  {name}")
+if dangling:
+    fail.append("header pointers")
+    print("  FAIL  header pointers: named a .c that does not exist")
+    for d in dangling[:8]:
+        print(f"          {d}")
+    print("          Fix the pointer, or record it in "
+          "baseline/header_file_refs_historical.txt if it is deliberate history.")
+elif sorted(hist - used_hist):
+    # A recorded exception that no longer appears is an exception nobody needs.
+    fail.append("header pointers")
+    print("  FAIL  header pointers: recorded history that is no longer mentioned")
+    for k in sorted(hist - used_hist):
+        print(f"          {k}")
+else:
+    print(f"  OK    header pointers ({len(hist)} historical mentions recorded)")
+
 # ── Test inventory ─────────────────────────────────────────────────────────
 # A subset of a passing suite also passes, so shrinkage is invisible unless
 # the collected list is compared by name.

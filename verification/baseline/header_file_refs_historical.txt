@@ -1,0 +1,24 @@
+# `<header>:<name>` pairs a header may mention although the file is gone.
+#
+# Headers in this codebase carry the argument, not just the declaration, and
+# the pointers in them are load-bearing: `dp.h` said "see the definition in
+# score.c for when this is safe" and that was the only statement of the
+# precondition for `beam_layer_weights_live`. `score.c` did not exist. A reader
+# who went to check found nothing and had no way to tell whether the claim or
+# the pointer was wrong.
+#
+# So every `*.c` named in a header must resolve against the tree -- except
+# these, which are deliberate history. Each is prose about what the code USED
+# to be ("these were static functions inside a single build.c", "previously
+# spread across core/runtime.c", "it had been renamed to model/prism.c"), and
+# that prose is worth more than the tidiness of removing it.
+#
+# Adding a line here is a claim that the mention is historical. Deleting the
+# file a header points at, without saying so, fails the check instead.
+budget.h:runtime.c
+errors.h:model/prism.c
+memory.h:core/runtime.c
+mixing.h:repair.c
+mixing.h:prism.c
+mixing.h:model/prism.c
+model_build.h:build.c
