@@ -53,4 +53,47 @@ int beam_py_count_max(PyObject *o, const char *name, uint32_t hi,
  */
 int beam_py_budget(uint64_t bytes, uint32_t n, const char *unit);
 
+/**
+ * What `n` returned sequences cost at PEAK: the flat buffer, the `str`
+ * objects built from it, and the list holding them -- all three alive at
+ * once, because the buffer is freed only after the list is complete.
+ *
+ * A binding that returns a list of strings does not hand back the flat buffer
+ * it filled -- it hands back one `str` object per row and a list to hold them,
+ * and that is the larger figure by four times:
+ *
+ *     2,000,000 draws of ~12 characters
+ *       C buffer, n * stride            30.0 MB   <- what was being checked
+ *       list of pointers                16.0 MB
+ *       the str objects                106.0 MB
+ *       measured RSS growth            144.5 MB
+ *
+ * A compact-ASCII `str` is a 40-byte PyASCIIObject plus its bytes plus a NUL,
+ * and the list holds an 8-byte pointer to each. So the honest per-row cost is
+ * the buffer row AND both of those. Charging only the buffer meant a request
+ * was admitted at roughly a quarter of what it would actually take, which is
+ * how `sample(2**28)` passed a 4.29 GB budget and then asked CPython for
+ * about 16 GB.
+ *
+ * IT DELIBERATELY OVER-CHARGES, because it must assume every row is as long
+ * as the model allows and real rows are shorter, so their `str` objects land
+ * in smaller pymalloc size classes. Measured against the true high-water mark,
+ * one process per point:
+ *
+ *     stride 15, ~12-char rows    charged 174 MB   peak 157 MB   1.11x
+ *     stride 28, ~22-char rows    charged 232 MB   peak 164 MB   1.42x
+ *     stride 28, ~12-char rows    charged 232 MB   peak 180 MB   1.29x
+ *
+ * Over by a tenth to a half, never under. The figure it replaced was 30 MB
+ * against a 157 MB peak -- 0.19x -- so a request was admitted at a fifth of
+ * its cost. Refusing a little early is the side of that trade to be on.
+ *
+ * The 40 and the 16 are CPython's layout, not portable constants. Both are
+ * measured rather than assumed: `sys.getsizeof` reports a flat 41-byte
+ * overhead at every ASCII length on this build, and a 55-byte object occupies
+ * a 64-byte block. A wrong value here moves a refusal threshold; it can never
+ * make a buffer short, because nothing is allocated from this.
+ */
+uint64_t beam_py_sequence_bytes(uint32_t n, uint32_t stride);
+
 #endif /* BEAM_PY_GUARDS_H */

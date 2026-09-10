@@ -40,18 +40,8 @@ PyObject *py_sample(PyObject *self, PyObject *args) {
      * Checked here, in the units the caller asked in, so the refusal names
      * the draw count rather than an internal byte figure.
      */
-    const uint64_t out_bytes = (uint64_t)n * stride + 1u;
-    const uint64_t budget = beam_model_memory_budget();
-    if (out_bytes > budget) {
-        PyErr_Format(PyExc_ValueError,
-                     "%u draws of up to %u characters needs %llu bytes for the "
-                     "result and the memory budget is %llu; raise it with "
-                     "BEAM.set_memory_budget, or draw fewer",
-                     n, (unsigned)(stride - 1u),
-                     (unsigned long long)out_bytes,
-                     (unsigned long long)budget);
-        return NULL;
-    }
+    if (beam_py_budget(beam_py_sequence_bytes(n, stride) + 1u,
+                       n, "draws") < 0) return NULL;
 
     char *buf = (char *)PyMem_Calloc((size_t)n * stride + 1u, 1);
     if (!buf) return PyErr_NoMemory();
@@ -86,8 +76,9 @@ PyObject *py_top_k(PyObject *self, PyObject *args) {
      * request. `k = 2**28` reserved about 9 GB of address space and returned
      * the correct answer, which is the failure mode that does not look like
      * one until the machine is out of memory. */
-    if (beam_py_budget((uint64_t)k * stride + 1u + (uint64_t)k * sizeof(double),
-                       k, "sequences") < 0) return NULL;
+    if (beam_py_budget(beam_py_sequence_bytes(k, stride) + 1u
+                       + (uint64_t)k * sizeof(double), k, "sequences") < 0)
+        return NULL;
 
     char *buf = (char *)PyMem_Calloc((size_t)k * stride + 1u, 1);
     double *lp = (double *)PyMem_Calloc(k ? k : 1u, sizeof(double));

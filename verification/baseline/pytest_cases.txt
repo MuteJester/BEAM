@@ -648,3 +648,6 @@ tests/python/test_binding_guards.py::test_top_k_that_fits_still_runs
 tests/python/test_binding_guards.py::test_the_top_k_refusal_tracks_the_budget
 tests/python/test_binding_guards.py::test_the_facade_bounds_magnitude_not_only_sign
 tests/python/test_error_contract.py::test_the_guarded_sites_now_say_what_went_wrong
+tests/python/analytics/test_sample_accounting.py::test_the_charge_covers_the_true_peak[14-10]
+tests/python/analytics/test_sample_accounting.py::test_the_charge_covers_the_true_peak[27-20]
+tests/python/analytics/test_sample_accounting.py::test_the_charge_counts_the_representation_not_just_the_buffer
