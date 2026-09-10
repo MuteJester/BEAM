@@ -18,6 +18,7 @@
  * two packages during the transition is still recognised; it is renamed with
  * everything else in the rename step. */
 #include "beam/python_bindings.h"
+#include "guards.h"
 
 PyObject *py_log_pseq(PyObject *self, PyObject *args) {
     (void)self;
@@ -39,7 +40,9 @@ PyObject *py_prism_factor(PyObject *self, PyObject *args) {
     const char **v = edge_borrow_strings(seqs, &n);
     if (!v) return NULL;
     double *out = (double *)PyMem_Malloc((size_t)(n > 0 ? n : 1) * sizeof(double));
-    if (!out) { PyMem_Free(v); return PyErr_NoMemory(); }
+    if (!out) { PyMem_Free(v);
+                return beam_py_nomem("the score buffer",
+                                     (uint64_t)n * sizeof(double)); }
 
     BeamError err;
     Py_BEGIN_ALLOW_THREADS
@@ -103,7 +106,9 @@ PyObject *py_log_pseq_batch(PyObject *self, PyObject *args) {
     const char **v = edge_borrow_strings(seqs, &n);
     if (!v) return NULL;
     double *out = (double *)PyMem_Malloc((size_t)(n > 0 ? n : 1) * sizeof(double));
-    if (!out) { PyMem_Free(v); return PyErr_NoMemory(); }
+    if (!out) { PyMem_Free(v);
+                return beam_py_nomem("the score buffer",
+                                     (uint64_t)n * sizeof(double)); }
 
     BeamError err;
     Py_BEGIN_ALLOW_THREADS

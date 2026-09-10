@@ -18,6 +18,7 @@ import pytest
 
 import BEAM
 from BEAM import Builder
+from BEAM.errors import BeamError, BudgetExceeded
 
 AA = "ACDEFGHIKLMNPQRSTVWY"
 
@@ -47,7 +48,7 @@ def test_a_draw_that_fits_still_works(model):
 
 
 def test_a_draw_far_past_the_budget_is_refused(model):
-    with pytest.raises(ValueError) as e:
+    with pytest.raises(BudgetExceeded) as e:
         model.sample(400_000_000)
     msg = str(e.value)
     # The refusal must name what the caller asked for and what the limit is,
@@ -64,7 +65,7 @@ def test_the_refusal_tracks_the_budget(model, budget):
     assert len(model.sample(n)) == n          # 26 MB of result: comfortable
 
     BEAM.set_memory_budget(8 << 20)           # 8 MB: the same draw cannot fit
-    with pytest.raises(ValueError) as e:
+    with pytest.raises(BudgetExceeded) as e:
         model.sample(n)
     assert "budget" in str(e.value)
 
@@ -76,8 +77,10 @@ def test_a_small_draw_survives_a_small_budget(model, budget):
 
 def test_the_refusal_is_not_a_bare_memory_error(model):
     """MemoryError carries no message and no quantity. That was the bug."""
-    with pytest.raises(Exception) as e:
+    with pytest.raises(BudgetExceeded) as e:
         model.sample(2 ** 31)
-    assert not isinstance(e.value, MemoryError), \
-        "the allocation was attempted instead of refused"
+    # The point was never "not a MemoryError" -- BudgetExceeded IS one, and
+    # should be. The point is that it is TYPED and carries a message, so a
+    # caller can catch it precisely and read what to change.
+    assert isinstance(e.value, BeamError), "not part of the error hierarchy"
     assert str(e.value).strip(), "the refusal carried no message"

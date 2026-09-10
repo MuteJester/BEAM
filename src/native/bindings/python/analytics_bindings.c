@@ -32,9 +32,15 @@ PyObject *py_spectrum_pair(PyObject *self, PyObject *args) {
         PyErr_SetString(PyExc_ValueError, "bins must be at least 2");
         return NULL;
     }
-    double *cw = (double *)PyMem_Malloc((size_t)bins * sizeof(double));
-    double *gw = (double *)PyMem_Malloc((size_t)bins * sizeof(double));
-    if (!cw || !gw) { PyMem_Free(cw); PyMem_Free(gw); return PyErr_NoMemory(); }
+    /* `bins` is the caller's: 2**31 of them asked for 34 GB and reported a
+     * MemoryError carrying nothing. */
+    double *cw = (double *)beam_py_alloc((uint64_t)bins * sizeof(double) * 2u,
+                                         "the spectrum histograms",
+                                         bins, "bins");
+    if (!cw) return NULL;
+    double *gw = (double *)beam_py_alloc((uint64_t)bins * sizeof(double),
+                                         "the generated histogram", 0u, NULL);
+    if (!gw) { PyMem_Free(cw); return NULL; }
     double ds = 0.0;
     BeamError err;
     Py_BEGIN_ALLOW_THREADS
@@ -64,7 +70,8 @@ PyObject *py_spectra_by_length(PyObject *self, PyObject *args) {
                                    : (unsigned int)beam_model_config(m)->max_length + 1u;
     size_t n = (size_t)rows * (size_t)bins;
     double *w = (double *)PyMem_Calloc(n ? n : 1, sizeof(double));
-    if (!w) return PyErr_NoMemory();
+    if (!w) return beam_py_nomem("the per-length weights",
+                                 (uint64_t)n * sizeof(double));
     double ds = 0.0;
     BeamError err;
     Py_BEGIN_ALLOW_THREADS
@@ -92,7 +99,8 @@ PyObject *py_length_derivatives(PyObject *self, PyObject *args) {
     unsigned int cols = order + 1u;
     size_t n = (size_t)rows * (size_t)cols;
     double *out = (double *)PyMem_Calloc(n, sizeof(double));
-    if (!out) return PyErr_NoMemory();
+    if (!out) return beam_py_nomem("the derivative table",
+                                   (uint64_t)n * sizeof(double));
     BeamError err;
     Py_BEGIN_ALLOW_THREADS
     err = beam_model_length_derivatives(m, q, order, out);
@@ -161,8 +169,9 @@ PyObject *py_spectrum(PyObject *self, PyObject *args) {
         PyErr_SetString(PyExc_ValueError, "bins must be at least 2");
         return NULL;
     }
-    double *w = (double *)PyMem_Malloc((size_t)bins * sizeof(double));
-    if (!w) return PyErr_NoMemory();
+    double *w = (double *)beam_py_alloc((uint64_t)bins * sizeof(double),
+                                       "the spectrum histogram", bins, "bins");
+    if (!w) return NULL;
     double ds = 0.0;
     BeamError err;
     Py_BEGIN_ALLOW_THREADS
@@ -231,7 +240,8 @@ PyObject *py_length_marginals(PyObject *self, PyObject *arg) {
     double *v = (double *)PyMem_Calloc(n, sizeof(double));
     if (!c || !g || !s || !v) {
         PyMem_Free(c); PyMem_Free(g); PyMem_Free(s); PyMem_Free(v);
-        return PyErr_NoMemory();
+        return beam_py_nomem("the four per-length arrays",
+                             4ull * (uint64_t)n * sizeof(double));
     }
     BeamError err;
     Py_BEGIN_ALLOW_THREADS
@@ -280,7 +290,8 @@ PyObject *py_surprisal_by_depth(PyObject *self, PyObject *args) {
     if (!m) return NULL;
     const unsigned int n = (unsigned int)beam_model_config(m)->max_length;
     double *buf = (double *)PyMem_Calloc(n, sizeof(double));
-    if (!buf) return PyErr_NoMemory();
+    if (!buf) return beam_py_nomem("the analytic buffer",
+                                   (uint64_t)n * sizeof(double));
     double konst = 0.0;
     BeamError err;
     Py_BEGIN_ALLOW_THREADS
@@ -318,7 +329,8 @@ PyObject *py_topology(PyObject *self, PyObject *args) {
         }
     }
     uint32_t *layers = (uint32_t *)PyMem_Calloc(length + 1u, sizeof(uint32_t));
-    if (!layers) return PyErr_NoMemory();
+    if (!layers) return beam_py_nomem("the layer index",
+                                      (uint64_t)(length + 1u) * sizeof(uint32_t));
     double nodes = 0.0, edges = 0.0;
     BeamError err;
     Py_BEGIN_ALLOW_THREADS
@@ -387,7 +399,8 @@ PyObject *py_positional_marginals(PyObject *self, PyObject *args) {
     const unsigned int R = (unsigned int)beam_model_n_residues(m);
     const size_t n = (size_t)length * R;
     double *out = (double *)PyMem_Calloc(n ? n : 1u, sizeof(double));
-    if (!out) return PyErr_NoMemory();
+    if (!out) return beam_py_nomem("the positional marginals",
+                                   (uint64_t)n * sizeof(double));
     double logz = 0.0;
     BeamError err;
     Py_BEGIN_ALLOW_THREADS

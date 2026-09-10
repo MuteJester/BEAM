@@ -37,14 +37,35 @@ int beam_py_count_max(PyObject *o, const char *name, uint32_t hi,
     return 0;
 }
 
+/* BEAM.errors.<name>, or `fallback` if the module cannot be reached. Same
+ * approach as common.c's own lookup: a broken install degrades to a builtin
+ * rather than to a confusing failure. */
+static PyObject *beam_py_error_class(const char *name, PyObject *fallback) {
+    PyObject *mod = PyImport_ImportModule("BEAM.errors");
+    if (!mod) { PyErr_Clear(); Py_INCREF(fallback); return fallback; }
+    PyObject *cls = PyObject_GetAttrString(mod, name);
+    Py_DECREF(mod);
+    if (!cls) { PyErr_Clear(); Py_INCREF(fallback); return fallback; }
+    return cls;
+}
+
 int beam_py_budget(uint64_t bytes, uint32_t n, const char *unit) {
     const uint64_t budget = beam_model_memory_budget();
     if (bytes <= budget) return 0;
-    PyErr_Format(PyExc_ValueError,
+    /*
+     * `BudgetExceeded`, which is what the C layer raises for the same refusal
+     * through `set_beam_error`. Raising a plain ValueError here would give one
+     * failure two types depending on which layer noticed it first -- and a
+     * caller writing `except BudgetExceeded` would catch the deep one and miss
+     * the shallow one, which is the worse half of the pair to miss.
+     */
+    PyObject *cls = beam_py_error_class("BudgetExceeded", PyExc_MemoryError);
+    PyErr_Format(cls,
                  "%u %s needs %llu bytes and the memory budget is %llu; "
                  "raise it with BEAM.set_memory_budget, or ask for fewer",
                  (unsigned)n, unit,
                  (unsigned long long)bytes, (unsigned long long)budget);
+    Py_DECREF(cls);
     return -1;
 }
 
@@ -71,4 +92,21 @@ uint64_t beam_py_sequence_bytes(uint32_t n, uint32_t stride) {
      * and the peak is what runs a machine out of memory. */
     return (uint64_t)n * (uint64_t)stride
          + (uint64_t)n * (block + sizeof(PyObject *));
+}
+
+void *beam_py_nomem(const char *what, uint64_t bytes) {
+    PyObject *cls = beam_py_error_class("OutOfMemory", PyExc_MemoryError);
+    PyErr_Format(cls, "out of memory allocating %s (%llu bytes)",
+                 what, (unsigned long long)bytes);
+    Py_DECREF(cls);
+    return NULL;
+}
+
+void *beam_py_alloc(uint64_t bytes, const char *what,
+                    uint32_t n, const char *unit) {
+    if (unit && beam_py_budget(bytes, n, unit) < 0) return NULL;
+    if (bytes > (uint64_t)PY_SSIZE_T_MAX) return beam_py_nomem(what, bytes);
+    void *p = PyMem_Malloc((size_t)(bytes ? bytes : 1u));
+    if (!p) return beam_py_nomem(what, bytes);
+    return p;
 }

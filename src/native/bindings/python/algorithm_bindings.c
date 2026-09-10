@@ -44,7 +44,8 @@ PyObject *py_sample(PyObject *self, PyObject *args) {
                        n, "draws") < 0) return NULL;
 
     char *buf = (char *)PyMem_Calloc((size_t)n * stride + 1u, 1);
-    if (!buf) return PyErr_NoMemory();
+    if (!buf) return beam_py_nomem("the draw buffer",
+                                   (uint64_t)n * stride + 1u);
     BeamRng rng;
     beam_rng_seed(&rng, (uint64_t)seed);
     BeamError err;
@@ -82,7 +83,10 @@ PyObject *py_top_k(PyObject *self, PyObject *args) {
 
     char *buf = (char *)PyMem_Calloc((size_t)k * stride + 1u, 1);
     double *lp = (double *)PyMem_Calloc(k ? k : 1u, sizeof(double));
-    if (!buf || !lp) { PyMem_Free(buf); PyMem_Free(lp); return PyErr_NoMemory(); }
+    if (!buf || !lp) { PyMem_Free(buf); PyMem_Free(lp);
+                       return beam_py_nomem("the top-k buffers",
+                                            (uint64_t)k * stride + 1u
+                                            + (uint64_t)k * sizeof(double)); }
     uint32_t n = 0;
     BeamError err;
     Py_BEGIN_ALLOW_THREADS

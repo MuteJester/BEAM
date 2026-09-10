@@ -19,6 +19,7 @@
  * two packages during the transition is still recognised; it is renamed with
  * everything else in the rename step. */
 #include "beam/python_bindings.h"
+#include "guards.h"
 
 /*
  * Map a C error code onto a Python exception CLASS.
@@ -101,11 +102,19 @@ PyObject *set_beam_error(BeamError err) {
     switch (err) {
         case BEAM_ERR_BUDGET:
         case BEAM_ERR_ALLOC:
-            /* PyErr_NoMemory() sets MemoryError with no message, which is
-             * right for a bare allocation failure and wrong for a refusal
-             * that has something to say -- "this configuration needs 41 GB
-             * and the budget is 4" tells a caller what to change. */
-            if (!has_msg) return PyErr_NoMemory();
+            /*
+             * A refusal that has something to say -- "this configuration needs
+             * 41 GB and the budget is 4" -- carries its message. One that has
+             * nothing falls through to the generic below rather than to
+             * `PyErr_NoMemory()`, which sets a bare MemoryError.
+             *
+             * The bare form was defensible while allocation failure had no
+             * class of its own. It has one: `OutOfMemory` is a MemoryError AND
+             * a BeamError, so `except BeamError` now catches an exhausted
+             * allocation as it catches everything else. Short-circuiting here
+             * was the last place that still escaped the hierarchy the rest of
+             * this table exists to provide.
+             */
             builtin = PyExc_MemoryError; generic = "out of memory";      break;
 
         case BEAM_ERR_NULL_ARG:
@@ -150,7 +159,8 @@ const char **edge_borrow_strings(PyObject *seq, Py_ssize_t *out_n) {
     }
     Py_ssize_t n = PyList_GET_SIZE(seq);
     const char **v = (const char **)PyMem_Malloc((size_t)(n > 0 ? n : 1) * sizeof(char *));
-    if (!v) { PyErr_NoMemory(); return NULL; }
+    if (!v) return beam_py_nomem("the sequence pointers",
+                                 (uint64_t)n * sizeof(char *));
     for (Py_ssize_t i = 0; i < n; i++) {
         PyObject *item = PyList_GET_ITEM(seq, i);
         if (!PyUnicode_Check(item)) {
@@ -200,8 +210,9 @@ double *edge_borrow_abundances(PyObject *abund, Py_ssize_t n, bool *out_ok) {
             if (usable) {
                 double *w = (double *)PyMem_Malloc(
                     (size_t)(n > 0 ? n : 1) * sizeof(double));
-                if (!w) { PyBuffer_Release(&view); PyErr_NoMemory();
-                          *out_ok = false; return NULL; }
+                if (!w) { PyBuffer_Release(&view); *out_ok = false;
+                          return beam_py_nomem("the abundance copy",
+                                               (uint64_t)n * sizeof(double)); }
                 if (n > 0) memcpy(w, view.buf, (size_t)n * sizeof(double));
                 PyBuffer_Release(&view);
                 return w;
@@ -223,7 +234,9 @@ double *edge_borrow_abundances(PyObject *abund, Py_ssize_t n, bool *out_ok) {
         return NULL;
     }
     double *w = (double *)PyMem_Malloc((size_t)(n > 0 ? n : 1) * sizeof(double));
-    if (!w) { Py_DECREF(fast); PyErr_NoMemory(); *out_ok = false; return NULL; }
+    if (!w) { Py_DECREF(fast); *out_ok = false;
+              return beam_py_nomem("the abundance buffer",
+                                   (uint64_t)n * sizeof(double)); }
     for (Py_ssize_t i = 0; i < n; i++) {
         w[i] = PyFloat_AsDouble(PySequence_Fast_GET_ITEM(fast, i));
         if (PyErr_Occurred()) {
@@ -296,7 +309,8 @@ PyObject *edge_moment_list(const BeamModel *m, double q,
                                   unsigned int order, int cumulants) {
     const unsigned int n = cumulants ? order : order + 1u;
     double *buf = (double *)PyMem_Calloc(n ? n : 1u, sizeof(double));
-    if (!buf) return PyErr_NoMemory();
+    if (!buf) return beam_py_nomem("the moment buffer",
+                                   (uint64_t)n * sizeof(double));
     BeamError err;
     Py_BEGIN_ALLOW_THREADS
     err = cumulants ? beam_model_surprisal_cumulants(m, q, order, buf)

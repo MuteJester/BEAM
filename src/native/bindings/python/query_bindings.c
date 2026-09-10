@@ -27,6 +27,7 @@
 #include "beam/query.h"
 
 #include "beam/python_bindings.h"
+#include "guards.h"
 
 /* ── Building a constraint from a description ────────────────── */
 
@@ -54,7 +55,7 @@ static BeamAutomaton *build_automaton(PyObject *spec, uint32_t length,
         const Py_ssize_t k = PySequence_Size(seq);
         if (k < 0) return NULL;
         uint8_t *res = (uint8_t *)PyMem_Malloc((size_t)(k > 0 ? k : 1));
-        if (!res) { PyErr_NoMemory(); return NULL; }
+        if (!res) return beam_py_nomem("the residue set", (uint64_t)k);
         for (Py_ssize_t i = 0; i < k; ++i) {
             PyObject *it = PySequence_GetItem(seq, i);
             if (!it) { PyMem_Free(res); return NULL; }
@@ -198,7 +199,8 @@ PyObject *py_query_marginals(PyObject *self, PyObject *args) {
     QUERY_PROLOGUE(args, "OIOO");
     const uint32_t R = beam_model_n_residues(m);
     double *out = (double *)PyMem_Malloc((size_t)length * R * sizeof(double));
-    if (!out) { beam_query_constraint_free(c); return PyErr_NoMemory(); }
+    if (!out) { beam_query_constraint_free(c);
+                return beam_py_nomem("the query result", (uint64_t)length * R * sizeof(double)); }
     double logz = 0.0;
     BeamError err;
     Py_BEGIN_ALLOW_THREADS
@@ -237,7 +239,8 @@ PyObject *py_query_expect(PyObject *self, PyObject *args) {
     double *tab = NULL;
     if (table != Py_None) {
         tab = (double *)PyMem_Malloc((size_t)length * R * sizeof(double));
-        if (!tab) { beam_query_constraint_free(c); return PyErr_NoMemory(); }
+        if (!tab) { beam_query_constraint_free(c);
+                return beam_py_nomem("the query table", (uint64_t)length * R * sizeof(double)); }
         for (uint32_t k = 0; k < length * R; ++k) {
             PyObject *it = PySequence_GetItem(table, (Py_ssize_t)k);
             if (!it) { PyMem_Free(tab); beam_query_constraint_free(c);
@@ -266,7 +269,8 @@ PyObject *py_query_expect(PyObject *self, PyObject *args) {
 PyObject *py_query_position_entropy(PyObject *self, PyObject *args) {
     QUERY_PROLOGUE(args, "OIOO");
     double *out = (double *)PyMem_Malloc((size_t)length * sizeof(double));
-    if (!out) { beam_query_constraint_free(c); return PyErr_NoMemory(); }
+    if (!out) { beam_query_constraint_free(c);
+                return beam_py_nomem("the query result", (uint64_t)length * sizeof(double)); }
     BeamError err;
     Py_BEGIN_ALLOW_THREADS
     err = beam_query_position_entropy(m, c, out);
@@ -285,7 +289,8 @@ PyObject *py_query_pair_joint(PyObject *self, PyObject *args) {
     QUERY_PROLOGUE(args, "OIOOII", &i, &j);
     const uint32_t R = beam_model_n_residues(m);
     double *out = (double *)PyMem_Malloc((size_t)R * R * sizeof(double));
-    if (!out) { beam_query_constraint_free(c); return PyErr_NoMemory(); }
+    if (!out) { beam_query_constraint_free(c);
+                return beam_py_nomem("the query result", (uint64_t)R * R * sizeof(double)); }
     BeamError err;
     Py_BEGIN_ALLOW_THREADS
     err = beam_query_pair_joint(m, c, i, j, out);
@@ -304,7 +309,8 @@ PyObject *py_query_information_matrix(PyObject *self, PyObject *args) {
     QUERY_PROLOGUE(args, "OIOO");
     double *out = (double *)PyMem_Malloc((size_t)length * length
                                          * sizeof(double));
-    if (!out) { beam_query_constraint_free(c); return PyErr_NoMemory(); }
+    if (!out) { beam_query_constraint_free(c);
+                return beam_py_nomem("the query result", (uint64_t)length * length * sizeof(double)); }
     BeamError err;
     Py_BEGIN_ALLOW_THREADS
     err = beam_query_information_matrix(m, c, out);

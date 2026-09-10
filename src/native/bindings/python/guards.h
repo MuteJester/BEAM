@@ -96,4 +96,34 @@ int beam_py_budget(uint64_t bytes, uint32_t n, const char *unit);
  */
 uint64_t beam_py_sequence_bytes(uint32_t n, uint32_t stride);
 
+/**
+ * Fail an allocation the way the rest of the library fails.
+ *
+ * `PyErr_NoMemory()` raises MemoryError with an EMPTY string. It says nothing
+ * about what could not be allocated or how large it was, and -- because the
+ * exception hierarchy is reached by name from BEAM.errors -- it is not a
+ * `BeamError`, so `except BeamError` does not catch it. errors.py has carried
+ * a note about that gap, and a test has pinned it, since before this existed.
+ *
+ * This raises `BEAM.errors.OutOfMemory`, which IS both, with a message naming
+ * the thing and its size. Falls back to a plain MemoryError if the module
+ * cannot be imported, so a broken install degrades to today's behaviour
+ * rather than to a confusing one.
+ *
+ * Always returns NULL, so a call site reads `return beam_py_nomem(...)`.
+ */
+void *beam_py_nomem(const char *what, uint64_t bytes);
+
+/**
+ * Allocate `bytes`, refusing first if that would exceed the memory budget.
+ *
+ * One call in place of "check, allocate, test, PyErr_NoMemory". `n` and `unit`
+ * describe the request in the caller's terms for the refusal message; pass 0
+ * and NULL where the size is the model's rather than the caller's, and the
+ * budget check is skipped -- an allocation the caller cannot influence should
+ * not be refused for being large, only reported when it fails.
+ */
+void *beam_py_alloc(uint64_t bytes, const char *what,
+                    uint32_t n, const char *unit);
+
 #endif /* BEAM_PY_GUARDS_H */

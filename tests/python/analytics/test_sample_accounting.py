@@ -95,7 +95,8 @@ def _charged(maxlen: int, n: int) -> int:
     was = BEAM.memory_budget()
     try:
         BEAM.set_memory_budget(1 << 20)       # certainly too small for n
-        with pytest.raises(ValueError) as e:
+        from BEAM.errors import BudgetExceeded
+        with pytest.raises(BudgetExceeded) as e:
             m.sample(n)
         got = re.search(r"needs (\d+) bytes", str(e.value))
         assert got, f"the refusal no longer prints its byte figure: {e.value}"

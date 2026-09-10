@@ -22,6 +22,7 @@ import pytest
 
 import BEAM
 from BEAM import Builder, _cbeam as _c
+from BEAM.errors import BudgetExceeded
 
 AA = "ACDEFGHIKLMNPQRSTVWY"
 
@@ -78,7 +79,7 @@ def test_a_float_order_is_refused_rather_than_truncated(model):
 # ── the budget ──────────────────────────────────────────────────────────────
 
 def test_top_k_refuses_what_will_not_fit(model):
-    with pytest.raises(ValueError) as e:
+    with pytest.raises(BudgetExceeded) as e:
         _c.top_k(model._g, 2 ** 28, 10)
     msg = str(e.value)
     assert "268435456" in msg and "budget" in msg, msg
@@ -91,7 +92,7 @@ def test_top_k_that_fits_still_runs(model):
 
 def test_the_top_k_refusal_tracks_the_budget(model, budget):
     BEAM.set_memory_budget(8 << 20)
-    with pytest.raises(ValueError):
+    with pytest.raises(BudgetExceeded):
         _c.top_k(model._g, 5_000_000, 10)
 
 

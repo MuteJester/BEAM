@@ -247,25 +247,40 @@ def test_a_load_failure_is_not_always_an_OSError(model, saved):
     assert not isinstance(exc.value, OSError)
 
 
-def test_some_failures_carry_no_code_and_no_message(model):
-    """`PyErr_NoMemory()` sites bypass the error context entirely.
+def _budget_exceeded():
+    from BEAM.errors import BudgetExceeded
+    return BudgetExceeded
 
-    They raise a bare MemoryError with an empty string. A code-to-class table
-    has no row for them, so a future `except BeamMemoryError` would NOT catch
-    these -- worth knowing before the hierarchy is advertised as complete.
-    Pinned as a known gap, not as desirable behaviour.
 
-    This used to point at `top_k`, which now refuses with a ValueError naming
-    the request and the budget. Two of roughly twenty-eight such sites are
-    guarded; the spectra are not, and stand in for the rest. When a guard
-    reaches this one too, move the test again rather than deleting it -- the
-    gap is closed only when no site is left to point at.
+def test_no_allocation_failure_escapes_the_hierarchy(model):
+    """Every allocation failure is a BeamError. This used to be a known gap.
+
+    `PyErr_NoMemory()` raises MemoryError with an empty string, and because the
+    hierarchy is reached by name from BEAM.errors, such a failure was NOT a
+    BeamError -- `except BeamError` missed it. errors.py carried a note about
+    that, and this test used to PIN the gap rather than forbid it: it asserted
+    a bare MemoryError, and was moved from site to site as guards closed them.
+
+    There is nowhere left to move it to. Every `return PyErr_NoMemory()` in the
+    bindings is gone -- 22 became `beam_py_nomem`, which raises `OutOfMemory`
+    with the thing and its size, and the last one was a short-circuit in
+    `set_beam_error` that predated `OutOfMemory` existing. So the test now
+    asserts the property instead of the gap, and reads the source to say so:
+    a reintroduced bare site fails it before anyone has to trigger one.
     """
-    with pytest.raises(MemoryError) as exc:
-        _c.spectrum_pair(model._g, 8, 2 ** 31, 0.5)
-    assert str(exc.value) == "", (
-        "if this now carries a message, move this test to another "
-        "PyErr_NoMemory site, or close the gap and assert that")
+    from pathlib import Path
+    import BEAM as _b
+    root = Path(_b.__file__).resolve().parents[2] / "src" / "native" / "bindings"
+    if not root.is_dir():                     # installed, not a source tree
+        pytest.skip("no binding sources beside the package")
+    bare = []
+    for f in sorted(root.rglob("*.c")):
+        for i, line in enumerate(f.read_text().splitlines(), 1):
+            if "PyErr_NoMemory()" in line and not line.lstrip().startswith("*"):
+                bare.append(f"{f.name}:{i}")
+    assert bare == [], (
+        "these raise a bare MemoryError, which is not a BeamError and carries "
+        f"no message: {bare}")
 
 
 def test_the_guarded_sites_now_say_what_went_wrong(model):
@@ -277,7 +292,7 @@ def test_the_guarded_sites_now_say_what_went_wrong(model):
     """
     for call in (lambda: _c.top_k(model._g, 4_000_000_000, 5),
                  lambda: _c.sample(model._g, 4_000_000_000, 5, 1)):
-        with pytest.raises(ValueError) as exc:
+        with pytest.raises(_budget_exceeded()) as exc:
             call()
         msg = str(exc.value)
         assert "4000000000" in msg and "budget" in msg, msg

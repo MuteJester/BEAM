@@ -19,6 +19,7 @@
 #include "beam/model.h"
 #include "beam/mixture.h"
 #include "beam/python_bindings.h"
+#include "guards.h"
 
 
 /**
@@ -49,7 +50,9 @@ static const BeamModel **borrow_models(PyObject *seq, uint32_t *out_n) {
     }
     const BeamModel **v =
         (const BeamModel **)PyMem_Malloc((size_t)n * sizeof(*v));
-    if (!v) { Py_DECREF(fast); PyErr_NoMemory(); return NULL; }
+    if (!v) { Py_DECREF(fast);
+              return beam_py_nomem("the member list",
+                                   (uint64_t)n * sizeof(*v)); }
     for (Py_ssize_t i = 0; i < n; ++i) {
         BeamModel *m = edge_from_capsule(PySequence_Fast_GET_ITEM(fast, i));
         if (!m) {
@@ -93,7 +96,9 @@ PyObject *py_mixture_inner_product(PyObject *self, PyObject *args) {
 
     const uint32_t slots = len_slots(v[0]);
     double *by = (double *)PyMem_Malloc((size_t)slots * sizeof(double));
-    if (!by) { PyMem_Free(v); return PyErr_NoMemory(); }
+    if (!by) { PyMem_Free(v);
+               return beam_py_nomem("the per-length results",
+                                    (uint64_t)slots * sizeof(double)); }
 
     double total = 0.0;
     BeamError err;
@@ -120,7 +125,9 @@ PyObject *py_mixture_support_union(PyObject *self, PyObject *args) {
 
     const uint32_t slots = len_slots(v[0]);
     double *by = (double *)PyMem_Malloc((size_t)slots * sizeof(double));
-    if (!by) { PyMem_Free(v); return PyErr_NoMemory(); }
+    if (!by) { PyMem_Free(v);
+               return beam_py_nomem("the per-length results",
+                                    (uint64_t)slots * sizeof(double)); }
 
     double total = 0.0;
     uint64_t peak = 0;
@@ -146,8 +153,11 @@ PyObject *py_mixture_gram(PyObject *self, PyObject *args) {
     const BeamModel **v = borrow_models(seq, &n);
     if (!v) return NULL;
 
-    double *g = (double *)PyMem_Malloc((size_t)n * n * sizeof(double));
-    if (!g) { PyMem_Free(v); return PyErr_NoMemory(); }
+    /* n^2 doubles. At the 65,536-member ceiling that is 34 GB, asked for
+     * without a word and reported as a bare MemoryError. */
+    double *g = (double *)beam_py_alloc((uint64_t)n * n * sizeof(double),
+                                        "the Gram matrix", n, "members");
+    if (!g) { PyMem_Free(v); return NULL; }
 
     BeamError err;
     Py_BEGIN_ALLOW_THREADS
