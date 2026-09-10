@@ -543,6 +543,48 @@ static inline BeamLogRow beam_sparse_log_row(const BeamSparseRows *t,
 }
 
 
+/* ── Asking a table about itself ─────────────────────────────── */
+
+/*
+ * Two questions callers were answering by walking `values`, `size`, `n_parts`
+ * and `row_ids` themselves, from `model/introspection.c` and
+ * `model/finalize.c`.
+ *
+ * That is reading the representation from outside the file that owns it, and
+ * the representation is not one thing: rank sealing removes `index`, interning
+ * puts `pool_id` in front of the slot, packing replaces `values` with a mask
+ * and dictionary indices, and the plane transpose reorders the payload. A loop
+ * over `values[p]` reading doubles is right for a MUTABLE count table and
+ * silently wrong for three of the four finalized forms -- and
+ * `beam_model_n_nonzero_cells`, which did exactly that, is public API, so the
+ * plausible wrong number reaches Python.
+ *
+ * Nothing is wrong today: pack, intern and transpose all decline for a mutable
+ * table, and count tables are mutable. The type never said so, and the
+ * direction of travel is toward compacting more.
+ *
+ * So both REFUSE rather than guess. Each handles the representation it can
+ * count exactly and returns false for anything else, which turns a future
+ * silent wrong answer into a loud one at the call site.
+ */
+
+/**
+ * Stored cells strictly greater than zero. False if `t` is in a form this
+ * cannot count exactly, in which case `*out` is untouched.
+ */
+bool beam_sparse_count_positive_cells(const BeamSparseRows *t, uint64_t *out);
+
+/**
+ * The dense row ids this table holds, written to `out` in payload order.
+ *
+ * `cap` is how many `out` can take; `*n_out` receives how many were written.
+ * False if the table cannot list its rows -- which is any form without the
+ * slot-to-row reverse map, i.e. anything finalized.
+ */
+bool beam_sparse_occupied_rows(const BeamSparseRows *t, uint32_t *out,
+                               uint64_t cap, uint32_t *n_out);
+
+
 /* ── Compaction of a finalized table ─────────────────────────── */
 
 /**

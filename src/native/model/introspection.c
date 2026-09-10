@@ -61,11 +61,26 @@ uint64_t beam_model_n_nonzero_cells(const BeamModel *m) {
                 }
                 const BeamSparseRows *t = beam_sparse_count_table_const(
                     m, d, (BeamTableKind)kind);
-                for (uint32_t p = 0; p < t->n_parts; ++p) {
-                    const double *v = t->values[p];
-                    const size_t nc = (size_t)t->size[p] * m->n_residues;
-                    for (size_t i = 0; i < nc; ++i) if (v[i] > 0.0) n++;
+                /*
+                 * Through the accessor rather than over `values[p]` directly.
+                 * This walked the payload as doubles, which is right for a
+                 * mutable count table and wrong for a packed one -- where
+                 * those doubles are dictionary indices -- and this function is
+                 * public, so the wrong number would reach Python looking
+                 * exactly like a right one. Nothing packs a count table today.
+                 * The refusal is what makes that a fact the code checks rather
+                 * than one a reader has to know.
+                 */
+                uint64_t here = 0;
+                if (!beam_sparse_count_positive_cells(t, &here)) {
+                    beam_set_error(BEAM_ERR_INVALID_ARG,
+                                   "this model's count tables are in a form "
+                                   "the non-zero cell count cannot read "
+                                   "exactly, so no number is returned rather "
+                                   "than a wrong one");
+                    return 0;
                 }
+                n += here;
             }
         }
         return n;

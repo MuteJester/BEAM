@@ -724,3 +724,53 @@ uint64_t beam_sparse_n_rows(const BeamSparseRows *t) {
         rows += t->size[part];
     return rows;
 }
+
+/* ── Asking a table about itself ─────────────────────────────── */
+
+/*
+ * See the note in sparse_rows.h for why these exist. Both are deliberately
+ * narrow: they answer for the representation a mutable count table is in, and
+ * refuse everything else rather than return a number that looks right.
+ */
+
+bool beam_sparse_count_positive_cells(const BeamSparseRows *t, uint64_t *out) {
+    if (!t || !out) return false;
+    /* A packed table's `values` is a dictionary and its cells are indices; an
+     * interned one shares payload rows between slots, so payload cells and
+     * model cells are not the same count; a plane-major one is a different
+     * order, which does not change a total but does mean this has not been
+     * thought about for it. Each is a separate question and none is this one. */
+    if (t->cell_mask || t->pool_id || t->plane_step > 1u) return false;
+    if (!t->values || !t->size) return false;
+
+    uint64_t n = 0;
+    for (uint32_t p = 0; p < t->n_parts; ++p) {
+        const double *v = t->values[p];
+        if (!v) continue;
+        const size_t nc = (size_t)t->size[p] * t->stride;
+        for (size_t i = 0; i < nc; ++i) if (v[i] > 0.0) ++n;
+    }
+    *out = n;
+    return true;
+}
+
+bool beam_sparse_occupied_rows(const BeamSparseRows *t, uint32_t *out,
+                               uint64_t cap, uint32_t *n_out) {
+    if (!t || !out || !n_out) return false;
+    /* The slot -> row reverse map is what a mutable table carries and a
+     * finalized one does not; without it the rows can only be recovered by
+     * probing the directory, which is the seven-million-probe scan this list
+     * exists to avoid. */
+    if (!t->row_ids || !t->size) return false;
+
+    uint32_t n = 0;
+    for (uint32_t p = 0; p < t->n_parts; ++p) {
+        if (!t->row_ids[p]) continue;
+        for (uint32_t k = 0; k < t->size[p]; ++k) {
+            if ((uint64_t)n >= cap) return false;
+            out[n++] = t->row_ids[p][k];
+        }
+    }
+    *n_out = n;
+    return true;
+}

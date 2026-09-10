@@ -232,6 +232,78 @@ static void test_finalize_never_transposes_a_forward_table(void) {
 }
 
 /**
+ * The two table accessors refuse a representation they cannot read exactly.
+ *
+ * `beam_model_n_nonzero_cells` used to walk `values[p]` as doubles from
+ * `model/introspection.c`. That is right for a mutable count table and wrong
+ * for a packed one, where those doubles are dictionary indices -- and it is
+ * public API, so the wrong number would reach Python looking like a right one.
+ * Nothing packs a count table today; the refusal is what makes that a fact the
+ * code checks rather than one a reader has to know.
+ *
+ * A refusal nothing can trigger is not a guard, so this triggers both: it
+ * counts a plain table, compacts it, and requires the same calls to say no
+ * afterwards.
+ */
+static void test_the_table_accessors_refuse_what_they_cannot_read(void) {
+    uint32_t *rows = (uint32_t *)malloc(900u * sizeof(uint32_t));
+    ASSERT_MSG(rows, "out of memory");
+    uint32_t n_rows = 0, small = 0;
+
+    /* A MUTABLE table -- what a count table is -- answers both. It is the one
+     * form that carries the slot-to-row reverse map. */
+    {
+        BeamSparseRows mut;
+        ASSERT_MSG(beam_sparse_init(&mut, DENSE, 1u, STRIDE, true) == BEAM_OK,
+                   "mutable table did not init");
+        for (uint32_t i = 0; i < 900u; ++i) {
+            double *r = beam_sparse_row_mut(&mut, i * 3u, 0u, true);
+            ASSERT_MSG(r != NULL, "row not created");
+            for (uint32_t x = 0; x < STRIDE; ++x) r[x] = (double)(x % 3u);
+        }
+        uint64_t cells = 0;
+        const bool counted_mut =
+            beam_sparse_count_positive_cells(&mut, &cells);
+        const bool listed_mut =
+            beam_sparse_occupied_rows(&mut, rows, 900u, &n_rows);
+        /* A cap that cannot hold the answer is refused, not overrun. */
+        const bool overran = beam_sparse_occupied_rows(&mut, rows, 10u, &small);
+        beam_sparse_destroy(&mut);
+        ASSERT_MSG(counted_mut, "a mutable table could not be counted");
+        ASSERT_MSG(cells > 0, "every cell counted as zero");
+        ASSERT_MSG(listed_mut, "a mutable table could not list its rows");
+        ASSERT_MSG(n_rows == 900u, "the row list is the wrong length");
+        ASSERT_MSG(!overran, "a listing that does not fit was written anyway");
+    }
+
+    /* A COMPACTED table must decline both: its payload is no longer an array
+     * of values, and it has no reverse map. */
+    BeamSparseRows t;
+    build_repetitive(&t, 900u, 3u);
+    ASSERT_MSG(t.size[0] == 900u, "table did not fill");
+    BeamCompactionApplied applied;
+    memset(&applied, 0, sizeof(applied));
+    ASSERT_MSG(beam_sparse_compact_finalized(&t, DENSE, true, &applied)
+               == BEAM_OK, "compaction failed");
+    ASSERT_MSG(applied.packed || applied.transposed || applied.interned,
+               "nothing was applied, so there is no changed form to refuse");
+
+    uint64_t after = 0;
+    const bool counted = beam_sparse_count_positive_cells(&t, &after);
+    const bool listed  = beam_sparse_occupied_rows(&t, rows, 900u, &small);
+    free(rows);
+    beam_sparse_destroy(&t);
+
+    ASSERT_MSG(!counted,
+               "a compacted table was counted as though its payload were "
+               "still an array of values");
+    ASSERT_MSG(!listed,
+               "a compacted table listed rows it no longer has a reverse map "
+               "for");
+    PASS();
+}
+
+/**
  * The compaction pipeline's report is what the table actually became.
  *
  * Every one of the four transforms keeps the table as it is and returns
@@ -402,6 +474,7 @@ int main(void) {
     RUN_TEST(test_the_transpose_actually_moves_the_cells);
     RUN_TEST(test_finalize_never_transposes_a_forward_table);
     RUN_TEST(test_the_compaction_report_matches_what_the_table_became);
+    RUN_TEST(test_the_table_accessors_refuse_what_they_cannot_read);
     RUN_TEST(test_scores_are_bit_identical_with_planes);
     RUN_TEST(test_what_cannot_be_transposed_is_left_alone);
     RUN_TEST(test_a_plane_major_table_refuses_the_row_pointer);

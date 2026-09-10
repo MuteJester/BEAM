@@ -310,19 +310,24 @@ static BeamError finalize_sparse_table(BeamModel *m, uint32_t dir,
         if (cap) {
             rows = (uint32_t *)malloc((size_t)cap * sizeof(uint32_t));
             if (!rows) return BEAM_EALLOC("the occupied-row list");
-            for (uint32_t part = 0; part < ct->n_parts; ++part) {
-                if (!ct->row_ids[part]) continue;
-                for (uint32_t k = 0; k < ct->size[part]; ++k) {
-                    const uint32_t src = ct->row_ids[part][k];
-                    uint32_t dst = src;
-                    if (reverse_wide) {
-                        const uint32_t d = src / m->n_ctx_wide;
-                        const uint32_t c = src % m->n_ctx_wide;
-                        dst = d * m->n_ctx_wide + beam_ctx_reverse(c, m->order, m->n_alphabet);
-                    }
-                    rows[n_rows++] = dst;
-                }
+            /* The listing is the table's business, not this file's: it is
+             * the only place that knows a mutable table carries the reverse
+             * map and a finalized one does not. */
+            if (!beam_sparse_occupied_rows(ct, rows, cap, &n_rows)) {
+                free(rows);
+                return BEAM_FAIL(BEAM_ERR_INVALID_ARG,
+                                 "the count table cannot list its occupied "
+                                 "rows, so the finalized payload cannot be "
+                                 "built in destination order");
             }
+            if (reverse_wide)
+                for (uint32_t i = 0; i < n_rows; ++i) {
+                    const uint32_t src = rows[i];
+                    const uint32_t d = src / m->n_ctx_wide;
+                    const uint32_t c = src % m->n_ctx_wide;
+                    rows[i] = d * m->n_ctx_wide
+                            + beam_ctx_reverse(c, m->order, m->n_alphabet);
+                }
             qsort(rows, n_rows, sizeof(uint32_t), cmp_row_u32);
         }
     }
