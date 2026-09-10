@@ -365,16 +365,6 @@ static void test_the_doubling_paths_refuse_too(void) {
 
 int main(void) {
     printf("expected-count budget\n");
-    /*
-     * ONE THREAD. These tests are about what the sweep allocates, not about
-     * how it divides the work, and the models here are small enough that the
-     * per-layer parallel regions cost several hundred times what they save:
-     * the pooled sweep below is 0.02 s on one thread and 17.6 s on this
-     * machine's default, which is a property of the model's size and not of
-     * anything under test.
-     */
-    const int threads_before = beam_model_threads();
-    beam_model_set_threads(1);
 
     RUN_TEST(test_the_shipped_budget_answers_and_every_block_is_whole);
     RUN_TEST(test_the_accumulators_refuse_and_say_it_was_the_budget);
@@ -382,7 +372,6 @@ int main(void) {
     RUN_TEST(test_the_doubling_paths_refuse_too);
     RUN_TEST(test_one_block_can_be_released_before_the_rest);
     if (g_wide) beam_model_destroy(g_wide);
-    beam_model_set_threads(threads_before);
     printf("  %d passed, %d failed\n", pass_count, fail_count);
     return fail_count ? 1 : 0;
 }

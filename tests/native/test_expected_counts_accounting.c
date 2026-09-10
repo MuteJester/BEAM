@@ -317,12 +317,13 @@ static void test_the_reported_figure_tracks_the_work(void) {
 int main(void) {
     printf("expected-count accounting\n");
     /*
-     * ONE THREAD. These tests are about what the sweep allocates, not about
-     * how it divides the work, and the models here are small enough that the
-     * per-layer parallel regions cost several hundred times what they save:
-     * the pooled sweep below is 0.02 s on one thread and 17.6 s on this
-     * machine's default, which is a property of the model's size and not of
-     * anything under test.
+     * ONE THREAD, and not for speed: the allocation tracker above is a plain
+     * global table with no locking, so a `note` and a `forget` racing on two
+     * worker threads would corrupt `live` and the measured peak would be a
+     * number with nothing behind it. Nothing in the sweep allocates from
+     * inside a parallel region today, which is exactly the kind of fact that
+     * stops being true without anyone noticing here. Pinning makes the
+     * measurement sound rather than merely correct at the moment.
      */
     const int threads_before = beam_model_threads();
     beam_model_set_threads(1);
