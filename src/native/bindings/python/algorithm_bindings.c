@@ -18,6 +18,7 @@
  * two packages during the transition is still recognised; it is renamed with
  * everything else in the rename step. */
 #include "beam/python_bindings.h"
+#include "guards.h"
 
 PyObject *py_sample(PyObject *self, PyObject *args) {
     (void)self;
@@ -74,11 +75,19 @@ PyObject *py_sample(PyObject *self, PyObject *args) {
 }
 PyObject *py_top_k(PyObject *self, PyObject *args) {
     (void)self;
-    PyObject *cap; unsigned int k, length;
-    if (!PyArg_ParseTuple(args, "OII", &cap, &k, &length)) return NULL;
+    PyObject *cap, *k_obj; unsigned int k, length;
+    if (!PyArg_ParseTuple(args, "OOI", &cap, &k_obj, &length)) return NULL;
+    if (beam_py_count(k_obj, "k", &k) < 0) return NULL;
     BeamModel *m = edge_from_capsule(cap);
     if (!m) return NULL;
     const unsigned int stride = (unsigned int)beam_model_config(m)->max_length + 1u;
+
+    /* Two buffers, both k-sized, both taken before the library sees the
+     * request. `k = 2**28` reserved about 9 GB of address space and returned
+     * the correct answer, which is the failure mode that does not look like
+     * one until the machine is out of memory. */
+    if (beam_py_budget((uint64_t)k * stride + 1u + (uint64_t)k * sizeof(double),
+                       k, "sequences") < 0) return NULL;
 
     char *buf = (char *)PyMem_Calloc((size_t)k * stride + 1u, 1);
     double *lp = (double *)PyMem_Calloc(k ? k : 1u, sizeof(double));

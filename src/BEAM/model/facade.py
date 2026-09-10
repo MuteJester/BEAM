@@ -603,9 +603,16 @@ class BeamModel:
     def _check_count(self, name: str, n: int) -> int:
         """Validate a "how many" argument.
 
-        The C layer takes these as ``uint32_t``: ``sample(-1)`` becomes a
-        request for 4,294,967,295 draws, which does not raise, it simply never
-        returns.
+        The C layer takes these as ``uint32_t``, and the binding used to parse
+        them with ``PyArg_ParseTuple``'s ``"I"``, which truncates modulo 2**32
+        without error. So this checked only the sign -- while its own docstring
+        described the magnitude problem it was not preventing: ``sample(-1)``
+        was rejected, and ``sample(2**32 + 5)`` became a request for 5.
+
+        The bindings now refuse an out-of-range integer themselves, and refuse
+        a request too large for the memory budget. This stays as the first
+        line, because a Python-level message can name the argument as the
+        caller wrote it.
         """
         try:
             v = int(n)
@@ -613,6 +620,9 @@ class BeamModel:
             raise TypeError(f"{name} must be an integer, got {n!r}") from None
         if v < 0:
             raise ValueError(f"{name} must be non-negative, got {v}")
+        if v > 0xFFFFFFFF:
+            raise ValueError(
+                f"{name} must be at most 4294967295, got {v}")
         return v
 
     def _check_bins(self, bins: int, spacing: float | None) -> int:

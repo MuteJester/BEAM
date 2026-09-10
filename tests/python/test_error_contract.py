@@ -254,8 +254,30 @@ def test_some_failures_carry_no_code_and_no_message(model):
     has no row for them, so a future `except BeamMemoryError` would NOT catch
     these -- worth knowing before the hierarchy is advertised as complete.
     Pinned as a known gap, not as desirable behaviour.
+
+    This used to point at `top_k`, which now refuses with a ValueError naming
+    the request and the budget. Two of roughly twenty-eight such sites are
+    guarded; the spectra are not, and stand in for the rest. When a guard
+    reaches this one too, move the test again rather than deleting it -- the
+    gap is closed only when no site is left to point at.
     """
     with pytest.raises(MemoryError) as exc:
-        _c.top_k(model._g, 4_000_000_000, 5)
+        _c.spectrum_pair(model._g, 8, 2 ** 31, 0.5)
     assert str(exc.value) == "", (
-        "if this now carries a message, the gap was closed -- update this test")
+        "if this now carries a message, move this test to another "
+        "PyErr_NoMemory site, or close the gap and assert that")
+
+
+def test_the_guarded_sites_now_say_what_went_wrong(model):
+    """The counterpart: where a guard exists, the refusal is diagnosable.
+
+    A bare MemoryError names no quantity the caller controls. These name the
+    request, the bytes, and the limit -- which is the difference between an
+    error a user can act on and one they can only report.
+    """
+    for call in (lambda: _c.top_k(model._g, 4_000_000_000, 5),
+                 lambda: _c.sample(model._g, 4_000_000_000, 5, 1)):
+        with pytest.raises(ValueError) as exc:
+            call()
+        msg = str(exc.value)
+        assert "4000000000" in msg and "budget" in msg, msg

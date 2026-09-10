@@ -18,6 +18,8 @@
  * two packages during the transition is still recognised; it is renamed with
  * everything else in the rename step. */
 #include "beam/python_bindings.h"
+#include "guards.h"
+#include "beam/dp.h"   /* BEAM_MAX_MOMENT */
 
 PyObject *py_spectrum_pair(PyObject *self, PyObject *args) {
     (void)self;
@@ -77,8 +79,13 @@ PyObject *py_spectra_by_length(PyObject *self, PyObject *args) {
 }
 PyObject *py_length_derivatives(PyObject *self, PyObject *args) {
     (void)self;
-    PyObject *cap; double q; unsigned int order;
-    if (!PyArg_ParseTuple(args, "OdI", &cap, &q, &order)) return NULL;
+    PyObject *cap, *order_obj; double q; unsigned int order;
+    if (!PyArg_ParseTuple(args, "OdO", &cap, &q, &order_obj)) return NULL;
+    /* "I" truncated: order 2**32 + 2 was answered as order 2, a well-formed
+     * table for a question nobody asked. The library's own check never saw
+     * the real number. */
+    if (beam_py_count_max(order_obj, "order", BEAM_MAX_MOMENT, &order) < 0)
+        return NULL;
     BeamModel *m = edge_from_capsule(cap);
     if (!m) return NULL;
     unsigned int rows = (unsigned int)beam_model_config(m)->max_length + 1u;
