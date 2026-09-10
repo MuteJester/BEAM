@@ -34,18 +34,17 @@ int beam_threads(void);
  * what it buys and what it costs.
  */
 
-/**
- * Chunks a parallel SUM is split into, fixed and independent of the thread
- * count.
- *
- * A sum is the one reduction whose answer depends on the order it is taken
- * in, so `reduction(+:)` would make a result depend on how many cores
- * happened to be free. Splitting the range into a fixed number of chunks,
- * summing each serially and then adding the chunk totals in index order gives
- * one answer for every thread count — the property the tests pin — at the
- * cost of differing from a single serial sweep in the last bit or two.
+/*
+ * Here rather than in `error_macros.h`, which is where it was: it is the one
+ * refusal macro that dereferences a model, so it belongs with the struct it
+ * reads rather than dragging that struct into every file that wants
+ * `BEAM_ENULL`.
  */
-#define BEAM_SUM_CHUNKS 256u
+#define BEAM_EBADLEN(mdl, L)                                              \
+    BEAM_FAIL(BEAM_ERR_PARAM_OUT_OF_RANGE,                                      \
+             "%s: length %u is not one this model generates (lengths 1..%u "  \
+             "with a finite length prior are)", __func__, (unsigned)(L),      \
+             (unsigned)(mdl)->max_len)
 
 #define BEAM_DIRS   2u
 #define BEAM_FWD    0u   /* N-anchored: indexes by distance from the front */

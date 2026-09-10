@@ -10,7 +10,7 @@
 #define BEAM_INTERNAL_QUERY_H
 
 #include "beam/query.h"
-#include "beam/model_state.h"   /* BEAM_SUM_CHUNKS */
+#include "beam/reduction.h"     /* BEAM_SUM_CHUNKS */
 #include "beam/math_internal.h" /* lse_add           */
 
 /**

@@ -12,7 +12,11 @@
 #include <math.h>
 
 #include "beam/model.h"
-#include "beam/model_state.h"
+/* NOT model_state.h: every declaration below takes `const BeamModel *`, and
+ * a pointer to an opaque type needs only the public header. Including the
+ * layout here put it into `query_internal.h`, and from there into
+ * `query/automaton.c` and `query/constraint.c`, neither of which mentions a
+ * model at all. */
 
 /**
  * Per-length Mellin terms at `q`, and the largest of them.

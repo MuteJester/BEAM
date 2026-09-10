@@ -17,7 +17,12 @@
 #define BEAM_INTERNAL_ERROR_MACROS_H
 
 #include "beam/model.h"
-#include "beam/model_state.h"
+/* NOT model_state.h. `BEAM_EBADLEN` was the only macro here that
+ * dereferenced a model, and it took the whole model layout, the sparse-row
+ * representation and the frozen-count representation into six translation
+ * units that never mention a model: the four Poisson-binomial occupancy
+ * files, `query/automaton.c` and `query/constraint.c`. None of them calls
+ * it. The macro now lives beside the struct it reads. */
 
 /* ── Diagnosable failures ────────────────────────────────────── */
 
@@ -45,12 +50,6 @@
 
 #define BEAM_EALLOC(what)                                                 \
     BEAM_FAIL(BEAM_ERR_ALLOC, "%s: out of memory allocating %s", __func__, (what))
-
-#define BEAM_EBADLEN(mdl, L)                                              \
-    BEAM_FAIL(BEAM_ERR_PARAM_OUT_OF_RANGE,                                      \
-             "%s: length %u is not one this model generates (lengths 1..%u "  \
-             "with a finite length prior are)", __func__, (unsigned)(L),      \
-             (unsigned)(mdl)->max_len)
 
 #define BEAM_ERANGE(...)                                                  \
     BEAM_FAIL(BEAM_ERR_PARAM_OUT_OF_RANGE, __VA_ARGS__)

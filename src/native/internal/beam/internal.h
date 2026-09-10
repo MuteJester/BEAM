@@ -61,6 +61,7 @@
  * still sees exactly what it saw before. Narrow one file at a time to the
  * specific headers it needs; this umbrella goes away when none remain. */
 #include "beam/model_state.h"
+#include "beam/reduction.h"
 #include "beam/sparse_rows.h"
 #include "beam/frozen_counts.h"
 #include "beam/live_frontier.h"
