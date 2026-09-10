@@ -62,6 +62,14 @@ test: $(TEST_BINS)
 # define that symbol fails to link.
 build/tests/native/test_model: LDEXTRA = -Wl,--wrap=malloc
 
+# The same mechanism used to MEASURE rather than to fail: this test sums what
+# the allocator actually handed out during one analytic and checks the figure
+# that analytic reports against it. Nothing else can catch an allocation that
+# is simply never charged, because the account is otherwise the only witness.
+build/tests/native/test_expected_counts_accounting: \
+    LDEXTRA = -Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=realloc \
+              -Wl,--wrap=free
+
 build/tests/native/%: tests/native/%.c build/libbeam.a
 	@mkdir -p $(@D)
 	$(CC) $(CFLAGS) -Itests/native $< build/libbeam.a $(LDLIBS) \

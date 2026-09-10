@@ -937,6 +937,19 @@ typedef struct {
     BeamCountBlock block[2][3];
     uint32_t n_residues;
     double   expected_length;
+    /**
+     * The most scratch the call held at once, in bytes, this struct included.
+     *
+     * Reported because it cannot be predicted. The accumulators are keyed on
+     * the `(depth, context)` pairs the trellis actually reaches, so their size
+     * is a property of the answer rather than of the model's shape, and the
+     * only bound derivable in advance is the dense table -- 148 million cells
+     * at order 4, which is what the sparse accumulator exists to avoid. On the
+     * published foundation model this figure is over a gigabyte, larger than
+     * the model. A caller sizing a job around this analytic needs the
+     * measurement, and there is nowhere else to get it.
+     */
+    uint64_t working_set_bytes;
 } BeamExpectedCounts;
 
 /**
@@ -967,6 +980,18 @@ BeamError beam_model_expected_counts(const BeamModel *m, uint32_t length,
 
 /** Release a `BeamExpectedCounts` and zero it. Safe on an already-freed one. */
 void beam_model_expected_counts_free(BeamExpectedCounts *ec);
+
+/**
+ * Release ONE block and zero it, for a caller that consumes the six in turn.
+ *
+ * A block is large -- 303 MB for the wide forward block of the published
+ * foundation model -- and a caller that copies each into its own
+ * representation holds two copies of the whole answer if it waits for
+ * `beam_model_expected_counts_free`. Releasing each block as it is consumed
+ * halves that. Freeing a block does not disturb the others, and the
+ * whole-struct free stays correct afterwards.
+ */
+void beam_count_block_free(BeamCountBlock *b);
 
 /* ── Most probable sequences ─────────────────────────────────── */
 

@@ -116,16 +116,20 @@ static bool clamp_active(const uint8_t *clamp, uint32_t len) {
  * values, so the two agree bit for bit. It is a separate function rather than
  * a parameter added to `beam_betas` because that function is on the sampler's
  * and the top-k search's hot path, and neither has a clamp to pass.
+ *
+ * `w` is one layer of edge weights, BORROWED from the caller's workspace
+ * rather than allocated here. This runs to completion before the forward
+ * sweep touches that buffer, so there is nothing to share, and allocating a
+ * second one meant 31 MB on an order-4 amino-acid model that no budget knew
+ * about -- `fb_alloc` charges for exactly one layer and this made two.
  */
 static BeamError clamped_betas(const BeamModel *m, uint32_t len,
-                               const uint8_t *clamp, double **beta) {
+                               const uint8_t *clamp, double **beta,
+                               double *w) {
     const uint32_t A = m->n_alphabet;
     const uint32_t R = m->n_residues;
     const uint32_t S = m->n_states;
     const uint32_t SK = m->state_shift;
-
-    double *w = (double *)malloc((size_t)S * R * sizeof(double));
-    if (!w) return BEAM_EALLOC("one layer of edge weights");
 
     beam_tail_weights(m, len, beta[len]);
 
@@ -156,7 +160,6 @@ static BeamError clamped_betas(const BeamModel *m, uint32_t len,
             beta[i][s] = mx + log(acc);
         }
     }
-    free(w);
     return BEAM_OK;
 }
 
@@ -219,6 +222,51 @@ static bool advance(const BeamModel *m, const double *w,
 }
 
 
+/* ── One operation's memory account ──────────────────────────── */
+
+/**
+ * What a single call has taken from the budget so far.
+ *
+ * The budget is "the most scratch ONE OPERATION may hold at once", and an
+ * operation here holds several things at the same time: a forward-backward
+ * workspace, six accumulator maps, and at the end the six blocks it emits.
+ * Checking each of those against the whole budget independently is not a
+ * budget -- four allocations that each pass at 90% of the figure hold three
+ * and a half times it between them. One account, and each allocation asks for
+ * what is left.
+ *
+ * EVERY entry point opens one, including the marginals, which hold a single
+ * workspace and could have passed nothing. Letting the account be optional is
+ * what this file got wrong first: `rowpool_room` grew a null check and
+ * `rowpool_take` did not, so the path that passed nothing dereferenced it and
+ * every clamped marginal segfaulted. There is no null case now, so there is
+ * no null case to get half right.
+ */
+typedef struct RowPool {
+    uint64_t  held;     /* bytes this call currently holds        */
+    uint64_t  peak;     /* the most it held at once, reported out */
+    BeamError err;      /* BEAM_OK, or the refusal that stopped it */
+} RowPool;
+
+/** How much of the budget is still unclaimed. Zero, never negative. */
+static uint64_t rowpool_room(const RowPool *p) {
+    const uint64_t budget = beam_model_memory_budget();
+    return budget > p->held ? budget - p->held : 0u;
+}
+
+/** Take `bytes` if they fit. Sets no error: the caller words its own. */
+static bool rowpool_take(RowPool *p, uint64_t bytes) {
+    if (bytes > rowpool_room(p)) return false;
+    p->held += bytes;
+    if (p->held > p->peak) p->peak = p->held;
+    return true;
+}
+
+static void rowpool_release(RowPool *p, uint64_t bytes) {
+    p->held -= bytes;
+}
+
+
 /* ── Shared forward-backward scratch ─────────────────────────── */
 
 typedef struct {
@@ -228,6 +276,8 @@ typedef struct {
     double  *next;    /* [n_states]                              */
     double  *tail;    /* [n_states], sink weights                */
     uint32_t n_beta;  /* rows actually allocated, for the free   */
+    RowPool *pool;    /* the account charged                     */
+    uint64_t held;    /* what was charged to it, for the release */
 } FBWork;
 
 static void fb_free(FBWork *k) {
@@ -236,10 +286,12 @@ static void fb_free(FBWork *k) {
         free(k->beta);
     }
     free(k->w); free(k->cur); free(k->next); free(k->tail);
+    if (k->pool) rowpool_release(k->pool, k->held);   /* NULL only if unused */
     memset(k, 0, sizeof(*k));
 }
 
-static BeamError fb_alloc(const BeamModel *m, uint32_t len, FBWork *k) {
+static BeamError fb_alloc(const BeamModel *m, uint32_t len, FBWork *k,
+                          RowPool *pool) {
     const uint32_t S = m->n_states;
     const uint32_t R = m->n_residues;
     memset(k, 0, sizeof(*k));
@@ -259,11 +311,28 @@ static BeamError fb_alloc(const BeamModel *m, uint32_t len, FBWork *k) {
      */
     const uint64_t need = ((uint64_t)len + 1u) * S * sizeof(double)
                         + (uint64_t)S * (R + 3u) * sizeof(double);
-    const uint64_t budget = beam_model_memory_budget();
-    if (need > budget) {
+    if (!rowpool_take(pool, need)) {
         const char *nu, *bu;
         const double nv = beam_budget_scaled(need, &nu);
-        const double bv = beam_budget_scaled(budget, &bu);
+        if (pool->held) {
+            /* The accumulators are already holding part of the budget and are
+             * live for the whole sweep, so what this field has to fit in is
+             * what they left, not the whole figure. Naming both is what makes
+             * the message actionable: raising the budget helps, and so does
+             * asking for one length rather than the pooled answer. */
+            const char *hu;
+            const double hv = beam_budget_scaled(pool->held, &hu);
+            const double bv = beam_budget_scaled(beam_model_memory_budget(),
+                                                 &bu);
+            return BEAM_FAIL(BEAM_ERR_BUDGET,
+                        "a forward-backward sweep at length %u needs about "
+                        "%.2f %s for the backward field of %u states, and the "
+                        "expected-count accumulators already hold %.2f %s of "
+                        "the %.2f %s budget; raise it with "
+                        "BEAM.set_memory_budget, or ask at a lower order",
+                        (unsigned)len, nv, nu, (unsigned)S, hv, hu, bv, bu);
+        }
+        const double bv = beam_budget_scaled(rowpool_room(pool), &bu);
         return BEAM_FAIL(BEAM_ERR_BUDGET,
                         "a forward-backward sweep at length %u needs about "
                         "%.2f %s for the backward field of %u states, and the "
@@ -271,6 +340,8 @@ static BeamError fb_alloc(const BeamModel *m, uint32_t len, FBWork *k) {
                         "BEAM.set_memory_budget, or ask at a lower order",
                         (unsigned)len, nv, nu, (unsigned)S, bv, bu);
     }
+    k->pool = pool;
+    k->held = need;
 
     k->beta = (double **)calloc((size_t)len + 1u, sizeof(double *));
     if (!k->beta) return BEAM_EALLOC("the backward-value layer table");
@@ -316,17 +387,24 @@ BeamError beam_model_positional_marginals(const BeamModel *m, uint32_t length,
                               "%u residues of this model's alphabet",
                               (unsigned)i, (unsigned)clamp[i], (unsigned)R);
 
+    RowPool pool;
+    memset(&pool, 0, sizeof(pool));
     FBWork k;
-    BeamError err = fb_alloc(m, length, &k);
+    BeamError err = fb_alloc(m, length, &k, &pool);
     if (err != BEAM_OK) return err;
 
     /* Per-chunk partial rows, combined in chunk order so the answer does not
      * depend on how many threads happened to be free. See BEAM_SUM_CHUNKS. */
-    double *chunk = (double *)malloc((size_t)BEAM_SUM_CHUNKS * R
-                                     * sizeof(double));
+    const uint64_t partials = (uint64_t)BEAM_SUM_CHUNKS * R * sizeof(double);
+    if (!rowpool_take(&pool, partials)) {
+        fb_free(&k);
+        return beam_budget_refuse("a positional-marginal sweep", length,
+                                  pool.held + partials);
+    }
+    double *chunk = (double *)malloc((size_t)partials);
     if (!chunk) { fb_free(&k); return BEAM_EALLOC("the marginal partials"); }
 
-    err = clamped_betas(m, length, clamp, k.beta);
+    err = clamped_betas(m, length, clamp, k.beta, k.w);
     if (err != BEAM_OK) goto done;
 
     {
@@ -424,25 +502,89 @@ typedef struct {
     uint32_t  stride;   /* doubles per row: the alphabet's residue count    */
     double   *vals;     /* [cap * stride]                                   */
     uint32_t *ids;      /* row slot -> dense row index                      */
+    RowPool  *pool;     /* the budget this map and its five siblings share  */
 } RowMap;
 
+/**
+ * Take `bytes` from the shared account for a map, or refuse and record why.
+ *
+ * GROWTH-TIME rather than up front, which is the part worth explaining. Every
+ * other program in this file bounds itself before it starts, from a shape it
+ * knows: `fb_alloc` multiplies out `(len + 1) * n_states` and refuses. There
+ * is no such expression here. The maps are keyed on the DP's `(depth, ctx)`
+ * space, and the only bound derivable from the model's shape is the dense
+ * table -- 148 million cells at order 4, which is the address space the map
+ * exists in order NOT to allocate. A guard built on it would refuse every
+ * call. What is available instead is exact: both growth paths double in
+ * place, so each knows the figure it is about to ask for at the moment it
+ * asks. That figure is charged here, and the answer is a measurement rather
+ * than a prediction.
+ *
+ * REFUSE BEFORE ALLOCATING, as budget.h requires: callers charge the figure
+ * they are about to hand `malloc`, and allocate only if this returns true.
+ *
+ * The refusal is recorded on the account rather than only returned, because
+ * `rowmap_row` returns `double *` and has only NULL to fail with. Without it
+ * a budget refusal and a genuine allocation failure would reach the caller as
+ * the same bare `EALLOC`, and the message naming the figure and the way out
+ * would be lost.
+ */
+static bool rowpool_charge(RowPool *p, uint64_t bytes) {
+    if (!rowpool_take(p, bytes)) {
+        /* The figure is the WHOLE call's -- the backward field shares this
+         * account -- so the refusal names the working set and not the
+         * accumulators, which are only the part that asked last. */
+        p->err = beam_budget_refuse_bytes("the expected-count working set",
+                                          p->held + bytes);
+        return false;
+    }
+    return true;
+}
+
+/** The key directory's bytes at capacity `slots`: two parallel uint32 arrays. */
+static uint64_t rowmap_dir_bytes(uint64_t slots) {
+    return slots * 2u * sizeof(uint32_t);
+}
+
+/** One row's bytes in `vals` and `ids` together. */
+static uint64_t rowmap_row_bytes(uint32_t stride) {
+    return (uint64_t)stride * sizeof(double) + sizeof(uint32_t);
+}
+
+/** What a map holds right now. Zero for one that was never initialised. */
+static uint64_t rowmap_bytes(const RowMap *t) {
+    if (!t->key) return 0;
+    return rowmap_dir_bytes((uint64_t)t->mask + 1u)
+         + (uint64_t)t->cap * rowmap_row_bytes(t->stride);
+}
+
 static void rowmap_free(RowMap *t) {
+    if (t->pool) rowpool_release(t->pool, rowmap_bytes(t));
     free(t->key); free(t->at); free(t->vals); free(t->ids);
     memset(t, 0, sizeof(*t));
 }
 
-static bool rowmap_init(RowMap *t, uint32_t stride) {
+static bool rowmap_init(RowMap *t, RowPool *pool, uint32_t stride) {
     memset(t, 0, sizeof(*t));
     const uint32_t k0 = 1024u, r0 = 512u;
+    const uint64_t want = rowmap_dir_bytes(k0)
+                        + (uint64_t)r0 * rowmap_row_bytes(stride);
+    if (!rowpool_charge(pool, want)) return false;
     t->key = (uint32_t *)malloc((size_t)k0 * sizeof(uint32_t));
     t->at  = (uint32_t *)malloc((size_t)k0 * sizeof(uint32_t));
     t->vals = (double *)calloc((size_t)r0 * stride, sizeof(double));
     t->ids  = (uint32_t *)malloc((size_t)r0 * sizeof(uint32_t));
-    if (!t->key || !t->at || !t->vals || !t->ids) { rowmap_free(t); return false; }
+    if (!t->key || !t->at || !t->vals || !t->ids) {
+        free(t->key); free(t->at); free(t->vals); free(t->ids);
+        memset(t, 0, sizeof(*t));
+        rowpool_release(pool, want);
+        return false;
+    }
     for (uint32_t i = 0; i < k0; ++i) t->key[i] = UINT32_MAX;
     t->mask = k0 - 1u;
     t->cap = r0;
     t->stride = stride;
+    t->pool = pool;
     return true;
 }
 
@@ -455,9 +597,18 @@ static inline uint32_t rowmap_hash(uint32_t row) {
 
 static bool rowmap_rehash(RowMap *t) {
     const uint32_t ncap = (t->mask + 1u) * 2u;
+    /* Both directories are live at once -- the new one is filled by walking
+     * the old -- so the new size is charged on top of the old, and the old is
+     * released only once it has actually been freed. */
+    const uint64_t want = rowmap_dir_bytes(ncap);
+    if (!rowpool_charge(t->pool, want)) return false;
     uint32_t *key = (uint32_t *)malloc((size_t)ncap * sizeof(uint32_t));
     uint32_t *at  = (uint32_t *)malloc((size_t)ncap * sizeof(uint32_t));
-    if (!key || !at) { free(key); free(at); return false; }
+    if (!key || !at) {
+        free(key); free(at);
+        rowpool_release(t->pool, want);
+        return false;
+    }
     for (uint32_t i = 0; i < ncap; ++i) key[i] = UINT32_MAX;
     const uint32_t nmask = ncap - 1u;
     for (uint32_t slot = 0; slot < t->n; ++slot) {
@@ -468,6 +619,7 @@ static bool rowmap_rehash(RowMap *t) {
         at[h] = slot;
     }
     free(t->key); free(t->at);
+    rowpool_release(t->pool, rowmap_dir_bytes((uint64_t)t->mask + 1u));
     t->key = key; t->at = at; t->mask = nmask;
     return true;
 }
@@ -481,17 +633,31 @@ static double *rowmap_row(RowMap *t, uint32_t row) {
     }
     if (t->n == t->cap) {
         const uint32_t ncap = t->cap * 2u;
+        /* Charged like the rehash: `realloc` may move rather than extend, in
+         * which case both copies are live across the call, so the new size
+         * goes on top of the old and the old comes off once the pair has
+         * settled at `ncap`. */
+        const uint64_t old  = (uint64_t)t->cap * rowmap_row_bytes(t->stride);
+        const uint64_t want = (uint64_t)ncap * rowmap_row_bytes(t->stride);
+        if (!rowpool_charge(t->pool, want)) return NULL;
+        /* `ids` first, the four-byte-per-row array, so that a failure to grow
+         * the hundred-and-sixty-byte one leaves the smaller of the two
+         * oversized rather than the larger. Either way `cap` is unchanged, so
+         * the pool's release under-counts by that overhang -- which is not
+         * observable: a NULL from here aborts the whole call, and the pool is
+         * a stack local that dies with it. */
+        uint32_t *ids = (uint32_t *)realloc(t->ids,
+                                            (size_t)ncap * sizeof(uint32_t));
+        if (!ids) { rowpool_release(t->pool, want); return NULL; }
+        t->ids = ids;
         double *v = (double *)realloc(t->vals,
                                       (size_t)ncap * t->stride * sizeof(double));
-        if (!v) return NULL;
+        if (!v) { rowpool_release(t->pool, want); return NULL; }
         t->vals = v;
         memset(t->vals + (size_t)t->cap * t->stride, 0,
                (size_t)t->cap * t->stride * sizeof(double));
-        uint32_t *ids = (uint32_t *)realloc(t->ids,
-                                            (size_t)ncap * sizeof(uint32_t));
-        if (!ids) return NULL;
-        t->ids = ids;
         t->cap = ncap;
+        rowpool_release(t->pool, old);
     }
     const uint32_t slot = t->n++;
     t->ids[slot] = row;
@@ -518,10 +684,32 @@ static int cmp_u32(const void *a, const void *b) {
 static BeamError rowmap_emit(RowMap *t, BeamCountBlock *b) {
     b->n_rows = 0; b->rows = NULL; b->counts = NULL;
     if (t->n == 0) return BEAM_OK;
+    /*
+     * The block is the second copy of the map, and here the figure IS known
+     * up front: `n` rows exactly. Charged and never released, because unlike
+     * the maps it is the answer and outlives this function.
+     *
+     * This charge CANNOT be the one that refuses, and that is worth writing
+     * down rather than leaving for someone to rediscover as a hole. A block
+     * is `n` rows; the map it came from holds `cap >= n` rows plus a key
+     * directory, so `block <= map` always. The caller emits and frees one map
+     * at a time, so what is held while block `k` is charged is every map from
+     * `k` on plus every block before it -- and term by term that is bounded by
+     * the six maps together, which were all live a moment earlier. The peak is
+     * behind us by the time we get here.
+     *
+     * It stays because that argument is a property of the emit ordering
+     * above, not of this function. Emit all six before releasing any -- which
+     * is what this code did until it was measured at 1,566 MB on the
+     * foundation model -- and this becomes the check that binds.
+     */
+    const uint64_t want = (uint64_t)t->n * rowmap_row_bytes(t->stride);
+    if (!rowpool_charge(t->pool, want)) return t->pool->err;
     uint32_t *rows = (uint32_t *)malloc((size_t)t->n * sizeof(uint32_t));
     double *counts = (double *)malloc((size_t)t->n * t->stride * sizeof(double));
     if (!rows || !counts) {
         free(rows); free(counts);
+        rowpool_release(t->pool, want);
         return BEAM_EALLOC("an expected-count block");
     }
     memcpy(rows, t->ids, (size_t)t->n * sizeof(uint32_t));
@@ -561,15 +749,25 @@ static inline uint32_t row_len(const BeamModel *m, uint32_t len, uint32_t depth,
     return (len * m->max_len + depth) * m->n_ctx_len + ctx;
 }
 
-/* The six maps, indexed [anchor][expert] exactly as BeamExpectedCounts is. */
-typedef RowMap Maps[2][3];
+/**
+ * The six maps, indexed [anchor][expert] exactly as BeamExpectedCounts is,
+ * together with the budget they share.
+ *
+ * One struct rather than an array of six plus a pool passed beside it: the
+ * budget and the maps it governs have to stay in step through eight call
+ * sites, and two parameters that must agree are two chances for them not to.
+ */
+typedef struct {
+    RowMap  map[2][3];
+    RowPool pool;
+} Accum;
 
 /** Add `g` to one cell of each of the three tables of one anchor. */
-static bool bump(Maps mp, uint32_t dir, uint32_t rw, uint32_t rm, uint32_t rl,
+static bool bump(Accum *ac, uint32_t dir, uint32_t rw, uint32_t rm, uint32_t rl,
                  uint32_t x, double g) {
-    double *w = rowmap_row(&mp[dir][0], rw);
-    double *d = rowmap_row(&mp[dir][1], rm);
-    double *l = rowmap_row(&mp[dir][2], rl);
+    double *w = rowmap_row(&ac->map[dir][0], rw);
+    double *d = rowmap_row(&ac->map[dir][1], rm);
+    double *l = rowmap_row(&ac->map[dir][2], rl);
     if (!w || !d || !l) return false;
     w[x] += g; d[x] += g; l[x] += g;
     return true;
@@ -609,7 +807,7 @@ static bool bump(Maps mp, uint32_t dir, uint32_t rw, uint32_t rm, uint32_t rl,
  * that many layers reach come out the same on every run.
  */
 static BeamError expected_one_length(const BeamModel *m, uint32_t len,
-                                     double weight, Maps mp) {
+                                     double weight, Accum *ac) {
     const uint32_t A = m->n_alphabet;
     const uint32_t R = m->n_residues;
     const uint32_t S = m->n_states;
@@ -620,10 +818,10 @@ static BeamError expected_one_length(const BeamModel *m, uint32_t len,
     const uint32_t n2 = m->n_ctx_len;
 
     FBWork k;
-    BeamError err = fb_alloc(m, len, &k);
+    BeamError err = fb_alloc(m, len, &k, &ac->pool);
     if (err != BEAM_OK) return err;
 
-    err = clamped_betas(m, len, NULL, k.beta);
+    err = clamped_betas(m, len, NULL, k.beta, k.w);
     if (err != BEAM_OK) { fb_free(&k); return err; }
 
     {
@@ -664,7 +862,7 @@ static BeamError expected_one_length(const BeamModel *m, uint32_t len,
                 if (nb == -INFINITY) continue;
                 const double g = weight * exp(la + row[x] + nb);
                 if (g == 0.0) continue;
-                if (!bump(mp, BEAM_FWD, fw, fm, fl, x, g)) { oom = true; break; }
+                if (!bump(ac, BEAM_FWD, fw, fm, fl, x, g)) { oom = true; break; }
                 if (!back) continue;
                 const uint32_t bw = row_wide(
                     m, r, beam_ctx_backward_from_state(s, x, K, m->order, A));
@@ -672,7 +870,7 @@ static BeamError expected_one_length(const BeamModel *m, uint32_t len,
                     m, r, beam_ctx_backward_from_state(s, x, K, 3u, A));
                 const uint32_t bl = row_len(
                     m, len, r, beam_ctx_backward_from_state(s, x, K, 2u, A));
-                if (!bump(mp, BEAM_BWD, bw, bm, bl, scored, g)) {
+                if (!bump(ac, BEAM_BWD, bw, bm, bl, scored, g)) {
                     oom = true; break;
                 }
             }
@@ -716,7 +914,7 @@ static BeamError expected_one_length(const BeamModel *m, uint32_t len,
                 const uint32_t bw = row_wide(m, rr, cw);
                 const uint32_t bm = row_mid(m, rr, cm);
                 const uint32_t bl = row_len(m, len, rr, cl);
-                if (!bump(mp, BEAM_BWD, bw, bm, bl, scored, g)) {
+                if (!bump(ac, BEAM_BWD, bw, bm, bl, scored, g)) {
                     oom = true; break;
                 }
             }
@@ -724,7 +922,12 @@ static BeamError expected_one_length(const BeamModel *m, uint32_t len,
     }
 
     fb_free(&k);
-    if (oom) return BEAM_EALLOC("an expected-count accumulator row");
+    /* `rowmap_row` has only NULL to fail with, so which failure it was is
+     * carried on the pool: a budget refusal names the figure and the way out,
+     * and a genuine allocation failure does not pretend to. */
+    if (oom)
+        return ac->pool.err != BEAM_OK
+             ? ac->pool.err : BEAM_EALLOC("an expected-count accumulator row");
     if (lost)
         return BEAM_ENOPATHS("the forward sweep lost the trellis's mass to "
                             "underflow, so the expected counts would not sum "
@@ -746,21 +949,23 @@ BeamError beam_model_expected_counts(const BeamModel *m, uint32_t length,
     /* Zeroed FIRST, so the cleanup below is safe on the maps that were never
      * reached: `rowmap_free` frees four pointers, and on an uninitialised map
      * those are whatever was on the stack. */
-    Maps mp;
-    memset(mp, 0, sizeof(mp));
+    Accum ac;
+    memset(&ac, 0, sizeof(ac));
     for (uint32_t d = 0; d < 2u; ++d)
         for (uint32_t e = 0; e < 3u; ++e)
-            if (!rowmap_init(&mp[d][e], m->n_residues)) {
+            if (!rowmap_init(&ac.map[d][e], &ac.pool, m->n_residues)) {
+                const BeamError why = ac.pool.err;
                 for (uint32_t dd = 0; dd < 2u; ++dd)
                     for (uint32_t ee = 0; ee < 3u; ++ee)
-                        rowmap_free(&mp[dd][ee]);
-                return BEAM_EALLOC("the expected-count accumulators");
+                        rowmap_free(&ac.map[dd][ee]);
+                return why != BEAM_OK
+                     ? why : BEAM_EALLOC("the expected-count accumulators");
             }
 
     BeamError err = BEAM_OK;
     double total = 0.0;
     if (length != 0u) {
-        err = expected_one_length(m, length, 1.0, mp);
+        err = expected_one_length(m, length, 1.0, &ac);
         total = (double)length;
     } else {
         /* Ascending length, so a cell many lengths reach accumulates its
@@ -772,29 +977,48 @@ BeamError beam_model_expected_counts(const BeamModel *m, uint32_t length,
             if (!beam_length_live(m, L)) continue;
             const double pi = exp(m->log_pi[L]);
             if (pi == 0.0) continue;
-            err = expected_one_length(m, L, pi, mp);
+            err = expected_one_length(m, L, pi, &ac);
             total += pi * (double)L;
         }
     }
 
-    for (uint32_t d = 0; d < 2u && err == BEAM_OK; ++d)
-        for (uint32_t e = 0; e < 3u && err == BEAM_OK; ++e)
-            err = rowmap_emit(&mp[d][e], &out->block[d][e]);
-
+    /*
+     * Emit and free ONE MAP AT A TIME, not all six then all six.
+     *
+     * A block is a second copy of its map, so emitting all six before
+     * releasing any means the peak is every map plus every block at once --
+     * measured at 1,566 MB on the foundation model, where releasing each map
+     * as its block lands peaks at 1,185 MB for the same answer. The largest
+     * map is 377 MB and is the first one emitted; holding it through five
+     * more emissions buys nothing.
+     *
+     * `rowmap_free` runs unconditionally, including on the maps an earlier
+     * error skipped, so every map is still freed exactly once.
+     */
     for (uint32_t d = 0; d < 2u; ++d)
-        for (uint32_t e = 0; e < 3u; ++e) rowmap_free(&mp[d][e]);
+        for (uint32_t e = 0; e < 3u; ++e) {
+            if (err == BEAM_OK)
+                err = rowmap_emit(&ac.map[d][e], &out->block[d][e]);
+            rowmap_free(&ac.map[d][e]);
+        }
 
     if (err != BEAM_OK) { beam_model_expected_counts_free(out); return err; }
     out->expected_length = total;
+    out->working_set_bytes = ac.pool.peak;
     return BEAM_OK;
+}
+
+void beam_count_block_free(BeamCountBlock *b) {
+    if (!b) return;
+    free(b->rows);
+    free(b->counts);
+    memset(b, 0, sizeof(*b));
 }
 
 void beam_model_expected_counts_free(BeamExpectedCounts *ec) {
     if (!ec) return;
     for (uint32_t d = 0; d < 2u; ++d)
-        for (uint32_t e = 0; e < 3u; ++e) {
-            free(ec->block[d][e].rows);
-            free(ec->block[d][e].counts);
-        }
+        for (uint32_t e = 0; e < 3u; ++e)
+            beam_count_block_free(&ec->block[d][e]);
     memset(ec, 0, sizeof(*ec));
 }

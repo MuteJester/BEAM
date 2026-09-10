@@ -1745,8 +1745,9 @@ class BeamModel:
                 has a check attached to it: see ``expected_length`` below.
 
         Returns a dict with ``expected_length``, ``n_residues``, ``residues``,
-        and six blocks keyed ``forward_wide``, ``forward_mid``,
-        ``forward_len``, ``backward_wide``, ``backward_mid``, ``backward_len``.
+        ``working_set_bytes``, and six blocks keyed ``forward_wide``,
+        ``forward_mid``, ``forward_len``, ``backward_wide``, ``backward_mid``,
+        ``backward_len``.
         Each block is itself a dict of
 
             ``rows``    dense row indices, ascending, ``(n_rows,)`` int64
@@ -1770,10 +1771,21 @@ class BeamModel:
         count tables. The finalized C-anchored wide table is repacked
         nearest-first for cache reasons; these are counts, so they are not.
 
+        ``working_set_bytes`` is the most scratch the C sweep held at once,
+        MEASURED rather than estimated, and it is reported because it cannot
+        be predicted: the accumulators are keyed on the ``(depth, context)``
+        pairs the trellis actually reaches, so their size is a property of the
+        answer, not of the model's shape. On the published foundation model it
+        is over a gigabyte -- larger than the model. It is charged against
+        :func:`BEAM.set_memory_budget`, so a call that would exceed the budget
+        raises :class:`BudgetExceeded` instead of taking the machine down.
+
         .. note::
            This is the most expensive analytic here: a full forward-backward
            sweep per length, over every state of every layer with no pruning.
-           Ask for one ``length`` when that is what you need.
+           Ask for one ``length`` when that is what you need, and read
+           ``working_set_bytes`` before asking for the pooled answer on a wide
+           model.
         """
         want = 0 if length is None else self._check_length(length)
         if want != 0 and not math.isfinite(self.log_length_prior(want)):
@@ -1781,7 +1793,7 @@ class BeamModel:
                 f"the model generates no sequences of length {want}, so it "
                 f"uses no cells there; length_pmf() shows which lengths it "
                 f"does generate")
-        blocks, n_res, total = _c.expected_counts(self._g, want)
+        blocks, n_res, total, working_set = _c.expected_counts(self._g, want)
 
         cfg = self.config
         radix = n_res + 1
@@ -1791,12 +1803,23 @@ class BeamModel:
             "expected_length": float(total),
             "n_residues": int(n_res),
             "residues": alphabets.symbols(self.alphabet),
+            "working_set_bytes": int(working_set),
         }
-        for (anchor, expert), (rows_b, vals_b) in zip(self._EXPECTED_BLOCKS,
-                                                      blocks):
+        # Each block's bytes are dropped as soon as its arrays exist, rather
+        # than held until the loop ends. `np.frombuffer` is a view and `.copy()`
+        # is the array the caller keeps, so holding the six buffers to the end
+        # means two copies of the whole answer are resident at once -- 112 MB
+        # against 112 MB on a 24-length order-3 model, and over a gigabyte on
+        # the foundation model. Clearing the list entry is what releases them:
+        # `blocks` is the only reference the C layer left behind.
+        for i, (anchor, expert) in enumerate(self._EXPECTED_BLOCKS):
+            rows_b, vals_b = blocks[i]
+            blocks[i] = None
             rows = np.frombuffer(rows_b, dtype=np.uint32).astype(np.int64)
+            del rows_b
             counts = np.frombuffer(vals_b, dtype=np.float64).reshape(
                 len(rows), n_res).copy()
+            del vals_b
             nc = n_ctx[expert]
             block: dict[str, np.ndarray] = {
                 "rows": rows,

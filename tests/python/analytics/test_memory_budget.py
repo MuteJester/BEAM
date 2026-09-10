@@ -71,6 +71,7 @@ def _calls(m):
         "surprisal_range":      lambda: m.surprisal_range(),
         "cgf_jet":              lambda: m.cgf_jet(0.4),
         "positional_marginals": lambda: m.positional_marginals(12),
+        "expected_counts":      lambda: m.expected_counts(),
         "top_k_sequences":      lambda: m.top_k_sequences(3),
         "sample":               lambda: m.sample(4, seed=1),
         "topology":             lambda: m.topology(12),
