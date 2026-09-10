@@ -449,7 +449,7 @@ static void test_multiplicity_accounts_for_every_edit_exactly_once(void) {
     /*
      * The posterior is over distinct STRINGS, so a string reachable several
      * ways appears once. `multiplicity` is what makes the other convention
-     * recoverable -- PRISM sums repairs WITH multiplicity, deliberately, and
+     * recoverable -- a per-edit measure sums repairs WITH multiplicity, and
      * a caller wanting that needs to know how many edits each string stands
      * for. Review found the two conventions clashing with nothing to bridge
      * them.

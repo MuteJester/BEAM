@@ -34,7 +34,6 @@ from ._model import (
 )
 from ._publicness import PublicnessModel
 from .analytics.scale import Attribution, ScaleIndex, attribute
-from .prism import Prism, PrismScorer
 from .mixture import (BetaDiversity, EntropyBounds, EntropyEstimate,
                       IncompatibleMembers, Mixture, MixtureError,
                       MixtureTooLarge, SupportSize, UnsupportedOrder)
@@ -57,7 +56,6 @@ __all__ = [
     "threads", "set_memory_budget", "set_threads",
     "PublicnessModel",
     "Attribution", "ScaleIndex", "attribute",
-    "Prism", "PrismScorer",
     "BeamQuery", "Condition",
     "Mixture", "BetaDiversity", "EntropyBounds", "EntropyEstimate",
     "SupportSize",

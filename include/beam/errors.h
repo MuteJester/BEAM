@@ -72,11 +72,11 @@
  * unreachable FROM PYTHON, because every binding resolves its capsule and
  * returns before C is ever handed a NULL. Instrumenting `beam_set_error` and
  * running the full suite shows it firing zero times across 475 tests. The
- * only producers Python can reach are two BEAM_ERR_INVALID_ARG alias sites in
- * model/prism.c, which mean "parameter out of range" rather than "null
- * argument". So the guards are worth keeping for C callers and are dead
- * weight for the bindings, which is a different statement from the code being
- * unused.
+ * The two BEAM_ERR_INVALID_ARG alias sites that were the only producers
+ * Python could reach were in `model/prism.c` and went with it, so today the
+ * count is zero from either direction. The guards are worth keeping for C
+ * callers and are dead weight for the bindings, which is a different
+ * statement from the code being unused.
  */
 #ifndef BEAM_ERRORS_H
 #define BEAM_ERRORS_H

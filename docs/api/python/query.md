@@ -136,13 +136,13 @@ Each entry is a dict with `sequence`, `site`, `residue`, `multiplicity`, `log_od
 
 `posterior` is `P(s' | s' in this set)` — a distribution over **strings**, not over edit operations. Inserting `S` into the `SS` of `CASSSQYF` gives one string reachable four ways; it appears once, with `multiplicity = 4`. Weighted per edit instead — multiply by `multiplicity` and renormalise — that string is the likeliest neighbour, where per string it ranks ninth.
 
-Both are right, under different questions. Per string asks what the model makes of a candidate set. Per edit asks what happens when a longer sequence is drawn and a uniformly chosen position removed, which is the story `PrismScorer` uses and why it sums repairs with multiplicity rather than deduplicating.
+Both are right, under different questions. Per string asks what the model makes of a candidate set. Per edit asks what happens when a longer sequence is drawn and a uniformly chosen position removed; a per-edit measure sums repairs with multiplicity rather than deduplicating. A caller who wants that convention has `multiplicity` and one line of arithmetic.
 
 `site` is the **leftmost** gap producing that string — a canonical label, not a claim about where an edit occurred.
 
 `length_producible` is false when the model generates no sequence of the neighbours' length at all. Every posterior is then zero for that one reason, which is a fact about the length prior rather than about any of these strings.
 
-**None of this infers an edit.** The model has no alignment and no indel process. These are ratios between what it assigns to two strings that differ by one residue, describing where a repertoire tolerates insertions. For "given this observed sequence, where was it edited", use `PrismScorer`.
+**None of this infers an edit.** The model has no alignment and no indel process. These are ratios between what it assigns to two strings that differ by one residue, describing where a repertoire tolerates insertions. "Given this observed sequence, where was it edited" is a different question, and nothing here answers it.
 
 ## Cost
 

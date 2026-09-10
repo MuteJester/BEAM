@@ -17,8 +17,8 @@
  * NOTHING HERE INFERS AN EDIT. The model has no alignment and no indel
  * process; these are ratios between what it assigns to two strings that
  * happen to differ by one residue, and they describe where a repertoire
- * tolerates insertions rather than what happened to any sequence. PRISM
- * answers the per-sequence question and this does not.
+ * tolerates insertions rather than what happened to any sequence. The
+ * per-sequence question is a different one and this does not answer it.
  *
  * Aliases need no deduplication pass. Inserting `S` at gaps 2, 3 and 4 of
  * `CASSF` gives one string, and the leftmost representative is picked by a

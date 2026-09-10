@@ -105,8 +105,6 @@ beam_model_threads
 beam_model_top_k
 beam_model_topology
 beam_model_total_weight
-beam_prism_factor
-beam_prism_factor_batch
 beam_publicness_accumulate
 beam_publicness_accumulate_grouped
 beam_publicness_moments

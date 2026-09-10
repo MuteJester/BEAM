@@ -1,7 +1,18 @@
+tests/python/test_binding_guards.py::test_an_order_that_fits_is_still_answered
+tests/python/test_binding_guards.py::test_an_order_past_the_word_is_refused_not_wrapped[4294967296]
+tests/python/test_binding_guards.py::test_an_order_past_the_word_is_refused_not_wrapped[4294967298]
+tests/python/test_binding_guards.py::test_an_order_past_the_word_is_refused_not_wrapped[8589934592]
+tests/python/test_binding_guards.py::test_an_order_past_the_word_is_refused_not_wrapped[18446744073709551616]
+tests/python/test_binding_guards.py::test_an_order_above_the_domain_is_refused
+tests/python/test_binding_guards.py::test_a_negative_order_is_refused
+tests/python/test_binding_guards.py::test_a_float_order_is_refused_rather_than_truncated
+tests/python/test_binding_guards.py::test_top_k_refuses_what_will_not_fit
+tests/python/test_binding_guards.py::test_top_k_that_fits_still_runs
+tests/python/test_binding_guards.py::test_the_top_k_refusal_tracks_the_budget
+tests/python/test_binding_guards.py::test_the_facade_bounds_magnitude_not_only_sign
 tests/python/test_error_contract.py::test_the_observed_exception_class_is_unchanged[build over budget]
 tests/python/test_error_contract.py::test_the_observed_exception_class_is_unchanged[load over budget]
 tests/python/test_error_contract.py::test_the_observed_exception_class_is_unchanged[positional_marginals over budget]
-tests/python/test_error_contract.py::test_the_observed_exception_class_is_unchanged[prism omega out of range]
 tests/python/test_error_contract.py::test_the_observed_exception_class_is_unchanged[finalize with nothing observed]
 tests/python/test_error_contract.py::test_the_observed_exception_class_is_unchanged[explain an unreadable sequence]
 tests/python/test_error_contract.py::test_the_observed_exception_class_is_unchanged[facade explain, same input]
@@ -20,6 +31,7 @@ tests/python/test_error_contract.py::test_one_error_code_reaches_python_three_di
 tests/python/test_error_contract.py::test_the_query_facade_narrows_builtins_to_its_own_classes
 tests/python/test_error_contract.py::test_a_load_failure_is_not_always_an_OSError
 tests/python/test_error_contract.py::test_no_allocation_failure_escapes_the_hierarchy
+tests/python/test_error_contract.py::test_the_guarded_sites_now_say_what_went_wrong
 tests/python/analytics/test_calibration.py::test_calibration_survival_is_a_valid_tail
 tests/python/analytics/test_calibration.py::test_calibration_pvalues_are_uniform_under_its_own_null
 tests/python/analytics/test_calibration.py::test_calibration_flags_an_implausible_sequence
@@ -48,6 +60,12 @@ tests/python/analytics/test_dynamic_programming.py::test_spectrum_identity
 tests/python/analytics/test_dynamic_programming.py::test_spectrum_mean_is_exact_but_the_shape_is_not
 tests/python/analytics/test_dynamic_programming.py::test_spectrum_per_length_sums_to_pooled
 tests/python/analytics/test_dynamic_programming.py::test_accumulator_max_bounds_the_grid
+tests/python/analytics/test_expected_counts_memory.py::test_the_working_set_is_reported_and_is_not_zero
+tests/python/analytics/test_expected_counts_memory.py::test_the_working_set_covers_the_answer_it_returned
+tests/python/analytics/test_expected_counts_memory.py::test_the_working_set_tracks_the_work
+tests/python/analytics/test_expected_counts_memory.py::test_the_working_set_does_not_move_with_the_budget
+tests/python/analytics/test_expected_counts_memory.py::test_a_budget_below_the_working_set_refuses_rather_than_allocating
+tests/python/analytics/test_expected_counts_memory.py::test_the_refusal_is_a_memory_error
 tests/python/analytics/test_liveness.py::test_topology_matches_an_enumerated_trellis[True]
 tests/python/analytics/test_liveness.py::test_topology_matches_an_enumerated_trellis[False]
 tests/python/analytics/test_liveness.py::test_live_structure_is_identical_on_every_repeat_call[True-2]
@@ -125,21 +143,6 @@ tests/python/analytics/test_positional_marginals.py::test_both_answers_stay_exac
 tests/python/analytics/test_positional_marginals.py::test_both_answers_stay_exact_at_every_order[4]
 tests/python/analytics/test_positional_marginals.py::test_both_answers_are_bit_identical_across_thread_counts
 tests/python/analytics/test_positional_marginals.py::test_an_oversized_sweep_is_refused_before_it_allocates
-tests/python/analytics/test_prism.py::test_c_path_matches_a_direct_implementation
-tests/python/analytics/test_prism.py::test_B_is_an_e_value
-tests/python/analytics/test_prism.py::test_markov_bound_holds_on_the_model_s_own_draws
-tests/python/analytics/test_prism.py::test_posterior_is_a_posterior
-tests/python/analytics/test_prism.py::test_deletion_posterior_is_indexed_on_gaps
-tests/python/analytics/test_prism.py::test_repair_localises_a_substitution
-tests/python/analytics/test_prism.py::test_unspellable_but_repairable_is_infinite
-tests/python/analytics/test_prism.py::test_bad_alphabet_scores_nan_rather_than_raising
-tests/python/analytics/test_prism.py::test_flag_defaults_to_the_non_arbitrary_point
-tests/python/analytics/test_prism.py::test_larger_thresholds_still_carry_the_bound
-tests/python/analytics/test_prism.py::test_scorer_rejects_a_non_model
-tests/python/analytics/test_prism.py::test_omega_matches_the_number_of_edits_it_is_looking_for
-tests/python/analytics/test_prism.py::test_omega_2_keeps_the_e_value_property
-tests/python/analytics/test_prism.py::test_omega_out_of_range_is_refused
-tests/python/analytics/test_prism.py::test_site_arrays_are_nan_above_omega_1
 tests/python/analytics/test_rules.py::test_rejects_order_below_two
 tests/python/analytics/test_rules.py::test_finds_a_planted_rule
 tests/python/analytics/test_rules.py::test_a_rule_beyond_the_model_order_is_not_representable
@@ -153,6 +156,14 @@ tests/python/analytics/test_rules.py::test_canonicalise_infers_start_anchor
 tests/python/analytics/test_rules.py::test_single_length_rule_is_not_assigned_an_anchor
 tests/python/analytics/test_rules.py::test_canonicalise_keeps_the_per_length_profile
 tests/python/analytics/test_rules.py::test_rule_geometry_round_trips
+tests/python/analytics/test_sample_accounting.py::test_the_charge_covers_the_true_peak[14-10]
+tests/python/analytics/test_sample_accounting.py::test_the_charge_covers_the_true_peak[27-20]
+tests/python/analytics/test_sample_accounting.py::test_the_charge_counts_the_representation_not_just_the_buffer
+tests/python/analytics/test_sample_budget.py::test_a_draw_that_fits_still_works
+tests/python/analytics/test_sample_budget.py::test_a_draw_far_past_the_budget_is_refused
+tests/python/analytics/test_sample_budget.py::test_the_refusal_tracks_the_budget
+tests/python/analytics/test_sample_budget.py::test_a_small_draw_survives_a_small_budget
+tests/python/analytics/test_sample_budget.py::test_the_refusal_is_not_a_bare_memory_error
 tests/python/analytics/test_scale.py::test_profiles_reconstruct_the_score
 tests/python/analytics/test_scale.py::test_anchor_profile_is_indexed_on_gaps
 tests/python/analytics/test_scale.py::test_clean_sequences_have_no_dipole
@@ -377,6 +388,12 @@ tests/python/model/test_build.py::test_max_length_two_is_the_smallest_model
 tests/python/model/test_build.py::test_degenerate_corpus_matches_the_reference[2]
 tests/python/model/test_build.py::test_degenerate_corpus_matches_the_reference[3]
 tests/python/model/test_build.py::test_degenerate_corpus_matches_the_reference[4]
+tests/python/model/test_cache_accounting.py::test_the_cache_is_empty_until_an_analytic_runs
+tests/python/model/test_cache_accounting.py::test_an_analytic_fills_the_cache_and_memory_bytes_does_not_move
+tests/python/model/test_cache_accounting.py::test_drop_caches_releases_it
+tests/python/model/test_cache_accounting.py::test_drop_caches_changes_no_result
+tests/python/model/test_cache_accounting.py::test_dropping_twice_is_safe
+tests/python/model/test_cache_accounting.py::test_dropping_before_any_analytic_is_safe
 tests/python/model/test_configuration.py::test_coefficients_must_sum_to_one
 tests/python/model/test_configuration.py::test_rejects_bad_order
 tests/python/model/test_configuration.py::test_requires_sequences
@@ -470,7 +487,6 @@ tests/python/model/test_nucleotide.py::test_the_two_alphabets_cannot_be_combined
 tests/python/model/test_nucleotide.py::test_the_builder_takes_the_alphabet_too
 tests/python/model/test_nucleotide.py::test_the_sequence_column_defaults_to_the_alphabets_own
 tests/python/model/test_nucleotide.py::test_an_amino_acid_model_is_unaffected_by_a_nucleotide_one
-tests/python/model/test_nucleotide.py::test_prism_channel_counts_follow_the_alphabet
 tests/python/model/test_nucleotide.py::test_the_open_world_builds_at_the_default_order
 tests/python/model/test_nucleotide.py::test_every_order_survives_backoff[4]
 tests/python/model/test_nucleotide.py::test_every_order_survives_backoff[5]
@@ -546,6 +562,15 @@ tests/python/model/test_top_k.py::test_top_k_is_exact_against_exhaustive_enumera
 tests/python/model/test_top_k.py::test_top_k_at_a_fixed_length
 tests/python/model/test_top_k.py::test_top_k_beats_random_draws
 tests/python/model/test_top_k.py::test_top_k_more_than_exists
+tests/python/model/test_weight_buffers.py::test_a_float64_array_builds_the_same_model_as_a_list
+tests/python/model/test_weight_buffers.py::test_the_buffer_path_is_actually_taken
+tests/python/model/test_weight_buffers.py::test_a_memoryview_builds_the_same_model
+tests/python/model/test_weight_buffers.py::test_other_dtypes_still_build_the_same_model[int64]
+tests/python/model/test_weight_buffers.py::test_other_dtypes_still_build_the_same_model[float32]
+tests/python/model/test_weight_buffers.py::test_other_dtypes_still_build_the_same_model[int32]
+tests/python/model/test_weight_buffers.py::test_a_non_contiguous_array_still_builds_the_same_model
+tests/python/model/test_weight_buffers.py::test_a_mismatched_buffer_length_is_still_refused
+tests/python/model/test_weight_buffers.py::test_a_list_of_python_floats_is_unchanged
 tests/python/publicness/test_publicness.py::test_matches_bruteforce_dp_convolution[0.0]
 tests/python/publicness/test_publicness.py::test_matches_bruteforce_dp_convolution[1e-09]
 tests/python/publicness/test_publicness.py::test_matches_bruteforce_dp_convolution[1e-06]
@@ -615,45 +640,3 @@ tests/python/query/test_query.py::test_a_functional_of_the_wrong_shape_is_refuse
 tests/python/query/test_query.py::test_a_non_finite_functional_is_refused
 tests/python/query/test_query.py::test_a_query_over_the_memory_budget_is_refused
 tests/python/query/test_query.py::test_cost_reports_the_ladder
-tests/python/model/test_weight_buffers.py::test_a_float64_array_builds_the_same_model_as_a_list
-tests/python/model/test_weight_buffers.py::test_the_buffer_path_is_actually_taken
-tests/python/model/test_weight_buffers.py::test_a_memoryview_builds_the_same_model
-tests/python/model/test_weight_buffers.py::test_other_dtypes_still_build_the_same_model[int64]
-tests/python/model/test_weight_buffers.py::test_other_dtypes_still_build_the_same_model[float32]
-tests/python/model/test_weight_buffers.py::test_other_dtypes_still_build_the_same_model[int32]
-tests/python/model/test_weight_buffers.py::test_a_non_contiguous_array_still_builds_the_same_model
-tests/python/model/test_weight_buffers.py::test_a_mismatched_buffer_length_is_still_refused
-tests/python/model/test_weight_buffers.py::test_a_list_of_python_floats_is_unchanged
-tests/python/model/test_cache_accounting.py::test_the_cache_is_empty_until_an_analytic_runs
-tests/python/model/test_cache_accounting.py::test_an_analytic_fills_the_cache_and_memory_bytes_does_not_move
-tests/python/model/test_cache_accounting.py::test_drop_caches_releases_it
-tests/python/model/test_cache_accounting.py::test_drop_caches_changes_no_result
-tests/python/model/test_cache_accounting.py::test_dropping_twice_is_safe
-tests/python/model/test_cache_accounting.py::test_dropping_before_any_analytic_is_safe
-tests/python/analytics/test_sample_budget.py::test_a_draw_that_fits_still_works
-tests/python/analytics/test_sample_budget.py::test_a_draw_far_past_the_budget_is_refused
-tests/python/analytics/test_sample_budget.py::test_the_refusal_tracks_the_budget
-tests/python/analytics/test_sample_budget.py::test_a_small_draw_survives_a_small_budget
-tests/python/analytics/test_sample_budget.py::test_the_refusal_is_not_a_bare_memory_error
-tests/python/test_binding_guards.py::test_an_order_that_fits_is_still_answered
-tests/python/test_binding_guards.py::test_an_order_past_the_word_is_refused_not_wrapped[4294967296]
-tests/python/test_binding_guards.py::test_an_order_past_the_word_is_refused_not_wrapped[4294967298]
-tests/python/test_binding_guards.py::test_an_order_past_the_word_is_refused_not_wrapped[8589934592]
-tests/python/test_binding_guards.py::test_an_order_past_the_word_is_refused_not_wrapped[18446744073709551616]
-tests/python/test_binding_guards.py::test_an_order_above_the_domain_is_refused
-tests/python/test_binding_guards.py::test_a_negative_order_is_refused
-tests/python/test_binding_guards.py::test_a_float_order_is_refused_rather_than_truncated
-tests/python/test_binding_guards.py::test_top_k_refuses_what_will_not_fit
-tests/python/test_binding_guards.py::test_top_k_that_fits_still_runs
-tests/python/test_binding_guards.py::test_the_top_k_refusal_tracks_the_budget
-tests/python/test_binding_guards.py::test_the_facade_bounds_magnitude_not_only_sign
-tests/python/test_error_contract.py::test_the_guarded_sites_now_say_what_went_wrong
-tests/python/analytics/test_sample_accounting.py::test_the_charge_covers_the_true_peak[14-10]
-tests/python/analytics/test_sample_accounting.py::test_the_charge_covers_the_true_peak[27-20]
-tests/python/analytics/test_sample_accounting.py::test_the_charge_counts_the_representation_not_just_the_buffer
-tests/python/analytics/test_expected_counts_memory.py::test_the_working_set_is_reported_and_is_not_zero
-tests/python/analytics/test_expected_counts_memory.py::test_the_working_set_covers_the_answer_it_returned
-tests/python/analytics/test_expected_counts_memory.py::test_the_working_set_tracks_the_work
-tests/python/analytics/test_expected_counts_memory.py::test_the_working_set_does_not_move_with_the_budget
-tests/python/analytics/test_expected_counts_memory.py::test_a_budget_below_the_working_set_refuses_rather_than_allocating
-tests/python/analytics/test_expected_counts_memory.py::test_the_refusal_is_a_memory_error

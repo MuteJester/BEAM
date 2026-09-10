@@ -56,10 +56,15 @@ static inline double mix_sparse(const BeamModel *m, uint32_t dir,
  * any residue is unreachable, which is what makes the closed world cheap: a
  * sequence the model cannot spell costs one position, not the whole length.
  *
- * Shared between scoring.c and repair.c. The repair factor scores 40L+20
- * one-edit neighbours of every sequence, so it must compute exactly the same
- * quantity as `beam_model_log_pseq`; two copies of this would eventually
- * disagree and the Bayes factor would stop being a ratio of like for like.
+ * `model/scoring.c` is the only caller today, so this could fold back into it.
+ * It stays declared here because the reason it was shared is still the right
+ * reason: a second caller that scores sequences must compute exactly the same
+ * quantity as `beam_model_log_pseq`, and two copies would eventually disagree.
+ *
+ * The comment here used to name `repair.c` as that second caller. There was no
+ * `repair.c`: it had been renamed to `model/prism.c` and the signpost was left
+ * behind, which is how it read for long enough to be found by an audit rather
+ * than by a compiler. `prism.c` has since been removed altogether.
  */
 double beam_raw_log_weight(const BeamModel *m, const uint8_t *s, uint32_t len);
 

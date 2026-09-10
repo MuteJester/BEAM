@@ -100,10 +100,6 @@ CONTRACT = [
     ("positional_marginals over budget",
      lambda m, s, t: m.positional_marginals(6),
      MemoryError, "memory budget", True),
-
-    ("prism omega out of range",
-     lambda m, s, t: _c.prism_explain(m._g, "CASSLF", 0),
-     ValueError, "omega", False),
     ("finalize with nothing observed",
      lambda m, s, t: _c.finalize(_c.new(*NEW_ARGS)),
      ValueError, "no usable sequence", False),

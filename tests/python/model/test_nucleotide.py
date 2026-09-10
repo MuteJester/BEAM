@@ -244,17 +244,6 @@ def test_an_amino_acid_model_is_unaffected_by_a_nucleotide_one(corpus):
     assert [after.log_pseq(s) for s in seqs[:20]] == scores_before
 
 
-def test_prism_channel_counts_follow_the_alphabet(nt):
-    """PRISM's channel denominators are counts of possible edits, so they are
-    alphabet-sized: R-1 substitutions at a site, R insertions before it. The
-    posterior sums to 1 only if the right R is used."""
-    p = BEAM.PrismScorer(nt).explain(NT_SEQS[0], omega=1)
-    assert p.n_residues == 5
-    post = p.posterior()
-    total = sum(float(np.nansum(v)) for v in post.values())
-    assert total == pytest.approx(1.0, abs=1e-9)
-
-
 # ═══════════════════════════════════════════════════════════════
 # the open world, at the alphabet's own default order
 # ═══════════════════════════════════════════════════════════════

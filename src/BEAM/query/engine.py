@@ -369,7 +369,7 @@ class BeamQuery:
         neighbour, where here it ranks ninth. Per string asks what the model
         makes of a candidate set; per edit asks what happens when a longer
         sequence is drawn and a uniform position removed, which is the story
-        :class:`~BEAM.prism.PrismScorer` uses and why it sums repairs with
+        a per-edit measure uses, and why such a measure sums repairs with
         multiplicity rather than deduplicating.
 
         ``site`` is the LEFTMOST gap producing that string -- a canonical
@@ -384,7 +384,7 @@ class BeamQuery:
         indel process. These are ratios between what it assigns to two strings
         that differ by one residue, describing where a repertoire tolerates
         insertions. For "given this observed sequence, where was it edited",
-        see :class:`~BEAM.prism.PrismScorer`.
+        is a different question and this does not answer it.
         """
         return self._neighbours(sequence, deletions=False)
 

@@ -153,10 +153,6 @@ typedef enum {
  */
 #define BEAM_MAX_LENGTH_CEILING 255u
 
-/** Largest edit radius PRISM will accept. Each level multiplies the work by
- *  about 40L+20, so omega=3 would be ~2e8 scorings for one sequence. */
-#define BEAM_PRISM_MAX_OMEGA 2u
-
 /**
  * Largest order any alphabet permits, and therefore the size of the
  * order-indexed scratch arrays: `slot[]` in the context packers, and
@@ -538,42 +534,6 @@ BeamError beam_model_log_pseq_batch(const BeamModel *m,
  * confident at the start, the C-anchored expert at the end, and both are
  * surprised across the junction.
  */
-/**
- * The one-edit Bayes factor: is `s` better explained as a model draw, or as a
- * model draw with one edit applied to it?
- *
- * `B = Q/P`, where `P` is the model's probability for `s` and `Q` is the
- * probability of observing `s` under a channel that draws a clean sequence
- * from the model, picks one of substitution/insertion/deletion with
- * probability 1/3, picks a legal site and residue uniformly, and applies a
- * single edit. Because `B` is a likelihood ratio, `E[B] <= 1` under the model,
- * so it is an e-value: `P(B >= t) <= 1/t` with no calibration table and no
- * simulated null.
- *
- * `*out_log_b` is `log B`, and is `+INFINITY` when the model cannot spell `s`
- * but can spell a repair, `-INFINITY` when no single edit reaches the model's
- * support, and `NaN` when neither `s` nor any one-edit repair is in it.
- *
- * The optional per-site arrays are the unnormalised localisation posterior;
- * dividing by `Q` gives `P(edit history | s, H1)`. They need room for `L`,
- * `L` and `L+1` doubles respectively. Costs `40L+20` scorings.
- */
-BeamError beam_prism_factor(const BeamModel *m, const char *seq,
-                            uint32_t omega,
-                            double *out_log_b, double *out_log_q,
-                            double *out_log_p0, double *out_sub,
-                            double *out_ins, double *out_del,
-                            uint32_t *out_len);
-
-/**
- * Batch form of `beam_prism_factor`, parallelised when the build has
- * OpenMP. A sequence the encoder rejects scores NaN rather than failing the
- * batch. `out_log_b` must have room for `n` doubles.
- */
-BeamError beam_prism_factor_batch(const BeamModel *m,
-                                  const char *const *seqs, uint32_t n,
-                                  uint32_t omega, double *out_log_b);
-
 BeamError beam_model_explain(const BeamModel *m,
                                 const char *seq,
                                 double *out_forward,

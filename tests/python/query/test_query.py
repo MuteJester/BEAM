@@ -232,10 +232,10 @@ def test_a_run_collapses_its_aliases(nt_model):
 def test_multiplicity_recovers_the_per_edit_convention(nt_model):
     """The posterior is over strings; multiplicity is the bridge to per-edit.
 
-    PRISM sums repairs WITH multiplicity, deliberately and for a different
+    A per-edit measure sums repairs WITH multiplicity, for a different
     generative story, so a caller who wants that convention needs to know how
-    many edits each string stands for. Without it the two subsystems in this
-    library disagree with nothing to reconcile them.
+    many edits each string stands for. Without `multiplicity` there is no way
+    to get from the per-string answer to the per-edit one.
     """
     q = BeamQuery(nt_model)
     ins = q.insertions("ACGTA")

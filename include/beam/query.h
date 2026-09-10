@@ -366,17 +366,15 @@ void beam_query_neighbourhood_free(BeamNeighbourhood *nb);
  *
  * Both are right, under different questions. Per string asks what the model
  * makes of a candidate set. Per edit asks what happens when a longer sequence
- * is drawn and a uniformly chosen position removed, which is the generative
- * story `beam_model_prism_*` uses -- `prism.c` sums repairs WITH multiplicity
- * for exactly that reason, and deliberately does not deduplicate. A caller who
- * wants that convention has `multiplicity` and one line of arithmetic.
+ * is drawn and a uniformly chosen position removed. A caller who wants the
+ * per-edit convention has `multiplicity` and one line of arithmetic.
  *
  * **This is not an inferred edit.** The model has no alignment and no indel
  * process; nothing here says a sequence was edited. The quantity is a ratio
  * between what the model assigns to two strings that happen to differ by one
  * residue, and it describes where a REPERTOIRE tolerates insertions. The
  * per-sequence question -- given this observed sequence, where was it edited
- * -- is what PRISM answers, and the two must not be confused.
+ * -- is a different one, and this does not answer it.
  *
  * @return BEAM_ERR_INVALID_SEQUENCE if the source is not scoreable;
  *         BEAM_ERR_NO_LIVE_PATHS if the source has probability zero, since

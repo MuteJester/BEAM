@@ -39,8 +39,6 @@ path_count
 path_count_total
 positional_marginals
 posterior
-prism_explain
-prism_factor
 publicness_accumulate
 publicness_accumulate_grouped
 publicness_moments

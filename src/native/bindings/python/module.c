@@ -58,8 +58,6 @@ static PyMethodDef module_methods[] = {
     {"compact",            py_compact,                       METH_O, NULL},
     {"log_pseq",           py_log_pseq,                      METH_VARARGS, NULL},
     {"log_pseq_batch",     py_log_pseq_batch,                METH_VARARGS, NULL},
-    {"prism_factor",      py_prism_factor,                 METH_VARARGS, NULL},
-    {"prism_explain",     py_prism_explain,                METH_VARARGS, NULL},
     {"explain",            py_explain,                       METH_VARARGS, NULL},
     {"log_partition",      py_log_partition,                 METH_VARARGS, NULL},
     {"log_length_prior",   py_log_length_prior,              METH_VARARGS, NULL},
