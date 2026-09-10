@@ -369,72 +369,12 @@ static BeamError finalize_sparse_table(BeamModel *m, uint32_t dir,
     beam_sparse_shrink(out);
 
     /*
-     * A table almost none of whose rows exist spends nearly all of itself on
-     * a directory of absences: 28.19 MiB per generation at order 4 whether the
-     * corpus was nine hundred million sequences or nine hundred. Below the
-     * measured threshold, swap that directory for the rank form -- see
-     * BEAM_RANK_SEAL_MAX_OCCUPANCY_DENOM for what was measured and why the
-     * line is where it is.
-     *
-     * Sealing is exact: the same rows, the same slots, the same doubles. It
-     * happens here, before `beam_compute_log_z` reads these tables, so the
-     * partition functions are computed against the representation the model
-     * will actually keep rather than against one it is about to discard.
+     * Compaction is `storage/compaction.c`: four transforms whose order is
+     * load-bearing, now in one place with the reasons beside them. It used to
+     * be four calls spread over seventy lines here, with the order held
+     * together by the prose between them.
      */
-    const uint32_t occupied = out->size ? out->size[0] : 0u;
-    if ((uint64_t)occupied * BEAM_RANK_SEAL_MAX_OCCUPANCY_DENOM <= (uint64_t)nr) {
-        const BeamError se = beam_sparse_seal_rank(out);
-        if (se != BEAM_OK) return se;
-    }
-
-    /*
-     * Then share storage between rows that are already byte-identical. A
-     * context seen once normalises to one residue at 0.0 and nineteen at
-     * -inf, and only twenty such rows can exist, so a repertoire model is
-     * about half copies of twenty rows: 73-79% of a donor's rows repeat.
-     *
-     * After sealing, not before. Sealing requires each row's slot to be the
-     * count of rows before it, and interning is precisely what breaks that --
-     * it points several slots at one row. Ordered the other way the seal
-     * would refuse, correctly, and the directory would stay 28.19 MiB.
-     */
-    const BeamError ie = beam_sparse_intern_rows(out);
-    if (ie != BEAM_OK) return ie;
-
-    /*
-     * Finally, replace the values themselves with indices into the distinct
-     * ones. Every cell here is `log(c / t)` for integers c <= t, and a
-     * repertoire's counts are small, so after interning has removed the
-     * repeated ROWS, 95% of the remaining cells are still a value stored
-     * somewhere else: 1,175,396 cells take 59,008 distinct values on a
-     * 197,139-sequence donor.
-     *
-     * Last, because it is the step that gives up the contiguous twenty-double
-     * row. Sealing and interning both still address rows; from here on a row
-     * is a mask and a run of indices, and `beam_sparse_log_row` is what hands
-     * either form to a caller.
-     */
-    const BeamError pe = beam_sparse_pack_cells(out);
-    if (pe != BEAM_OK) return pe;
-
-    /*
-     * A backward table that still holds plain rows is laid out by residue.
-     *
-     * Nothing reads a backward row whole -- `beam_log_row_into` is called only
-     * on the three forward rows -- and the backward half of the edge kernel
-     * reads ONE residue from each of twenty rows whose dense ids are
-     * consecutive. Measured on the foundation: 78,538 of 148,176 such tiles
-     * have all twenty rows present, they hold 85.2% of the occupied rows, and
-     * in every one of them the slots are consecutive too. By row that is
-     * fifty cache lines to use a hundred and sixty bytes; by residue those
-     * bytes are contiguous.
-     *
-     * Declined for a packed table, which has no array of rows to transpose,
-     * and for the forward tables, which are read whole and want the rows
-     * exactly as they are.
-     */
-    if (dir == BEAM_BWD) return beam_sparse_plane_transpose(out);
-    return BEAM_OK;
+    return beam_sparse_compact_finalized(out, nr, dir == BEAM_BWD, NULL);
 }
 
 static BeamError finalize_sparse_direction(BeamModel *m, uint32_t dir) {

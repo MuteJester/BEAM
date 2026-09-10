@@ -543,4 +543,38 @@ static inline BeamLogRow beam_sparse_log_row(const BeamSparseRows *t,
 }
 
 
+/* ── Compaction of a finalized table ─────────────────────────── */
+
+/**
+ * Which of the four transforms actually happened.
+ *
+ * All four keep the table as it is and report `BEAM_OK` when they cannot
+ * apply, which for a single call is right -- none is needed for correctness,
+ * only for size. The cost of that is a pipeline whose failure to compact is
+ * invisible: a model can keep a 28.19 MiB directory on each of six tables with
+ * no error, no log, and `beam_model_memory_bytes` reporting the larger figure
+ * with nothing to compare it against. This is the signal.
+ *
+ * `packed` and `transposed` are never both true. The transpose has no array of
+ * rows to work on once the cells are packed, so the two are alternatives and
+ * the pipeline gives packing priority -- see `storage/compaction.c`.
+ */
+typedef struct {
+    bool sealed;        /**< directory swapped for the rank form   */
+    bool interned;      /**< byte-identical rows now share storage */
+    bool packed;        /**< cells replaced by dictionary indices  */
+    bool transposed;    /**< backward table relaid plane-major     */
+} BeamCompactionApplied;
+
+/**
+ * Apply all four, in the one order that works, to a finalized table.
+ *
+ * `n_dense` is the table's dense row count, which the occupancy test compares
+ * against. `backward` selects the transpose, which is for C-anchored tables
+ * alone. `applied` may be NULL.
+ */
+BeamError beam_sparse_compact_finalized(BeamSparseRows *t, uint32_t n_dense,
+                                        bool backward,
+                                        BeamCompactionApplied *applied);
+
 #endif /* BEAM_INTERNAL_SPARSE_ROWS_H */

@@ -89,6 +89,26 @@ static void build_plain(BeamSparseRows *t, uint32_t n, uint32_t step) {
 }
 
 /**
+ * A table whose rows repeat and whose cells take few values, so interning and
+ * packing both apply. `build_plain` gives every row distinct values and every
+ * cell a distinct one, so on that table three of the four transforms decline
+ * and a report check over it is mostly `false == false`.
+ */
+static void build_repetitive(BeamSparseRows *t, uint32_t n, uint32_t step) {
+    ASSERT_MSG(beam_sparse_init(t, DENSE, 1u, STRIDE, false) == BEAM_OK,
+               "table did not init");
+    for (uint32_t i = 0; i < n; ++i) {
+        const uint32_t row = i * step;
+        double *r = beam_sparse_row_mut(t, row, 0u, true);
+        if (!r) return;
+        /* Eight distinct row patterns over four distinct cell values. */
+        const uint32_t pat = i % 8u;
+        for (uint32_t x = 0; x < STRIDE; ++x)
+            r[x] = -(double)((x + pat) % 4u);
+    }
+}
+
+/**
  * Every cell reads back as itself through the transposed layout.
  *
  * On a hand-built table rather than a finalized one, because whether a real
@@ -175,7 +195,20 @@ static void test_the_transpose_actually_moves_the_cells(void) {
     PASS();
 }
 
-/** Finalize transposes backward plain tables and never forward ones. */
+/**
+ * Finalize never transposes a forward table, AND says why not on this fixture.
+ *
+ * The assertion on its own was passing for the wrong reason. On this model
+ * every table -- forward and backward alike -- comes out PACKED, and the
+ * transpose declines for a packed table, so nothing anywhere was transposed
+ * and "no forward table was transposed" could not have failed. A test that
+ * cannot fail for the reason it names is not testing that reason.
+ *
+ * So the fixture's actual outcome is pinned too: the backward tables are
+ * packed, which is what excludes them from the transpose. If packing ever
+ * stops applying here, this fails and says so, and the forward assertion
+ * becomes load-bearing again rather than silently vacuous.
+ */
 static void test_finalize_never_transposes_a_forward_table(void) {
     BeamModel *m = build(400u, 4u, 14u);
     ASSERT_MSG(m != NULL, "model did not build");
@@ -185,7 +218,79 @@ static void test_finalize_never_transposes_a_forward_table(void) {
                    name_of(t));
             fail_count++; beam_model_destroy(m); return;
         }
+    const bool packed = m->sp_lp_wide[BEAM_BWD].cell_mask != NULL;
+    const bool moved  = m->sp_lp_wide[BEAM_BWD].plane_step > 1u;
     beam_model_destroy(m);
+    ASSERT_MSG(packed != moved,
+               "the backward wide table is neither packed nor transposed, or "
+               "somehow both; they are alternatives and exactly one applies");
+    ASSERT_MSG(packed,
+               "the backward table is no longer packed on this fixture, so "
+               "the forward assertion above has stopped being vacuous for a "
+               "reason worth looking at rather than asserting");
+    PASS();
+}
+
+/**
+ * The compaction pipeline's report is what the table actually became.
+ *
+ * Every one of the four transforms keeps the table as it is and returns
+ * `BEAM_OK` when it cannot apply, which for a single call is right and in
+ * aggregate means a model can fail to compact entirely with no error, no log,
+ * and `beam_model_memory_bytes` reporting the larger figure with nothing to
+ * compare it against. Real memory, no signal. `BeamCompactionApplied` is the
+ * signal, so it has to be checked against the table rather than trusted: a
+ * report that says "sealed" about a table that is not is worse than none.
+ *
+ * Run on a table built here rather than on a finalized model's, because a
+ * finalized table has already been through this and would report four
+ * declines -- which is the wrong thing to assert.
+ */
+static void test_the_compaction_report_matches_what_the_table_became(void) {
+    static char msg[192];
+    bool saw_packed = false, saw_moved = false, saw_interned = false;
+
+    /* Two fixtures, because no single one exercises all four. `build_plain`
+     * has distinct rows and distinct cells, so only the transpose applies;
+     * `build_repetitive` repeats both, so interning and packing apply and the
+     * transpose is then excluded. Between them every field of the report is
+     * seen true at least once, which is what makes the agreement mean
+     * something rather than being `false == false` three times over. */
+    for (uint32_t which = 0; which < 2u; ++which) {
+        BeamSparseRows t;
+        if (which == 0u) build_plain(&t, 900u, 3u);
+        else             build_repetitive(&t, 900u, 3u);
+        ASSERT_MSG(t.size[0] == 900u, "table did not fill");
+
+        BeamCompactionApplied got;
+        memset(&got, 0, sizeof(got));
+        ASSERT_MSG(beam_sparse_compact_finalized(&t, DENSE, true, &got)
+                   == BEAM_OK, "compaction failed");
+
+        const bool sealed = t.rank != NULL;
+        const bool interned = t.n_pool != 0u;
+        const bool packed = t.cell_mask != NULL;
+        const bool moved = t.plane_step > 1u;
+        saw_packed |= packed; saw_moved |= moved; saw_interned |= interned;
+        const bool agree = got.sealed == sealed && got.interned == interned
+                        && got.packed == packed && got.transposed == moved;
+        const bool exclusive = !(got.packed && got.transposed);
+        beam_sparse_destroy(&t);
+
+        if (!agree) {
+            snprintf(msg, sizeof msg,
+                     "fixture %u: the report says %d/%d/%d/%d and the table is "
+                     "%d/%d/%d/%d", which, got.sealed, got.interned, got.packed,
+                     got.transposed, sealed, interned, packed, moved);
+            ASSERT_MSG(false, msg);
+        }
+        ASSERT_MSG(exclusive,
+                   "packed and transposed are alternatives and both were "
+                   "reported");
+    }
+    ASSERT_MSG(saw_interned, "no fixture interned, so that field is untested");
+    ASSERT_MSG(saw_packed, "no fixture packed, so that field is untested");
+    ASSERT_MSG(saw_moved, "no fixture transposed, so that field is untested");
     PASS();
 }
 
@@ -296,6 +401,7 @@ int main(void) {
     RUN_TEST(test_a_transposed_table_reads_back_identically);
     RUN_TEST(test_the_transpose_actually_moves_the_cells);
     RUN_TEST(test_finalize_never_transposes_a_forward_table);
+    RUN_TEST(test_the_compaction_report_matches_what_the_table_became);
     RUN_TEST(test_scores_are_bit_identical_with_planes);
     RUN_TEST(test_what_cannot_be_transposed_is_left_alone);
     RUN_TEST(test_a_plane_major_table_refuses_the_row_pointer);
