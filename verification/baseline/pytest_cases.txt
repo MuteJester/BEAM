@@ -630,3 +630,8 @@ tests/python/model/test_cache_accounting.py::test_drop_caches_releases_it
 tests/python/model/test_cache_accounting.py::test_drop_caches_changes_no_result
 tests/python/model/test_cache_accounting.py::test_dropping_twice_is_safe
 tests/python/model/test_cache_accounting.py::test_dropping_before_any_analytic_is_safe
+tests/python/analytics/test_sample_budget.py::test_a_draw_that_fits_still_works
+tests/python/analytics/test_sample_budget.py::test_a_draw_far_past_the_budget_is_refused
+tests/python/analytics/test_sample_budget.py::test_the_refusal_tracks_the_budget
+tests/python/analytics/test_sample_budget.py::test_a_small_draw_survives_a_small_budget
+tests/python/analytics/test_sample_budget.py::test_the_refusal_is_not_a_bare_memory_error

@@ -137,6 +137,28 @@ BeamError beam_model_sample(const BeamModel *m, uint32_t n,
     if (!m->finalized) return BEAM_ENOTBUILT();
     if (n == 0) return BEAM_OK;
 
+    /*
+     * These two are eight bytes per draw and were charged to nobody. The
+     * per-sweep figure below covers what one length's sweep holds; these are
+     * held across ALL of them, and at the sizes a caller can ask for they are
+     * the larger term: at 2^28 draws the sweep is about 1 GB and these are
+     * 2.1 GB. Refused up front rather than discovered by the allocator.
+     */
+    {
+        const uint64_t need = 2ull * n * sizeof(uint32_t);
+        const uint64_t budget = beam_model_memory_budget();
+        if (need > budget) {
+            const char *nu, *bu;
+            const double nv = beam_budget_scaled(need, &nu);
+            const double bv = beam_budget_scaled(budget, &bu);
+            return BEAM_FAIL(BEAM_ERR_BUDGET,
+                            "assigning %u draws to lengths needs about %.2f %s "
+                            "and the memory budget is %.2f %s; raise it with "
+                            "BEAM.set_memory_budget, or draw fewer",
+                            (unsigned)n, nv, nu, bv, bu);
+        }
+    }
+
     /* Group the draws by length so each length pays for its backward pass
      * once, however many sequences land on it. */
     uint32_t *len_of = (uint32_t *)malloc((size_t)n * sizeof(uint32_t));
