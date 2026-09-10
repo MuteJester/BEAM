@@ -22,7 +22,7 @@
 
 #include "beam/common.h"
 #include "beam/model.h"
-#include "beam/io_internal.h"
+#include "beam/crc32c.h"
 #include "beam/crc32c.h"
 
 /*
@@ -614,22 +614,79 @@ static void test_backward_wide_context_matches_the_sequence(void) {
     PASS();
 }
 
-static void test_crc_matches_the_reference(void) {
-    /*
-     * io.c checksums a gigabyte of counts with a hardware CRC-32C where the
-     * CPU has one. Same polynomial and same convention as the shared software
-     * implementation, so the two must agree byte for byte — including on the
-     * unaligned heads and short tails the fast path handles separately, which
-     * is exactly where a hand-written CRC goes wrong.
-     */
+/**
+ * A CRC-32C reference derived from the polynomial, with no table and no
+ * hardware.
+ *
+ * The point of computing it here is that it shares nothing with the library.
+ * The test this replaces compared the two library implementations against each
+ * OTHER, which cannot distinguish "both right" from "both wrong the same way"
+ * -- and they came from one polynomial constant that appeared in two files.
+ */
+static uint32_t crc32c_by_hand(uint32_t crc, const uint8_t *p, size_t len) {
+    uint32_t c = ~crc;
+    for (size_t i = 0; i < len; ++i) {
+        c ^= p[i];
+        for (int b = 0; b < 8; ++b)
+            c = (c >> 1) ^ ((c & 1u) ? 0x82F63B78u : 0u);
+    }
+    return ~c;
+}
+
+/**
+ * Both CRC paths agree with the polynomial, at every alignment and length.
+ *
+ * `beam_crc32c_update` takes the SSE4.2 instruction where the CPU has one, and
+ * `beam_crc32c_software` is the table. On this machine the first is the
+ * hardware path, so without the second the fallback would go unexercised until
+ * someone ran BEAM on a machine without the instruction -- which, since the
+ * Python binding releases the GIL around save and load, is also the only
+ * machine where the table's initialisation ever mattered.
+ *
+ * The sweep covers offsets 0-8 against every length up to 300, because the
+ * unaligned head and the short tail are handled separately in the fast path
+ * and that is exactly where a hand-written CRC goes wrong.
+ */
+static void test_both_crc_paths_match_the_polynomial(void) {
     uint8_t buf[300];
     for (size_t i = 0; i < sizeof buf; ++i) buf[i] = (uint8_t)(i * 37u + 11u);
     for (size_t off = 0; off < 9; ++off) {
         for (size_t len = 0; len + off <= sizeof buf; ++len) {
-            const uint32_t want = beam_crc32c_update(0x1234u, buf + off, len);
-            const uint32_t got  = beam_model_crc32c(0x1234u, buf + off, len);
-            ASSERT_MSG(got == want, "hardware CRC-32C must match the reference");
+            const uint32_t want = crc32c_by_hand(0x1234u, buf + off, len);
+            ASSERT_MSG(beam_crc32c_update(0x1234u, buf + off, len) == want,
+                       "the dispatching CRC-32C disagrees with the polynomial");
+            ASSERT_MSG(beam_crc32c_software(0x1234u, buf + off, len) == want,
+                       "the table CRC-32C disagrees with the polynomial");
         }
+    }
+    PASS();
+}
+
+/**
+ * The literal table is what the polynomial generates, all 256 entries.
+ *
+ * It became a literal so that it needs no initialisation and cannot be raced;
+ * the cost of that is 256 constants nobody reads. This regenerates them. It
+ * reaches the table through `beam_crc32c_software` on single bytes, because
+ * `crc32c_table[i]` for a zero starting CRC is exactly the entry.
+ */
+static void test_crc32c_table_matches_the_polynomial(void) {
+    for (uint32_t i = 0; i < 256; ++i) {
+        uint32_t want = i;
+        for (int j = 0; j < 8; ++j)
+            want = (want >> 1) ^ ((want & 1u) ? 0x82F63B78u : 0u);
+        /*
+         * One byte through the table path is
+         *     ~( table[0xFF ^ byte] ^ 0x00FFFFFF )
+         * because the running CRC starts at ~0, so feeding `0xFF ^ i` and
+         * undoing that recovers entry `i` exactly. Reading the entry through
+         * the shipped function rather than the array keeps this a test of what
+         * callers actually reach.
+         */
+        const uint8_t byte = (uint8_t)(0xFFu ^ i);
+        const uint32_t got = (~beam_crc32c_software(0u, &byte, 1)) ^ 0x00FFFFFFu;
+        ASSERT_MSG(got == want, "a CRC-32C table entry does not match the "
+                                "polynomial it was generated from");
     }
     PASS();
 }
@@ -1888,7 +1945,7 @@ static bool rewrite_as_legacy_format(const char *path, uint32_t format) {
             (size_t)end - v2_bytes - tail);
     const long shorter = end - (long)tail;
 
-    const uint32_t crc = beam_model_crc32c(0u, b,
+    const uint32_t crc = beam_crc32c_update(0u, b,
                                          (size_t)shorter - sizeof(uint32_t));
     memcpy(b + shorter - (long)sizeof crc, &crc, sizeof crc);
 
@@ -2514,7 +2571,8 @@ int main(void) {
     RUN_TEST(test_backward_context_packing);
     RUN_TEST(test_backward_context_from_state_matches_the_sequence);
     RUN_TEST(test_backward_wide_context_matches_the_sequence);
-    RUN_TEST(test_crc_matches_the_reference);
+    RUN_TEST(test_both_crc_paths_match_the_polynomial);
+    RUN_TEST(test_crc32c_table_matches_the_polynomial);
     RUN_TEST(test_threads_setting_round_trips);
     RUN_TEST(test_results_do_not_depend_on_the_thread_count);
     RUN_TEST(test_layer_weights_reproduce_the_scorer);

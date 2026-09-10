@@ -20,7 +20,7 @@
 #include "beam/crc32c.h"
 #include "beam/internal.h"
 #include "beam/memory.h"
-#include "beam/io_internal.h"
+#include "beam/crc32c.h"
 
 /* 0x4245414D is 'B','E','A','M' as ASCII, most significant byte first. The
  * field is written in host byte order, so those bytes appear reversed in a
@@ -41,49 +41,6 @@
 #define BEAM_FORMAT_DENSE_V1 1u
 
 /* ── Checksum ────────────────────────────────────────────────── */
-
-/*
- * An BEAM model at order 4 is a gigabyte of counts, and the shared
- * byte-at-a-time CRC-32C runs at about a gigabyte a second, so the checksum
- * was costing as much as the write itself. Every x86-64 chip since Nehalem
- * has the polynomial in silicon; this uses it when the running CPU says it
- * has it and falls back to the shared implementation otherwise.
- *
- * Same polynomial, same convention, same answer — `test_crc_matches_the
- * _reference` checks that against `beam_crc32c_update` on unaligned buffers of
- * every length class, which is the only thing that makes swapping the
- * implementation safe.
- */
-#if defined(__x86_64__) || defined(__i386__)
-#define BEAM_HAVE_CRC_HW 1
-#include <x86intrin.h>
-
-__attribute__((target("sse4.2")))
-static uint32_t crc32c_hw(uint32_t crc, const void *data, size_t len) {
-    const uint8_t *p = (const uint8_t *)data;
-    uint32_t c = ~crc;
-    while (len && ((uintptr_t)p & 7u)) { c = __builtin_ia32_crc32qi(c, *p++); --len; }
-#if defined(__x86_64__)
-    uint64_t c64 = c;
-    while (len >= 8) {
-        uint64_t v;
-        memcpy(&v, p, 8);
-        c64 = __builtin_ia32_crc32di(c64, v);
-        p += 8; len -= 8;
-    }
-    c = (uint32_t)c64;
-#endif
-    while (len--) c = __builtin_ia32_crc32qi(c, *p++);
-    return ~c;
-}
-#endif
-
-uint32_t beam_model_crc32c(uint32_t crc, const void *data, size_t len) {
-#ifdef BEAM_HAVE_CRC_HW
-    if (__builtin_cpu_supports("sse4.2")) return crc32c_hw(crc, data, len);
-#endif
-    return beam_crc32c_update(crc, data, len);
-}
 
 typedef struct {
     uint32_t magic;
@@ -149,13 +106,13 @@ _Static_assert(BEAM_HEADER_V2_BYTES == 136, "formats 1 and 2 wrote 136 bytes");
 
 static bool write_all(FILE *f, const void *p, size_t n, uint32_t *crc) {
     if (n && fwrite(p, 1, n, f) != n) return false;
-    *crc = beam_model_crc32c(*crc, p, n);
+    *crc = beam_crc32c_update(*crc, p, n);
     return true;
 }
 
 static bool read_all(FILE *f, void *p, size_t n, uint32_t *crc) {
     if (n && fread(p, 1, n, f) != n) return false;
-    *crc = beam_model_crc32c(*crc, p, n);
+    *crc = beam_crc32c_update(*crc, p, n);
     return true;
 }
 

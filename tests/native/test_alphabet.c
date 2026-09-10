@@ -14,7 +14,7 @@
 
 #include "beam/common.h"
 #include "beam/model.h"
-#include "beam/io_internal.h"
+#include "beam/crc32c.h"
 #include "beam/alphabet.h"
 #include "beam/model_build.h"   /* beam_config_valid */
 
@@ -842,7 +842,7 @@ static bool relabel_alphabet(const char *path, uint32_t alphabet) {
     fclose(f);
 
     memcpy(b + 136, &alphabet, sizeof alphabet);   /* the appended tail */
-    const uint32_t crc = beam_model_crc32c(0u, b,
+    const uint32_t crc = beam_crc32c_update(0u, b,
                                          (size_t)end - sizeof(uint32_t));
     memcpy(b + end - (long)sizeof crc, &crc, sizeof crc);
 

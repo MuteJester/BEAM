@@ -1,6 +1,7 @@
 beam_clear_error
 beam_count_block_free
 beam_crc32c
+beam_crc32c_software
 beam_crc32c_update
 beam_error_message
 beam_last_error
