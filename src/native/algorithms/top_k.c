@@ -132,84 +132,15 @@ static void arena_write(const Arena *ar, const char *idx_to_char,
 
 /* ── Best-completion values ──────────────────────────────────── */
 
-/**
- * `best[i][s]` is the weight of the BEST completion from state `s` at layer
- * `i`, sink term included: a max-plus sweep rather than the log-sum-exp one
- * `beam_betas` performs.
- *
- * Which one guides the search is the difference between a second and a minute.
- * `acc + beta` bounds the best completion from above but not tightly — beta
- * sums over every completion, so on a 194,481-state trellis it overshoots by
- * many nats and the frontier degenerates towards breadth-first, expanding
- * millions of prefixes that can never win. `acc + best` is the exact weight of
- * the best completion, so the pop order is the true order and every expansion
- * is one the answer needed.
- *
- * Exactness is unchanged, and so is the reported probability: at the final
- * layer there is nothing left to choose, so `best[len]` IS the sink weight,
- * exactly as `beta[len]` was.
+/*
+ * `beam_best_completions` is in `dp/backward.c`, with the two log-sum-exp
+ * sweeps it shares a skeleton with. It lived here, and the reason it should
+ * not is that the three are one family: same seed, same descending loop, same
+ * state decomposition, same edge-skip test, differing in the semiring, the
+ * tilt and whether they visit every state or only the reached ones. A change
+ * to the shape is a change to all three, and two of them were in another
+ * directory.
  */
-static BeamError best_completions(const BeamModel *m, uint32_t len,
-                                 double **best) {
-    const uint32_t A = m->n_alphabet;
-    const uint32_t R = m->n_residues;
-    const uint32_t S = m->n_states;
-    const uint32_t SK = m->state_shift;
-
-    BEAM_BUDGET_OR_REFUSE("a best-completion sweep", len,
-                          (uint64_t)S * R * sizeof(double) + S);
-
-    double *w = (double *)malloc((size_t)S * R * sizeof(double));
-    uint8_t *alive = (uint8_t *)malloc(S);
-    if (!w || !alive) { free(w); free(alive);
-        return BEAM_EALLOC("one layer of edge weights"); }
-
-    /* Only states the root can reach are ever expanded by the search below,
-     * so only their completions are read. This asks for no `out_max`, which
-     * is the case `beam_layer_weights_live` documents as safe: dead rows are
-     * provably unread, because a reached state's finite edge always lands on
-     * a reached target, and an infinite one is rejected before the target is
-     * touched.
-     *
-     * Unreached entries are filled with -inf rather than left stale. Nothing
-     * should read them; if anything ever does, an impossible completion is a
-     * loud wrong answer instead of a quiet one. */
-    LiveHandle h;
-    if (beam_live_acquire(m, len, &h) != BEAM_OK) {
-        free(w); free(alive);
-        return BEAM_EALLOC("the forward frontier");
-    }
-    const BeamLive *L = h.L;
-
-    beam_tail_weights(m, len, best[len]);
-    for (int32_t i = (int32_t)len - 1; i >= 0; --i) {
-        const uint32_t  nr = L->n_reached[i];
-        const uint32_t *rv = L->reached[i];
-        beam_reached_mask(L, (uint32_t)i, S, alive);
-        beam_layer_weights_live(m, (uint32_t)i, len, w, NULL, alive);
-        const double *nb = best[i + 1];
-        double *cu = best[i];
-        for (uint32_t t = 0; t < S; ++t) cu[t] = -INFINITY;
-#ifdef _OPENMP
-        #pragma omp parallel for schedule(static) num_threads(beam_threads())
-#endif
-        for (int64_t k = 0; k < (int64_t)nr; ++k) {
-            const uint32_t s = rv[k];
-            const double *row = w + (size_t)s * R;
-            const uint32_t base = (s % SK) * A;
-            double mx = -INFINITY;
-            for (uint32_t x = 0; x < R; ++x) {
-                if (row[x] == -INFINITY || nb[base + x] == -INFINITY) continue;
-                const double v = row[x] + nb[base + x];
-                if (v > mx) mx = v;
-            }
-            cu[s] = mx;
-        }
-    }
-    free(w); free(alive);
-    beam_live_release(&h);
-    return BEAM_OK;
-}
 
 /* ── One length ──────────────────────────────────────────────── */
 
@@ -253,7 +184,7 @@ static BeamError top_k_one(const BeamModel *m, uint32_t len, uint32_t k,
             return BEAM_EALLOC("one layer of backward values");
         }
     }
-    BeamError err = best_completions(m, len, beta);
+    BeamError err = beam_best_completions(m, len, beta);
     double *w = (double *)malloc((size_t)R * sizeof(double));
     Heap heap = {0};
     if (err != BEAM_OK || !w) {

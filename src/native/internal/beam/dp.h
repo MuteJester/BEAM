@@ -173,6 +173,34 @@ BeamError beam_betas_tilted(const BeamModel *m, uint32_t len, double q,
                                double **beta);
 
 /**
+ * `best[i][s]`: the weight of the BEST completion from state `s` at layer `i`,
+ * sink term included. Max-plus where the two above are log-sum-exp.
+ *
+ * Which one guides a top-k search is the difference between a second and a
+ * minute. `acc + beta` bounds the best completion from above but not tightly
+ * -- beta sums over every completion, so on a 194,481-state trellis it
+ * overshoots by many nats and the frontier degenerates towards breadth-first,
+ * expanding millions of prefixes that can never win. `acc + best` is the exact
+ * weight of the best completion, so the pop order is the true order and every
+ * expansion is one the answer needed.
+ *
+ * Exactness is unchanged and so is the reported probability: at the final
+ * layer there is nothing left to choose, so `best[len]` IS the sink weight,
+ * exactly as `beta[len]` is.
+ *
+ * It differs from its two siblings in three ways and each is deliberate: the
+ * semiring, the absence of a tilt, and that it visits only the states the
+ * forward frontier reached. That last one means `best[i][s]` is `-INFINITY`
+ * for every unreached state, where `beta[i][s]` may be finite -- so the
+ * relation between them is `best <= beta` and not equality outside the seed.
+ *
+ * `best` must hold `len + 1` rows of `n_states` doubles, which the caller
+ * owns and budgets; this budgets only its own layer of edge weights.
+ */
+BeamError beam_best_completions(const BeamModel *m, uint32_t len,
+                                double **best);
+
+/**
  * Lengths the model actually generates.
  *
  * `finalize` zeroes the prior of any length whose trellis has no surviving
