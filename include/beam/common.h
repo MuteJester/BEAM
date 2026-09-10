@@ -21,16 +21,6 @@
  */
 #include "beam/errors.h"
 
-/* ── Graph variant ──────────────────────────────────────────── */
-
-typedef enum {
-    BEAM_VARIANT_AAP       = 0,  /* Amino Acid Positional           */
-    BEAM_VARIANT_NDP       = 1,  /* Nucleotide Double Positional    */
-    BEAM_VARIANT_NAIVE     = 2,  /* Naive LZ76 (no position)        */
-    BEAM_VARIANT_NAIVE_POS = 3,  /* Naive positional: "{AA}_{pos}"  */
-    BEAM_VARIANT_FLAT_FB   = 4,  /* Flattened FlashBack: "{a}{b}_{k}" */
-} BeamVariant;
-
 /* ── Compiler hints ─────────────────────────────────────────── */
 
 #if defined(__GNUC__) || defined(__clang__)
@@ -45,17 +35,5 @@ typedef enum {
 
 
 /* ── Numerical constants ────────────────────────────────────── */
-
-#define BEAM_EPS       1e-300
-#define BEAM_LOG_EPS  (-690.7755278982137)  /* log(1e-300) */
-#define BEAM_NAN       ((double)NAN)
-
-/* ── Alphabet ──────────────────────────────────────────────── */
-
-#define BEAM_AA_COUNT  20
-
-/** Sentinel characters for sequence boundaries. */
-#define BEAM_START_SENTINEL '@'
-#define BEAM_END_SENTINEL   '$'
 
 #endif /* BEAM_COMMON_H */

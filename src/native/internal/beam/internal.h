@@ -56,10 +56,36 @@
 #include <omp.h>
 #endif
 
-/* The former contents of this header, split by responsibility. They are
- * included here in their original order so that every translation unit
- * still sees exactly what it saw before. Narrow one file at a time to the
- * specific headers it needs; this umbrella goes away when none remain. */
+/*
+ * The former contents of this header, split by responsibility. They are
+ * included here in their original order so that every translation unit still
+ * sees exactly what it saw before. Narrow one file at a time to the specific
+ * headers it needs; this umbrella goes away when none remain.
+ *
+ * WHAT NARROWING BUYS, measured rather than assumed, because for most of this
+ * header's life it bought nothing. Sixteen of nineteen internal headers
+ * transitively included `model_state.h`, which publishes the whole
+ * `struct BeamModel_` and pulls in the sparse-row and frozen-count
+ * representations with it -- so swapping `internal.h` for `budget.h` took a
+ * file from ten headers to five and left it seeing exactly as much. An audit
+ * put it plainly: narrowing was a rename.
+ *
+ * That changed when `error_macros.h` stopped including `model_state.h` for one
+ * macro none of its narrow consumers called, and `math_internal.h` stopped
+ * including it for declarations that only take `const BeamModel *`. Today:
+ *
+ *     closure 0    alphabet.h  error_macros.h  math_internal.h
+ *                  occupancy_internal.h  python_bindings.h  reduction.h
+ *                  sparse_rows.h
+ *     closure 1-2  budget.h  frozen_counts.h  query_internal.h
+ *     pulls the model layout    indexing.h  live_frontier.h  model_build.h
+ *                  memory.h  table_access.h  fb_sweep.h  mixing.h  dp.h
+ *
+ * Nine of twenty, down from sixteen of nineteen. So narrowing to any header in
+ * the first two groups is now real encapsulation and worth doing; narrowing to
+ * one in the third is still mostly a rename, and saying so is more useful than
+ * promising a payoff the graph will not pay.
+ */
 #include "beam/model_state.h"
 #include "beam/reduction.h"
 #include "beam/sparse_rows.h"
