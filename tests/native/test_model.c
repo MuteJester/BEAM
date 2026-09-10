@@ -647,6 +647,104 @@ static uint32_t crc32c_by_hand(uint32_t crc, const uint8_t *p, size_t len) {
  * unaligned head and the short tail are handled separately in the fast path
  * and that is exactly where a hand-written CRC goes wrong.
  */
+/**
+ * A top-k search cannot hold more than the budget by splitting the check.
+ *
+ * `top_k_one` charges the backward field and `beam_best_completions` charges
+ * its layer of edge weights, and the layer is allocated INSIDE the field's
+ * lifetime -- so the peak is the sum. While each checked the whole budget on
+ * its own, a figure between `max(field, layer)` and `field + layer` admitted a
+ * search that then held the sum: measured at 46.87 MB against a 33.65 MB
+ * budget on an order-4 model, 39% over.
+ *
+ * The budget here is computed from the two figures rather than guessed, and
+ * the test asserts both sides: at a budget that admits each part separately
+ * but not both, the search must refuse; with room for the sum, it must answer.
+ * Without the second half this would pass on a build that refused everything.
+ */
+static void test_a_top_k_search_cannot_split_its_way_past_the_budget(void) {
+    BeamModel *m = build(4, 12);
+    ASSERT_MSG(m != NULL, "model built");
+    const uint32_t n_states = beam_model_n_states(m);
+    const uint32_t n_res = beam_model_n_residues(m);
+    uint32_t longest = 0;
+    for (uint32_t L = 1; L <= 12u; ++L)
+        if (isfinite(beam_model_log_length_prior(m, L))) longest = L;
+    ASSERT_MSG(longest > 0, "the model generates nothing");
+
+    const uint64_t field = ((uint64_t)longest + 1u) * n_states * sizeof(double)
+                         + ((uint64_t)longest + 1u) * sizeof(double *)
+                         + (uint64_t)n_res * sizeof(double);
+    const uint64_t layer = (uint64_t)n_states * n_res * sizeof(double)
+                         + n_states;
+    const uint64_t each  = field > layer ? field : layer;
+    ASSERT_MSG(each < field + layer, "the two parts are not distinguishable");
+
+    const uint64_t before = beam_model_memory_budget();
+    char buf[8 * 16];
+    double lp[8];
+    uint32_t n = 0;
+
+    /* Above either part alone, below their sum. */
+    beam_model_set_memory_budget(each + (field + layer - each) / 2u);
+    const BeamError split = beam_model_top_k(m, 8u, 0u, buf, lp, &n);
+
+    /* And with room for the sum it still works, so the refusal above is the
+     * budget binding and not the search being broken. */
+    beam_model_set_memory_budget(0);
+    uint32_t n2 = 0;
+    const BeamError ample = beam_model_top_k(m, 8u, 0u, buf, lp, &n2);
+
+    beam_model_set_memory_budget(before);
+    beam_model_destroy(m);
+
+    ASSERT_MSG(split == BEAM_ERR_BUDGET,
+               "a budget between one part and the sum admitted a search that "
+               "holds the sum");
+    ASSERT_MSG(ample == BEAM_OK && n2 > 0,
+               "the search fails even with the whole budget available");
+    PASS();
+}
+
+/**
+ * The merge buffer is refused before it is allocated.
+ *
+ * `k * n_len * sizeof(Found)` had no guard of any kind. The Python binding
+ * validates `k` and budgets the two buffers IT allocates, which says nothing
+ * about this one, and a C caller has nothing between `k` and the `malloc` at
+ * all. At the sizes a caller can legitimately ask for -- ten million is a
+ * plausible "give me everything" -- that is a gigabyte and a half taken
+ * without the budget hearing about it.
+ *
+ * The output buffers here are deliberately small: a correct implementation
+ * refuses before it writes anything, and if that stops being true this test
+ * smashes the stack rather than passing quietly.
+ */
+static void test_the_top_k_merge_buffer_is_refused_before_it_is_taken(void) {
+    BeamModel *m = build(3, 12);
+    ASSERT_MSG(m != NULL, "model built");
+    const uint64_t before = beam_model_memory_budget();
+
+    char buf[64];
+    double lp[4];
+    uint32_t n = 0;
+    /* 10M results x at least one length x 16 bytes each is >= 160 MB. */
+    beam_model_set_memory_budget(64u << 20);
+    const BeamError huge = beam_model_top_k(m, 10000000u, 0u, buf, lp, &n);
+
+    beam_model_set_memory_budget(before);
+    uint32_t n2 = 0;
+    const BeamError small = beam_model_top_k(m, 4u, 0u, buf, lp, &n2);
+    beam_model_destroy(m);
+
+    ASSERT_MSG(huge == BEAM_ERR_BUDGET,
+               "a ten-million-result merge buffer was allocated without the "
+               "budget being consulted");
+    ASSERT_MSG(small == BEAM_OK && n2 > 0,
+               "an ordinary search stopped working");
+    PASS();
+}
+
 static void test_both_crc_paths_match_the_polynomial(void) {
     uint8_t buf[300];
     for (size_t i = 0; i < sizeof buf; ++i) buf[i] = (uint8_t)(i * 37u + 11u);
@@ -2571,6 +2669,8 @@ int main(void) {
     RUN_TEST(test_backward_context_packing);
     RUN_TEST(test_backward_context_from_state_matches_the_sequence);
     RUN_TEST(test_backward_wide_context_matches_the_sequence);
+    RUN_TEST(test_a_top_k_search_cannot_split_its_way_past_the_budget);
+    RUN_TEST(test_the_top_k_merge_buffer_is_refused_before_it_is_taken);
     RUN_TEST(test_both_crc_paths_match_the_polynomial);
     RUN_TEST(test_crc32c_table_matches_the_polynomial);
     RUN_TEST(test_threads_setting_round_trips);

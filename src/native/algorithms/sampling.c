@@ -57,8 +57,19 @@ static BeamError sample_fixed(const BeamModel *m, uint32_t len, uint32_t n,
      * doubles, held whole because the walk descends it after the sweep builds
      * it. `n` is the sample count, one state index each.
      */
-    BEAM_BUDGET_OR_REFUSE("an ancestral sampling sweep", len,
-                          sample_fixed_bytes(S, R, len, n));
+    /*
+     * One account for the whole sweep, so `beam_betas`'s layer is charged on
+     * top of the field rather than against the budget on its own. Here that
+     * changes no answer -- this file's own `w` is allocated only after
+     * `beam_betas` has returned, so the two layers never coexist and
+     * `sample_fixed_bytes` already covered the peak -- but the account is what
+     * makes that a fact about the code rather than a coincidence of ordering.
+     */
+    BeamMemAccount acct;
+    memset(&acct, 0, sizeof(acct));
+    const uint64_t need = sample_fixed_bytes(S, R, len, n);
+    if (!beam_account_take(&acct, need))
+        return beam_budget_refuse("an ancestral sampling sweep", len, need);
 
     double **beta = (double **)calloc(len + 1u, sizeof(double *));
     if (!beta) return BEAM_EALLOC("the backward-value layer table");
@@ -70,7 +81,7 @@ static BeamError sample_fixed(const BeamModel *m, uint32_t len, uint32_t n,
             return BEAM_EALLOC("one layer of backward values");
         }
     }
-    BeamError err = beam_betas(m, len, beta);
+    BeamError err = beam_betas(m, len, beta, &acct);
     double *w = (double *)malloc((size_t)S * R * sizeof(double));
     double *p = (double *)malloc((size_t)R * sizeof(double));
     uint32_t *state = (uint32_t *)malloc((size_t)n * sizeof(uint32_t));

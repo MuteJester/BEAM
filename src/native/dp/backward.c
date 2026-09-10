@@ -20,27 +20,31 @@
  * rather than sweeping it, so a per-layer scale factor would have to be
  * carried alongside and applied at every draw.
  */
-BeamError beam_betas(const BeamModel *m, uint32_t len, double **beta) {
-    return beam_betas_tilted(m, len, 1.0, beta);
+BeamError beam_betas(const BeamModel *m, uint32_t len, double **beta,
+                     BeamMemAccount *acct) {
+    return beam_betas_tilted(m, len, 1.0, beta, acct);
 }
 
 BeamError beam_betas_tilted(const BeamModel *m, uint32_t len, double q,
-                               double **beta) {
+                            double **beta, BeamMemAccount *acct) {
     const uint32_t A = m->n_alphabet;
     const uint32_t R = m->n_residues;
     const uint32_t S = m->n_states;
     const uint32_t SK = m->state_shift;
 
     /*
-     * One layer, `S * R` doubles: 31 MB on an order-4 amino-acid model. The
-     * backward FIELD is the caller's -- it is `(len + 1) * S` doubles and
-     * dwarfs this -- so it is budgeted where it is allocated, not here.
+     * One layer, `S * R` doubles: 31 MB on an order-4 amino-acid model.
+     * Charged to the CALLER'S account, not against the whole budget, because
+     * the caller is holding its backward field -- `(len + 1) * S` doubles,
+     * which dwarfs this -- for the duration of the call. Two independent
+     * checks let a budget admit the sum of two things that each fit.
      */
-    BEAM_BUDGET_OR_REFUSE("a backward sweep", len,
-                          (uint64_t)S * R * sizeof(double));
+    const uint64_t layer = (uint64_t)S * R * sizeof(double);
+    if (!beam_account_take(acct, layer))
+        return beam_budget_refuse("a backward sweep", len, acct->held + layer);
 
     double *w = (double *)malloc((size_t)S * R * sizeof(double));
-    if (!w) return BEAM_EALLOC("one layer of edge weights");
+    if (!w) { beam_account_release(acct, layer); return BEAM_EALLOC("one layer of edge weights"); }
 
     beam_tail_weights(m, len, beta[len]);
     if (q != 1.0)
@@ -73,6 +77,7 @@ BeamError beam_betas_tilted(const BeamModel *m, uint32_t len, double q,
         }
     }
     free(w);
+    beam_account_release(acct, layer);
     return BEAM_OK;
 }
 
@@ -100,18 +105,21 @@ BeamError beam_betas_tilted(const BeamModel *m, uint32_t len, double q,
  * state, and the seed layer must agree exactly.
  */
 BeamError beam_best_completions(const BeamModel *m, uint32_t len,
-                                double **best) {
+                                double **best, BeamMemAccount *acct) {
     const uint32_t A = m->n_alphabet;
     const uint32_t R = m->n_residues;
     const uint32_t S = m->n_states;
     const uint32_t SK = m->state_shift;
 
-    BEAM_BUDGET_OR_REFUSE("a best-completion sweep", len,
-                          (uint64_t)S * R * sizeof(double) + S);
+    const uint64_t scratch = (uint64_t)S * R * sizeof(double) + S;
+    if (!beam_account_take(acct, scratch))
+        return beam_budget_refuse("a best-completion sweep", len,
+                                  acct->held + scratch);
 
     double *w = (double *)malloc((size_t)S * R * sizeof(double));
     uint8_t *alive = (uint8_t *)malloc(S);
     if (!w || !alive) { free(w); free(alive);
+        beam_account_release(acct, scratch);
         return BEAM_EALLOC("one layer of edge weights"); }
 
     /* Only states the root can reach are ever expanded by the search below,
@@ -127,6 +135,7 @@ BeamError beam_best_completions(const BeamModel *m, uint32_t len,
     LiveHandle h;
     if (beam_live_acquire(m, len, &h) != BEAM_OK) {
         free(w); free(alive);
+        beam_account_release(acct, scratch);
         return BEAM_EALLOC("the forward frontier");
     }
     const BeamLive *L = h.L;
@@ -158,5 +167,6 @@ BeamError beam_best_completions(const BeamModel *m, uint32_t len,
     }
     free(w); free(alive);
     beam_live_release(&h);
+    beam_account_release(acct, scratch);
     return BEAM_OK;
 }

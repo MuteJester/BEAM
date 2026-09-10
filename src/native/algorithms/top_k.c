@@ -30,6 +30,7 @@ typedef struct {
 typedef struct {
     Item    *a;
     uint32_t n, cap;
+    BeamMemAccount *acct;   /* charged at each doubling */
 } Heap;
 
 /* Growth is capped below 2^31 so the doubling cannot wrap a uint32_t to zero
@@ -45,8 +46,19 @@ static bool heap_reserve(Heap *h, uint32_t need) {
         if (cap > BEAM_GROW_MAX / 2u) { cap = need; break; }
         cap *= 2u;
     }
+    /*
+     * Charged at the doubling, like every other container whose size is a
+     * property of the answer. `BEAM_GROW_MAX` above is a WRAP guard and
+     * nothing else -- 2^30 items is 25.8 GB of heap, six times the default
+     * budget -- so before this the two structures that actually dominate a
+     * large-`k` search were the only ones the budget never saw.
+     */
+    const uint64_t want = (uint64_t)cap * sizeof(Item);
+    const uint64_t old  = (uint64_t)h->cap * sizeof(Item);
+    if (!beam_account_take(h->acct, want)) return false;
     Item *na = (Item *)realloc(h->a, (size_t)cap * sizeof(Item));
-    if (!na) return false;
+    if (!na) { beam_account_release(h->acct, want); return false; }
+    beam_account_release(h->acct, old);
     h->a = na; h->cap = cap;
     return true;
 }
@@ -91,6 +103,7 @@ typedef struct {
     uint32_t *parent;
     uint8_t  *residue;
     uint32_t  n, cap;
+    BeamMemAccount *acct;   /* charged at each doubling */
 } Arena;
 
 /* Returns UINT32_MAX on failure, so the arena must never reach that index and
@@ -100,6 +113,12 @@ static uint32_t arena_add(Arena *ar, uint32_t parent, uint8_t residue) {
     if (ar->n == ar->cap) {
         if (ar->cap >= BEAM_GROW_MAX) return UINT32_MAX;
         uint32_t cap = ar->cap ? ar->cap * 2u : 4096u;
+        /* Five bytes a node, and a search that runs long enough allocates
+         * millions of them; charged at the doubling for the same reason the
+         * heap is. */
+        const uint64_t want = (uint64_t)cap * (sizeof(uint32_t) + 1u);
+        const uint64_t was  = (uint64_t)ar->cap * (sizeof(uint32_t) + 1u);
+        if (!beam_account_take(ar->acct, want)) return UINT32_MAX;
         uint32_t *p = (uint32_t *)realloc(ar->parent, (size_t)cap * sizeof(uint32_t));
         uint8_t  *r = (uint8_t *)realloc(ar->residue, (size_t)cap);
         /* Exactly one of each pair is the live buffer: a realloc that returned
@@ -110,9 +129,11 @@ static uint32_t arena_add(Arena *ar, uint32_t parent, uint8_t residue) {
             free(p ? p : ar->parent);
             free(r ? r : ar->residue);
             ar->parent = NULL; ar->residue = NULL;
+            beam_account_release(ar->acct, want + was);
             ar->n = 0; ar->cap = 0;      /* nothing survives; say so */
             return UINT32_MAX;
         }
+        beam_account_release(ar->acct, was);
         ar->parent = p; ar->residue = r; ar->cap = cap;
     }
     ar->parent[ar->n] = parent;
@@ -156,23 +177,29 @@ static int cmp_found(const void *a, const void *b) {
 }
 
 static BeamError top_k_one(const BeamModel *m, uint32_t len, uint32_t k,
-                          Arena *ar, Found *found, uint32_t *n_found) {
+                          Arena *ar, Found *found, uint32_t *n_found,
+                          BeamMemAccount *acct) {
     const uint32_t A = m->n_alphabet;
     const uint32_t R = m->n_residues;
     const uint32_t S = m->n_states;
     const uint32_t SK = m->state_shift;
 
     /*
-     * Refused before allocating. `beta` here holds best COMPLETIONS rather
-     * than sums, but it is the same `(len + 1) * S` doubles and the same
-     * reason to refuse before the OOM killer gets a vote. `best_completions`
-     * charges its own layer of weights separately, since it allocates and
-     * frees that inside this field's lifetime.
+     * Refused before allocating, and charged to the SHARED account.
+     *
+     * The comment here used to say `best_completions` "charges its own layer
+     * of weights separately, since it allocates and frees that inside this
+     * field's lifetime" -- which is the argument for charging them TOGETHER,
+     * stated as a reason to charge them apart. Inside this field's lifetime is
+     * exactly when both are resident. Measured on an order-4 model: a 33.65 MB
+     * budget admitted a search that held 46.87 MB, because the field passed
+     * one check and the layer passed the other.
      */
-    BEAM_BUDGET_OR_REFUSE("a top-k search", len,
-                          ((uint64_t)len + 1u) * S * sizeof(double)
-                        + ((uint64_t)len + 1u) * sizeof(double *)
-                        + (uint64_t)R * sizeof(double));
+    const uint64_t field = ((uint64_t)len + 1u) * S * sizeof(double)
+                         + ((uint64_t)len + 1u) * sizeof(double *)
+                         + (uint64_t)R * sizeof(double);
+    if (!beam_account_take(acct, field))
+        return beam_budget_refuse("a top-k search", len, acct->held + field);
 
     double **beta = (double **)calloc(len + 1u, sizeof(double *));
     if (!beta) return BEAM_EALLOC("the backward-value layer table");
@@ -184,9 +211,10 @@ static BeamError top_k_one(const BeamModel *m, uint32_t len, uint32_t k,
             return BEAM_EALLOC("one layer of backward values");
         }
     }
-    BeamError err = beam_best_completions(m, len, beta);
+    BeamError err = beam_best_completions(m, len, beta, acct);
     double *w = (double *)malloc((size_t)R * sizeof(double));
     Heap heap = {0};
+    heap.acct = acct;
     if (err != BEAM_OK || !w) {
         if (err == BEAM_OK) err = BEAM_EALLOC("one node's edge weights");
         goto done;
@@ -256,6 +284,7 @@ static BeamError top_k_one(const BeamModel *m, uint32_t len, uint32_t k,
 done:
     for (uint32_t i = 0; i <= len; ++i) free(beta[i]);
     free(beta); free(w); free(heap.a);
+    beam_account_release(acct, field + (uint64_t)heap.cap * sizeof(Item));
     return err;
 }
 
@@ -281,8 +310,23 @@ BeamError beam_model_top_k(const BeamModel *m, uint32_t k,
         if (length ? (L == length) : beam_length_live(m, L)) n_len++;
     if (n_len == 0) { if (out_n) *out_n = 0; return BEAM_OK; }
 
+    /*
+     * One account for the whole search: the merge buffer here, each length's
+     * backward field and best-completion layer, the heap, and the path arena.
+     * The merge buffer had no guard at all -- `k` is the caller's, and a C
+     * caller has nothing between it and this `malloc`. The Python binding
+     * validates and budgets `k` for its OWN two buffers, which says nothing
+     * about this one.
+     */
+    BeamMemAccount acct;
+    memset(&acct, 0, sizeof(acct));
+    const uint64_t merge = (uint64_t)k * n_len * sizeof(Found);
+    if (!beam_account_take(&acct, merge))
+        return beam_budget_refuse_bytes("the top-k merge buffer", merge);
+
     Found *found = (Found *)malloc((size_t)k * n_len * sizeof(Found));
     Arena ar = {0};
+    ar.acct = &acct;
     if (!found) return BEAM_EALLOC("the top-k merge buffer");
 
     uint32_t total = 0;
@@ -290,7 +334,7 @@ BeamError beam_model_top_k(const BeamModel *m, uint32_t k,
     for (uint32_t L = 1; L < m->n_len_slots && err == BEAM_OK; ++L) {
         if (length ? (L != length) : !beam_length_live(m, L)) continue;
         uint32_t got = 0;
-        err = top_k_one(m, L, k, &ar, found + total, &got);
+        err = top_k_one(m, L, k, &ar, found + total, &got, &acct);
         total += got;
     }
     if (err != BEAM_OK) { free(found); free(ar.parent); free(ar.residue); return err; }

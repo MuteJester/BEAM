@@ -46,8 +46,18 @@ static BeamError by_depth_one(const BeamModel *m, uint32_t L, double q,
      * 6.6 GB on a nucleotide model at the alphabet's ceiling order, so the
      * bound is a real one at the top of the range rather than a formality.
      */
-    BEAM_BUDGET_OR_REFUSE("a tilted forward-backward sweep", L,
-                          by_depth_bytes(S, R, L));
+    /*
+     * One account for the whole sweep. This file's `w` is allocated BEFORE
+     * `beam_betas_tilted` runs and freed after, so its layer and the sweep's
+     * own layer are live at the same moment -- two `S * R` arrays, 62 MB on an
+     * order-4 amino-acid model, of which `by_depth_bytes` counts one. Each
+     * passed its own check against the whole budget and the pair exceeded it.
+     */
+    BeamMemAccount acct;
+    memset(&acct, 0, sizeof(acct));
+    const uint64_t need = by_depth_bytes(S, R, L);
+    if (!beam_account_take(&acct, need))
+        return beam_budget_refuse("a tilted forward-backward sweep", L, need);
 
     /* Backward values of the q-tilted trellis. */
     double **beta = (double **)calloc(L + 1u, sizeof(double *));
@@ -67,7 +77,7 @@ static BeamError by_depth_one(const BeamModel *m, uint32_t L, double q,
         err = BEAM_EALLOC("the tilted forward-backward buffers");
         goto done;
     }
-    err = beam_betas_tilted(m, L, q, beta);
+    err = beam_betas_tilted(m, L, q, beta, &acct);
     if (err != BEAM_OK) goto done;
 
     {

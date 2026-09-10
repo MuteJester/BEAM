@@ -117,8 +117,11 @@ static void test_the_best_completion_never_exceeds_the_total(void) {
         double **beta = field(len, S);
         double **best = field(len, S);
         ASSERT_MSG(beta && best, "allocation");
-        ASSERT_MSG(beam_betas(m, len, beta) == BEAM_OK, beam_error_message());
-        ASSERT_MSG(beam_best_completions(m, len, best) == BEAM_OK,
+        BeamMemAccount acct;
+        memset(&acct, 0, sizeof(acct));
+        ASSERT_MSG(beam_betas(m, len, beta, &acct) == BEAM_OK,
+                   beam_error_message());
+        ASSERT_MSG(beam_best_completions(m, len, best, &acct) == BEAM_OK,
                    beam_error_message());
         ++lengths;
 
@@ -202,8 +205,11 @@ static void test_each_sweep_computes_its_own_semiring(void) {
     double **best = field(len, S);
     double *w = (double *)malloc((size_t)S * R * sizeof(double));
     ASSERT_MSG(beta && best && w, "allocation");
-    ASSERT_MSG(beam_betas(m, len, beta) == BEAM_OK, beam_error_message());
-    ASSERT_MSG(beam_best_completions(m, len, best) == BEAM_OK,
+    BeamMemAccount acct;
+    memset(&acct, 0, sizeof(acct));
+    ASSERT_MSG(beam_betas(m, len, beta, &acct) == BEAM_OK,
+               beam_error_message());
+    ASSERT_MSG(beam_best_completions(m, len, best, &acct) == BEAM_OK,
                beam_error_message());
     beam_layer_weights(m, len - 1u, len, w, NULL);
 

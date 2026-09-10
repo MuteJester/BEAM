@@ -13,6 +13,7 @@
 #include "beam/model.h"
 #include "beam/model_state.h"
 #include "beam/table_access.h"
+#include "beam/memory.h"
 
 /* ── The per-layer rescale ───────────────────────────────────── */
 
@@ -160,7 +161,21 @@ BeamError beam_compute_log_z(BeamModel *m, uint32_t len, double *out);
  * weight of every completion from `state` at layer `i`. `beta` must be an
  * array of `len + 1` pointers, each to `n_states` doubles.
  */
-BeamError beam_betas(const BeamModel *m, uint32_t len, double **beta);
+/*
+ * ALL THREE TAKE THE CALLER'S ACCOUNT, and that is the whole point of the
+ * parameter. Each allocates a layer of edge weights -- `S * R` doubles, 31 MB
+ * on an order-4 amino-acid model -- for the duration of the sweep, while the
+ * caller is already holding a backward field it charged for separately. Two
+ * checks against the same budget are not a budget: measured on an order-4
+ * model, a 33.65 MB budget admitted a top-k search that held 46.87 MB, 39%
+ * over, because the field passed one check and the layer passed the other.
+ *
+ * There is no null-account form. An optional account is what `positional.c`
+ * had first, where the reader tested for null and the writer did not, and the
+ * one caller that passed nothing dereferenced it.
+ */
+BeamError beam_betas(const BeamModel *m, uint32_t len, double **beta,
+                     BeamMemAccount *acct);
 
 /**
  * Backward values of the `q`-TILTED trellis, i.e. with every edge weight
@@ -170,7 +185,7 @@ BeamError beam_betas(const BeamModel *m, uint32_t len, double **beta);
  * attributing surprisal to depths at `q != 1`.
  */
 BeamError beam_betas_tilted(const BeamModel *m, uint32_t len, double q,
-                               double **beta);
+                            double **beta, BeamMemAccount *acct);
 
 /**
  * `best[i][s]`: the weight of the BEST completion from state `s` at layer `i`,
@@ -198,7 +213,7 @@ BeamError beam_betas_tilted(const BeamModel *m, uint32_t len, double q,
  * owns and budgets; this budgets only its own layer of edge weights.
  */
 BeamError beam_best_completions(const BeamModel *m, uint32_t len,
-                                double **best);
+                                double **best, BeamMemAccount *acct);
 
 /**
  * Lengths the model actually generates.
