@@ -213,6 +213,42 @@ static inline uint64_t union_table_bytes(uint64_t cap) {
 
 /* ── The sweep ───────────────────────────────────────────────── */
 
+/*
+ * The ceiling both union entry points enforce, and the arrays that depend on
+ * it.
+ *
+ * `beam_mixture_support_union` declares `LiveHandle h[BEAM_MIXTURE_MAX_MEMBERS]`
+ * and its `L[]` companion as FIXED STACK ARRAYS indexed by member. Their safety
+ * is this check and nothing else, so the check cannot be a thing that exists in
+ * two hand-maintained copies: one of them relaxed to `>=`, or one bound raised
+ * without the other, is a stack smash rather than a wrong number. It was two
+ * copies of an identical eleven-line refusal, and only the copy in the OTHER
+ * entry point -- the one with no stack arrays -- had a test.
+ *
+ * The static assertion ties the ceiling to the reason the message gives for it.
+ * "One bit per member in a 64-bit mask" is checkable, and if someone raises the
+ * constant to serve a larger mixture the build stops here rather than at the
+ * first `1ull << 64`.
+ */
+_Static_assert(BEAM_MIXTURE_MAX_MEMBERS <= 64u,
+               "the union's member ceiling is the width of the uint64_t seed "
+               "mask it is derived from; raising it needs a wider mask, not a "
+               "bigger number");
+
+static BeamError union_member_ceiling(uint32_t n_models) {
+    if (n_models <= BEAM_MIXTURE_MAX_MEMBERS) return BEAM_OK;
+    return BEAM_FAIL(BEAM_ERR_PARAM_OUT_OF_RANGE,
+                     "the exact support union holds at most %u members and "
+                     "%u were given: it carries one bit per member in a "
+                     "64-bit mask, which is structural. The other mixture "
+                     "quantities have no such limit; for q=0 above %u use "
+                     "the bounds max_i D0(i) <= D0(union) <= sum_i D0(i), "
+                     "which cost nothing at any number of members",
+                     (unsigned)BEAM_MIXTURE_MAX_MEMBERS,
+                     (unsigned)n_models,
+                     (unsigned)BEAM_MIXTURE_MAX_MEMBERS);
+}
+
 BeamError beam_mixture_support_union(const BeamModel *const *models,
                                      uint32_t n_models, uint32_t len,
                                      uint64_t cap, double *out,
@@ -227,17 +263,8 @@ BeamError beam_mixture_support_union(const BeamModel *const *models,
      * carries one bit per member. Everything else a mixture can be asked has
      * no such bound, and used to be refused along with this.
      */
-    if (n_models > BEAM_MIXTURE_MAX_MEMBERS)
-        return BEAM_FAIL(BEAM_ERR_PARAM_OUT_OF_RANGE,
-                         "the exact support union holds at most %u members and "
-                         "%u were given: it carries one bit per member in a "
-                         "64-bit mask, which is structural. The other mixture "
-                         "quantities have no such limit; for q=0 above %u use "
-                         "the bounds max_i D0(i) <= D0(union) <= sum_i D0(i), "
-                         "which cost nothing at any number of members",
-                         (unsigned)BEAM_MIXTURE_MAX_MEMBERS,
-                         (unsigned)n_models,
-                         (unsigned)BEAM_MIXTURE_MAX_MEMBERS);
+    const BeamError ceiling = union_member_ceiling(n_models);
+    if (ceiling != BEAM_OK) return ceiling;
 
     const BeamModel *m0 = models[0];
     if (len < 1u || len > m0->max_len) return BEAM_EBADLEN(m0, len);
@@ -458,17 +485,8 @@ BeamError beam_mixture_support_union_by_length(
     if (!out_total) return BEAM_ENULL("output buffer");
     /* Refused before the per-length arrays are allocated, so the message names
      * the mixture rather than whichever length happened to run first. */
-    if (n_models > BEAM_MIXTURE_MAX_MEMBERS)
-        return BEAM_FAIL(BEAM_ERR_PARAM_OUT_OF_RANGE,
-                         "the exact support union holds at most %u members and "
-                         "%u were given: it carries one bit per member in a "
-                         "64-bit mask, which is structural. The other mixture "
-                         "quantities have no such limit; for q=0 above %u use "
-                         "the bounds max_i D0(i) <= D0(union) <= sum_i D0(i), "
-                         "which cost nothing at any number of members",
-                         (unsigned)BEAM_MIXTURE_MAX_MEMBERS,
-                         (unsigned)n_models,
-                         (unsigned)BEAM_MIXTURE_MAX_MEMBERS);
+    const BeamError ceiling = union_member_ceiling(n_models);
+    if (ceiling != BEAM_OK) return ceiling;
 
     const BeamModel *m0 = models[0];
     const uint32_t n = m0->n_len_slots;

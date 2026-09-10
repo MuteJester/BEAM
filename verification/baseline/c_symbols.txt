@@ -1,4 +1,3 @@
-beam_aa_to_bit
 beam_alphabet_by_name
 beam_alphabet_info
 beam_betas

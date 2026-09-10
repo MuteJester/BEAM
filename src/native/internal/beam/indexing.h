@@ -189,19 +189,66 @@ static inline uint32_t beam_state_oldest(uint32_t state,
 
 /* ── Table addressing ────────────────────────────────────────── */
 
+/**
+ * The depth a wide-table row is filed under.
+ *
+ * Depths at or beyond `depth_cap` share one partition: the N-anchored expert
+ * stops distinguishing position once it is far enough from its anchor, and the
+ * table is sized accordingly. Every wide-table address goes through this, so
+ * there is one place the clamp can be got wrong.
+ */
+static inline uint32_t beam_depth_part(const BeamModel *m, uint32_t depth) {
+    return depth < m->cfg.depth_cap ? depth : m->cfg.depth_cap;
+}
+
+/*
+ * ROW addressing, and the CELL addressing built on it.
+ *
+ * A row is `(depth, context)` -- or `(length, depth, context)` for the
+ * length-conditioned table -- and a cell is a row plus a residue. Both forms
+ * are needed: the log tables and the sparse count directory are addressed by
+ * ROW, and the dense count arrays by CELL.
+ *
+ * They were written out four times over: here in cell form, in
+ * `table_access.h` inside each `beam_lp_*_row`, in `model/training.c` where
+ * counts are incremented, and in `math/expected_counts.c` where the expected
+ * usage of those same cells is accumulated. That last pair is the dangerous
+ * one. Expected counts mean something only because they land in the cells an
+ * observed sequence would have incremented, and `expected_counts.c` said so
+ * while keeping its own copy: "Deriving them a second way would be a second
+ * thing to keep in step." Four copies IS the second thing to keep in step. If
+ * they drift -- a change to the `depth_cap` clamp, or to the `len * max_len`
+ * stride -- the expected-count table is still well formed, still sums to the
+ * length, and is addressed wrongly, which is a class of error this codebase
+ * has already documented as one nothing else would catch.
+ *
+ * The cell forms are defined in terms of the row forms so the two cannot
+ * disagree about what a row is.
+ */
+static inline uint32_t beam_row_wide(const BeamModel *m, uint32_t depth,
+                                     uint32_t ctx) {
+    return beam_depth_part(m, depth) * m->n_ctx_wide + ctx;
+}
+static inline uint32_t beam_row_mid(const BeamModel *m, uint32_t depth,
+                                    uint32_t ctx) {
+    return depth * m->n_ctx_mid + ctx;
+}
+static inline uint32_t beam_row_len(const BeamModel *m, uint32_t len,
+                                    uint32_t depth, uint32_t ctx) {
+    return (len * m->max_len + depth) * m->n_ctx_len + ctx;
+}
+
 static inline size_t beam_ix_wide(const BeamModel *m, uint32_t depth,
                                       uint32_t ctx, uint32_t x) {
-    uint32_t d = depth < m->cfg.depth_cap ? depth : m->cfg.depth_cap;
-    return ((size_t)d * m->n_ctx_wide + ctx) * m->n_residues + x;
+    return (size_t)beam_row_wide(m, depth, ctx) * m->n_residues + x;
 }
 static inline size_t beam_ix_mid(const BeamModel *m, uint32_t depth,
                                      uint32_t ctx, uint32_t x) {
-    return ((size_t)depth * m->n_ctx_mid + ctx) * m->n_residues + x;
+    return (size_t)beam_row_mid(m, depth, ctx) * m->n_residues + x;
 }
 static inline size_t beam_ix_len(const BeamModel *m, uint32_t len,
                                      uint32_t depth, uint32_t ctx, uint32_t x) {
-    return (((size_t)len * m->max_len + depth) * m->n_ctx_len + ctx)
-           * m->n_residues + x;
+    return (size_t)beam_row_len(m, len, depth, ctx) * m->n_residues + x;
 }
 
 #endif /* BEAM_INTERNAL_INDEXING_H */

@@ -17,11 +17,6 @@
 
 /* ── Dense/sparse row access ────────────────────────────────── */
 
-static inline uint32_t beam_depth_part(const BeamModel *m,
-                                           uint32_t depth) {
-    return depth < m->cfg.depth_cap ? depth : m->cfg.depth_cap;
-}
-
 static inline uint32_t beam_wide_part_for_row(const BeamModel *m,
                                                    uint32_t row) {
     return row / m->n_ctx_wide;
@@ -176,8 +171,7 @@ static inline BeamLogRow beam_lp_wide_row(const BeamModel *m,
                                                   uint32_t dir,
                                                   uint32_t depth,
                                                   uint32_t ctx) {
-    const uint32_t d = beam_depth_part(m, depth);
-    const uint32_t row = d * m->n_ctx_wide + ctx;
+    const uint32_t row = beam_row_wide(m, depth, ctx);
     if (m->cfg.sparse) return beam_sparse_log_row(&m->sp_lp_wide[dir], row);
     BeamLogRow r = { .dense = m->lp_wide[dir] + (size_t)row * m->n_residues,
                      .step = 1u, .present = true };
@@ -188,7 +182,7 @@ static inline BeamLogRow beam_lp_mid_row(const BeamModel *m,
                                                  uint32_t dir,
                                                  uint32_t depth,
                                                  uint32_t ctx) {
-    const uint32_t row = depth * m->n_ctx_mid + ctx;
+    const uint32_t row = beam_row_mid(m, depth, ctx);
     if (m->cfg.sparse) return beam_sparse_log_row(&m->sp_lp_mid[dir], row);
     BeamLogRow r = { .dense = m->lp_mid[dir] + (size_t)row * m->n_residues,
                      .step = 1u, .present = true };
@@ -199,7 +193,7 @@ static inline BeamLogRow beam_lp_len_row(const BeamModel *m,
                                                  uint32_t dir, uint32_t len,
                                                  uint32_t depth,
                                                  uint32_t ctx) {
-    const uint32_t row = (len * m->max_len + depth) * m->n_ctx_len + ctx;
+    const uint32_t row = beam_row_len(m, len, depth, ctx);
     if (m->cfg.sparse) return beam_sparse_log_row(&m->sp_lp_len[dir], row);
     BeamLogRow r = { .dense = m->lp_len[dir] + (size_t)row * m->n_residues,
                      .step = 1u, .present = true };

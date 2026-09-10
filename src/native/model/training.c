@@ -37,10 +37,9 @@ static bool observe_one_position(BeamModel *m, uint32_t dir,
         return true;
     }
 
-    const uint32_t wd = beam_depth_part(m, depth);
-    const uint32_t rw = wd * m->n_ctx_wide + cw_ix;
-    const uint32_t rm = depth * m->n_ctx_mid + cm_ix;
-    const uint32_t rl = (len * m->max_len + depth) * m->n_ctx_len + cl_ix;
+    const uint32_t rw = beam_row_wide(m, depth, cw_ix);
+    const uint32_t rm = beam_row_mid(m, depth, cm_ix);
+    const uint32_t rl = beam_row_len(m, len, depth, cl_ix);
     double *wide = beam_cnt_wide_row_mut(m, dir, rw, true);
     double *mid  = beam_cnt_mid_row_mut(m, dir, rm, true);
     double *lng  = beam_cnt_len_row_mut(m, dir, rl, true);

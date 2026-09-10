@@ -292,24 +292,16 @@ static BeamError rowmap_emit(RowMap *t, BeamCountBlock *b) {
 /* ── Row addressing ──────────────────────────────────────────── */
 
 /*
- * The dense ROW index of a cell, one per table. Spelled out here rather than
- * derived from `beam_ix_*` by dividing out the residue stride, because these
- * have to be the same rows `observe_one_position` writes for the answer to be
- * comparable with the counts, and the count path computes them exactly like
- * this. Deriving them a second way would be a second thing to keep in step.
+ * It comes from `beam/indexing.h`, and that matters more here than anywhere
+ * else those functions are used.
+ *
+ * These have to be the same rows `observe_one_position` writes, or the expected
+ * counts are not comparable with the observed ones and the whole quantity means
+ * nothing. This file used to spell them out again, arguing that deriving them a
+ * second way would be a second thing to keep in step -- which is right, and is
+ * an argument against keeping a copy here rather than for it. There is one
+ * definition now, and `model/training.c` calls it too.
  */
-static inline uint32_t row_wide(const BeamModel *m, uint32_t depth,
-                                uint32_t ctx) {
-    return beam_depth_part(m, depth) * m->n_ctx_wide + ctx;
-}
-static inline uint32_t row_mid(const BeamModel *m, uint32_t depth,
-                               uint32_t ctx) {
-    return depth * m->n_ctx_mid + ctx;
-}
-static inline uint32_t row_len(const BeamModel *m, uint32_t len, uint32_t depth,
-                               uint32_t ctx) {
-    return (len * m->max_len + depth) * m->n_ctx_len + ctx;
-}
 
 /**
  * The six maps, indexed [anchor][expert] exactly as BeamExpectedCounts is,
@@ -412,9 +404,9 @@ static BeamError expected_one_length(const BeamModel *m, uint32_t len,
 
             /* Forward contexts do not depend on the residue emitted, so they
              * are hoisted; the state IS the forward context. */
-            const uint32_t fw = row_wide(m, i, s % nw);
-            const uint32_t fm = row_mid(m, i, s % n3);
-            const uint32_t fl = row_len(m, len, i, s % n2);
+            const uint32_t fw = beam_row_wide(m, i, s % nw);
+            const uint32_t fm = beam_row_mid(m, i, s % n3);
+            const uint32_t fl = beam_row_len(m, len, i, s % n2);
             const uint32_t scored = beam_state_oldest(s, SK);
             const bool back = settle_back && scored < R;
 
@@ -426,11 +418,11 @@ static BeamError expected_one_length(const BeamModel *m, uint32_t len,
                 if (g == 0.0) continue;
                 if (!bump(ac, BEAM_FWD, fw, fm, fl, x, g)) { oom = true; break; }
                 if (!back) continue;
-                const uint32_t bw = row_wide(
+                const uint32_t bw = beam_row_wide(
                     m, r, beam_ctx_backward_from_state(s, x, K, m->order, A));
-                const uint32_t bm = row_mid(
+                const uint32_t bm = beam_row_mid(
                     m, r, beam_ctx_backward_from_state(s, x, K, 3u, A));
-                const uint32_t bl = row_len(
+                const uint32_t bl = beam_row_len(
                     m, len, r, beam_ctx_backward_from_state(s, x, K, 2u, A));
                 if (!bump(ac, BEAM_BWD, bw, bm, bl, scored, g)) {
                     oom = true; break;
@@ -473,9 +465,9 @@ static BeamError expected_one_length(const BeamModel *m, uint32_t len,
                     cm = cm * A + ((j <= rr) ? slot[pos + j] : m->none_idx);
                 for (uint32_t j = 2u; j >= 1u; --j)
                     cl = cl * A + ((j <= rr) ? slot[pos + j] : m->none_idx);
-                const uint32_t bw = row_wide(m, rr, cw);
-                const uint32_t bm = row_mid(m, rr, cm);
-                const uint32_t bl = row_len(m, len, rr, cl);
+                const uint32_t bw = beam_row_wide(m, rr, cw);
+                const uint32_t bm = beam_row_mid(m, rr, cm);
+                const uint32_t bl = beam_row_len(m, len, rr, cl);
                 if (!bump(ac, BEAM_BWD, bw, bm, bl, scored, g)) {
                     oom = true; break;
                 }

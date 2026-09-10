@@ -1,4 +1,3 @@
-beam_aa_to_bit
 beam_clear_error
 beam_count_block_free
 beam_crc32c

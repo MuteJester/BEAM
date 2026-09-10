@@ -58,25 +58,4 @@ typedef enum {
 #define BEAM_START_SENTINEL '@'
 #define BEAM_END_SENTINEL   '$'
 
-/**
- * Map a character to a bit index for the walk dictionary bitmask.
- *
- * Bits 0-19:  Standard amino acids (A,C,D,E,F,G,H,I,K,L,M,N,P,Q,R,S,T,V,W,Y)
- * Bit 20:     Start sentinel '@'
- * Bit 21:     End sentinel '$'
- * Bit 31:     Non-standard (ignored in bitmask checks)
- */
-uint8_t beam_aa_to_bit(char c);  /* implemented in src/native/core/common.c */
-
-/**
- * Compute the character bitmask for a string of length `len`.
- * Each amino acid sets its corresponding bit in the uint32.
- */
-BEAM_INLINE uint32_t beam_aa_bitmask(const char *s, uint32_t len) {
-    uint32_t mask = 0;
-    for (uint32_t i = 0; i < len; i++)
-        mask |= (1u << beam_aa_to_bit(s[i]));
-    return mask;
-}
-
 #endif /* BEAM_COMMON_H */

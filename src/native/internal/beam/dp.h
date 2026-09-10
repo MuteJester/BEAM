@@ -231,6 +231,31 @@ static inline uint64_t beam_logz_sweep_bytes(uint32_t n_states,
 }
 
 /**
+ * Peak bytes one TILTED forward sweep holds: a layer of edge weights,
+ * `n_vec` state vectors, and one byte per state for the alive mask.
+ *
+ * `n_vec` is 4 for the tilted partition function and 6 for the min-plus /
+ * max-plus range, which is the only thing that differs between the two
+ * callers. The layer of edge weights dominates both.
+ *
+ * Here rather than beside either allocation because there are four callers in
+ * two files -- each sweep's own guard and each driver's concurrency bound --
+ * and they must agree. `math/diversity.c` and `math/extrema.c` each carried a
+ * byte-identical private copy of this, each with a comment saying the figure
+ * came from one expression "so what is refused and what is scheduled agree by
+ * construction". Two copies is what that sentence rules out, and budget.h says
+ * so directly: "A budget check computed from its own copy of the formula is
+ * not a check."
+ */
+static inline uint64_t beam_tilted_sweep_bytes(uint32_t n_states,
+                                               uint32_t n_residues,
+                                               uint32_t n_vec) {
+    return (uint64_t)n_states * n_residues * sizeof(double)
+         + (uint64_t)n_vec * n_states * sizeof(double)
+         + n_states;
+}
+
+/**
  * Peak bytes one `beam_model_path_count` sweep holds: the residue-mask bits
  * and three state vectors. No layer of edge weights, because path counting
  * never asks what an edge weighs -- which is why this is so much smaller than

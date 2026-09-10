@@ -1,10 +1,20 @@
 /**
  * @file alphabet_aa.c
- * @brief The amino-acid alphabet: 20 residues, plus the walk-dictionary
- *        bit mapping that is unrelated to it.
+ * @brief The amino-acid alphabet: 20 residues and one sentinel.
  *
  * Twenty residues in the conventional single-letter order, plus one sentinel
  * at index 20 that pads contexts at the termini and is never emitted.
+ *
+ * It used to carry a second encoding as well -- `beam_aa_to_bit`, the
+ * FlashBack walk dictionary's bitmask, whose own section header opened by
+ * admitting it was "unrelated to the model's own alphabet". The two disagreed
+ * deliberately and in opposite directions: `'X'` and lower case are refused
+ * here and folded to bit 31 there, and `'@'` and `'$'` are residues there and
+ * not here. Neither had a caller, and the only thing that referenced either
+ * was `beam_aa_bitmask` in common.h, which had no caller either and mapped
+ * every non-standard byte to the same bit, so an all-lower-case sequence and
+ * an all-`X` sequence produced identical masks. Both are gone. A maintainer
+ * editing "the amino-acid table" now has one table in front of them.
  */
 #include "beam/common.h"
 #include "beam/model.h"
@@ -63,27 +73,3 @@ const BeamAlphabetInfo beam_alphabet_aa = {
     .char_to_idx        = beam_aa_char_to_idx,
     .idx_to_char        = aa_idx_to_char,
 };
-
-
-/* ── Walk-dictionary bit mapping ─────────────────────────────── */
-
-/*
- * Unrelated to the model's own alphabet: this is the FlashBack walk
- * dictionary's bitmask encoding, which has its own sentinels and its own
- * treatment of non-standard residues.
- */
-
-uint8_t beam_aa_to_bit(char c) {
-    switch (c) {
-        case 'A': return  0; case 'C': return  1; case 'D': return  2;
-        case 'E': return  3; case 'F': return  4; case 'G': return  5;
-        case 'H': return  6; case 'I': return  7; case 'K': return  8;
-        case 'L': return  9; case 'M': return 10; case 'N': return 11;
-        case 'P': return 12; case 'Q': return 13; case 'R': return 14;
-        case 'S': return 15; case 'T': return 16; case 'V': return 17;
-        case 'W': return 18; case 'Y': return 19;
-        case '@': return 20; /* start sentinel */
-        case '$': return 21; /* end sentinel */
-        default:  return 31; /* non-standard → high bit, ignored in bitmask */
-    }
-}

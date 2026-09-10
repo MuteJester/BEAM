@@ -361,6 +361,63 @@ static void test_the_union_ceiling_binds_only_the_union(void) {
     PASS();
 }
 
+/**
+ * The PER-LENGTH union refuses above the ceiling too, and identically.
+ *
+ * This is the entry point whose safety actually depends on the check.
+ * `beam_mixture_support_union` declares `LiveHandle h[BEAM_MIXTURE_MAX_MEMBERS]`
+ * and `const BeamLive *L[...]` as fixed stack arrays indexed by member, so a
+ * ceiling that failed here would be a stack smash rather than a wrong number --
+ * and until this test, the only coverage was on
+ * `beam_mixture_support_union_by_length`, which has no such arrays.
+ *
+ * The two refusals were separate hand-maintained copies of the same eleven
+ * lines. They are one function now, and this asserts both callers reach it and
+ * say the same thing, which is what stops them becoming two again.
+ */
+static void test_both_union_entry_points_enforce_the_same_ceiling(void) {
+    BeamModel *m = build(TRAIN_A, WEIGHT_A, N_A, 2);
+    ASSERT_MSG(m, "model did not build");
+    const uint32_t over = BEAM_MIXTURE_MAX_MEMBERS + 1u;
+    const BeamModel **many =
+        (const BeamModel **)malloc((size_t)over * sizeof(*many));
+    ASSERT_MSG(many, "allocation");
+    for (uint32_t i = 0; i < over; ++i) many[i] = m;
+
+    double one = 0.0;
+    const BeamError per_length =
+        beam_mixture_support_union(many, over, 5u, 0, &one, NULL);
+    static char msg_a[512];
+    snprintf(msg_a, sizeof msg_a, "%s", beam_error_message());
+
+    double all = 0.0;
+    const BeamError pooled =
+        beam_mixture_support_union_by_length(many, over, 0, NULL, &all, NULL);
+    static char msg_b[512];
+    snprintf(msg_b, sizeof msg_b, "%s", beam_error_message());
+
+    /* And at the ceiling itself it is not refused, so the bound is `>` and not
+     * `>=`: an off-by-one here costs a caller the largest mixture that fits. */
+    const BeamError at = beam_mixture_support_union(many,
+                                                    BEAM_MIXTURE_MAX_MEMBERS,
+                                                    5u, 0, &one, NULL);
+    free(many);
+    beam_model_destroy(m);
+
+    ASSERT_MSG(per_length == BEAM_ERR_PARAM_OUT_OF_RANGE,
+               "the union that indexes fixed stack arrays by member did not "
+               "enforce its own ceiling");
+    ASSERT_MSG(pooled == BEAM_ERR_PARAM_OUT_OF_RANGE,
+               "the per-length union did not enforce the ceiling");
+    ASSERT_MSG(strcmp(msg_a, msg_b) == 0,
+               "the two entry points refuse with different messages, so they "
+               "are not sharing the check");
+    ASSERT_MSG(at != BEAM_ERR_PARAM_OUT_OF_RANGE,
+               "a mixture of exactly BEAM_MIXTURE_MAX_MEMBERS was refused, so "
+               "the ceiling is off by one");
+    PASS();
+}
+
 static void test_the_gram_matrix_matches_the_pairs_one_at_a_time(void) {
     /*
      * The driver exists for its parallelism, so what has to be checked is that
@@ -428,6 +485,7 @@ int main(void) {
     RUN_TEST(test_members_of_different_shapes_are_refused);
     RUN_TEST(test_an_unfinalized_member_is_refused);
     RUN_TEST(test_the_union_ceiling_binds_only_the_union);
+    RUN_TEST(test_both_union_entry_points_enforce_the_same_ceiling);
     RUN_TEST(test_the_gram_matrix_matches_the_pairs_one_at_a_time);
 
     printf("\n==============================================================\n");
