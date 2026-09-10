@@ -34,7 +34,9 @@ src/native/io/model_file.c
 
 src/native/math/cumulants.c
 src/native/math/diversity.c
+src/native/math/expected_counts.c
 src/native/math/extrema.c
+src/native/math/fb_sweep.c
 src/native/math/marginals.c
 src/native/math/mellin.c
 src/native/math/moments.c
@@ -82,6 +84,7 @@ src/native/storage/sparse_rows.c
 # Memory management: the allocator policy, the scratch budget, what a model
 # reports about its size, and what the per-length cache keeps.
 src/native/memory/accounting.c
+src/native/memory/account.c
 src/native/memory/allocator.c
 src/native/memory/budget.c
 src/native/memory/live_cache.c

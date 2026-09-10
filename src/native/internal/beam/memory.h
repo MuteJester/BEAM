@@ -9,6 +9,7 @@
  *
  *   allocator.c    how the process allocator is configured, and why
  *   budget.c       the scratch one operation may hold at once
+ *   account.c      the running total one operation has taken against it
  *   accounting.c   what a model reports about its own size
  *   live_cache.c   what the per-length cache keeps, and when it lets go
  *
@@ -24,6 +25,59 @@
 #include "beam/model.h"
 #include "beam/model_state.h"
 #include "beam/live_frontier.h"   /* BeamLive, named below */
+
+/* ── account.c ───────────────────────────────────────────────── */
+
+/**
+ * What a single operation currently holds against the memory budget.
+ *
+ * The budget is "the most scratch ONE OPERATION may hold at once", and an
+ * operation is usually several allocations that are live together: a
+ * forward-backward workspace, a set of accumulators, the answer they emit.
+ * Checking each against the whole budget independently is not observing it --
+ * four allocations that each pass at 90% of the figure hold three and a half
+ * times it between them. One account, opened by the entry point, and each
+ * allocation asks for what is left.
+ *
+ * ZERO-INITIALISE and pass by pointer. There is deliberately no constructor
+ * and no null-account convenience: an optional account is what
+ * `math/positional.c` had first, where the reader tested for null and the
+ * writer did not, so the one caller that passed nothing dereferenced it. An
+ * account that is always there has no half of the contract to get wrong.
+ *
+ * `peak` is the high-water mark, which is what an operation should REPORT: a
+ * caller sizing a job needs what was actually held, and for anything whose
+ * footprint depends on its answer rather than on its inputs that figure
+ * cannot be predicted, only measured.
+ *
+ * `err` carries a refusal out of a function with no room to return one --
+ * `double *` with NULL for failure, say. Without it a budget refusal and a
+ * genuine allocation failure reach the caller as the same bare code and the
+ * message naming the figure and the way out is lost. The account records
+ * WHICH; the wording stays with the caller, which is the only place that
+ * knows what it was allocating.
+ */
+typedef struct {
+    uint64_t  held;     /**< bytes this operation currently holds   */
+    uint64_t  peak;     /**< the most it held at once, for reporting */
+    BeamError err;      /**< BEAM_OK, or the refusal that stopped it */
+} BeamMemAccount;
+
+/** How much of the budget is still unclaimed. Zero, never negative. */
+uint64_t beam_account_room(const BeamMemAccount *a);
+
+/**
+ * Take `bytes` if they fit, and say whether they did. Sets no error: the
+ * caller words its own, because only the caller knows what it was for.
+ *
+ * REFUSE BEFORE ALLOCATING, as budget.h requires. Charge the figure you are
+ * about to hand `malloc`, and allocate only if this returns true.
+ */
+bool beam_account_take(BeamMemAccount *a, uint64_t bytes);
+
+/** Give `bytes` back. Never more than was taken. */
+void beam_account_release(BeamMemAccount *a, uint64_t bytes);
+
 
 /* ── allocator.c ─────────────────────────────────────────────── */
 
