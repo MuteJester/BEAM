@@ -4,11 +4,29 @@ Evidence for the reorganization, tracked in the repository rather than left in
 an ignored directory. It was in `.private/` until a reviewer pointed out that
 `git clean -fdx` would have destroyed the only copies.
 
+## Which interpreter
+
+Run the gate as `.venv/bin/python verification/check.py`, and re-record any
+baseline the same way.
+
+Not a style preference. The test inventory compares what the running
+interpreter collects against a list recorded from another, and
+`tests/python/io/test_parquet_streaming.py` opens with
+`pytest.importorskip("pyarrow")` at module level. An interpreter without
+pyarrow collects nothing from that file, `--collect-only` reports "636 tests
+collected" instead of 642 with no error and no skip count, and the six cases
+look deleted. Re-recording from there would delete them.
+
+The gate now refuses rather than reporting that as missing tests: a file the
+baseline knows about, still on disk, that collected nothing here, is an
+environment fault and is named as one. A file that is genuinely gone still
+reads as missing tests, which is the distinction that matters.
+
 ## Run anything that builds a model under `verification/bounded`
 
 ```bash
-verification/bounded -m 12 -t 900 -- python -m pytest tests -q
-PYTHONPATH=src verification/bounded -- python verification/check.py
+verification/bounded -m 12 -t 900 -- .venv/bin/python -m pytest tests -q
+PYTHONPATH=src verification/bounded -- .venv/bin/python verification/check.py
 ```
 
 Not optional, and not only for sweeps. BEAM can be asked for a configuration
@@ -30,8 +48,8 @@ it went wrong both times.
 
 ```bash
 make clean && make test          # 66 C tests
-python -m pytest tests -q        # Python suite
-python verification/check.py     # the contract below
+.venv/bin/python -m pytest tests -q     # Python suite
+.venv/bin/python verification/check.py    # the contract below
 ```
 
 `check.py` compares, against `baseline/`:

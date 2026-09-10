@@ -189,12 +189,49 @@ else:
 root = ROOT
 # splitlines, not split(): a parametrised id can contain spaces, and
 # whitespace-splitting silently truncates it to the first word.
-py_want = {l.split("::", 1)[1] for l in (B / "pytest_cases.txt").read_text().splitlines()
-           if "::" in l}
+py_want_lines = [l.strip() for l in (B / "pytest_cases.txt").read_text().splitlines()
+                 if "::" in l]
+py_want = {l.split("::", 1)[1] for l in py_want_lines}
 out = subprocess.run([sys.executable, "-m", "pytest", str(root / "tests"), "-q",
                       "--collect-only"], capture_output=True, text=True, cwd=root).stdout
-py_got = {l.split("::", 1)[1] for l in out.splitlines() if "::" in l}
-check("pytest inventory", sorted(py_got), sorted(py_want))
+py_got_lines = [l.strip() for l in out.splitlines() if "::" in l]
+py_got = {l.split("::", 1)[1] for l in py_got_lines}
+
+# ── Is this interpreter able to see the whole suite? ───────────────────────
+# The inventory compares what THIS environment collects against a list
+# recorded from another, so an environment that cannot import a test module
+# reports its cases as deleted. `tests/python/io/test_parquet_streaming.py`
+# opens with `pytest.importorskip("pyarrow")` at MODULE level: without pyarrow
+# the file yields nothing, `--collect-only` says "636 tests collected" instead
+# of 642 with no error, no skip count and no mention of the file, and the
+# check fails with six names under `missing`. The obvious response to that --
+# re-record the baseline -- deletes them.
+#
+# Module level is what makes it invisible. Three other files call
+# `importorskip` inside a test function; those cases are still collected and
+# merely skip at run time, which the inventory sees correctly.
+#
+# So the environment is checked before the comparison, by a route that does
+# not depend on pytest's output format: a file the baseline knows about, that
+# is still on disk, and that produced nothing here, means this interpreter
+# cannot collect it. That is a different fact from "the tests were removed"
+# and it is reported differently.
+silent = sorted({l.split("::", 1)[0] for l in py_want_lines}
+                - {l.split("::", 1)[0] for l in py_got_lines}
+                - {f for f in {l.split("::", 1)[0] for l in py_want_lines}
+                   if not (root / f).exists()})
+if silent:
+    fail.append("pytest inventory (environment)")
+    print("  FAIL  pytest inventory: this interpreter cannot collect the "
+          "whole suite")
+    for f in silent:
+        print(f"          silent : {f}  (on disk, collected nothing here)")
+    print(f"          running: {sys.executable}")
+    print("          Re-recording the baseline from here would DELETE those "
+          "cases. Run the gate under the environment that can import them; "
+          "in this repo that is .venv/bin/python.")
+else:
+    check("pytest inventory", sorted(py_got), sorted(py_want))
 
 c_want = (B / "c_cases.txt").read_text().split()   # C names have no spaces
 c_got = re.findall(r"RUN_TEST\((\w+)\)",
