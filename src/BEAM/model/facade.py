@@ -2009,6 +2009,22 @@ class BeamModel:
 
     # ── Spectrum analytics under the graph models' names ────────
 
+    @property
+    def insights(self):
+        """Derived, plottable views of this model -- see :mod:`BEAM.insights`.
+
+        An accessor rather than a method per quantity, so the package can
+        grow without `BeamModel` growing a method for everything anyone ever
+        wants derived from one.
+
+        Example:
+            >>> s = model.insights.logos(15, pseq_below=1e-9)
+            >>> s[0].consensus_sequence
+            'CASSLGGGGGYEQYF'
+        """
+        from ..insights import _Insights
+        return _Insights(self)
+
     def pseq_analysis(self) -> PseqAnalysis:
         """An :class:`PseqAnalysis` over this model.
 

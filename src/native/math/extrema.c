@@ -76,7 +76,8 @@ static double accumulator_max_at(const BeamModel *m, uint32_t len) {
     uint8_t *alive = (uint8_t *)malloc(S);
     LiveHandle h;
     if (!alive || beam_live_acquire(m, len, &h) != BEAM_OK) {
-        /* `range_at` below returns BEAM_EALLOC from the identical branch.
+        /* `beam_surprisal_range_at` below returns BEAM_EALLOC from the
+         * identical branch.
          * This one set nothing, so 0.0 reached the binding's guard with a
          * clean error context and was served as an answer. */
         if (!alive) (void)BEAM_EALLOC("the accumulator frontier mask");
@@ -180,12 +181,9 @@ double beam_model_accumulator_max(const BeamModel *m) {
 
 /* ── Surprisal range ─────────────────────────────────────────── */
 
-/**
- * Min-plus and max-plus sweeps over one length, giving the exact extremes of
- * `-ln P` among producible sequences of that length.
- */
-static BeamError range_at(const BeamModel *m, uint32_t len,
-                         double *out_min, double *out_max) {
+/* Declared in math_internal.h; see there for why it is shared. */
+BeamError beam_surprisal_range_at(const BeamModel *m, uint32_t len,
+                                  double *out_min, double *out_max) {
     const uint32_t A = m->n_alphabet;
     const uint32_t R = m->n_residues;
     const uint32_t S = m->n_states;
@@ -212,7 +210,8 @@ static BeamError range_at(const BeamModel *m, uint32_t len,
     uint8_t *alive = (uint8_t *)malloc(S);
     LiveHandle h;
     if (!alive || beam_live_acquire(m, len, &h) != BEAM_OK) {
-        /* `range_at` below returns BEAM_EALLOC from the identical branch.
+        /* `beam_surprisal_range_at` below returns BEAM_EALLOC from the
+         * identical branch.
          * This one set nothing, so 0.0 reached the binding's guard with a
          * clean error context and was served as an answer. */
         if (!alive) (void)BEAM_EALLOC("the accumulator frontier mask");
@@ -292,7 +291,7 @@ BeamError beam_model_surprisal_range(const BeamModel *m,
 #endif
     for (int64_t k = 0; k < (int64_t)nw; ++k) {
         double a = 0.0, b = 0.0;
-        const BeamError e = range_at(m, work[k], &a, &b);
+        const BeamError e = beam_surprisal_range_at(m, work[k], &a, &b);
         if (e != BEAM_OK) { if ((int)e > failed) failed = (int)e; continue; }
         if (a < best) best = a;
         if (b > worst) worst = b;

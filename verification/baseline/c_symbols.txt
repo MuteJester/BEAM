@@ -33,6 +33,9 @@ beam_frozen_memory_bytes
 beam_frozen_row
 beam_frozen_row_id
 beam_frozen_thaw
+beam_insights_logo_cost
+beam_insights_logo_set_free
+beam_insights_logos
 beam_last_error
 beam_layer_max
 beam_layer_weights
@@ -47,6 +50,7 @@ beam_live_free
 beam_live_lengths_desc
 beam_live_release
 beam_live_selfcheck
+beam_logo_request_default
 beam_mellin_terms
 beam_memory_init
 beam_mix
@@ -122,6 +126,7 @@ beam_model_threads
 beam_model_top_k
 beam_model_topology
 beam_model_total_weight
+beam_positional_banded_bytes
 beam_publicness_accumulate
 beam_publicness_accumulate_grouped
 beam_publicness_moments
@@ -197,6 +202,7 @@ beam_sparse_seal_rank
 beam_sparse_shrink
 beam_spectrum_spacing
 beam_state_weights
+beam_surprisal_range_at
 beam_tail_weights
 beam_threads
 beam_to_log_inplace

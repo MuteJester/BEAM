@@ -83,6 +83,10 @@ PyObject *py_path_count(PyObject *self, PyObject *args);
 PyObject *py_path_count_total(PyObject *self, PyObject *arg);
 PyObject *py_positional_marginals(PyObject *self, PyObject *args);
 PyObject *py_positional_banded(PyObject *self, PyObject *args);
+
+/* insights_bindings.c */
+PyObject *py_insights_logos(PyObject *self, PyObject *args);
+PyObject *py_insights_logo_cost(PyObject *self, PyObject *args);
 PyObject *py_posterior(PyObject *self, PyObject *args);
 PyObject *py_publicness_accumulate(PyObject *self, PyObject *args);
 PyObject *py_publicness_accumulate_grouped(PyObject *self, PyObject *args);

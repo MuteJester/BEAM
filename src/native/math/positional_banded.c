@@ -121,7 +121,9 @@
  * Scratch this sweep holds at once, in bytes, from the SAME expressions the
  * allocations below use. The backward pool dominates everything else.
  */
-static uint64_t banded_bytes(const BeamModel *m, uint32_t bins,
+/* Declared in math_internal.h so `insights/logo.c` can estimate this sweep
+ * from the SAME expression that guards it. */
+uint64_t beam_positional_banded_bytes(const BeamModel *m, uint32_t bins,
                              uint32_t bbins, uint64_t slots, uint32_t maxlive,
                              uint32_t len, uint32_t n_thr) {
     const uint64_t S = m->n_states;
@@ -540,7 +542,8 @@ BeamError beam_model_positional_banded(const BeamModel *m, uint32_t length,
     const uint32_t bbins = bins + pad;
 
     const uint64_t need =
-        banded_bytes(m, bins, bbins, slots, maxlive, length, n_edges);
+        beam_positional_banded_bytes(m, bins, bbins, slots, maxlive,
+                                     length, n_edges);
     if (!beam_budget_fits(need)) {
         free(tail);
         beam_live_release(&lh);

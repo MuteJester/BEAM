@@ -85,6 +85,8 @@ static PyMethodDef module_methods[] = {
     {"topology",           py_topology,                      METH_VARARGS, NULL},
     {"positional_marginals", py_positional_marginals,        METH_VARARGS, NULL},
     {"positional_banded",    py_positional_banded,           METH_VARARGS, NULL},
+    {"insights_logos",       py_insights_logos,              METH_VARARGS, NULL},
+    {"insights_logo_cost",   py_insights_logo_cost,          METH_VARARGS, NULL},
     {"expected_counts",    py_expected_counts,               METH_VARARGS, NULL},
     {"query_probability",  py_query_probability,             METH_VARARGS, NULL},
     {"query_marginals",    py_query_marginals,               METH_VARARGS, NULL},

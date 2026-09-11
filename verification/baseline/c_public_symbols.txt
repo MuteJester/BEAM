@@ -4,7 +4,11 @@ beam_crc32c
 beam_crc32c_software
 beam_crc32c_update
 beam_error_message
+beam_insights_logo_cost
+beam_insights_logo_set_free
+beam_insights_logos
 beam_last_error
+beam_logo_request_default
 beam_mixture_check_shape
 beam_mixture_gram
 beam_mixture_log_inner_product

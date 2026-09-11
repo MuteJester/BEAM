@@ -126,6 +126,7 @@ class BeamModel:
   def hill_curve(self, orders: 'Iterable[float] | None' = None) -> 'dict[str, np.ndarray]'
   def hill_number(self, alpha: 'float') -> 'float'
   def hill_numbers(self, orders: 'Iterable[float]') -> 'np.ndarray'
+  property insights
   property is_dag
   property length_distribution
   def length_marginals(self) -> 'dict[str, np.ndarray]'

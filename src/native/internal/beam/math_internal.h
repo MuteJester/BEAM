@@ -43,6 +43,40 @@ BeamError beam_mellin_terms(const BeamModel *m, double q, double *terms,
 BeamError beam_spectrum_spacing(const BeamModel *m, uint32_t bins,
                                 double spacing, double *out_ds);
 
+/**
+ * Exact extremes of `-ln P` among the producible sequences of ONE length.
+ *
+ * Two sweeps, min-plus and max-plus, and nothing else -- which is why it is
+ * shared. `insights/logo.c` needs it to refuse a surprisal band that lies
+ * outside what a length can attain, and it must refuse BEFORE allocating: the
+ * banded sweep it would otherwise run holds gigabytes, where this holds a
+ * handful of arrays over the state space.
+ *
+ * `beam_model_surprisal_range` is the public form over every length, and is
+ * too loose for that check -- a band can sit inside the model's whole range
+ * and outside this length's.
+ */
+BeamError beam_surprisal_range_at(const BeamModel *m, uint32_t len,
+                                  double *out_min, double *out_max);
+
+/**
+ * Scratch a banded positional sweep holds at once, in bytes.
+ *
+ * The figure `beam_model_positional_banded` refuses on, exposed so that
+ * `beam_insights_logo_cost` reports the same number rather than a second
+ * derivation of it. `budget.h` requires a guard and its allocation to come
+ * from one expression; an estimator that disagrees with the guard is the same
+ * defect wearing a different hat.
+ *
+ * `bbins` is the padded grid width. A caller estimating before the sweep does
+ * not know the padding -- it comes from the sink weights -- and should pass
+ * `bins`, which makes the answer a slight underestimate.
+ */
+uint64_t beam_positional_banded_bytes(const BeamModel *m, uint32_t bins,
+                                      uint32_t bbins, uint64_t slots,
+                                      uint32_t maxlive, uint32_t len,
+                                      uint32_t n_thr);
+
 /* ── Log-space accumulation ──────────────────────────────────── */
 
 /**

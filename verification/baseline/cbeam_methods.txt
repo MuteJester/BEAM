@@ -12,6 +12,8 @@ expected_counts
 explain
 finalize
 hill_number
+insights_logo_cost
+insights_logos
 is_finalized
 length_derivatives
 length_marginals

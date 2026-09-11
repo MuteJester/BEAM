@@ -239,6 +239,28 @@ def tier1(report):
             report(f"{tag}: positional_marginals L={L}",
                    m.positional_marginals(L), marg, abs_=ABS)
 
+            #
+            # The sequence logo, against entropy computed by hand from the
+            # same enumeration. It goes here rather than in the numeric
+            # baseline because that baseline pins a quantity against a
+            # recording of ITSELF: a logo wrong from the day it was written
+            # would pass it forever. This is the only place the arithmetic
+            # meets a reference that shares none of its code.
+            #
+            g = m.insights.logo(L)
+            nz = marg > 0.0
+            ent = np.zeros(L)
+            np.add.at(ent, np.nonzero(nz)[0],
+                      -(marg[nz] * np.log2(marg[nz])))
+            report(f"{tag}: logo probability L={L}", g.probability, marg,
+                   abs_=ABS)
+            report(f"{tag}: logo entropy_bits L={L}", g.entropy_bits, ent,
+                   abs_=ABS)
+            report(f"{tag}: logo information_bits L={L}", g.information_bits,
+                   math.log2(len(AA)) - ent, abs_=ABS)
+            report(f"{tag}: logo height_bits L={L}", g.height_bits,
+                   marg * (math.log2(len(AA)) - ent)[:, None], abs_=ABS)
+
             # A clamp the model can satisfy, chosen from the marginals.
             pos = 1
             res = AA[int(np.argmax(marg[pos]))]

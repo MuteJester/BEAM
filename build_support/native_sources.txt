@@ -30,6 +30,8 @@ src/native/dp/rescale.c
 src/native/dp/path_count.c
 src/native/dp/topology.c
 
+src/native/insights/logo.c
+
 src/native/io/model_file.c
 
 src/native/math/cumulants.c

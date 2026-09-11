@@ -1029,3 +1029,40 @@ The gate had been reporting all of them as notes rather than failures --
 correctly, since none is declared in `include/beam/` -- and they entered the
 recorded set the moment it was re-recorded for any reason. Nothing public was
 removed; `c_public_symbols.txt` lost nothing.
+
+
+# Why six baselines were re-recorded for the insights module
+
+Re-recorded 2026-09-11 for `beam_insights_logos` and the `insights`
+subpackage. Previous copies kept as `*.preinsights.txt`.
+
+Compared as SETS, which is how `check.py` compares them. **Nothing was
+removed from any of the six.**
+
+- `cbeam_methods.txt`   +2: `insights_logos`, `insights_logo_cost`
+- `c_public_symbols.txt` +4: the two entry points, `beam_logo_request_default`
+  and `beam_insights_logo_set_free`
+- `python_api.txt`      +1: `BeamModel.insights`
+- `pytest_cases.txt`   +24: `tests/python/insights/test_logo.py`
+- `c_cases.txt`        +12: `tests/native/test_insights_logo.c`
+- `c_symbols.txt`       +6: the four public ones above, plus two internals
+
+The two internal symbols are worth naming, because both are `static`
+functions that became shared and neither is public API:
+
+  - `beam_surprisal_range_at`, previously `range_at` in `math/extrema.c`.
+    The logo layer refuses a band outside the surprisal a length can attain,
+    and must do so BEFORE allocating -- two sweeps over the state space
+    against a pool measured in gigabytes.
+  - `beam_positional_banded_bytes`, previously `banded_bytes` in
+    `math/positional_banded.c`, so `beam_insights_logo_cost` reports the same
+    figure the sweep is guarded on. `budget.h` requires a guard and its
+    allocation to come from one expression; an estimator that disagreed with
+    the guard would be that defect wearing a different hat.
+
+`exact.py` grew from 280 quantities to 336: the logo's probability, entropy,
+information and heights are now checked against entropy computed by hand from
+the enumerated support. That is deliberate placement. `numeric.json` pins a
+quantity against a recording of itself, so a logo wrong from the day it was
+written would pass it forever; `exact.py` is the only check with an
+independent reference.
