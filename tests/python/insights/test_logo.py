@@ -127,6 +127,38 @@ def test_pseq_above_and_below_are_complementary(model):
     assert hi_p.fraction + lo_p.fraction == pytest.approx(1.0)
 
 
+def test_surprisal_keywords_select_the_same_sequences_as_the_pseq_ones(model):
+    """The reversal, pinned rather than trusted.
+
+    Surprisal is the native axis, so `surprisal_*` needs no conversion and
+    `pseq_*` does. The trap is that "above" means opposite things on the two:
+    rarer is HIGHER surprisal and LOWER probability, so `surprisal_above` and
+    `pseq_below` are the same request. Getting it backwards returns a
+    perfectly plausible logo of the wrong sequences, which is why this
+    compares the arrays rather than the band edges.
+    """
+    t = math.exp(-CUT)
+    common_p = model.insights.logo(L_ENUM, pseq_above=t, bins=2048)
+    common_s = model.insights.logo(L_ENUM, surprisal_below=CUT, bins=2048)
+    rare_p = model.insights.logo(L_ENUM, pseq_below=t, bins=2048)
+    rare_s = model.insights.logo(L_ENUM, surprisal_above=CUT, bins=2048)
+
+    assert np.array_equal(common_p.probability, common_s.probability)
+    assert np.array_equal(rare_p.probability, rare_s.probability)
+    assert common_s.fraction + rare_s.fraction == pytest.approx(1.0)
+    # And they are genuinely different bands, or the equalities above would
+    # hold for a stopped clock.
+    assert not np.allclose(common_s.probability, rare_s.probability)
+
+
+def test_edges_in_nats_need_no_conversion(model):
+    """`edges` is the native axis, so it must agree with the keyword form."""
+    a = model.insights.logo(L_ENUM, edges=[-math.inf, CUT], bins=2048)
+    b = model.insights.logo(L_ENUM, surprisal_below=CUT, bins=2048)
+    assert np.array_equal(a.probability, b.probability)
+    assert a.lo_nats == b.lo_nats and a.hi_nats == b.hi_nats
+
+
 def test_the_bands_recombine_into_the_pooled_logo(model):
     """Mass-weighting the bands undoes the conditioning.
 
@@ -216,6 +248,8 @@ def test_the_nucleotide_ceiling_is_log2_of_five_unless_asked_otherwise(nt_model)
 
 @pytest.mark.parametrize("kw,fragment", [
     ({"pseq_above": 2.0},                    "between 0 and 1"),
+    ({"surprisal_above": -3.0},              "never negative"),
+    ({"surprisal_below": math.inf},          "finite number of nats"),
     ({"pseq_above": 0.0},                    "between 0 and 1"),
     ({"edges": [5.0, 3.0]},                  "ascend strictly"),
     ({"edges": [0.0, math.nan]},             "NaN"),
@@ -228,9 +262,17 @@ def test_a_malformed_request_is_refused_by_name(model, kw, fragment):
         model.insights.logo(L_ENUM, **kw)
 
 
-def test_two_conditions_at_once_are_refused(model):
+@pytest.mark.parametrize("kw", [
+    {"pseq_above": 0.5, "pseq_below": 0.5},
+    {"surprisal_above": 3.0, "pseq_below": 0.5},
+    {"surprisal_below": 3.0, "edges": [0.0, 3.0]},
+])
+def test_two_conditions_at_once_are_refused(model, kw):
+    """Mixing axes is the mistake worth catching: a caller who gives both a
+    probability and a surprisal has almost certainly confused which is
+    which."""
     with pytest.raises(ValueError, match="at most one of"):
-        model.insights.logo(L_ENUM, pseq_above=0.5, pseq_below=0.5)
+        model.insights.logo(L_ENUM, **kw)
 
 
 def test_a_length_the_model_cannot_produce_is_refused(model):

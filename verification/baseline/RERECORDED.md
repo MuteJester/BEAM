@@ -1042,8 +1042,10 @@ removed from any of the six.**
 - `cbeam_methods.txt`   +2: `insights_logos`, `insights_logo_cost`
 - `c_public_symbols.txt` +4: the two entry points, `beam_logo_request_default`
   and `beam_insights_logo_set_free`
-- `python_api.txt`      +1: `BeamModel.insights`
-- `pytest_cases.txt`   +24: `tests/python/insights/test_logo.py`
+- `python_api.txt`      +1: `BeamModel.insights`. Its signature was recorded
+  twice in the same session: `surprisal_above` / `surprisal_below` were added
+  after the first recording, so that both axes have named keywords.
+- `pytest_cases.txt`   +30: `tests/python/insights/test_logo.py`
 - `c_cases.txt`        +12: `tests/native/test_insights_logo.c`
 - `c_symbols.txt`       +6: the four public ones above, plus two internals
 

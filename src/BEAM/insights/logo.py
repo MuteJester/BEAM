@@ -15,20 +15,32 @@ from .results import Logo, LogoSet
 _TOP = math.inf
 
 
-def _edges_from(pseq_above, pseq_below, edges, length):
+def _edges_from(pseq_above, pseq_below, surprisal_above, surprisal_below,
+                edges, length):
     """Turn the caller's condition into ascending surprisal edges.
 
-    The reversal lives here, at the boundary the caller thinks in. Inside the
-    library everything is nats of surprisal ascending, and a probability
-    threshold entering there would invert an axis in the middle of code that
-    has no other reason to think about probabilities.
+    Surprisal is the native axis, so `surprisal_*` and `edges` need no
+    conversion; `pseq_*` does, and the reversal lives here, at the boundary
+    the caller thinks in. Inside the library everything is nats ascending, and
+    a probability threshold entering there would invert an axis in the middle
+    of code with no other reason to think about probabilities.
+
+    Note which way each pair runs, because "above" means opposite things on
+    the two axes: `pseq_above` and `surprisal_below` select the SAME
+    sequences, the common ones.
     """
-    named = sum(x is not None for x in (pseq_above, pseq_below, edges))
-    if named > 1:
+    given = {k: v for k, v in (("pseq_above", pseq_above),
+                               ("pseq_below", pseq_below),
+                               ("surprisal_above", surprisal_above),
+                               ("surprisal_below", surprisal_below),
+                               ("edges", edges)) if v is not None}
+    if len(given) > 1:
         raise ValueError(
-            "give at most one of pseq_above, pseq_below or edges; they are "
-            "three ways of saying which sequences the logo is over")
-    if named == 0:
+            f"give at most one of pseq_above, pseq_below, surprisal_above, "
+            f"surprisal_below or edges; they are ways of saying which "
+            f"sequences the logo is over, and you gave "
+            f"{', '.join(sorted(given))}")
+    if not given:
         return None
     if edges is not None:
         e = np.ascontiguousarray(np.asarray(edges, dtype=np.float64).ravel())
@@ -37,14 +49,29 @@ def _edges_from(pseq_above, pseq_below, edges, length):
                 f"{e.size} band edge(s) define no band; two ascending edges "
                 f"define one")
         return e
+
+    if surprisal_above is not None or surprisal_below is not None:
+        cut = float(surprisal_above if surprisal_above is not None
+                    else surprisal_below)
+        if not math.isfinite(cut) or cut < 0.0:
+            raise ValueError(
+                f"a surprisal threshold is a finite number of nats and is "
+                f"never negative, got {cut!r}. A negative one is almost "
+                f"always ln(p) where -ln(p) was meant")
+        # Rarer is HIGHER surprisal, so "above" is the upper band. This is the
+        # opposite way round from the probability keywords, which is why they
+        # are named for their own axis rather than sharing one word.
+        if surprisal_above is not None:
+            return np.array([cut, _TOP], dtype=np.float64)
+        return np.array([-_TOP, cut], dtype=np.float64)
+
     t = float(pseq_above if pseq_above is not None else pseq_below)
     if not (0.0 < t < 1.0):
         raise ValueError(
             f"a Pseq threshold is a probability strictly between 0 and 1, "
             f"got {t!r}")
     cut = -math.log(t)
-    # Above in probability is BELOW in surprisal, and vice versa. This one
-    # line is the whole reason the keywords exist.
+    # Above in probability is BELOW in surprisal, and vice versa.
     if pseq_above is not None:
         return np.array([-_TOP, cut], dtype=np.float64)
     return np.array([cut, _TOP], dtype=np.float64)
@@ -86,7 +113,8 @@ def _args(g, length, edges, counting, bins, spacing, reference_residues,
             int(reference_residues), float(max_resolution_error))
 
 
-def logos(model, length, *, pseq_above=None, pseq_below=None, edges=None,
+def logos(model, length, *, pseq_above=None, pseq_below=None,
+          surprisal_above=None, surprisal_below=None, edges=None,
           counting=False, bins=0, spacing=0.0, reference_residues=0,
           max_resolution_error=0.0) -> LogoSet:
     """Sequence logos for one length, optionally split by Pseq.
@@ -98,6 +126,12 @@ def logos(model, length, *, pseq_above=None, pseq_below=None, edges=None,
             form.
         pseq_above: keep only sequences with ``Pseq > t``. One logo.
         pseq_below: keep only sequences with ``Pseq <= t``. One logo.
+        surprisal_above: keep only sequences with ``-ln Pseq >= s``, in nats
+            -- the RARE ones. Note the reversal: ``surprisal_above`` and
+            ``pseq_below`` select the same sequences, and so do
+            ``surprisal_below`` and ``pseq_above``. Surprisal is the native
+            axis, so these need no conversion.
+        surprisal_below: keep only sequences with ``-ln Pseq < s``, in nats.
         edges: surprisal edges in nats, ascending, for full control;
             ``n`` edges give ``n - 1`` logos. ``inf`` is allowed at either
             end and is resolved against the grid.
@@ -129,13 +163,15 @@ def logos(model, length, *, pseq_above=None, pseq_below=None, edges=None,
             returned, because a logo of nothing comes back as maximum
             information content at every position.
 
-        >>> s = model.insights.logos(15, pseq_below=1e-9)
+        >>> s = model.insights.logos(15, surprisal_above=20.7)   # nats
+        >>> s = model.insights.logos(15, pseq_below=1e-9)          # the same
         >>> s[0].consensus_sequence
         'CASSLGGGGGYEQYF'
         >>> s[0].information_bits.round(2)[:4]
         array([4.32, 3.91, 2.87, 2.34])
     """
-    e = _edges_from(pseq_above, pseq_below, edges, length)
+    e = _edges_from(pseq_above, pseq_below, surprisal_above, surprisal_below,
+                    edges, length)
     a = _args(model._g, length, e, counting, bins, spacing,
               reference_residues, max_resolution_error)
     (raw, n_res, alpha, ref, max_bits, max_nats, on_grid, whole, spc,
@@ -166,7 +202,8 @@ def logo(model, length, **kw) -> Logo:
     return s[0]
 
 
-def cost(model, length, *, pseq_above=None, pseq_below=None, edges=None,
+def cost(model, length, *, pseq_above=None, pseq_below=None,
+         surprisal_above=None, surprisal_below=None, edges=None,
          counting=False, bins=0, spacing=0.0, reference_residues=0,
          max_resolution_error=0.0) -> dict:
     """What :func:`logos` will cost, without running it.
@@ -177,7 +214,8 @@ def cost(model, length, *, pseq_above=None, pseq_below=None, edges=None,
     slightly UNDERSTATES a banded sweep: the backward grid carries an origin
     offset that is only known once the sink weights are built.
     """
-    e = _edges_from(pseq_above, pseq_below, edges, length)
+    e = _edges_from(pseq_above, pseq_below, surprisal_above, surprisal_below,
+                    edges, length)
     a = _args(model._g, length, e, counting, bins, spacing,
               reference_residues, max_resolution_error)
     states, edge_count, nbytes = _c.insights_logo_cost(*a)

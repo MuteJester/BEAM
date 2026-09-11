@@ -172,27 +172,33 @@ tests/python/analytics/test_topology.py::test_topology_edges_bound_the_paths
 tests/python/insights/test_logo.py::test_a_band_differs_from_the_pooled_logo
 tests/python/insights/test_logo.py::test_a_length_the_model_cannot_produce_is_refused
 tests/python/insights/test_logo.py::test_a_malformed_request_is_refused_by_name[kw0-between 0 and 1]
-tests/python/insights/test_logo.py::test_a_malformed_request_is_refused_by_name[kw1-between 0 and 1]
-tests/python/insights/test_logo.py::test_a_malformed_request_is_refused_by_name[kw2-ascend strictly]
-tests/python/insights/test_logo.py::test_a_malformed_request_is_refused_by_name[kw3-NaN]
-tests/python/insights/test_logo.py::test_a_malformed_request_is_refused_by_name[kw4-never negative]
-tests/python/insights/test_logo.py::test_a_malformed_request_is_refused_by_name[kw5-define no band]
-tests/python/insights/test_logo.py::test_a_malformed_request_is_refused_by_name[kw6-reference_residues]
+tests/python/insights/test_logo.py::test_a_malformed_request_is_refused_by_name[kw1-never negative]
+tests/python/insights/test_logo.py::test_a_malformed_request_is_refused_by_name[kw2-finite number of nats]
+tests/python/insights/test_logo.py::test_a_malformed_request_is_refused_by_name[kw3-between 0 and 1]
+tests/python/insights/test_logo.py::test_a_malformed_request_is_refused_by_name[kw4-ascend strictly]
+tests/python/insights/test_logo.py::test_a_malformed_request_is_refused_by_name[kw5-NaN]
+tests/python/insights/test_logo.py::test_a_malformed_request_is_refused_by_name[kw6-never negative]
+tests/python/insights/test_logo.py::test_a_malformed_request_is_refused_by_name[kw7-define no band]
+tests/python/insights/test_logo.py::test_a_malformed_request_is_refused_by_name[kw8-reference_residues]
 tests/python/insights/test_logo.py::test_a_set_reports_its_grid_and_its_shortfall
 tests/python/insights/test_logo.py::test_a_single_band_over_everything_is_still_exact
 tests/python/insights/test_logo.py::test_an_empty_band_is_refused_rather_than_reported_as_conserved
 tests/python/insights/test_logo.py::test_as_dict_is_keyed_by_residue_and_matches_the_heights
 tests/python/insights/test_logo.py::test_asking_for_one_logo_from_several_bands_is_refused
 tests/python/insights/test_logo.py::test_consensus_reads_out_as_a_sequence
+tests/python/insights/test_logo.py::test_edges_in_nats_need_no_conversion
 tests/python/insights/test_logo.py::test_information_is_the_ceiling_less_the_entropy
 tests/python/insights/test_logo.py::test_pseq_above_and_below_are_complementary
+tests/python/insights/test_logo.py::test_surprisal_keywords_select_the_same_sequences_as_the_pseq_ones
 tests/python/insights/test_logo.py::test_the_bands_recombine_into_the_pooled_logo
 tests/python/insights/test_logo.py::test_the_cost_is_reported_before_the_sweep_and_scales_with_bins
 tests/python/insights/test_logo.py::test_the_nucleotide_ceiling_is_log2_of_five_unless_asked_otherwise
 tests/python/insights/test_logo.py::test_the_stack_sums_to_the_information
 tests/python/insights/test_logo.py::test_the_unconditional_logo_is_the_exact_marginal
 tests/python/insights/test_logo.py::test_the_unconditional_set_has_no_grid_at_all
-tests/python/insights/test_logo.py::test_two_conditions_at_once_are_refused
+tests/python/insights/test_logo.py::test_two_conditions_at_once_are_refused[kw0]
+tests/python/insights/test_logo.py::test_two_conditions_at_once_are_refused[kw1]
+tests/python/insights/test_logo.py::test_two_conditions_at_once_are_refused[kw2]
 tests/python/io/test_parquet_streaming.py::test_streaming_and_eager_reads_return_the_same_rows
 tests/python/io/test_parquet_streaming.py::test_the_eager_reader_does_grow_with_the_file
 tests/python/io/test_parquet_streaming.py::test_the_memory_a_read_holds_does_not_grow_with_the_file

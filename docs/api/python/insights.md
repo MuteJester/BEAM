@@ -34,7 +34,20 @@ rare   = model.insights.logo(15, pseq_below=1e-8, bins=4096)
 common.fraction + rare.fraction     # 1.0
 ```
 
-For full control, `edges=` takes ascending **surprisal** in nats, and `n` edges give `n − 1` logos. `±inf` is allowed at either end and is resolved against the grid.
+Surprisal is the **native** axis, so if you are already thinking in nats there is nothing to convert:
+
+```python
+rare = model.insights.logo(15, surprisal_above=20.7)     # nats
+rare = model.insights.logo(15, pseq_below=1e-9)          # the same request
+```
+
+Note that **"above" means opposite things on the two axes.** Rarer is higher surprisal and lower probability, so `surprisal_above` and `pseq_below` select the same sequences, as do `surprisal_below` and `pseq_above`. That is why each keyword is named for its own axis rather than sharing one word, and why giving one of each is refused rather than resolved.
+
+For full control, `edges=` takes ascending surprisal in nats, and `n` edges give `n − 1` logos. `±inf` is allowed at either end and is resolved against the grid:
+
+```python
+model.insights.logos(15, edges=[-inf, 16.1, 18.4, 20.7, inf])   # four bands
+```
 
 Two things to know about the threshold:
 
