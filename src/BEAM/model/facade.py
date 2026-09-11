@@ -1724,11 +1724,32 @@ class BeamModel:
         surprisal is binned and a sequence near an edge can fall either side.
         Check ``result.resolution_error`` before trusting narrow bands.
 
-        Sizing the grid automatically is the right default for a strict
-        model and a poor one for a model with backoff, where the automatic
-        bound is set by the smoothing floor hundreds of nats away from any
-        real sequence and a 512-bin grid has bins many nats wide. If
-        ``resolution_error`` is large, that is usually why: raise ``bins``.
+        **How many bins a band needs.** Linear splitting spreads one
+        sequence over ``length + 1`` adjacent bins, so what governs the
+        answer is that kernel against the width of a band::
+
+            kernel  = (length + 1) * spacing
+            spacing = accumulator_max * 1.02 / (bins - max_length - 9)
+
+        Keep ``kernel`` well under the narrowest band -- a fifth of it is
+        comfortable -- which rearranges to a bin count::
+
+            bins >~ 5 * (length + 1) * accumulator_max / band_width
+
+        Two properties of a model drive that, and neither is its size. The
+        first is ``accumulator_max``, the surprisal range the grid must span:
+        the more it spans, the wider each bin is at a fixed ``bins``. The
+        second is how much mass sits within a kernel of a band edge -- a
+        small model whose spectrum is a few dozen spikes has edges that land
+        in the gaps between them and pays nothing for a coarse grid, while a
+        model fitted to hundreds of millions of sequences is a continuum and
+        every edge cuts through mass.
+
+        Backoff makes the first much worse, because an unobserved transition
+        sits near ``ln(1e-300)`` and drags ``accumulator_max`` hundreds of
+        nats past anything real. But a STRICT model is not therefore safe:
+        the foundation below is strict and still needs eight times the
+        default. ``resolution_error`` is what settles it either way.
 
         How many bins a band needs, measured on the 927M-sequence foundation
         (order 4, strict) at its modal length 15, with quartile bands about
@@ -1742,10 +1763,11 @@ class BeamModel:
 
         Halving the spacing halves the error, which is what says it is the
         grid and not a defect. The band fractions are stable to a tenth of a
-        point from 4096 on, so that is the setting to reach for there. The
-        quantity that governs it is the splitting width, ``(length + 1) *
-        spacing``, against the width of a band: at 1024 bins those are 1.95
-        and 2.4 nats, which is why the default is not enough for that model.
+        point from 4096 on, so that is the setting to reach for there.
+        Working the rule above: that model spans 117.9 nats, so at the
+        default 512 bins its kernel is 4.04 nats against bands of 2.4 -- the
+        smoothing is WIDER than the band it is meant to resolve, and no
+        amount of care in the caller recovers that.
 
         Scratch is refused before it is allocated, and the refusal names the
         figure -- so the cheap way to size a run is to ask for it under a
