@@ -1730,6 +1730,27 @@ class BeamModel:
         real sequence and a 512-bin grid has bins many nats wide. If
         ``resolution_error`` is large, that is usually why: raise ``bins``.
 
+        How many bins a band needs, measured on the 927M-sequence foundation
+        (order 4, strict) at its modal length 15, with quartile bands about
+        2.4 nats wide::
+
+            bins   spacing   resolution_error   scratch   time
+            1024     0.122         3.4%           16 GB    7.7s
+            2048     0.060         2.2%           31 GB     10s
+            4096     0.030         1.1%           61 GB     19s
+            8192     0.015        0.44%          119 GB     37s
+
+        Halving the spacing halves the error, which is what says it is the
+        grid and not a defect. The band fractions are stable to a tenth of a
+        point from 4096 on, so that is the setting to reach for there. The
+        quantity that governs it is the splitting width, ``(length + 1) *
+        spacing``, against the width of a band: at 1024 bins those are 1.95
+        and 2.4 nats, which is why the default is not enough for that model.
+
+        Scratch is refused before it is allocated, and the refusal names the
+        figure -- so the cheap way to size a run is to ask for it under a
+        small :func:`~BEAM.set_memory_budget` and read the number back.
+
             >>> import numpy as np
             >>> b = model.positional_banded(14, [0, 30, 34, 1e12])
             >>> b.fraction.round(3)
