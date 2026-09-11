@@ -153,6 +153,7 @@ class BeamModel:
   property observed_lengths
   def path_count(self, length: 'int | None' = None) -> 'float'
   def pgen_diagnostics(self) -> 'dict[str, Any]'
+  def positional_banded(self, length: 'int', edges, *, counting: 'bool' = False, bins: 'int' = 512, spacing: 'float' = 0.0) -> 'BandedMarginals'
   def positional_marginals(self, length: 'int', *, clamp: 'dict | None' = None) -> 'np.ndarray'
   def posterior(self, prior: 'BeamModel', kappa: 'float' = 100.0) -> 'None'
   def power_sum(self, q: 'float') -> 'float'

@@ -440,6 +440,111 @@ PyObject *py_positional_marginals(PyObject *self, PyObject *args) {
     return Py_BuildValue("(NId)", b, R, logz);
 }
 
+/**
+ * `positional_banded(cap, length, counting, bins, spacing, edges) ->
+ *  (marginals, band_mass, position_mass, n_residues, n_bands, spacing)`
+ *
+ * `edges` is a buffer of float64 band edges in nats, ascending. The three
+ * outputs come back as byte blocks the facade reshapes: the marginals are
+ * `n_bands x length x n_residues`, the masses `n_bands` and
+ * `n_bands x length`.
+ *
+ * `position_mass` is returned always rather than on request. It is the only
+ * thing that tells a caller whether the grid resolved their bands -- the
+ * positions of one band agree to the last bits when it did and visibly
+ * disagree when it did not -- and a diagnostic nobody can reach is one nobody
+ * uses.
+ */
+PyObject *py_positional_banded(PyObject *self, PyObject *args) {
+    (void)self;
+    PyObject *cap, *edges_obj;
+    unsigned int length, bins;
+    int counting = 0;
+    double spacing = 0.0;
+    if (!PyArg_ParseTuple(args, "OIpIdO", &cap, &length, &counting, &bins,
+                          &spacing, &edges_obj))
+        return NULL;
+    BeamModel *m = edge_from_capsule(cap);
+    if (!m) return NULL;
+
+    /* The length before anything is sized from it; see the note on
+     * py_positional_marginals for what sizing first used to report. */
+    {
+        const BeamModelConfig *bcfg = beam_model_config(m);
+        if (bcfg && length > bcfg->max_length) {
+            PyErr_Format(PyExc_ValueError,
+                         "length %u is above this model's max_length of %u",
+                         length, (unsigned)bcfg->max_length);
+            return NULL;
+        }
+    }
+    if (length < 1u) {
+        PyErr_SetString(PyExc_ValueError,
+                        "banded marginals are per-length and need a length of "
+                        "at least 1");
+        return NULL;
+    }
+
+    char *ebuf; Py_ssize_t ebytes;
+    if (PyBytes_AsStringAndSize(edges_obj, &ebuf, &ebytes) != 0) return NULL;
+    if (ebytes % (Py_ssize_t)sizeof(double) != 0) {
+        PyErr_SetString(PyExc_ValueError,
+                        "the band edges must be a whole number of float64s");
+        return NULL;
+    }
+    const size_t n_edges = (size_t)ebytes / sizeof(double);
+    if (n_edges < 2u) {
+        PyErr_Format(PyExc_ValueError,
+                     "%zu band edge(s) define no band; two ascending edges "
+                     "define one", n_edges);
+        return NULL;
+    }
+    const size_t n_bands = n_edges - 1u;
+    const unsigned int R = (unsigned int)beam_model_n_residues(m);
+
+    /* Sized in size_t and checked, because the edge count is the caller's. */
+    if (n_bands > SIZE_MAX / length / (R ? R : 1u) / sizeof(double)) {
+        PyErr_Format(PyExc_ValueError,
+                     "%zu bands at length %u would not fit in memory",
+                     n_bands, length);
+        return NULL;
+    }
+    const size_t n_marg = n_bands * length * R;
+    const size_t n_pm   = n_bands * length;
+
+    double *marg = (double *)PyMem_Calloc(n_marg ? n_marg : 1u, sizeof(double));
+    double *bmas = (double *)PyMem_Calloc(n_bands, sizeof(double));
+    double *pmas = (double *)PyMem_Calloc(n_pm ? n_pm : 1u, sizeof(double));
+    if (!marg || !bmas || !pmas) {
+        PyMem_Free(marg); PyMem_Free(bmas); PyMem_Free(pmas);
+        return beam_py_nomem("the banded positional marginals",
+                             (uint64_t)(n_marg + n_bands + n_pm)
+                                 * sizeof(double));
+    }
+
+    double used = 0.0;
+    BeamError err;
+    Py_BEGIN_ALLOW_THREADS
+    err = beam_model_positional_banded(m, length, (bool)counting, bins,
+                                       spacing, (const double *)ebuf,
+                                       (uint32_t)n_edges, marg, bmas, pmas,
+                                       &used);
+    Py_END_ALLOW_THREADS
+    if (err != BEAM_OK) {
+        PyMem_Free(marg); PyMem_Free(bmas); PyMem_Free(pmas);
+        return set_beam_error(err);
+    }
+
+    PyObject *a = edge_doubles_to_bytes(marg, n_marg);
+    PyObject *b = edge_doubles_to_bytes(bmas, n_bands);
+    PyObject *c = edge_doubles_to_bytes(pmas, n_pm);
+    PyMem_Free(marg); PyMem_Free(bmas); PyMem_Free(pmas);
+    if (!a || !b || !c) { Py_XDECREF(a); Py_XDECREF(b); Py_XDECREF(c);
+                          return NULL; }
+    return Py_BuildValue("(NNNInd)", a, b, c, R, (Py_ssize_t)n_bands, used);
+}
+
+
 /*
  * The six blocks come back as a flat list of `(rows, counts)` byte pairs in
  * `[anchor][expert]` order, which the facade reshapes. Flat rather than nested

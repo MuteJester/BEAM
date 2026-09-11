@@ -855,6 +855,70 @@ BeamError beam_model_positional_marginals(const BeamModel *m, uint32_t length,
                                           double *out, double *out_log_z);
 
 /**
+ * `P(x_i = a | length, band)` for each band of a sequence's own surprisal.
+ *
+ * One residue distribution per position PER BAND OF PROBABILITY: what a
+ * typical sequence of this length looks like given that it is also this rare.
+ * `beam_model_positional_marginals` answers the same question pooled over all
+ * rarities, and equals the single band that covers the whole grid.
+ *
+ * `edges` holds `n_edges` surprisal thresholds in nats, STRICTLY ASCENDING,
+ * defining `n_edges - 1` half-open bands `[edges[j], edges[j+1])`. Surprisal
+ * is `-ln P(s)`, so bands ascend in rarity and a caller thinking in
+ * probabilities passes `-ln p`. Mass outside the outermost edges belongs to
+ * no band; pass `0` and `bins * spacing` to cover everything.
+ *
+ * @param counting  true weights every supported sequence 1, false weights it
+ *                  by its own probability -- the same two measures
+ *                  `beam_model_spectrum` offers, and both matter here.
+ * @param bins,spacing  the surprisal grid, sized exactly as the spectrum's is.
+ *                  `spacing <= 0` chooses it automatically and reports the
+ *                  choice through `out_spacing`. Band masses are comparable
+ *                  with `beam_model_spectrum` only on the same grid.
+ * @param out_marginals   `(n_edges-1) * length * n_residues` doubles,
+ *                  `out[(j * length + i) * n_residues + a]`. Each row sums to
+ *                  1, or is all zeros where the band holds no mass.
+ * @param out_band_mass   `n_edges-1` doubles, the mass in each band. This is
+ *                  not a convenience: it is how much of the model each row of
+ *                  logos represents, and it is what says a band's marginals
+ *                  describe nothing when it is zero.
+ * @param out_position_mass  optional; `(n_edges-1) * length` doubles, the row
+ *                  totals before normalising. Every position of a band is an
+ *                  independent estimate of that band's mass, so these agree
+ *                  across positions to grid precision, and their disagreement
+ *                  is the sharpest available measure of the grid's error.
+ *
+ * UNLIKE `beam_model_positional_marginals`, THIS IS NOT EXACT. The residue
+ * axis still is, but conditioning on a band needs the distribution of a
+ * real-valued path functional, so surprisal is binned and mass is split
+ * linearly between adjacent bins as in `beam_model_spectrum`. A sequence near
+ * an edge can fall on either side of it. Totals are conserved exactly; band
+ * membership is accurate to O(spacing), so a band only a few bins wide
+ * measures the grid rather than the model.
+ *
+ * Choosing the spacing automatically is right for a STRICT model and poor
+ * for one with backoff. The automatic bound comes from
+ * `beam_model_accumulator_max`, which on a smoothed model is set by the
+ * floor near `ln(1e-300)` -- hundreds of nats past anything the model
+ * actually generates -- so a 512-bin grid there has bins many nats wide and
+ * every useful band is narrower than one. `out_position_mass` is how that is
+ * detected: its positions agree to the last bits when the grid resolves the
+ * bands and visibly disagree when it does not.
+ *
+ * Cost is `2 + n_edges` spectrum passes. Scratch is one grid per live state
+ * per layer, held at once, and is refused against the memory budget before
+ * anything is allocated.
+ */
+BeamError beam_model_positional_banded(const BeamModel *m, uint32_t length,
+                                       bool counting, uint32_t bins,
+                                       double spacing,
+                                       const double *edges, uint32_t n_edges,
+                                       double *out_marginals,
+                                       double *out_band_mass,
+                                       double *out_position_mass,
+                                       double *out_spacing);
+
+/**
  * One expert's expected counts: the rows that carry any expected use at all.
  *
  * Sparse by row because the answer is: an order-4 model has 147.8 million

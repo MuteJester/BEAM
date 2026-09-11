@@ -13,8 +13,15 @@
 # spread across core/runtime.c", "it had been renamed to model/prism.c"), and
 # that prose is worth more than the tidiness of removing it.
 #
-# Adding a line here is a claim that the mention is historical. Deleting the
-# file a header points at, without saying so, fails the check instead.
+# A second category lives here too: a pointer into a DIFFERENT tree. `grid.h`
+# cites the production FlashBack transport as the precedent for carrying an
+# occupied-bin range, and that file is real -- just not in this repository, so
+# it can never resolve here. Naming it is worth more than dropping it, because
+# it is the reason the bookkeeping exists.
+#
+# Adding a line here is a claim that the mention is historical, or that it
+# points outside this tree. Deleting the file a header points at, without
+# saying so, fails the check instead.
 budget.h:runtime.c
 errors.h:model/prism.c
 memory.h:core/runtime.c
@@ -22,3 +29,4 @@ mixing.h:repair.c
 mixing.h:prism.c
 mixing.h:model/prism.c
 model_build.h:build.c
+grid.h:lib/flashback/graph_analytics.c

@@ -50,6 +50,7 @@ beam_model_new
 beam_model_observe
 beam_model_path_count
 beam_model_path_count_total
+beam_model_positional_banded
 beam_model_positional_marginals
 beam_model_posterior
 beam_model_radix

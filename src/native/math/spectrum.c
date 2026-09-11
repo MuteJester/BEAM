@@ -1,8 +1,15 @@
 /**
  * @file spectrum.c
- * @brief Surprisal spectrum: grid transport and the sweeps over it.
+ * @brief Surprisal spectrum: the sweeps that move mass onto the grid.
+ *
+ * The transport itself -- the linear split that puts a shifted histogram onto
+ * adjacent bins -- is in `internal/beam/grid.h`, because the banded positional
+ * marginals run the same split in both directions and the two halves of a
+ * forward-backward pair have to split mass identically to recombine.
  */
 #include "beam/internal.h"
+#include "beam/grid.h"
+#include "beam/math_internal.h"
 
 
 /*
@@ -14,90 +21,6 @@
  */
 
 /* ── Surprisal spectrum ──────────────────────────────────────── */
-
-/**
- * Occupied bin range of one node's histogram, as a half-open interval.
- *
- * Carrying this is what makes the spectrum DP affordable. Early layers occupy
- * a handful of bins out of a thousand, and without bounds every edge would
- * sweep the whole grid: the production FlashBack transport
- * (`lib/flashback/graph_analytics.c:pseq_grid_transport`) keeps the same
- * bookkeeping for the same reason.
- */
-typedef struct { uint32_t lo, hi; } BinRange;
-
-/**
- * Add `src` shifted up by `u` bins into `dst`, splitting linearly between the
- * two adjacent bins so total mass is conserved and the mean is unbiased.
- * Source bins that fall outside the grid contribute nothing; that must hold at
- * BOTH ends, because the sink shift can be negative.
- *
- * `sr` bounds the source's occupied bins; `dr` is widened to cover whatever
- * this call writes.
- */
-static void transport(const double *src, double *dst, uint32_t bins,
-                      double u, double factor, BinRange sr, BinRange *dr) {
-    const int64_t k = (int64_t)floor(u);
-    const double  f = u - (double)k;
-    const double  g = 1.0 - f;
-    for (uint32_t b = sr.lo; b < sr.hi; ++b) {
-        const double v = src[b];
-        if (v == 0.0) continue;
-        const int64_t lo = (int64_t)b + k;
-        if (lo >= 0 && lo < (int64_t)bins) {
-            dst[lo] += v * g * factor;
-            if ((uint32_t)lo < dr->lo) dr->lo = (uint32_t)lo;
-            if ((uint32_t)lo + 1u > dr->hi) dr->hi = (uint32_t)lo + 1u;
-        }
-        const int64_t hi = lo + 1;
-        if (hi >= 0 && hi < (int64_t)bins) {
-            dst[hi] += v * f * factor;
-            if ((uint32_t)hi < dr->lo) dr->lo = (uint32_t)hi;
-            if ((uint32_t)hi + 1u > dr->hi) dr->hi = (uint32_t)hi + 1u;
-        }
-    }
-}
-
-/**
- * Add `src` shifted up by `u` bins into `dst` for TWO measures at once,
- * splitting linearly between the two adjacent bins exactly as `transport`
- * does for one.
- *
- * The point is not to save a pass over the source bins — it is that the shift
- * `u`, and therefore the integer bin `k` and the split fractions `f` and `g`,
- * are computed ONCE and used for both. Two separate transports would compute
- * them twice from the same inputs and get the same answer today, but nothing
- * would hold them together, and the ratio of the two measures per bin is only
- * meaningful if the mass was split identically. That ratio is the exact
- * mass-weighted mean probability of the sequences in the bin, which is what
- * the discovery-curve arithmetic is built on.
- */
-static void transport2(const double *src_a, const double *src_b,
-                       double *dst_a, double *dst_b, uint32_t bins,
-                       double u, double factor_a, double factor_b,
-                       BinRange sr, BinRange *dr) {
-    const int64_t k = (int64_t)floor(u);
-    const double  f = u - (double)k;
-    const double  g = 1.0 - f;
-    for (uint32_t b = sr.lo; b < sr.hi; ++b) {
-        const double va = src_a[b], vb = src_b[b];
-        if (va == 0.0 && vb == 0.0) continue;
-        const int64_t lo = (int64_t)b + k;
-        if (lo >= 0 && lo < (int64_t)bins) {
-            dst_a[lo] += va * g * factor_a;
-            dst_b[lo] += vb * g * factor_b;
-            if ((uint32_t)lo < dr->lo) dr->lo = (uint32_t)lo;
-            if ((uint32_t)lo + 1u > dr->hi) dr->hi = (uint32_t)lo + 1u;
-        }
-        const int64_t hi = lo + 1;
-        if (hi >= 0 && hi < (int64_t)bins) {
-            dst_a[hi] += va * f * factor_a;
-            dst_b[hi] += vb * f * factor_b;
-            if ((uint32_t)hi < dr->lo) dr->lo = (uint32_t)hi;
-            if ((uint32_t)hi + 1u > dr->hi) dr->hi = (uint32_t)hi + 1u;
-        }
-    }
-}
 
 /**
  * One length's surprisal spectrum, carrying either one measure or both.
@@ -151,8 +74,8 @@ static BeamError spectrum_one(const BeamModel *m, bool counting,
     double *tail = (double *)malloc((size_t)S * sizeof(double));
     double *cur  = (double *)calloc((size_t)maxlive * hist, sizeof(double));
     double *next = (double *)calloc((size_t)maxlive * hist, sizeof(double));
-    BinRange *rc = (BinRange *)malloc((size_t)maxlive * sizeof(BinRange));
-    BinRange *rn = (BinRange *)malloc((size_t)maxlive * sizeof(BinRange));
+    BeamBinRange *rc = (BeamBinRange *)malloc((size_t)maxlive * sizeof(BeamBinRange));
+    BeamBinRange *rn = (BeamBinRange *)malloc((size_t)maxlive * sizeof(BeamBinRange));
     /* state -> slot within its own layer's live list, one map per side */
     uint32_t *sc = (uint32_t *)malloc((size_t)S * sizeof(uint32_t));
     uint32_t *sn = (uint32_t *)malloc((size_t)S * sizeof(uint32_t));
@@ -236,10 +159,10 @@ static BeamError spectrum_one(const BeamModel *m, bool counting,
                 if (wv == -INFINITY) continue;
                 const double *src = cur + (size_t)ks * hist;
                 if (nm == 1u) {
-                    transport(src, dst, bins, -wv / ds,
+                    beam_grid_transport(src, dst, bins, -wv / ds,
                               counting ? 1.0 : exp(wv), rc[ks], &rn[kk]);
                 } else {
-                    transport2(src, src + bins, dst, dst + bins, bins,
+                    beam_grid_transport2(src, src + bins, dst, dst + bins, bins,
                                -wv / ds, 1.0, exp(wv), rc[ks], &rn[kk]);
                 }
             }
@@ -256,7 +179,7 @@ static BeamError spectrum_one(const BeamModel *m, bool counting,
                        (size_t)(rc[k].hi - rc[k].lo) * sizeof(double));
         }
         { double *t = cur; cur = next; next = t; }
-        { BinRange *t = rc; rc = rn; rn = t; }
+        { BeamBinRange *t = rc; rc = rn; rn = t; }
         { uint32_t *t = sc; sc = sn; sn = t; }
     }
 
@@ -265,17 +188,17 @@ static BeamError spectrum_one(const BeamModel *m, bool counting,
     beam_tail_weights(m, len, tail);
     {
         const double off = m->log_z[len] - m->log_pi[len];
-        BinRange sink = { bins, 0 };
+        BeamBinRange sink = { bins, 0 };
         for (uint32_t k = 0; k < L->n_live[len]; ++k) {
             const uint32_t s = L->live[len][k];
             if (tail[s] == -INFINITY || rc[k].lo >= rc[k].hi) continue;
             const double *src = cur + (size_t)k * hist;
             const double u = (-tail[s] + off) / ds;
             if (nm == 1u) {
-                transport(src, out_a, bins, u,
+                beam_grid_transport(src, out_a, bins, u,
                           counting ? 1.0 : exp(tail[s] - off), rc[k], &sink);
             } else {
-                transport2(src, src + bins, out_a, out_b, bins, u,
+                beam_grid_transport2(src, src + bins, out_a, out_b, bins, u,
                            1.0, exp(tail[s] - off), rc[k], &sink);
             }
         }
@@ -287,13 +210,8 @@ static BeamError spectrum_one(const BeamModel *m, bool counting,
     return BEAM_OK;
 }
 
-/**
- * Grid spacing for a spectrum, sized automatically when `spacing` is not
- * positive. Shared by every spectrum entry point so they cannot disagree
- * about what grid they are on — which for the paired and per-length forms is
- * not a tidiness point but the property that makes their outputs comparable.
- */
-static BeamError spectrum_spacing(const BeamModel *m, uint32_t bins,
+/* Declared in math_internal.h; see there for why it is shared. */
+BeamError beam_spectrum_spacing(const BeamModel *m, uint32_t bins,
                                  double spacing, double *out_ds) {
     if (bins < 2)
         return BEAM_ERANGE("%s: a spectrum needs at least 2 bins, got %u",
@@ -339,7 +257,7 @@ BeamError beam_model_spectrum(const BeamModel *m, bool counting,
     if (!m->finalized) return BEAM_ENOTBUILT();
 
     double ds = 0.0;
-    BeamError e = spectrum_spacing(m, bins, spacing, &ds);
+    BeamError e = beam_spectrum_spacing(m, bins, spacing, &ds);
     if (e != BEAM_OK) return e;
     if (out_spacing) *out_spacing = ds;
 
@@ -368,7 +286,7 @@ BeamError beam_model_spectrum_pair(const BeamModel *m, uint32_t length,
     if (!m->finalized) return BEAM_ENOTBUILT();
 
     double ds = 0.0;
-    BeamError e = spectrum_spacing(m, bins, spacing, &ds);
+    BeamError e = beam_spectrum_spacing(m, bins, spacing, &ds);
     if (e != BEAM_OK) return e;
     if (out_spacing) *out_spacing = ds;
 
@@ -401,7 +319,7 @@ static uint64_t spectrum_bytes(const BeamModel *m, uint32_t bins,
     const uint64_t S = m->n_states;
     if (maxlive == 0u || maxlive > S) maxlive = (uint32_t)S;
     return 2ull * maxlive * nm * bins * sizeof(double)  /* cur + next   */
-         + 2ull * maxlive * sizeof(BinRange)
+         + 2ull * maxlive * sizeof(BeamBinRange)
          + S * m->n_residues * sizeof(double)           /* edge weights */
          + S * sizeof(double)                           /* tail         */
          + 2ull * S * sizeof(uint32_t)                  /* slot maps    */
@@ -421,7 +339,7 @@ BeamError beam_model_spectra_by_length(const BeamModel *m, bool counting,
     if (max_length == 0) max_length = m->max_len;
 
     double ds = 0.0;
-    BeamError e = spectrum_spacing(m, bins, spacing, &ds);
+    BeamError e = beam_spectrum_spacing(m, bins, spacing, &ds);
     if (e != BEAM_OK) return e;
     if (out_spacing) *out_spacing = ds;
 

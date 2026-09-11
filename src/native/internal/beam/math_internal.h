@@ -27,6 +27,22 @@
 BeamError beam_mellin_terms(const BeamModel *m, double q, double *terms,
                              double *out_max);
 
+/**
+ * Grid spacing for a surprisal histogram, sized automatically when `spacing`
+ * is not positive.
+ *
+ * Shared by every spectrum entry point so they cannot disagree about what
+ * grid they are on — which for the paired and per-length forms is not a
+ * tidiness point but the property that makes their outputs comparable.
+ *
+ * `math/positional_banded.c` is here for exactly that reason. Its band masses
+ * are only checkable against `beam_model_spectrum` summed over the same bins
+ * if both landed on the same grid, and a second copy of this arithmetic would
+ * agree today and drift later.
+ */
+BeamError beam_spectrum_spacing(const BeamModel *m, uint32_t bins,
+                                double spacing, double *out_ds);
+
 /* ── Log-space accumulation ──────────────────────────────────── */
 
 /**

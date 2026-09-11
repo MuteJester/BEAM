@@ -29,6 +29,7 @@ from ..runtime import effective_threads, memory_budget, set_threads, threads
 
 from .. import _cbeam as _c
 from .._simulation_result import SimulationResult
+from .._banded_result import BandedMarginals
 
 
 def _default_column(column: str | None, config: dict) -> str:
@@ -1691,6 +1692,89 @@ class BeamModel:
         buf = self._clamp_buffer(length, clamp)
         w, n_res, _logz = _c.positional_marginals(self._g, length, buf)
         return np.frombuffer(w, dtype=np.float64).reshape(length, n_res).copy()
+
+    def positional_banded(self, length: int, edges, *,
+                          counting: bool = False, bins: int = 512,
+                          spacing: float = 0.0) -> BandedMarginals:
+        """Per-position residue distributions, one set per band of surprisal.
+
+        What a typical sequence of this length looks like given that it is
+        also this rare. :meth:`positional_marginals` answers the same
+        question pooled over all rarities and is what a single band covering
+        everything returns.
+
+        Args:
+            length: the sequence length. Marginals are per-length.
+            edges: band edges in nats of surprisal (``-ln P(s)``), strictly
+                ascending. ``n`` edges define ``n - 1`` half-open bands.
+                Mass outside the outermost edges belongs to no band; pass
+                ``0`` and a large number to catch everything. Thinking in
+                probabilities, an edge is ``-log(p)``, so bands ascend in
+                rarity as ``p`` falls.
+            counting: weight every producible sequence 1 rather than by its
+                own probability -- the two measures :meth:`spectrum` offers.
+            bins, spacing: the surprisal grid, sized as the spectrum's is.
+                ``spacing <= 0`` chooses it automatically.
+
+        Returns:
+            :class:`~BEAM._banded_result.BandedMarginals`.
+
+        Unlike :meth:`positional_marginals` this is NOT exact. The residue
+        axis still is, but a band conditions on a real-valued quantity, so
+        surprisal is binned and a sequence near an edge can fall either side.
+        Check ``result.resolution_error`` before trusting narrow bands.
+
+        Sizing the grid automatically is the right default for a strict
+        model and a poor one for a model with backoff, where the automatic
+        bound is set by the smoothing floor hundreds of nats away from any
+        real sequence and a 512-bin grid has bins many nats wide. If
+        ``resolution_error`` is large, that is usually why: raise ``bins``.
+
+            >>> import numpy as np
+            >>> b = model.positional_banded(14, [0, 30, 34, 1e12])
+            >>> b.fraction.round(3)
+            array([0.412, 0.317, 0.271])
+            >>> b.marginals[0].shape
+            (14, 20)
+        """
+        length = self._check_length(length)
+        if length < 1:
+            raise ValueError(
+                "positional_banded() needs a specific length of at least 1; "
+                "marginals are per-length and there is no pooled form")
+        if not math.isfinite(self.log_length_prior(length)):
+            raise ValueError(
+                f"the model generates no sequences of length {length}, so it "
+                f"has no banded marginals there; length_pmf() shows which "
+                f"lengths it does generate")
+
+        e = np.ascontiguousarray(np.asarray(edges, dtype=np.float64).ravel())
+        if e.size < 2:
+            raise ValueError(
+                f"{e.size} band edge(s) define no band; two ascending edges "
+                f"define one")
+        if not np.all(np.isfinite(e)):
+            raise ValueError(
+                "band edges must be finite; a band is bounded in nats at both "
+                "ends, so pass a large number rather than inf for an open top")
+        if not np.all(np.diff(e) > 0.0):
+            bad = int(np.argmin(np.diff(e)))
+            raise ValueError(
+                f"band edges must ascend strictly, but edge {bad} is "
+                f"{e[bad]!r} and edge {bad + 1} is {e[bad + 1]!r}; if you are "
+                f"thinking in probabilities, remember -log(p) reverses the "
+                f"order")
+        bins = self._check_bins(bins, spacing if spacing > 0 else None)
+
+        marg, bmass, pmass, n_res, n_bands, used = _c.positional_banded(
+            self._g, length, bool(counting), bins, float(spacing), e.tobytes())
+        return BandedMarginals(
+            np.frombuffer(marg, dtype=np.float64)
+              .reshape(n_bands, length, n_res).copy(),
+            np.frombuffer(bmass, dtype=np.float64).copy(),
+            np.frombuffer(pmass, dtype=np.float64)
+              .reshape(n_bands, length).copy(),
+            e, used, bool(counting), length)
 
     def log_clamp_probability(self, length: int, clamp: dict) -> float:
         """``ln P(clamp | length)``, the exact mass the clamp keeps.

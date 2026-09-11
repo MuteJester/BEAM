@@ -41,6 +41,7 @@ src/native/math/marginals.c
 src/native/math/mellin.c
 src/native/math/moments.c
 src/native/math/positional.c
+src/native/math/positional_banded.c
 src/native/math/spectrum.c
 src/native/math/surprisal.c
 src/native/math/tilt.c

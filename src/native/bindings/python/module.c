@@ -84,6 +84,7 @@ static PyMethodDef module_methods[] = {
     {"surprisal_by_depth", py_surprisal_by_depth,            METH_VARARGS, NULL},
     {"topology",           py_topology,                      METH_VARARGS, NULL},
     {"positional_marginals", py_positional_marginals,        METH_VARARGS, NULL},
+    {"positional_banded",    py_positional_banded,           METH_VARARGS, NULL},
     {"expected_counts",    py_expected_counts,               METH_VARARGS, NULL},
     {"query_probability",  py_query_probability,             METH_VARARGS, NULL},
     {"query_marginals",    py_query_marginals,               METH_VARARGS, NULL},

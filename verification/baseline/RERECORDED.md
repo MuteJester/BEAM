@@ -991,3 +991,41 @@ on two checks.
 were counted as public API that no header declares; the recorded set has 112
 rather than 114.
 
+
+# Why six baselines were re-recorded for the banded marginals
+
+Re-recorded 2026-09-11, adding `beam_model_positional_banded` and its Python
+method. The previous files are kept beside them as `*.preband.txt`, so the
+change is auditable rather than erased.
+
+Compared as SETS -- which is how `check.py` compares them, and how they must
+be diffed, because GNU sort and Python order underscores differently and a
+line diff of the same content reports hundreds of spurious moves.
+
+Every difference is an ADDITION except one, listed below.
+
+- `cbeam_methods.txt`  +1: `positional_banded`
+- `c_public_symbols.txt` +1: `beam_model_positional_banded`
+- `python_api.txt`     +1: `BeamModel.positional_banded`
+- `pytest_cases.txt`  +16: `tests/python/analytics/test_positional_banded.py`
+- `c_cases.txt`       +11: `tests/native/test_positional_banded.c`
+- `c_symbols.txt`     +22, -1
+
+`c_symbols.txt` is the one that needs explaining, because only two of its
+twenty-two additions belong to this change:
+
+  - `beam_model_positional_banded`, the new entry point;
+  - `beam_spectrum_spacing`, which was `static` in `math/spectrum.c` and is
+    now shared, so the banded sweep lands on the same grid the spectrum does.
+    Its own docstring already argued for that -- the paired and per-length
+    spectra are only comparable because they share it -- and a second copy of
+    the arithmetic would agree today and drift later.
+
+The other twenty, and the single removal, are PRE-EXISTING drift from the
+memory-optimisation campaign that preceded this: the `account.c`,
+`fb_sweep.c` and `compaction.c` splits gave internal helpers external
+linkage, and `beam_model_crc32c` went away when `core/crc32c.c` was rewritten.
+The gate had been reporting all of them as notes rather than failures --
+correctly, since none is declared in `include/beam/` -- and they entered the
+recorded set the moment it was re-recorded for any reason. Nothing public was
+removed; `c_public_symbols.txt` lost nothing.
