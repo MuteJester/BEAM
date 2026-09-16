@@ -138,17 +138,41 @@ cgf(t) -> float             # ln E[exp(t ln P)], equal to log_mellin(1 + t)
 ```
 The generator everything else here is built from. `q=0` gives the log support size, `q=1` gives 0, and the derivatives with respect to `q` are the cumulants of `ln P`.
 
+#### Many orders in one pass
+
+```python
+log_mellin_many(orders) -> np.ndarray   # log_mellin at every order
+```
+
+**Bit-identical** to `[log_mellin(q) for q in orders]` — compared with `==` in the tests, not within a tolerance — on both alphabets, in both worlds, at orders either side of 1, at 0.999 and 1.001, and at negative orders; and unchanged by the thread count, the memory budget, or which other orders share the call.
+
+What it saves is traversals. Calling `log_mellin` once per order walks every length's trellis once per order and rebuilds the same layer of edge weights each time. This walks each trellis once and carries every order through it. Each order keeps its own per-layer rescaling, because each has its own dynamic range, and that is what keeps the bits: a shared rescale would be cheaper and would move every order's last digits but one. On a donor-scale model (180,000 sequences, order 4, 16 threads), 29 orders take 0.22 s against 2.65 s one at a time.
+
+A sweep carrying `n` orders holds `n` mass vectors where one order holds one, and lengths running concurrently divide the [memory budget](runtime.md#memory-budget) as they always have. Orders are fused as widely as leaves room for one sweep per thread — 31 orders at amino-acid order 4 is 128 MB a sweep — and split into blocks when they do not fit. It refuses only where a sweep of a single order would not fit either.
+
+Orders must be finite; `nan` and `inf` raise `BeamValueError`.
+
 ### Diversity
 
 ```python
 entropy(*, base=math.e) -> float
 hill_number(alpha) -> float
 hill_numbers(orders) -> np.ndarray
+hill_profile(orders) -> np.ndarray   # the same profile, one pass per length
 hill_curve(orders=None) -> dict   # {"orders", "hill"}
 diversity_profile() -> dict       # D0, D1, D2
 effective_diversity() -> float    # D1
 ```
 `alpha=0` gives the support size, `alpha=1` the exponential of the entropy, `alpha=2` the inverse collision probability. `D0` inherits the caveat on `path_count`; `D1` is the number to quote.
+
+`hill_profile` is the fast way to a whole profile. Every order but the two corners is `exp(log_mellin(q) / (1 - q))`, with all of them from one `log_mellin_many` call; `q = 0` is `path_count()` and `q` within `1e-12` of 1 is `exp(entropy())`, the routes `hill_number` itself takes. On a donor-scale model the default 31 orders take 0.42 s against 4.25 s for `hill_numbers`.
+
+!!! note "`hill_profile` agrees with `hill_numbers` to machine precision, NOT bit for bit"
+    `hill_number` reaches `sum P**q` through a different tilted sweep, one that rescales each layer by a different maximum and so rounds differently. Over nine models spanning both alphabets and both worlds, the two values of `ln sum P**q` differ by at most 7.1e-15, and on the grid 0 to 3 in steps of 0.1 the Hill numbers differ by at most 1.1e-14 relative. The two corners take `hill_number`'s own routes and are bit-identical.
+
+    **Near `q = 1` the relative difference grows as `1 / |1 - q|`**, because `D_q = exp(ln M / (1 - q))` magnifies any rounding in `ln M` by that factor on both routes: 1.3e-12 was measured at `q = 1.001` on an open-world model. Neither route is the more accurate one there.
+
+    Keep `hill_numbers` wherever a profile has to reproduce one already published from it to the last bit.
 
 ### Surprisal moments
 

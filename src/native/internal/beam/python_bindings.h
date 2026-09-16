@@ -59,6 +59,7 @@ PyObject *py_length_marginals(PyObject *self, PyObject *arg);
 PyObject *py_load(PyObject *self, PyObject *arg);
 PyObject *py_log_length_prior(PyObject *self, PyObject *arg);
 PyObject *py_log_mellin(PyObject *self, PyObject *args);
+PyObject *py_log_mellin_many(PyObject *self, PyObject *args);
 PyObject *py_log_partition(PyObject *self, PyObject *arg);
 PyObject *py_log_pseq(PyObject *self, PyObject *args);
 PyObject *py_log_pseq_batch(PyObject *self, PyObject *args);

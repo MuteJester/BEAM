@@ -119,8 +119,9 @@ uint32_t beam_live_lengths_desc(const BeamModel *m, uint32_t *out);
  * costs a memset over the state space, which is far less than building
  * weights for states no path reaches.
  *
- * Only for callers that pass `out_max = NULL`, or that obtain the layer
- * maximum separately and exactly. See beam_layer_weights_live.
+ * With `out_max = NULL`, only callers that never read an unmarked row may use
+ * this mask. With `out_max != NULL`, `beam_layer_weights_live` still computes
+ * the exact global maximum while materialising the marked rows.
  */
 static inline void beam_reached_mask(const BeamLive *L, uint32_t i,
                                      uint32_t n_states, uint8_t *alive) {

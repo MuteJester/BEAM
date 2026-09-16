@@ -221,6 +221,80 @@ static void test_a_depth_bucket_with_no_rows_is_minus_infinity(void) {
     PASS();
 }
 
+/**
+ * The log-Z thin-frontier path asks one traversal for two things: the exact
+ * all-state maximum and complete rows for a marked subset. Pin both halves of
+ * that contract to the old, independent state-at-a-time definition.
+ */
+static void test_sparse_combined_max_and_marked_rows(void) {
+    BeamModel *m = build(4u, 8u, true);
+    ASSERT_MSG(m != NULL, "model did not build");
+
+    const uint32_t S = m->n_states;
+    const uint32_t R = m->n_residues;
+    const uint32_t i = 4u, len = 7u;
+    uint8_t *alive = (uint8_t *)calloc(S, sizeof(uint8_t));
+    double *out = (double *)malloc((size_t)S * R * sizeof(double));
+    if (!alive || !out) {
+        free(alive);
+        free(out);
+        beam_model_destroy(m);
+        ASSERT_MSG(false, "combined-path buffers did not allocate");
+    }
+
+    /* Include definitely live rows plus arbitrary states whose forward-wide
+     * row may be absent, since both must be fully written. */
+    double reference[BEAM_MAX_RESIDUES];
+    uint32_t finite_marked = 0u;
+    for (uint32_t s = 0; s < S && finite_marked < 24u; ++s) {
+        beam_state_weights(m, i, len, s, reference);
+        bool finite = false;
+        for (uint32_t x = 0; x < R; ++x)
+            if (reference[x] != -INFINITY) { finite = true; break; }
+        if (finite) {
+            alive[s] = 1u;
+            finite_marked++;
+        }
+    }
+    const uint32_t step = S / 19u;
+    for (uint32_t s = 0; s < S; s += step) alive[s] = 1u;
+    alive[S - 1u] = 1u;
+    memset(out, 0xa5, (size_t)S * R * sizeof(double));
+
+    double got_max = -INFINITY;
+    beam_layer_weights_live(m, i, len, out, &got_max, alive);
+    const double want_max = reference_layer_max(m, i, len);
+    if (!same_double(got_max, want_max)) {
+        printf("FAIL: combined max got %.17g want %.17g\n",
+               got_max, want_max);
+        fail_count++;
+        free(alive);
+        free(out);
+        beam_model_destroy(m);
+        return;
+    }
+
+    for (uint32_t s = 0; s < S; ++s) {
+        if (!alive[s]) continue;
+        beam_state_weights(m, i, len, s, reference);
+        const double *got = out + (size_t)s * R;
+        if (memcmp(got, reference, (size_t)R * sizeof(double)) != 0) {
+            printf("FAIL: combined marked row state=%u\n", s);
+            fail_count++;
+            free(alive);
+            free(out);
+            beam_model_destroy(m);
+            return;
+        }
+    }
+
+    free(alive);
+    free(out);
+    beam_model_destroy(m);
+    ASSERT_MSG(finite_marked > 0u, "no finite marked row was exercised");
+    PASS();
+}
+
 int main(void) {
     printf("\nbeam_layer_max\n");
     RUN_TEST(test_sparse_order_4_matches_the_definition);
@@ -228,6 +302,7 @@ int main(void) {
     RUN_TEST(test_dense_matches_the_definition);
     RUN_TEST(test_layers_beyond_the_depth_cap);
     RUN_TEST(test_a_depth_bucket_with_no_rows_is_minus_infinity);
+    RUN_TEST(test_sparse_combined_max_and_marked_rows);
 
     printf("\n  %d passed, %d failed\n\n", pass_count, fail_count);
     return fail_count == 0 ? 0 : 1;

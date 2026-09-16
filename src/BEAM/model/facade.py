@@ -28,6 +28,7 @@ from ..math.saddlepoint import _normal_pdf, _normal_cdf
 from ..runtime import effective_threads, memory_budget, set_threads, threads
 
 from .. import _cbeam as _c
+from ..errors import BeamTypeError, BeamValueError
 from .._simulation_result import SimulationResult
 from .._banded_result import BandedMarginals
 
@@ -50,6 +51,49 @@ def _default_column(column: str | None, config: dict) -> str:
         raise ValueError(
             f"no default column for alphabet {alphabet!r}; name one "
             f"explicitly") from None
+
+
+def _orders_vector(orders: Iterable[float]) -> np.ndarray:
+    """``orders`` as a fresh one-dimensional float64 array of finite values.
+
+    Fresh on purpose, not merely contiguous: the C side reads it with the GIL
+    released, and an array the caller still holds could be written by another
+    thread while it does.
+    """
+    if isinstance(orders, (str, bytes)):
+        raise BeamTypeError("orders must be a sequence of numbers, not a string")
+    try:
+        seq = orders if isinstance(orders, np.ndarray) else list(orders)
+        q = np.array(seq, dtype=np.float64)
+    except (TypeError, ValueError):
+        raise BeamTypeError(
+            f"orders must be a sequence of numbers, got "
+            f"{type(orders).__name__}") from None
+    if q.ndim != 1:
+        raise BeamValueError(
+            f"orders must be one-dimensional, got shape {q.shape}")
+    bad = q[~np.isfinite(q)]
+    if bad.size:
+        raise BeamValueError(
+            f"orders must be finite, got {bad[:3].tolist()}")
+    return np.ascontiguousarray(q)
+
+
+def _hill_from_mellin(q: float, log_mellin: float) -> float:
+    """``D_q`` from ``ln sum P**q``, by the expression ``hill_number`` ends in.
+
+    ``beam_model_hill_number`` returns 0.0 for a model with no live length,
+    where ``log_mellin`` is ``-inf``; above ``q = 1`` the division would turn
+    that into ``+inf`` instead, so it is special-cased the same way. C's
+    ``exp`` saturates to ``inf`` where Python's raises, and a support too
+    large for a double is an answer, not an error.
+    """
+    if log_mellin == -math.inf:
+        return 0.0
+    try:
+        return math.exp(log_mellin / (1.0 - q))
+    except OverflowError:
+        return math.inf
 
 
 class BeamModel:
@@ -1150,6 +1194,25 @@ class BeamModel:
         """
         return float(_c.log_mellin(self._g, float(q)))
 
+    def log_mellin_many(self, orders: Iterable[float]) -> np.ndarray:
+        """:meth:`log_mellin` at every order in ``orders``, in one pass.
+
+        Bit-identical to ``[self.log_mellin(q) for q in orders]`` -- the same
+        bits, not the same numbers to rounding -- whatever the thread count,
+        the memory budget, or which other orders share the call. What changes
+        is the work: each length's trellis is traversed once for all the
+        orders instead of once per order, with the layer of edge weights built
+        once and every order riding it under its own rescaling.
+
+        Orders must be finite. Returns a float64 array the length of
+        ``orders``; an empty sequence returns an empty array.
+        """
+        q = _orders_vector(orders)
+        if q.size == 0:
+            return np.empty(0, dtype=np.float64)
+        return np.frombuffer(_c.log_mellin_many(self._g, q),
+                             dtype=np.float64).copy()
+
     def power_sum(self, q: float) -> float:
         """``sum_s P(s)**q`` on the linear scale.
 
@@ -1159,8 +1222,60 @@ class BeamModel:
         return math.exp(self.log_mellin(q))
 
     def hill_numbers(self, orders: Iterable[float]) -> np.ndarray:
-        """Hill numbers at several orders at once."""
+        """Hill numbers at several orders at once.
+
+        One :meth:`hill_number` per order, each its own pass over every
+        length. :meth:`hill_profile` computes the same profile from one pass
+        per length and agrees with this to machine precision, not bit for bit;
+        keep this where a number has to reproduce one already published.
+        """
         return np.array([self.hill_number(float(a)) for a in orders])
+
+    def hill_profile(self, orders: Iterable[float]) -> np.ndarray:
+        """Hill numbers at every order in ``orders``, from one pass per length.
+
+        Each order takes the route :meth:`hill_number` takes, chosen by the
+        same tests: ``q = 0`` is :meth:`path_count`, ``q`` within ``1e-12`` of
+        1 is ``exp(entropy())``, and every other order is
+        ``exp(log_mellin(q) / (1 - q))`` with all of those orders' Mellin
+        values from one :meth:`log_mellin_many` call.
+
+        The two corners are bit-identical to :meth:`hill_numbers`. The rest
+        agree with it to MACHINE PRECISION, NOT BIT FOR BIT: ``hill_number``
+        reaches ``sum P**q`` through a different tilted sweep
+        (``tilted_log_z`` in math/diversity.c), which rescales each layer by a
+        different maximum and so rounds differently. Over nine models -- both
+        alphabets, both worlds, orders 2 to 4, and a donor-scale model -- the
+        two values of ``ln sum P**q`` differ by at most 7.1e-15, and on the
+        default grid of 0 to 3 in steps of 0.1 the Hill numbers by at most
+        1.1e-14 relative. Closed-world models mostly agree exactly.
+
+        NEAR ``q = 1`` THE RELATIVE DIFFERENCE GROWS as ``1 / |1 - q|``,
+        because ``D_q = exp(ln M / (1 - q))`` magnifies any rounding in
+        ``ln M`` by that factor on both routes: 1.3e-12 was measured at
+        ``q = 1.001`` on an open-world model. Neither route is the more
+        accurate one there. Use :meth:`hill_numbers` where a profile has to
+        reproduce one already published from it to the last bit.
+
+        On a donor-scale model (180,000 sequences, order 4, 16 threads) the
+        default 31-order profile takes 0.42 s here against 4.25 s for
+        :meth:`hill_numbers`.
+        """
+        q = _orders_vector(orders)
+        out = np.empty(q.size, dtype=np.float64)
+        one = np.abs(q - 1.0) < 1e-12        # `fabs(alpha - 1.0) < 1e-12` in C
+        zero = q == 0.0
+        rest = ~(one | zero)
+        if rest.any():
+            qr = q[rest]
+            lm = self.log_mellin_many(qr)
+            out[rest] = [_hill_from_mellin(float(a), float(v))
+                         for a, v in zip(qr, lm)]
+        if zero.any():
+            out[zero] = self.path_count()
+        if one.any():
+            out[one] = math.exp(self.entropy())
+        return out
 
     def hill_curve(self, orders: Iterable[float] | None = None) -> dict[str, np.ndarray]:
         """The diversity profile as a curve, for plotting."""

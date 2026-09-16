@@ -181,6 +181,20 @@ def tier1(report):
                    o.log_mellin(q))
         report(f"{tag}: hill 2", m.hill_number(2.0),
                math.exp(o.log_mellin(2.0) / (1.0 - 2.0)))
+        # The many-order forms, against the enumeration rather than against
+        # the single-order forms they are tested equal to elsewhere: a fused
+        # sweep that were wrong the same way at every q would pass that, and
+        # cannot pass this. Negative orders included for the same reason as
+        # above -- the fused sweep keeps its own q < 0 layer minimum per order.
+        qs = (-2.0, -0.5, 0.0, 0.5, 2.0)
+        for q, v in zip(qs, m.log_mellin_many(qs)):
+            report(f"{tag}: log_mellin_many q={q}", v, o.log_mellin(q))
+        orders = (0.0, 0.5, 1.0, 2.0, 3.0)
+        want = [float(o.live.sum()) if q == 0.0 else
+                math.exp(o.entropy()) if q == 1.0 else
+                math.exp(o.log_mellin(q) / (1.0 - q)) for q in orders]
+        for q, v, w in zip(orders, m.hill_profile(orders), want):
+            report(f"{tag}: hill_profile q={q}", v, w)
         lo, hi = m.surprisal_range()
         s = -o.logp[o.live]
         report(f"{tag}: surprisal_range", (lo, hi), (s.min(), s.max()))

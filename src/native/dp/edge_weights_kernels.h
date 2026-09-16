@@ -159,19 +159,52 @@ static inline void BEAM_KFN(state_weights_dense)(const BeamModel *m, uint32_t i,
     }
 }
 
-/** Sparse counterpart with the three forward directory lookups hoisted. */
-static inline void BEAM_KFN(state_weights_sparse)(const BeamModel *m, uint32_t i,
+/** Sparse counterpart, with a forward-wide row the caller may already hold. */
+static inline void BEAM_KFN(state_weights_sparse_with_fw)(
+                                        const BeamModel *m, uint32_t i,
                                         uint32_t len, uint32_t s,
                                         bool settle_back, uint32_t r,
-                                        double *row) {
+                                        BeamLogRow fw, double *row) {
     const uint32_t R  = BEAM_K_R;
     const uint32_t A  = BEAM_K_A;
     const uint32_t K  = m->state_order;
     const uint32_t n2 = m->n_ctx_len;
     const uint32_t n3 = m->n_ctx_mid;
-    const uint32_t nw = m->n_ctx_wide;
+    const uint32_t scored = settle_back
+                          ? beam_state_oldest(s, m->state_shift) : R;
 
-    const BeamLogRow fw = beam_lp_wide_row(m, BEAM_FWD, i, s % nw);
+    /*
+     * At the default order the backward mid/length rows, and the cells read
+     * from them, are invariant across every residue emitted by this state.
+     * Test them before expanding three complete forward rows: if either cell
+     * is dead, every settled edge is -inf and those sixty decodes would be
+     * discarded.  This is only the order-4 shape; orders 2 and 3 retain the
+     * per-residue route below because x belongs to different contexts there.
+     */
+    const bool fixed_back = settle_back && scored < R
+                         && K > 3u && m->order == K;
+    BeamLogRow bm_fixed = { .step = 1u }, bl_fixed = { .step = 1u };
+    double bmv = 0.0, blv = 0.0;
+    uint32_t cw0 = 0u;
+    if (fixed_back) {
+        const uint32_t cm = beam_ctx_backward_from_state(s, 0u, K, 3u, A);
+        const uint32_t cl = beam_ctx_backward_from_state(s, 0u, K, 2u, A);
+        bm_fixed = beam_lp_mid_row(m, BEAM_BWD, r, cm);
+        bl_fixed = beam_lp_len_row(m, BEAM_BWD, len, r, cl);
+        if (!bm_fixed.present || !bl_fixed.present) {
+            for (uint32_t x = 0; x < R; ++x) row[x] = -INFINITY;
+            return;
+        }
+        bmv = beam_log_cell(&bm_fixed, scored);
+        blv = beam_log_cell(&bl_fixed, scored);
+        if (bmv == -INFINITY || blv == -INFINITY) {
+            for (uint32_t x = 0; x < R; ++x) row[x] = -INFINITY;
+            return;
+        }
+        cw0 = beam_ctx_backward_wide_from_state(
+            s, 0u, m->state_shift, K, m->order, A);
+    }
+
     const BeamLogRow fm = beam_lp_mid_row(m, BEAM_FWD, i, s % n3);
     const BeamLogRow fl = beam_lp_len_row(m, BEAM_FWD, len, i, s % n2);
     if (!fw.present || !fm.present || !fl.present) {
@@ -204,8 +237,6 @@ static inline void BEAM_KFN(state_weights_sparse)(const BeamModel *m, uint32_t i
         }
     }
     if (!settle_back) return;
-
-    const uint32_t scored = beam_state_oldest(s, m->state_shift);
     if (scored >= R) return;
 
     /*
@@ -253,24 +284,24 @@ static inline void BEAM_KFN(state_weights_sparse)(const BeamModel *m, uint32_t i
      * exists to prevent. Other orders take the original path; they are rare
      * and correctness is not negotiable for a speedup.
      */
-    if (K > 3u && m->order == K) {
-        const uint32_t cm = beam_ctx_backward_from_state(s, 0u, K, 3u, A);
-        const uint32_t cl = beam_ctx_backward_from_state(s, 0u, K, 2u, A);
-        const BeamLogRow bm = beam_lp_mid_row(m, BEAM_BWD, r, cm);
-        const BeamLogRow bl = beam_lp_len_row(m, BEAM_BWD, len, r, cl);
-        if (!bm.present || !bl.present) {
-            for (uint32_t x = 0; x < R; ++x) row[x] = -INFINITY;
-            return;
-        }
-        const uint32_t cw0 = beam_ctx_backward_wide_from_state(
-            s, 0u, m->state_shift, K, m->order, A);
+    if (fixed_back) {
+        /*
+         * The two cell reads, not just the two row lookups.
+         *
+         * `bm`, `bl` and `scored` are all invariant across x -- that is the
+         * whole point of the hoist argued above -- so these were being read
+         * twenty times with byte-identical arguments. GCC cannot hoist them
+         * itself: the store to `row[x]` may alias the rows' `dict`, so it is
+         * obliged to re-read. A cell read is a select, never arithmetic, so
+         * `mix_values` receives the same two doubles it received before and
+         * the result is bit-identical.
+         */
         for (uint32_t x = 0; x < R; ++x) {
             if (row[x] == -INFINITY) continue;
             const BeamLogRow bw = beam_lp_wide_row(m, BEAM_BWD, r, cw0 + x);
             const double b = !bw.present ? -INFINITY
                            : mix_values(m, beam_log_cell(&bw, scored),
-                                        beam_log_cell(&bm, scored),
-                                        beam_log_cell(&bl, scored));
+                                        bmv, blv);
             row[x] = (b == -INFINITY) ? -INFINITY
                                       : row[x] + m->cfg.weight_backward * b;
         }
@@ -296,6 +327,131 @@ static inline void BEAM_KFN(state_weights_sparse)(const BeamModel *m, uint32_t i
     }
 }
 
+/** Sparse entry point for a caller that has not already resolved `fw`. */
+static inline void BEAM_KFN(state_weights_sparse)(const BeamModel *m, uint32_t i,
+                                        uint32_t len, uint32_t s,
+                                        bool settle_back, uint32_t r,
+                                        double *row) {
+    const BeamLogRow fw = beam_lp_wide_row(m, BEAM_FWD, i,
+                                           s % m->n_ctx_wide);
+    BEAM_KFN(state_weights_sparse_with_fw)(m, i, len, s, settle_back, r,
+                                           fw, row);
+}
+
+/**
+ * Maximum edge of one sparse state without constructing its output row.
+ *
+ * Packed forward rows are intersected first, so dictionary values are fetched
+ * only for residues all three experts contain.  Dense rows are streamed from
+ * their payloads.  Both paths visit residues in ascending order and perform
+ * exactly the same mixed-forward multiply and backward add as
+ * `state_weights_sparse_with_fw`; only the stores and subsequent rescan are
+ * absent.
+ */
+static inline double BEAM_KFN(state_max_sparse_with_fw)(
+                                        const BeamModel *m, uint32_t i,
+                                        uint32_t len, uint32_t s,
+                                        bool settle_back, uint32_t r,
+                                        BeamLogRow fw) {
+    const uint32_t R = BEAM_K_R;
+    const uint32_t A = BEAM_K_A;
+    const uint32_t K = m->state_order;
+    const uint32_t scored = settle_back
+                          ? beam_state_oldest(s, m->state_shift) : R;
+    const bool fixed_back = settle_back && scored < R
+                         && K > 3u && m->order == K;
+    double bmv = 0.0, blv = 0.0;
+    uint32_t cw0 = 0u;
+
+    if (fixed_back) {
+        const uint32_t cm = beam_ctx_backward_from_state(s, 0u, K, 3u, A);
+        const uint32_t cl = beam_ctx_backward_from_state(s, 0u, K, 2u, A);
+        const BeamLogRow bm = beam_lp_mid_row(m, BEAM_BWD, r, cm);
+        const BeamLogRow bl = beam_lp_len_row(m, BEAM_BWD, len, r, cl);
+        if (!bm.present || !bl.present) return -INFINITY;
+        bmv = beam_log_cell(&bm, scored);
+        blv = beam_log_cell(&bl, scored);
+        if (bmv == -INFINITY || blv == -INFINITY) return -INFINITY;
+        cw0 = beam_ctx_backward_wide_from_state(
+            s, 0u, m->state_shift, K, m->order, A);
+    }
+
+    const BeamLogRow fm = beam_lp_mid_row(m, BEAM_FWD, i,
+                                          s % m->n_ctx_mid);
+    const BeamLogRow fl = beam_lp_len_row(m, BEAM_FWD, len, i,
+                                          s % m->n_ctx_len);
+    if (!fw.present || !fm.present || !fl.present) return -INFINITY;
+
+    double hi = -INFINITY;
+#define BEAM_CONSIDER_FORWARD(x_, f_) do {                                    \
+        const uint32_t edge_x_ = (x_);                                       \
+        const double edge_f_ = (f_);                                         \
+        if (edge_f_ == -INFINITY) break;                                     \
+        double edge_v_ = m->cfg.weight_forward * edge_f_;                    \
+        if (settle_back && scored < R) {                                     \
+            double edge_b_;                                                  \
+            if (fixed_back) {                                                \
+                const BeamLogRow bw_ = beam_lp_wide_row(                     \
+                    m, BEAM_BWD, r, cw0 + edge_x_);                          \
+                edge_b_ = !bw_.present ? -INFINITY                           \
+                        : mix_values(m, beam_log_cell(&bw_, scored),          \
+                                     bmv, blv);                              \
+            } else {                                                         \
+                const uint32_t cw_ = beam_ctx_backward_wide_from_state(      \
+                    s, edge_x_, m->state_shift, K, m->order, A);             \
+                const uint32_t cm_ = beam_ctx_backward_from_state(           \
+                    s, edge_x_, K, 3u, A);                                   \
+                const uint32_t cl_ = beam_ctx_backward_from_state(           \
+                    s, edge_x_, K, 2u, A);                                   \
+                const BeamLogRow bw_ = beam_lp_wide_row(m, BEAM_BWD, r, cw_);\
+                const BeamLogRow bm_ = beam_lp_mid_row(m, BEAM_BWD, r, cm_); \
+                const BeamLogRow bl_ = beam_lp_len_row(                      \
+                    m, BEAM_BWD, len, r, cl_);                               \
+                edge_b_ = (!bw_.present || !bm_.present || !bl_.present)     \
+                        ? -INFINITY                                           \
+                        : mix_values(m, beam_log_cell(&bw_, scored),          \
+                                     beam_log_cell(&bm_, scored),            \
+                                     beam_log_cell(&bl_, scored));           \
+            }                                                                \
+            if (edge_b_ == -INFINITY) break;                                 \
+            edge_v_ = edge_v_ + m->cfg.weight_backward * edge_b_;           \
+        }                                                                    \
+        if (edge_v_ > hi) hi = edge_v_;                                     \
+    } while (0)
+
+    if (!fw.dense && !fm.dense && !fl.dense) {
+        uint32_t common = fw.mask & fm.mask & fl.mask;
+        if (R < 32u) common &= (1u << R) - 1u;
+        while (common) {
+            const uint32_t x = (uint32_t)__builtin_ctz(common);
+            const uint32_t below = (1u << x) - 1u;
+            const double a = fw.dict[fw.index[
+                __builtin_popcount(fw.mask & below)]];
+            const double b = fm.dict[fm.index[
+                __builtin_popcount(fm.mask & below)]];
+            const double c = fl.dict[fl.index[
+                __builtin_popcount(fl.mask & below)]];
+            BEAM_CONSIDER_FORWARD(x, mix_values(m, a, b, c));
+            common &= common - 1u;
+        }
+    } else if (fw.dense && fm.dense && fl.dense) {
+        for (uint32_t x = 0; x < R; ++x) {
+            const double a = fw.dense[(size_t)x * fw.step];
+            const double b = fm.dense[(size_t)x * fm.step];
+            const double c = fl.dense[(size_t)x * fl.step];
+            BEAM_CONSIDER_FORWARD(x, mix_values(m, a, b, c));
+        }
+    } else {
+        for (uint32_t x = 0; x < R; ++x)
+            BEAM_CONSIDER_FORWARD(
+                x, mix_values(m, beam_log_cell(&fw, x),
+                              beam_log_cell(&fm, x), beam_log_cell(&fl, x)));
+    }
+
+#undef BEAM_CONSIDER_FORWARD
+    return hi;
+}
+
 static void BEAM_KFN(state_weights)(const BeamModel *m, uint32_t i, uint32_t len,
                             uint32_t state, double *out) {
     const uint32_t K = m->state_order;
@@ -305,6 +461,103 @@ static void BEAM_KFN(state_weights)(const BeamModel *m, uint32_t i, uint32_t len
         BEAM_KFN(state_weights_sparse)(m, i, len, state, settle_back, r, out);
     else
         BEAM_KFN(state_weights_dense)(m, i, len, state, settle_back, r, out);
+}
+
+/** One directory chunk of the sparse all-state maximum/fill traversal. */
+static double BEAM_KFN(layer_max_sparse_chunk)(
+                            const BeamModel *m, uint32_t i, uint32_t len,
+                            bool settle_back, uint32_t r,
+                            const BeamSparseRows *fw, uint32_t base,
+                            uint32_t lo, uint32_t stop,
+                            const uint8_t *fill, double *out) {
+    const uint32_t R = BEAM_K_R;
+    const uint32_t S = m->n_states;
+    const uint32_t nw = m->n_ctx_wide;
+    const uint32_t stride = S / nw;
+    double hi = -INFINITY;
+
+    BeamRowCursor cur;
+    beam_row_cursor_init(&cur, fw, base + lo, base + stop);
+    uint32_t next_slot = fw->rank
+                       ? beam_row_cursor_slot0(fw, base + lo) : 0u;
+    uint32_t got;
+    while (beam_row_cursor_next(&cur, &got)) {
+        const uint32_t slot = fw->rank ? next_slot++ : fw->index[got];
+        const BeamLogRow fwr = beam_sparse_log_slot(fw, slot);
+        const uint32_t ctx = got - base;
+
+        /* One wide context can back several states when the state carries
+         * more residues than the wide expert's order. */
+        for (uint32_t rep = 0; rep < stride; ++rep) {
+            const uint32_t st = rep * nw + ctx;
+            if (st >= S) break;
+            if (fill && fill[st]) {
+                double *row = out + (size_t)st * R;
+                BEAM_KFN(state_weights_sparse_with_fw)(
+                    m, i, len, st, settle_back, r, fwr, row);
+                for (uint32_t x = 0; x < R; ++x)
+                    if (row[x] > hi) hi = row[x];
+            } else {
+                const double v = BEAM_KFN(state_max_sparse_with_fw)(
+                    m, i, len, st, settle_back, r, fwr);
+                if (v > hi) hi = v;
+            }
+        }
+    }
+    return hi;
+}
+
+/**
+ * Exact maximum over every sparse state, optionally materialising `fill` rows.
+ *
+ * The maximum never uses `fill` as a filter: unmarked states take the max-only
+ * scorer and marked states take the ordinary output-producing scorer.  This is
+ * what lets a forward sweep reuse the rows it needs without changing the
+ * global rescale maximum.
+ */
+static double BEAM_KFN(layer_max_sparse_scan)(
+                            const BeamModel *m, uint32_t i, uint32_t len,
+                            const uint8_t *fill, double *out) {
+    const uint32_t K = m->state_order;
+    const uint32_t nw = m->n_ctx_wide;
+    const bool settle_back = (i >= K);
+    const uint32_t r = settle_back ? (len - 1u - (i - K)) : 0u;
+    const BeamSparseRows *fw = &m->sp_lp_wide[BEAM_FWD];
+    const uint32_t base = beam_depth_part(m, i) * nw;
+    if ((!fw->index && !fw->rank)
+        || (uint64_t)base + nw > (uint64_t)fw->n_dense_rows)
+        return -INFINITY;
+
+    const uint32_t chunk = 4096u;                 /* 64 rank words */
+    const int64_t n_chunks = (int64_t)((nw + chunk - 1u) / chunk);
+    double hi = -INFINITY;
+
+#ifdef _OPENMP
+    /* `beam_compute_log_z` is normally inside finalize's per-length region.
+     * Entering another OpenMP region there only creates a serialized team and
+     * paid several percent of the sweep in driver overhead. */
+    if (!omp_in_parallel() && nw > chunk && beam_threads() > 1) {
+        #pragma omp parallel for schedule(static) reduction(max:hi) \
+                num_threads(beam_threads())
+        for (int64_t ch = 0; ch < n_chunks; ++ch) {
+            const uint32_t lo = (uint32_t)ch * chunk;
+            const uint32_t stop = (lo + chunk < nw) ? lo + chunk : nw;
+            const double v = BEAM_KFN(layer_max_sparse_chunk)(
+                m, i, len, settle_back, r, fw, base, lo, stop, fill, out);
+            if (v > hi) hi = v;
+        }
+    } else
+#endif
+    {
+        for (int64_t ch = 0; ch < n_chunks; ++ch) {
+            const uint32_t lo = (uint32_t)ch * chunk;
+            const uint32_t stop = (lo + chunk < nw) ? lo + chunk : nw;
+            const double v = BEAM_KFN(layer_max_sparse_chunk)(
+                m, i, len, settle_back, r, fw, base, lo, stop, fill, out);
+            if (v > hi) hi = v;
+        }
+    }
+    return hi;
 }
 
 /**
@@ -332,11 +585,7 @@ static void BEAM_KFN(state_weights)(const BeamModel *m, uint32_t i, uint32_t len
  */
 static double BEAM_KFN(layer_max)(const BeamModel *m, uint32_t i, uint32_t len) {
     const uint32_t R  = BEAM_K_R;
-    const uint32_t K  = m->state_order;
     const uint32_t S  = m->n_states;
-    const uint32_t nw = m->n_ctx_wide;
-    const bool settle_back = (i >= K);
-    const uint32_t r = settle_back ? (len - 1u - (i - K)) : 0u;
 
     if (!m->cfg.sparse) {
         double *w = (double *)malloc((size_t)S * R * sizeof(double));
@@ -346,75 +595,66 @@ static double BEAM_KFN(layer_max)(const BeamModel *m, uint32_t i, uint32_t len) 
         free(w);
         return hi;
     }
-
-    /*
-     * Rows carry the depth bucket in their high digits, so this layer's rows
-     * are exactly the directory slice [want * nw, (want + 1) * nw). Walking
-     * the slice reaches the same rows in the same ascending order as filtering
-     * the whole slot -> row map did, and visits n_ctx_wide entries instead of
-     * every occupied row in the table -- 194,481 rather than 1,846,623 on the
-     * foundation, at any depth.
-     *
-     * That map was this function's only reader anywhere in the library, so
-     * reading the directory instead is also what lets a finalized table stop
-     * carrying one. The values are pinned in tests/native/test_layer_max.c
-     * against the DEFINITION -- every state, no shortcut -- rather than
-     * against whichever row source came before.
-     */
-    const BeamSparseRows *fw = &m->sp_lp_wide[BEAM_FWD];
-    const uint32_t want = beam_depth_part(m, i);
-    const uint32_t base = want * nw;
-    if ((!fw->index && !fw->rank)
-        || (uint64_t)base + nw > (uint64_t)fw->n_dense_rows)
-        return -INFINITY;
-
-    const uint32_t stride = S / nw;      /* 1 when order == state_order */
-
-    double hi = -INFINITY;
-    /*
-     * Chunked rather than row-per-iteration, so the walk inside a chunk can
-     * be a bitmap scan: one word load offers sixty-four rows and `ctz` picks
-     * out the occupied ones, where asking row by row paid a load, a shift and
-     * a mask for every absence. Chunks are a multiple of 64 so each begins on
-     * a word boundary and no word is examined by two threads.
-     *
-     * `hi` is a max reduction, and max over doubles is exact and
-     * order-independent, so splitting the range differently cannot move a
-     * bit of the answer.
-     */
-    const uint32_t chunk = 4096u;                 /* 64 words */
-    const int64_t n_chunks = (int64_t)((nw + chunk - 1u) / chunk);
-#ifdef _OPENMP
-    #pragma omp parallel for schedule(static) reduction(max:hi) \
-            num_threads(beam_threads()) if(nw > 4096)
-#endif
-    for (int64_t ch = 0; ch < n_chunks; ++ch) {
-        const uint32_t lo   = (uint32_t)ch * chunk;
-        const uint32_t stop = (lo + chunk < nw) ? lo + chunk : nw;
-        BeamRowCursor cur;
-        beam_row_cursor_init(&cur, fw, base + lo, base + stop);
-        uint32_t got;
-        while (beam_row_cursor_next(&cur, &got)) {
-        const uint32_t ctx = got - base;
-        double buf[BEAM_MAX_RESIDUES];
-        /* One wide context can back several states when the state carries
-         * more residues than the wide expert's order. */
-        for (uint32_t rep = 0; rep < stride; ++rep) {
-            const uint32_t st = rep * nw + ctx;
-            if (st >= S) break;
-            /* The directory just said this row is present, so the sparse
-             * scorer needs no probe of its own here. */
-            BEAM_KFN(state_weights_sparse)(m, i, len, st, settle_back, r, buf);
-            for (uint32_t x = 0; x < R; ++x) if (buf[x] > hi) hi = buf[x];
-        }
-        }
-    }
-    return hi;
+    return BEAM_KFN(layer_max_sparse_scan)(m, i, len, NULL, NULL);
 }
 
 static void BEAM_KFN(layer_weights)(const BeamModel *m, uint32_t i, uint32_t len,
                             double *out, double *out_max) {
     BEAM_KFN(layer_weights_live)(m, i, len, out, out_max, NULL);
+}
+
+/** One low-digits group of the sparse layer builder. */
+static inline double BEAM_KFN(layer_weights_sparse_group)(
+                                const BeamModel *m, uint32_t i, uint32_t len,
+                                uint32_t t, bool settle_back, uint32_t r,
+                                double *out, const uint8_t *alive) {
+    const uint32_t R = BEAM_K_R;
+    const uint32_t A = BEAM_K_A;
+    const uint32_t SK = m->state_shift;
+    const uint32_t nw_fwd = m->n_ctx_wide;
+    double hi = -INFINITY;
+
+    for (uint32_t oldest = 0; oldest < A; ++oldest) {
+        const uint32_t s = oldest * SK + t;
+        double *row = out + (size_t)s * R;
+        if (alive && !alive[s]) continue;
+
+        /* A missing forward-wide row makes all residues impossible. Probe it
+         * once, then pass the row through so the scorer does not look it up a
+         * second time. */
+        const BeamLogRow fw = beam_lp_wide_row(
+            m, BEAM_FWD, i, s % nw_fwd);
+        if (!fw.present) {
+            for (uint32_t x = 0; x < R; ++x) row[x] = -INFINITY;
+            continue;
+        }
+        BEAM_KFN(state_weights_sparse_with_fw)(
+            m, i, len, s, settle_back, r, fw, row);
+        for (uint32_t x = 0; x < R; ++x)
+            if (row[x] > hi) hi = row[x];
+    }
+    return hi;
+}
+
+/** One low-digits group of the dense layer builder. */
+static inline double BEAM_KFN(layer_weights_dense_group)(
+                                const BeamModel *m, uint32_t i, uint32_t len,
+                                uint32_t t, bool settle_back, uint32_t r,
+                                double *out, const uint8_t *alive) {
+    const uint32_t R = BEAM_K_R;
+    const uint32_t A = BEAM_K_A;
+    const uint32_t SK = m->state_shift;
+    double hi = -INFINITY;
+
+    for (uint32_t oldest = 0; oldest < A; ++oldest) {
+        const uint32_t s = oldest * SK + t;
+        double *row = out + (size_t)s * R;
+        if (alive && !alive[s]) continue;
+        BEAM_KFN(state_weights_dense)(m, i, len, s, settle_back, r, row);
+        for (uint32_t x = 0; x < R; ++x)
+            if (row[x] > hi) hi = row[x];
+    }
+    return hi;
 }
 
 /**
@@ -435,55 +675,62 @@ static void BEAM_KFN(layer_weights)(const BeamModel *m, uint32_t i, uint32_t len
  * PASS `alive` ONLY WHERE DEAD ROWS ARE PROVABLY UNREAD. The forward sweeps
  * qualify: their accumulator is non-zero only for states that were live
  * targets on the previous layer, so `cur[src] != 0` implies `alive[i][src]`.
- * Callers that ask for `out_max` do NOT qualify -- the fused maximum scans
- * every row, and excluding dead states would change the surprisal grid and
- * the tilted-sweep rescale, which is a change in results, not in speed.
+ *
+ * When `alive` and `out_max` are BOTH supplied, the maximum is nevertheless
+ * global: marked rows are materialised into `out`, while every unmarked sparse
+ * row takes the max-only scorer.  This combination exists for log-Z, which
+ * needs a rescale over every state but consumes weights only from its frontier.
+ * On a dense table there is no directory to skip through, so that combination
+ * builds the complete layer into `out` once.
  */
 static void BEAM_KFN(layer_weights_live)(const BeamModel *m, uint32_t i, uint32_t len,
                                  double *out, double *out_max,
                                  const uint8_t *alive) {
     const uint32_t R  = BEAM_K_R;
-    const uint32_t A  = BEAM_K_A;
     const uint32_t K  = m->state_order;
+    const uint32_t S  = m->n_states;
     const uint32_t SK = m->state_shift;
 
     const bool settle_back = (i >= K);
     const uint32_t r = settle_back ? (len - 1u - (i - K)) : 0u;
     double hi = -INFINITY;
 
-    if (m->cfg.sparse) {
-        const uint32_t nw_fwd = m->n_ctx_wide;
-#ifdef _OPENMP
-        #pragma omp parallel for schedule(static) reduction(max:hi) \
-                num_threads(beam_threads())
-#endif
-        for (int64_t t64 = 0; t64 < (int64_t)SK; ++t64) {
-            const uint32_t t = (uint32_t)t64;
-            for (uint32_t oldest = 0; oldest < A; ++oldest) {
-                const uint32_t s = oldest * SK + t;
+    if (alive && out_max) {
+        if (m->cfg.sparse) {
+            /* An occupied forward-wide row is the traversal's entry point.
+             * Marked states without one are therefore not visited, although
+             * their defined output is still an all--inf row. */
+            for (uint32_t s = 0; s < S; ++s) {
+                if (!alive[s]) continue;
                 double *row = out + (size_t)s * R;
-                /* Left UNTOUCHED, not filled with -inf. `out` is 20 doubles
-                 * per state -- 31 MB at order 4 -- so writing every dead row
-                 * rewrites the whole buffer each layer and costs more memory
-                 * traffic than the lookups it saves. Measured: filling gave
-                 * 1.24x, skipping gives far more. The contract above is what
-                 * makes this safe: dead rows are never read. */
-                if (alive && !alive[s]) continue;
-                /*
-                 * Probe the forward wide row first. A state missing it scores
-                 * exactly twenty -inf and nothing else, so deciding that with
-                 * ONE lookup saves two further probes and the whole backward
-                 * settle loop. On a per-repertoire model 98.6% of states have
-                 * no such row, which is why this is worth 3.4x there -- and
-                 * it writes the identical bytes, so the outputs do not move.
-                 */
-                if (!beam_lp_wide_row(m, BEAM_FWD, i, s % nw_fwd).present) {
-                    for (uint32_t x = 0; x < R; ++x) row[x] = -INFINITY;
-                    continue;
-                }
-                BEAM_KFN(state_weights_sparse)(m, i, len, s, settle_back, r, row);
-                for (uint32_t x = 0; x < R; ++x)
-                    if (row[x] > hi) hi = row[x];
+                for (uint32_t x = 0; x < R; ++x) row[x] = -INFINITY;
+            }
+            *out_max = BEAM_KFN(layer_max_sparse_scan)(m, i, len, alive, out);
+            return;
+        }
+        /* Dense `layer_max` has to build every row anyway. Build it into the
+         * caller's buffer instead of allocating a second complete layer. */
+        BEAM_KFN(layer_weights_live)(m, i, len, out, out_max, NULL);
+        return;
+    }
+
+    if (m->cfg.sparse) {
+#ifdef _OPENMP
+        if (!omp_in_parallel() && SK > 1u && beam_threads() > 1) {
+            #pragma omp parallel for schedule(static) reduction(max:hi) \
+                    num_threads(beam_threads())
+            for (int64_t t64 = 0; t64 < (int64_t)SK; ++t64) {
+                const double v = BEAM_KFN(layer_weights_sparse_group)(
+                    m, i, len, (uint32_t)t64, settle_back, r, out, alive);
+                if (v > hi) hi = v;
+            }
+        } else
+#endif
+        {
+            for (uint32_t t = 0; t < SK; ++t) {
+                const double v = BEAM_KFN(layer_weights_sparse_group)(
+                    m, i, len, t, settle_back, r, out, alive);
+                if (v > hi) hi = v;
             }
         }
         if (out_max) *out_max = hi;
@@ -522,20 +769,66 @@ static void BEAM_KFN(layer_weights_live)(const BeamModel *m, uint32_t i, uint32_
      * is -inf; a private copy no iteration touches therefore cannot outrank a
      * genuinely dead layer. */
 #ifdef _OPENMP
-    #pragma omp parallel for schedule(static) reduction(max:hi) \
-            num_threads(beam_threads())
+    if (!omp_in_parallel() && SK > 1u && beam_threads() > 1) {
+        #pragma omp parallel for schedule(static) reduction(max:hi) \
+                num_threads(beam_threads())
+        for (int64_t t64 = 0; t64 < (int64_t)SK; ++t64) {
+            const double v = BEAM_KFN(layer_weights_dense_group)(
+                m, i, len, (uint32_t)t64, settle_back, r, out, alive);
+            if (v > hi) hi = v;
+        }
+    } else
 #endif
-    for (int64_t t64 = 0; t64 < (int64_t)SK; ++t64) {
-        const uint32_t t = (uint32_t)t64;
-        for (uint32_t oldest = 0; oldest < A; ++oldest) {
-            const uint32_t s = oldest * SK + t;
-            double *row = out + (size_t)s * R;
-            if (alive && !alive[s]) continue;   /* see the sparse branch */
-            BEAM_KFN(state_weights_dense)(m, i, len, s, settle_back, r, row);
-            for (uint32_t x = 0; x < R; ++x) if (row[x] > hi) hi = row[x];
+    {
+        for (uint32_t t = 0; t < SK; ++t) {
+            const double v = BEAM_KFN(layer_weights_dense_group)(
+                m, i, len, t, settle_back, r, out, alive);
+            if (v > hi) hi = v;
         }
     }
     if (out_max) *out_max = hi;
+}
+
+/** One state's sink weight. */
+static inline double BEAM_KFN(tail_weight)(const BeamModel *m, uint32_t len,
+                                           uint32_t s) {
+    const uint32_t A = BEAM_K_A;
+    const uint32_t R = BEAM_K_R;
+    const uint32_t K = m->state_order;
+    const uint32_t n_tail = (K < len) ? K : len;
+
+    /* Unpack the state, oldest first. */
+    uint8_t slot[BEAM_MAX_ORDER + 1];
+    uint32_t q = s;
+    for (int32_t t = (int32_t)K - 1; t >= 0; --t) {
+        slot[t] = (uint8_t)(q % A);
+        q /= A;
+    }
+
+    double total = 0.0;
+    for (uint32_t r = 0; r < n_tail && total != -INFINITY; ++r) {
+        const uint32_t pos = K - 1u - r;  /* slot of the scored residue */
+        const uint32_t scored = slot[pos];
+        if (scored >= R) { total = -INFINITY; break; }
+
+        /* c_j = the residue j places to the right, or a sentinel past the
+         * end of the sequence. The mid and length tables are packed
+         * most-distant-first, so they take the digits descending; the wide
+         * table is packed nearest-first, so it takes them ascending. */
+        uint32_t cm = 0, cl = 0;
+        for (uint32_t j = K; j >= 1; --j) {
+            uint32_t c = (j <= r) ? slot[pos + j] : m->none_idx;
+            if (j <= 3u) cm = cm * A + c;
+            if (j <= 2u) cl = cl * A + c;
+        }
+        uint32_t cw = 0;
+        for (uint32_t j = 1; j <= m->order; ++j)
+            cw = cw * A + ((j <= r) ? slot[pos + j] : m->none_idx);
+        const double b = beam_mix(m, BEAM_BWD, len, r, cw, cm, cl, scored);
+        if (b == -INFINITY) { total = -INFINITY; break; }
+        total += m->cfg.weight_backward * b;
+    }
+    return total;
 }
 
 /**
@@ -548,50 +841,17 @@ static void BEAM_KFN(layer_weights_live)(const BeamModel *m, uint32_t i, uint32_
  * remaining context slots are sentinels.
  */
 static void BEAM_KFN(tail_weights)(const BeamModel *m, uint32_t len, double *out) {
-    const uint32_t A = BEAM_K_A;
-    const uint32_t R = BEAM_K_R;
-    const uint32_t K = m->state_order;
-    const uint32_t n_tail = (K < len) ? K : len;
-
 #ifdef _OPENMP
-    #pragma omp parallel for schedule(static) num_threads(beam_threads())
+    if (!omp_in_parallel() && beam_threads() > 1) {
+        #pragma omp parallel for schedule(static) num_threads(beam_threads())
+        for (int64_t s64 = 0; s64 < (int64_t)m->n_states; ++s64) {
+            const uint32_t s = (uint32_t)s64;
+            out[s] = BEAM_KFN(tail_weight)(m, len, s);
+        }
+    } else
 #endif
-    for (int64_t s64 = 0; s64 < (int64_t)m->n_states; ++s64) {
-        const uint32_t s = (uint32_t)s64;
-        /* Unpack the state, oldest first. */
-        uint8_t slot[BEAM_MAX_ORDER + 1];
-        uint32_t q = s;
-        for (int32_t t = (int32_t)K - 1; t >= 0; --t) {
-            slot[t] = (uint8_t)(q % A);
-            q /= A;
-        }
-
-        double total = 0.0;
-        for (uint32_t r = 0; r < n_tail && total != -INFINITY; ++r) {
-            const uint32_t pos = K - 1u - r;          /* slot of the scored residue */
-            const uint32_t scored = slot[pos];
-            if (scored >= R) { total = -INFINITY; break; }
-
-            /* c_j = the residue j places to the right, or a sentinel past the
-             * end of the sequence. The mid and length tables are packed
-             * most-distant-first, so they take the digits descending; the
-             * wide table is packed nearest-first, so it takes them ascending.
-             * See edge_model_internal.h for why the wide one differs. */
-            uint32_t cm = 0, cl = 0;
-            for (uint32_t j = K; j >= 1; --j) {
-                uint32_t c = (j <= r) ? slot[pos + j] : m->none_idx;
-                if (j <= 3u) cm = cm * A + c;
-                if (j <= 2u) cl = cl * A + c;
-            }
-            uint32_t cw = 0;
-            for (uint32_t j = 1; j <= m->order; ++j) {
-                cw = cw * A + ((j <= r) ? slot[pos + j] : m->none_idx);
-            }
-            const double b = beam_mix(m, BEAM_BWD, len, r,
-                                          cw, cm, cl, scored);
-            if (b == -INFINITY) { total = -INFINITY; break; }
-            total += m->cfg.weight_backward * b;
-        }
-        out[s] = total;
+    {
+        for (uint32_t s = 0; s < m->n_states; ++s)
+            out[s] = BEAM_KFN(tail_weight)(m, len, s);
     }
 }

@@ -503,6 +503,35 @@ static inline uint32_t beam_row_cursor_slot0(const BeamSparseRows *t,
 }
 
 /**
+ * A finalized payload slot as a `BeamLogRow`, without another directory
+ * lookup.
+ *
+ * A caller walking a rank directory already knows the slot: occupied rows are
+ * returned in ascending order, so the first slot comes from
+ * `beam_row_cursor_slot0` and every row after it is the next one.  Keeping this
+ * construction separate lets those walks reuse that fact instead of paying a
+ * second rank/popcount lookup for a row they have just proved present.
+ */
+static inline BeamLogRow beam_sparse_log_slot(const BeamSparseRows *t,
+                                              uint32_t slot) {
+    BeamLogRow r = { .step = 1u };
+    if (t->pool_id) slot = t->pool_id[slot];
+    r.present = true;
+    if (t->cell_mask) {
+        r.mask  = t->cell_mask[slot];
+        r.index = t->cell_index + t->cell_start[slot];
+        r.dict  = t->dict;
+    } else if (t->plane_step > 1u) {
+        r.dense = t->values0 + slot;          /* residue x is `step` further on */
+        r.step  = t->plane_step;
+    } else {
+        r.dense = t->values0 + (size_t)slot * t->stride;
+        r.step  = 1u;
+    }
+    return r;
+}
+
+/**
  * `beam_sparse_row_final` as a reference rather than a pointer, so a packed
  * table can answer it too. Same directory work; only what it hands back
  * differs.
@@ -526,20 +555,7 @@ static inline BeamLogRow beam_sparse_log_row(const BeamSparseRows *t,
         slot = t->index[row];
         if (slot == BEAM_ROW_MISSING) return r;
     }
-    if (t->pool_id) slot = t->pool_id[slot];
-    r.present = true;
-    if (t->cell_mask) {
-        r.mask  = t->cell_mask[slot];
-        r.index = t->cell_index + t->cell_start[slot];
-        r.dict  = t->dict;
-    } else if (t->plane_step > 1u) {
-        r.dense = t->values0 + slot;          /* residue x is `step` further on */
-        r.step  = t->plane_step;
-    } else {
-        r.dense = t->values0 + (size_t)slot * t->stride;
-        r.step  = 1u;
-    }
-    return r;
+    return beam_sparse_log_slot(t, slot);
 }
 
 

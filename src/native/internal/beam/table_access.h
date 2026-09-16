@@ -167,7 +167,15 @@ static inline bool beam_count_erase(BeamModel *m, uint32_t dir,
                                  beam_count_part_for_row(m, kind, row));
 }
 
-static inline BeamLogRow beam_lp_wide_row(const BeamModel *m,
+/*
+ * BEAM_INLINE, not plain `static inline`.
+ *
+ * At -O2 GCC declined to inline these three and emitted real calls, measured
+ * at 3.75% of cycles inside the edge-weight kernel. They are three loads and
+ * a branch each, and the kernel reaches them tens of millions of times per
+ * analytic, so the call overhead dominated the body.
+ */
+BEAM_INLINE BeamLogRow beam_lp_wide_row(const BeamModel *m,
                                                   uint32_t dir,
                                                   uint32_t depth,
                                                   uint32_t ctx) {
@@ -178,7 +186,7 @@ static inline BeamLogRow beam_lp_wide_row(const BeamModel *m,
     return r;
 }
 
-static inline BeamLogRow beam_lp_mid_row(const BeamModel *m,
+BEAM_INLINE BeamLogRow beam_lp_mid_row(const BeamModel *m,
                                                  uint32_t dir,
                                                  uint32_t depth,
                                                  uint32_t ctx) {
@@ -189,7 +197,7 @@ static inline BeamLogRow beam_lp_mid_row(const BeamModel *m,
     return r;
 }
 
-static inline BeamLogRow beam_lp_len_row(const BeamModel *m,
+BEAM_INLINE BeamLogRow beam_lp_len_row(const BeamModel *m,
                                                  uint32_t dir, uint32_t len,
                                                  uint32_t depth,
                                                  uint32_t ctx) {

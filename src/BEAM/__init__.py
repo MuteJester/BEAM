@@ -37,6 +37,8 @@ from .analytics.scale import Attribution, ScaleIndex, attribute
 from .mixture import (BetaDiversity, EntropyBounds, EntropyEstimate,
                       IncompatibleMembers, Mixture, MixtureError,
                       MixtureTooLarge, SupportSize, UnsupportedOrder)
+from .diversity import (DepthMatchedProfiles, ResamplingBand,
+                        depth_matched_hill_profiles)
 from .query import BeamQuery, Condition
 from .query.errors import (ImpossibleCondition, QueryError, QueryTooLarge,
                            UnsupportedQuery)
@@ -59,5 +61,6 @@ __all__ = [
     "BeamQuery", "Condition",
     "Mixture", "BetaDiversity", "EntropyBounds", "EntropyEstimate",
     "SupportSize",
+    "depth_matched_hill_profiles", "DepthMatchedProfiles", "ResamplingBand",
 ]
 __version__ = "0.1.0"

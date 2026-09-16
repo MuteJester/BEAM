@@ -10,6 +10,28 @@
 #endif
 
 
+/** One rest-group of the target-major transition. */
+static inline double logz_accumulate_rest(
+        uint32_t rest, uint32_t A, uint32_t R, uint32_t SK,
+        const uint32_t *off, const uint32_t *by_rest,
+        const double *w, const double *cur, double *next, double wmax) {
+    const uint32_t lo = off[rest], hi = off[rest + 1u];
+    double local_max = 0.0;
+    for (uint32_t x = 0; x < R; ++x) {
+        double acc = 0.0;
+        for (uint32_t j = lo; j < hi; ++j) {
+            const uint32_t s = by_rest[j] * SK + rest;
+            const double wv = w[(size_t)s * R + x];
+            if (wv == -INFINITY) continue;
+            acc += cur[s] * exp(wv - wmax);
+        }
+        next[(size_t)rest * A + x] = acc;
+        if (acc > local_max) local_max = acc;
+    }
+    return local_max;
+}
+
+
 /* ── Partition function ──────────────────────────────────────── */
 
 /**
@@ -52,15 +74,16 @@ BeamError beam_compute_log_z(BeamModel *m, uint32_t len, double *out) {
     uint32_t *off     = (uint32_t *)malloc(((size_t)SK + 1u) * sizeof(uint32_t));
     uint32_t *pos     = (uint32_t *)malloc((size_t)SK * sizeof(uint32_t));
     uint32_t *rests   = (uint32_t *)malloc((size_t)SK * sizeof(uint32_t));
+    uint8_t  *needed  = (uint8_t *)calloc((size_t)S, sizeof(uint8_t));
 
 #define BEAM_LOGZ_FREE() do {                                                 \
         free(w); free(cur); free(next); free(tail);                           \
         free(src); free(nxt); free(by_rest); free(off); free(pos);             \
-        free(rests);                                                          \
+        free(rests); free(needed);                                            \
     } while (0)
 
     if (!w || !cur || !next || !tail || !src || !nxt || !by_rest || !off ||
-        !pos || !rests) {
+        !pos || !rests || !needed) {
         BEAM_LOGZ_FREE();
         return BEAM_EALLOC("the partition-function trellis buffers");
     }
@@ -93,34 +116,32 @@ BeamError beam_compute_log_z(BeamModel *m, uint32_t len, double *out) {
      */
 
     for (uint32_t i = 0; i < len; ++i) {
-        /* Rescale the layer's weights by their maximum so the exponentials
-         * stay in range regardless of how deep the tables go. The maximum
-         * comes out of the layer build itself; taking a second pass over the
-         * 31 MB of weights to find it cost a fifth of the sweep. */
         /*
-         * The maximum comes from `beam_layer_max`, which reaches it
-         * through the occupied forward rows instead of building all 194,481
-         * states. Identical by construction -- a state with no forward row
-         * scores -inf and cannot carry a maximum -- and verified layer by
-         * layer against the full scan on the foundation.
-         *
-         * The weights themselves are then built only for states the sweep can
-         * reach, which the frontier now names outright instead of rediscovering
-         * with a scan over all 194,481 states.
+         * Rescale by the exact all-state maximum, but materialise only weights
+         * the frontier will consume. The sparse thin-frontier kernel does both
+         * in one directory traversal; densely reached layers use the batched
+         * full-layer build and obtain its fused maximum.
          *
          * This sweep is the partition function, run once per live length at
          * the end of finalize, and it was the 1.6s floor on every build -- and
          * on every load, since the file stores counts and loading refinalizes.
          */
         double wmax;
-        if ((uint64_t)reach * 8u < (uint64_t)S) {
-            /* Thinly reached: build only the rows the accumulation reads,
-             * walking the frontier rather than testing every state. */
-            wmax = beam_layer_max(m, i, len);
-            if (wmax != -INFINITY)
-                for (uint32_t k = 0; k < nsrc; ++k)
-                    beam_state_weights(m, i, len, src[k],
-                                       w + (size_t)src[k] * R);
+        if (m->cfg.sparse && (uint64_t)reach * 8u < (uint64_t)S) {
+            /*
+             * Thinly reached: mark only the rows the accumulation consumes,
+             * but take the maximum over every occupied state.  The combined
+             * kernel writes marked rows while max-only-scoring the rest, so a
+             * frontier state is never scored once for the maximum and again
+             * for the transition.
+             */
+            for (uint32_t k = 0; k < nsrc; ++k) {
+                const uint32_t s = src[k];
+                needed[s] = 1u;
+            }
+            wmax = -INFINITY;
+            beam_layer_weights_live(m, i, len, w, &wmax, needed);
+            for (uint32_t k = 0; k < nsrc; ++k) needed[src[k]] = 0u;
         } else {
             /* Densely reached, or a dense model: the batched build wins. Its
              * loop order turns the wide table into one sequential scan rather
@@ -170,22 +191,21 @@ BeamError beam_compute_log_z(BeamModel *m, uint32_t len, double *out) {
 
         double nmax = 0.0;
 #ifdef _OPENMP
-        #pragma omp parallel for schedule(static) reduction(max:nmax) \
-                num_threads(beam_threads())
+        if (!omp_in_parallel() && nrest > 1u && beam_threads() > 1) {
+            #pragma omp parallel for schedule(static) reduction(max:nmax) \
+                    num_threads(beam_threads())
+            for (int64_t q = 0; q < (int64_t)nrest; ++q) {
+                const double v = logz_accumulate_rest(
+                    rests[q], A, R, SK, off, by_rest, w, cur, next, wmax);
+                if (v > nmax) nmax = v;
+            }
+        } else
 #endif
-        for (int64_t q = 0; q < (int64_t)nrest; ++q) {
-            const uint32_t rest = rests[q];
-            const uint32_t lo = off[rest], hi = off[rest + 1u];
-            for (uint32_t x = 0; x < R; ++x) {
-                double acc = 0.0;
-                for (uint32_t j = lo; j < hi; ++j) {
-                    const uint32_t s = by_rest[j] * SK + rest;
-                    const double wv = w[(size_t)s * R + x];
-                    if (wv == -INFINITY) continue;
-                    acc += cur[s] * exp(wv - wmax);
-                }
-                next[(size_t)rest * A + x] = acc;
-                if (acc > nmax) nmax = acc;
+        {
+            for (uint32_t q = 0; q < nrest; ++q) {
+                const double v = logz_accumulate_rest(
+                    rests[q], A, R, SK, off, by_rest, w, cur, next, wmax);
+                if (v > nmax) nmax = v;
             }
         }
         log_scale += wmax;

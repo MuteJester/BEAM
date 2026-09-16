@@ -80,6 +80,22 @@ which also says which Hill orders are exact (`q = 0` and integer `q >= 2`),
 which are bounded (`q = 1`, refused rather than estimated), and what one inner
 product costs.
 
+### Diversity at a common sequencing depth
+
+```python
+from BEAM import depth_matched_hill_profiles
+
+r = depth_matched_hill_profiles([seqs_a, seqs_b], [templates_a, templates_b],
+                                seed=1)
+r.profiles                     # (2 repertoires, 20 resamples, 31 orders)
+r.resampling_band(5, 95)       # a resampling band, not a confidence interval
+```
+
+Each repertoire is resampled to the smallest template total in the call, and
+every resample is a freshly fitted model. The depth belongs to the call, so
+profiles are comparable only within one. See
+[`docs/api/python/diversity.md`](docs/api/python/diversity.md).
+
 ### Closed world by default
 
 The model holds what the sequences you gave it actually spell. A sequence no
@@ -127,9 +143,9 @@ python -m pytest tests    # Python suite
 | `src/native/io/` | Model persistence |
 | `src/native/core/` | Errors, logging, alphabet, runtime, RNG, CRC32C |
 | `src/native/bindings/python/` | The `_cbeam` extension, split by domain |
-| `src/BEAM/` | Python package: `model/`, `analytics/`, `math/`, `io/`, `publicness/`, `query/`, `mixture/` |
+| `src/BEAM/` | Python package: `model/`, `analytics/`, `math/`, `io/`, `publicness/`, `query/`, `mixture/`, `insights/`, `diversity/` |
 | `build_support/` | Explicit source manifests read by both `Makefile` and `setup.py` |
-| `tests/python/` | Python suite, grouped as `model/`, `math/`, `analytics/`, `publicness/`, `query/`, `mixture/` |
+| `tests/python/` | Python suite, grouped as `model/`, `math/`, `analytics/`, `publicness/`, `query/`, `mixture/`, `insights/`, `diversity/` |
 | `tests/native/` | C unit tests |
 | `tests/reference/` | An independent reimplementation, used to check the model against |
 | `docs/` | `architecture/`, `api/python/` |

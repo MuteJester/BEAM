@@ -10,7 +10,7 @@
 # wildcards. See build_support/native_sources.txt for why.
 
 CC      ?= gcc
-CFLAGS   = -O2 -Wall -Wextra -std=c11 -Iinclude -Isrc/native/internal
+CFLAGS   = -O2 -Wall -Wextra -std=c11 -mpopcnt -Iinclude -Isrc/native/internal
 CFLAGS  += -fopenmp
 LDLIBS   = -lm -fopenmp
 
