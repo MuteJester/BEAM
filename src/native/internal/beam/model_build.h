@@ -38,7 +38,7 @@ static inline uint32_t beam_ipow_u32(uint32_t base, uint32_t exp) {
  * It exists because the refusal used to be assembled by the caller from a
  * fixed list of fields, which could not name a rule that was not on the list:
  * a config rejected for asking sparse storage without the closed world was
- * reported by printing order, max_length, depth_cap, the coefficient sum and
+ * reported by printing order, max_length, the anchor weights and
  * the anchor weights, all of them valid.
  */
 const char *beam_config_invalid_reason(const BeamModelConfig *c,

@@ -309,7 +309,7 @@ static double BEAM_KFN(layer_max)(const BeamModel *m, uint32_t i, uint32_t len) 
         const uint32_t ctx = got - base;
         double buf[BEAM_MAX_RESIDUES];
         /* One wide context can back several states when the state carries
-         * more residues than the wide expert's order. */
+         * more residues than the context order. */
         for (uint32_t rep = 0; rep < stride; ++rep) {
             const uint32_t st = rep * nc + ctx;
             if (st >= S) break;

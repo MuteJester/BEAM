@@ -31,7 +31,7 @@ typedef struct {
     uint8_t none;             /**< the sentinel's index, == residues         */
 
     /**
-     * Context order of the wide expert: the default when the caller gives
+     * Context order: the default when the caller gives
      * none, and the largest this alphabet accepts.
      *
      * The ceiling is per-alphabet because it is really a bound on `A^order`.
@@ -47,14 +47,6 @@ typedef struct {
      *  amino-acid length to say the same thing. */
     uint8_t default_max_length;
 
-    /**
-     * Default depth cap of the wide expert.
-     *
-     * 255 means "resolve every depth": `beam_model_new` already clamps a cap
-     * at or beyond `max_length` down to `max_length - 1`, which resolves each
-     * depth exactly. The cap exists to keep the amino-acid wide table
-     * affordable at radix 21, and that cost does not arise at radix 6.
-     */
 
     /**
      * Byte → residue index, `BEAM_RESIDUE_INVALID` for anything else.
