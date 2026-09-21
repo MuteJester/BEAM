@@ -10,7 +10,7 @@ import math
 import pytest
 
 import BEAM
-from BEAM import BeamModel
+from BEAM import BeamModel, Builder
 
 from _helpers import make_corpus
 
@@ -171,9 +171,12 @@ def test_provenance_is_the_only_thing_two_identical_builds_disagree_on(tmp_path)
     seqs = ["CASSLGQ", "CASSLGT", "CASRDTQ", "CGSSLGQ", "CASSLGQY", "CASRDTQY"]
     ab = [40.0, 25.0, 18.0, 12.0, 9.0, 6.0]
     paths = []
+    first_created = None
     for name in ("a", "b"):
         m = BeamModel(seqs, abundances=ab, order=3, max_length=9,
                       strict=True)
+        if first_created is None:
+            first_created = m.metadata(lengths=False)["created_unix"]
         p = tmp_path / name
         m.save(str(p))
         paths.append(p.with_suffix(".beam").read_bytes())
@@ -191,7 +194,11 @@ def test_provenance_is_the_only_thing_two_identical_builds_disagree_on(tmp_path)
     # nanoseconds, which is true but is not something to assert.
     import struct
     created, observed, finalized = struct.unpack_from("<qqq", a, off)
-    assert created == m.metadata()["created_unix"]
+    # `a` is the FIRST model's bytes, so it must be compared against the first
+    # model's own stamp. Comparing against `m`, the loop variable, read the
+    # second model's clock and failed whenever the two builds straddled a
+    # one-second tick.
+    assert created == first_created
     assert observed > 0 and finalized > 0
 
 
@@ -227,3 +234,38 @@ def test_metadata_describes_a_compacted_model(small, tmp_path):
     assert after["build"] == before["build"]
     assert after["size"]["n_states"] == before["size"]["n_states"]
     assert after["size"]["n_cells"] == before["size"]["n_cells"]
+
+
+def test_adding_sequences_through_add_carries_their_build_time():
+    """`add` is the other way sequences enter a model, so the clock must move.
+
+    The counters aggregated here from the start and the durations did not, so
+    a model assembled from shards reported a build time of zero while
+    `n_observed` rose. `Builder.snapshot()` goes through this path and was the
+    visible symptom: seconds of real counting reported as 0.0.
+    """
+    a = BeamModel(["CASSLGQ", "CASSLGT"], abundances=[2.0, 1.0],
+                  order=2, max_length=9)
+    b = BeamModel(["CASSLGY", "CASRDTQ"], abundances=[1.0, 1.0],
+                  order=2, max_length=9)
+    before = a.metadata(lengths=False)["build"]
+    a.add(b)
+    after = a.metadata(lengths=False)["build"]
+
+    assert after["n_observed"] == before["n_observed"] + 2
+    assert after["observe_seconds"] > before["observe_seconds"]
+
+    # And subtract is its exact inverse, for the same reason the counters are:
+    # otherwise a leave-one-out workflow reports a build time that only rises.
+    a.subtract(b)
+    back = a.metadata(lengths=False)["build"]
+    assert back["n_observed"] == before["n_observed"]
+    assert back["observe_seconds"] == before["observe_seconds"]
+
+
+def test_a_streaming_snapshot_reports_the_time_it_spent():
+    b = Builder(order=2, max_length=9)
+    b.observe(["CASSLGQ", "CASSLGT", "CASRDTQ"], [1.0, 1.0, 1.0])
+    meta = b.snapshot().metadata(lengths=False)["build"]
+    assert meta["n_observed"] == 3
+    assert meta["observe_seconds"] > 0.0

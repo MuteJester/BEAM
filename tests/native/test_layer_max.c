@@ -134,44 +134,6 @@ static void test_dense_matches_the_definition(void) {
 }
 
 /**
- * The depth bucket is what the shortcut slices on, so a corpus whose lengths
- * straddle `depth_cap` is the case that catches an off-by-one in the slice.
- */
-static void test_layers_beyond_the_depth_cap(void) {
-    BeamModelConfig cfg;
-    beam_model_config_default(&cfg);
-    cfg.order = 3u;
-    cfg.max_length = 9u;
-    cfg.sparse = true;
-    BeamModel *m = beam_model_new(&cfg);
-    ASSERT_MSG(m != NULL, "model did not allocate");
-    if (beam_model_observe(m, TRAIN, WEIGHT, N_TRAIN) != BEAM_OK
-        || beam_model_finalize(m) != BEAM_OK) {
-        beam_model_destroy(m);
-        ASSERT_MSG(false, "model did not build");
-    }
-
-    uint32_t finite = 0;
-    for (uint32_t len = 1; len <= 9u; ++len) {
-        for (uint32_t i = 0; i < len; ++i) {
-            const double got = beam_layer_max(m, i, len);
-            const double want = reference_layer_max(m, i, len);
-            if (!same_double(got, want)) {
-                printf("FAIL: capped len=%u layer=%u got %.17g want %.17g\n",
-                       len, i, got, want);
-                fail_count++;
-                beam_model_destroy(m);
-                return;
-            }
-            if (got != -INFINITY) finite++;
-        }
-    }
-    beam_model_destroy(m);
-    ASSERT_MSG(finite > 0u, "every layer came back -inf: nothing was tested");
-    PASS();
-}
-
-/**
  * A depth bucket with no occupied row at all.
  *
  * The shortcut slices the directory by depth bucket, so a bucket the corpus

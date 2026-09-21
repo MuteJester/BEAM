@@ -528,9 +528,13 @@ class BeamModel:
         nonzero = None if self._compacted else self.n_nonzero_cells
 
         out: dict[str, Any] = {
-            "created": _datetime.datetime.fromtimestamp(
-                created_unix, _datetime.timezone.utc).isoformat(),
-            "created_unix": int(created_unix),
+            # Zero means the file predates provenance (format 6). Report it
+            # as unknown rather than as 1970, which is what an epoch stamp
+            # rendered literally would claim.
+            "created": (_datetime.datetime.fromtimestamp(
+                created_unix, _datetime.timezone.utc).isoformat()
+                if created_unix else None),
+            "created_unix": int(created_unix) or None,
             "beam_version": self._pkg_version(),
             "variant": self.variant,
             "finalized": True,

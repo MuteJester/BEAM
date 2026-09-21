@@ -462,6 +462,8 @@ tests/python/model/test_file_inputs.py::test_log_pseq_file_rejects_a_wrong_sized
 tests/python/model/test_file_inputs.py::test_log_pseq_parquet_preserves_row_order
 tests/python/model/test_file_inputs.py::test_novelty_is_the_richness_increment
 tests/python/model/test_file_inputs.py::test_pseq_accepts_a_list_and_a_log_flag
+tests/python/model/test_format_compatibility.py::test_a_format_6_file_is_read_and_agrees_with_the_build_that_wrote_it
+tests/python/model/test_format_compatibility.py::test_a_format_6_file_reports_its_build_time_as_unknown
 tests/python/model/test_format_compatibility.py::test_an_older_file_is_refused_and_says_why[format3_dense]
 tests/python/model/test_format_compatibility.py::test_an_older_file_is_refused_and_says_why[format3_sparse]
 tests/python/model/test_format_compatibility.py::test_an_older_file_is_refused_and_says_why[format4_dense]
@@ -479,6 +481,8 @@ tests/python/model/test_generation.py::test_sample_respects_the_model
 tests/python/model/test_generation.py::test_simulate_is_reproducible
 tests/python/model/test_generation.py::test_simulate_returns_a_simulation_result
 tests/python/model/test_metadata.py::test_a_caller_s_own_refinalize_still_counts
+tests/python/model/test_metadata.py::test_a_streaming_snapshot_reports_the_time_it_spent
+tests/python/model/test_metadata.py::test_adding_sequences_through_add_carries_their_build_time
 tests/python/model/test_metadata.py::test_build_time_aggregates_across_observe_calls
 tests/python/model/test_metadata.py::test_coverage_grows_with_length_while_the_data_does
 tests/python/model/test_metadata.py::test_coverage_is_a_fraction_and_rows_bound_cells

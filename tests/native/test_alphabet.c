@@ -486,12 +486,10 @@ static void test_every_config_refusal_names_its_own_rule(void) {
     cases[n].what = "a zero max_length"; cases[n].token = "max_length=";
     cases[n].c = valid_for(BEAM_ALPHABET_AA); cases[n].c.max_length = 0; ++n;
 
-    cases[n].c = valid_for(BEAM_ALPHABET_AA);
-
-    cases[n].what = "a negative backoff strength"; cases[n].token = "kappa";
-
-    cases[n].what = "coefficients off one"; cases[n].token = "coefficients";
-
+    /* The backoff-strength and coefficient rules went with the three-expert
+     * mixture; there is nothing left to refuse. Their entries were emptied
+     * rather than deleted, which left three writes to a slot that the next
+     * case overwrote. */
     cases[n].what = "a negative anchor weight"; cases[n].token = "anchor weights";
     cases[n].c = valid_for(BEAM_ALPHABET_AA);
     cases[n].c.weight_backward = -0.5; ++n;
@@ -500,9 +498,9 @@ static void test_every_config_refusal_names_its_own_rule(void) {
     cases[n].c = valid_for(BEAM_ALPHABET_AA);
     cases[n].c.sparse = true; cases[n].c.strict = false; ++n;
 
-    cases[n].what = "sparse with backoff on"; cases[n].token = "backoff strength at zero";
-    cases[n].c = valid_for(BEAM_ALPHABET_AA);
-    cases[n].c.sparse = true; cases[n].c.strict = true;
+    /* "sparse with backoff on" stood here without its `++n`, so the loop
+     * never reached it. That was load-bearing by accident: sparse AND strict
+     * is now a VALID config, so had it ever run it would have failed. */
 
     static char msg[512];
     char why[BEAM_CONFIG_REASON_MAX];

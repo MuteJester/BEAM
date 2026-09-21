@@ -100,7 +100,6 @@ static bool round_trips(BeamModel *m, const char *what, uint64_t *saved,
         fail_count++; return false;
     }
     for (uint32_t t = 0; t < 2u; ++t) {
-        uint32_t kind_unused;
         BeamSparseRows *src = count_table(m, t);
         const uint32_t nr = beam_count_n_rows(m);
 
@@ -489,8 +488,7 @@ static void test_rows_are_identified_the_cheaper_way(void) {
             fail_count++; goto out;
         }
         for (uint32_t t = 0; t < 2u; ++t) {
-            uint32_t kind_unused;
-            BeamSparseRows *src = count_table(m, t);
+                BeamSparseRows *src = count_table(m, t);
             BeamFrozenCounts f;
             if (beam_frozen_freeze(src, src->n_parts, &f) != BEAM_OK) {
                 printf("FAIL: %s %s did not freeze\n", cases[c].label, name_of(t));

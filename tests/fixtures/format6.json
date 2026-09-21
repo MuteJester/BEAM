@@ -1,0 +1,21 @@
+{
+ "entropy": 1.4097889338160305,
+ "log_pseq": {
+  "CASRDTQYF": -3.4339872044851463,
+  "CASSLGEQYF": -0.9490805546971459,
+  "CASSLGTEAFF": -1.6422277352570913,
+  "CASSPGTGFF": -2.0476928433652555,
+  "CASSQDTQYF": -1.3545456628053103
+ },
+ "n_nonzero_cells": 70,
+ "n_observed": 6,
+ "n_sequences": 31.0,
+ "n_states": 9261,
+ "observed_lengths": [
+  9,
+  10,
+  11
+ ],
+ "path_count": 5.0,
+ "total_weight": 31.0
+}

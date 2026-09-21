@@ -497,12 +497,29 @@ BeamModel *beam_model_load(const char *path) {
      * file. Zeroed first, so an older format leaves `alphabet` at
      * BEAM_ALPHABET_AA, which is what it is.
      */
+    /*
+     * Format 6 is read, not refused, and it is the only older one that is.
+     *
+     * It is THIS model -- one table per direction, exact depth -- written
+     * before provenance existed. The bytes provenance now occupies were
+     * `dead_coef[3]`, which format 6 wrote as three explicit zeros, so a
+     * format-6 file is a format-7 file whose build time is unknown and whose
+     * payload is identical. Refusing it told the owner of one that their file
+     * came from "a build with three experts per direction and a capped depth
+     * index" and that they had to retrain -- every clause false, and for a
+     * corpus of the foundation's size a very expensive thing to be told over
+     * 24 zero bytes. Formats 1 to 5 genuinely cannot be converted and are
+     * still refused, by the branch below that names why.
+     *
+     * A zero `created_unix` is how "unknown" reaches the caller; nothing
+     * invents a timestamp for a file that never carried one.
+     */
     BeamHeader h;
     memset(&h, 0, sizeof h);
     uint32_t crc = 0;
     if (!read_all(f, &h, BEAM_HEADER_V2_BYTES, &crc)
         || h.magic != BEAM_MAGIC
-        || h.format != BEAM_FORMAT) {
+        || (h.format != BEAM_FORMAT && h.format != BEAM_FORMAT_V6)) {
         const bool short_read = h.magic != BEAM_MAGIC && h.magic == 0u;
         const bool bad_magic  = h.magic != BEAM_MAGIC;
         const uint32_t got    = h.format;
@@ -515,7 +532,7 @@ BeamModel *beam_model_load(const char *path) {
             return (void)BEAM_FAIL(BEAM_ERR_IO_CORRUPT,
                                   "beam_model_load: '%s' is not a BEAM model "
                                   "file (wrong magic number)", path), NULL;
-        if (got >= BEAM_FORMAT_DENSE_V1 && got <= BEAM_FORMAT_V6)
+        if (got >= BEAM_FORMAT_DENSE_V1 && got <= BEAM_FORMAT_V5)
             return (void)BEAM_FAIL(BEAM_ERR_IO_CORRUPT,
                                   "beam_model_load: '%s' is a format %u BEAM "
                                   "model, written by a build with three "
@@ -589,7 +606,12 @@ BeamModel *beam_model_load(const char *path) {
      * The frozen reader installs them directly, so a loaded model arrives in
      * the same shape a finalized one is in rather than being expanded and
      * frozen again. */
-    const bool frozen_on_disk = (h.format >= BEAM_FORMAT) && m->cfg.sparse;
+    /* Frozen since format 6, so the test is against V6 and not against
+     * whatever BEAM_FORMAT happens to be. Written as `>= BEAM_FORMAT`
+     * it silently stopped matching format 6 the moment the number was
+     * bumped to 7, and a format-6 file -- whose counts ARE frozen --
+     * was then read as plain sparse records and reported as truncated. */
+    const bool frozen_on_disk = (h.format >= BEAM_FORMAT_V6) && m->cfg.sparse;
     bool ok = true;
     for (uint32_t d = 0; d < BEAM_DIRS && ok; ++d) {
         if (frozen_on_disk) {

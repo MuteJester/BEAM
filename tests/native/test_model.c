@@ -282,15 +282,6 @@ static void test_single_anchor_weights_are_accepted(void) {
     PASS();
 }
 
-static void test_depth_cap_is_clamped(void) {
-    /* max_length 12 still admits every training sequence, but sits below the
-     * default depth cap of 15. */
-    BeamModel *m = build(4, 12);
-    ASSERT_MSG(m != NULL, "a max_length below the default depth cap must work");
-    beam_model_destroy(m);
-    PASS();
-}
-
 static void test_sparse_requires_strict(void) {
     /* An omitted count row is a dead probability row only in the closed
      * world. The open world's add-one gives every row mass, including rows

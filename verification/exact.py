@@ -149,24 +149,24 @@ def tier1(report):
                      for _ in range(400)})
     ab = [1.0 + (i % 13) for i in range(len(corpus))]
 
-    # Six ordinary configurations, and one with backoff switched off.
+    # Six configurations: three orders against both worlds.
     #
-    # That last one is not decoration. In the open world with zero backoff the
-    # unobserved cells sit at `ln(1e-300)`, so a layer's weights span 690 nats
-    # -- and that spread is what the tilted sweeps got wrong. With default
-    # backoff the spread is a few nats and `q * wmax` is close enough to the
-    # true tilted maximum that the defect hides. A grid of well-conditioned
-    # models watches this class of bug walk past.
-    configs = [(o, s, None) for o in (2, 3, 4) for s in (False, True)]
-    configs.append((3, False, 0.0))
+    # A seventh stood here, tagged "no-backoff", to put a badly conditioned
+    # model in the grid: with the backoff hierarchy off, unobserved cells sat
+    # at `ln(1e-300)` and a layer's weights spanned 690 nats, which is the
+    # spread the tilted sweeps once got wrong. Both halves of that are gone.
+    # The hierarchy went with the three-expert mixture, the open world is a
+    # Laplace add-one with no floor to stretch the spread, and -- because the
+    # keyword that once switched it off no longer exists -- the seventh config
+    # had silently become a bit-for-bit copy of the sixth, measuring thirty
+    # quantities twice under a name for a regime nothing was testing.
+    configs = [(o, s) for o in (2, 3, 4) for s in (False, True)]
 
-    def one(order, strict, kap):
-        kw = {} if kap is None else dict()
+    def one(order, strict):
         m = BEAM.BeamModel(corpus, abundances=ab, order=order,
-                           max_length=4, strict=strict, **kw)
+                           max_length=4, strict=strict)
         o = Oracle(m, AA, (3, 4))
-        tag = (f"aa order {order} {'strict' if strict else 'open'}"
-               + ("" if kap is None else " no-backoff"))
+        tag = f"aa order {order} {'strict' if strict else 'open'}"
 
         report(f"{tag}: normalisation", o.total, 1.0)
         report(f"{tag}: entropy", m.entropy(), o.entropy())
@@ -281,13 +281,11 @@ def tier1(report):
     # aborting the tier would hide 279 other quantities behind the first
     # one, which is the difference between a gate that localises a defect
     # and one that only says something is wrong.
-    for order, strict, kap in configs:
+    for order, strict in configs:
         try:
-            one(order, strict, kap)
+            one(order, strict)
         except Exception as exc:                  # noqa: BLE001
-            tag = (f"aa order {order} "
-                   f"{'strict' if strict else 'open'}"
-                   + ("" if kap is None else " no-backoff"))
+            tag = f"aa order {order} {'strict' if strict else 'open'}"
             report(f"{tag}: raised {type(exc).__name__}: {exc}",
                    float("nan"), 0.0)
 

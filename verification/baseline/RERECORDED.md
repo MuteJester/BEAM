@@ -1396,3 +1396,80 @@ tables that compaction keeps.
 
 `numeric`, `saved-model bytes`, `thread independence` and `exact` are all
 unchanged across both fixes, which is what says neither touched the model.
+
+## Addendum, tag `presweep`: what a three-way audit of the branch found
+
+Three agents swept the tree for leftovers of the single-expert change, for
+gaps in the metadata work, and for documentation that no longer matches the
+code. Every claim quoted below was re-verified here before it was acted on;
+several of their other claims were right about the defect and wrong about its
+size, which is why the numbers in this section come from `diff` and from the
+gate rather than from the reports.
+
+    pytest_cases.txt   4 added, 0 gone
+    everything else    unchanged
+
+`c_cases.txt` did not move even though two C test functions were deleted --
+neither was ever registered with `RUN_TEST`, so neither was ever in the
+baseline. That is the evidence they were dead rather than merely unused.
+
+### Two defects in the metadata feature
+
+**`add` and `subtract` did not carry the build time.** The three corpus
+counters moved and the clock did not, so a model assembled from shards
+reported `n_observed` rising while `observe_seconds` stayed put, and
+`Builder.snapshot()` -- which goes through `add` -- reported 0.0 for a corpus
+it had genuinely spent time counting. That is the requirement this feature
+exists to meet: aggregate each time sequences are added. `add` now adds the
+other model's `observe_nanos` and `subtract` removes it, floored, exactly as
+the comment beside the counters already argued for them. `created_unix`
+deliberately does not move: absorbing counts is not a re-creation.
+
+**A format-6 file was refused with a false diagnosis.** The metadata commit
+widened the "three experts per direction and a capped depth index ... retrain
+the model" refusal from formats 1-5 to 1-6. Format 6 is not an older model --
+it is this one, written before provenance existed -- so every clause was
+false, and for a foundation-sized corpus an expensive thing to be told.
+
+### The fix for that second one was itself wrong, and a fixture caught it
+
+Accepting format 6 looked safe: diffing `3806d4c..46e3468` shows the header
+layout byte-identical, provenance occupying the 24 bytes format 6 wrote as
+explicit zeros. That diff was the wrong thing to check. The reader gates the
+frozen-counts payload on `h.format >= BEAM_FORMAT`, and bumping that constant
+to 7 silently stopped it matching format 6, so a format-6 file -- whose counts
+ARE frozen -- was read as plain sparse records and reported as truncated. The
+gate is now against `BEAM_FORMAT_V6`, which is the version the payload
+actually changed at.
+
+`tests/fixtures/format6_sparse.beam` is what found it. It was written by a
+worktree at `3806d4c`, the last commit that emitted format 6 -- NOT by
+patching a format-7 file with this build, which is the one thing
+`test_format_compatibility.py` says a fixture here must never be, and which
+would have reproduced the bug rather than exposing it. `format6.json` records
+what that build read back, and the test asserts this build reproduces every
+`log_pseq`, the path count and the entropy bit for bit.
+
+### Dead code the sweep turned up
+
+- `test_depth_cap_is_clamped` and `test_layers_beyond_the_depth_cap`: defined,
+  never registered, both emitting `-Wunused-function`. There is no depth cap.
+- Three `uint32_t kind_unused` declarations, left from when `count_table` took
+  an expert-kind out-parameter.
+- `tests/native/test_alphabet.c`: a refusal case stood without its `++n`, so
+  the loop never reached it. That was load-bearing by accident -- sparse AND
+  strict is now a VALID config, so had it ever run it would have failed.
+- The build is now warning-free.
+
+### The gate lost 45 quantities, and they were duplicates
+
+    exact against enumeration   336 -> 291
+
+`exact.py` built a seventh configuration tagged "no-backoff" to put a badly
+conditioned model in the grid. The keyword that switched backoff off no longer
+exists, so `kw = {} if kap is None else dict()` had both branches empty and
+the seventh config had become a bit-for-bit copy of the sixth -- measuring its
+quantities twice under a name for a regime nothing was testing. Removing it
+costs nothing: 336 = 7 x 45 + 21 and 291 = 6 x 45 + 21, so exactly one
+configuration's worth left and the six that remain are unchanged, which the
+unmoved `numeric` and `saved-model bytes` confirm.

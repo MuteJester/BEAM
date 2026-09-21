@@ -97,6 +97,8 @@ BeamError beam_model_subtract(BeamModel *m, const BeamModel *o) {
                     ? m->n_observed - o->n_observed : 0u;
     m->n_skipped    = m->n_skipped > o->n_skipped
                     ? m->n_skipped - o->n_skipped : 0u;
+    m->observe_nanos = m->observe_nanos > o->observe_nanos
+                    ? m->observe_nanos - o->observe_nanos : 0;
     m->finalized = false;
     return BEAM_OK;
 }
@@ -164,6 +166,18 @@ BeamError beam_model_add(BeamModel *m, const BeamModel *o) {
     m->total_weight += o->total_weight;
     m->n_observed   += o->n_observed;
     m->n_skipped    += o->n_skipped;
+    /*
+     * And the time those observations cost, for the same reason the counters
+     * move: `add` is the other way sequences enter a model, so a build time
+     * that ignored it would report zero for a model assembled from shards and
+     * would stop rising exactly when `n_observed` rose. `Builder.snapshot`
+     * goes through here, and used to report a build time of 0.0 for a corpus
+     * it had genuinely spent seconds counting.
+     *
+     * `created_unix` deliberately does NOT move. Absorbing another model's
+     * counts is not a re-creation of this one.
+     */
+    m->observe_nanos += o->observe_nanos;
     m->finalized = false;
     return BEAM_OK;
 }
