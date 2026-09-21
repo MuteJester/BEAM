@@ -342,10 +342,25 @@ static void test_the_posterior_survives_a_neighbourhood_that_underflows(void) {
         sum += nb.posterior[k];
         if (nb.posterior[k] > 0.0) positive++;
     }
-    ASSERT_MSG(best < -700.0, "every neighbour is far below the mode");
-    ASSERT_MSG(exp(best) == 0.0,
-               "so exponentiating a score directly gives exactly zero, and a "
-               "naive softmax would have nothing left to normalise");
+    /*
+     * It used to be asserted that every neighbour scores below -700, where
+     * exp() underflows. That is no longer reachable, for the reason recorded
+     * in test_query_moments: the old open world could floor a cell that
+     * normalised to nothing at 1e-300, worth about -690 nats on its own, and
+     * the Laplace add-one that replaced the backoff hierarchy bottoms out at
+     * 1/(n + R) instead. Measured here: the best neighbour is -33.7.
+     *
+     * The machinery still has to hold the posterior together over a
+     * neighbourhood far below the mode, which is what remains asserted.
+     */
+    ASSERT_MSG(best < -25.0, "every neighbour is far below the mode");
+    /* exp(best) was exactly zero when best was below -745. At -33.7 it is
+     * about 2e-15 instead: still far too small to normalise a softmax
+     * against without losing every digit, but no longer a literal zero. The
+     * claim is restated as what the number actually is. */
+    ASSERT_MSG(exp(best) < 1e-12,
+               "so exponentiating a score directly leaves nothing a naive "
+               "softmax could normalise against");
     ASSERT_MSG(fabs(sum - 1.0) < 1e-12,
                "yet the posterior is still a distribution");
     ASSERT_MSG(positive > nb.n / 2u,

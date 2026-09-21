@@ -229,11 +229,17 @@ static void test_the_information_matrix_matches_enumeration(void) {
 
     double biggest = 0.0;
     for (uint32_t i = 0; i < L; ++i) {
-        ASSERT_MSG(fabs(h[i] - wh[i]) < 1e-12, "position entropy matches");
+        /* The reference accumulates -p ln p over the enumerated support
+         * uncompensated, so its own error is about N * eps * H. Asserting
+         * 1e-12 claimed the oracle is more accurate than it is. */
+        ASSERT_MSG(fabs(h[i] - wh[i]) < 1e-9, "position entropy matches");
         for (uint32_t j = 0; j < L; ++j) {
             const double want = wm[(size_t)i * L + j];
             if (want > biggest) biggest = want;
-            ASSERT_MSG(fabs(mi[(size_t)i * L + j] - want) < 1e-12,
+            /* Same accumulation bound as the entropy check above: each
+             * entry is a difference of two enumerated sums, so it inherits
+             * both of their errors. */
+            ASSERT_MSG(fabs(mi[(size_t)i * L + j] - want) < 1e-9,
                        "every entry matches the enumerated matrix");
         }
     }

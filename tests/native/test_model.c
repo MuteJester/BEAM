@@ -2502,8 +2502,14 @@ static void test_clamped_marginals_survive_a_wide_dynamic_range(void) {
     double logz = 0.0;
     ASSERT_MSG(beam_model_positional_marginals(m, LEN, clamp, out, &logz)
                == BEAM_OK, "clamped marginals");
-    ASSERT_MSG(isfinite(logz) && logz < -100.0,
-               "the clamped mass is real and thousands of nats down");
+    /* Thousands of nats down was reachable when an unobserved cell could be
+     * floored at 1e-300. The open world is now a Laplace add-one that bottoms
+     * out at 1/(n + R), so the deepest a clamped mass goes is set by how many
+     * positions are pinned rather than by a floor artefact. The claim that
+     * matters is that the mass is real and far below the mode, and that the
+     * log-space path returns it at all. */
+    ASSERT_MSG(isfinite(logz) && logz < -5.0,
+               "the clamped mass is real and below the mode");
 
     for (uint32_t i = 0; i < LEN; ++i) {
         double s = 0.0;

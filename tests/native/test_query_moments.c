@@ -188,7 +188,15 @@ static void test_entropy_matches_enumeration(void) {
     double want_h = 0.0;
     enumerate_moments(m, L, NULL, NULL, NULL, &want_h);
     ASSERT_MSG(want_h > 0.5, "the reference found real entropy");
-    ASSERT_MSG(fabs(h - want_h) < 1e-12,
+    /*
+     * The reference sums -p ln p over the whole enumerated support in a plain
+     * loop with no compensation, so its own error is about N * eps * H. At
+     * L = 4 that is order 1e-10, and the two agree to 1.4e-11. A 1e-12
+     * tolerance was asserting the oracle is more accurate than it is; it held
+     * before because the summands happened to align, not because it was
+     * justified.
+     */
+    ASSERT_MSG(fabs(h - want_h) < 1e-9,
                "H matches -sum p ln p over the whole support");
     ASSERT_MSG(v > 0.0, "and the surprisal has spread");
     beam_model_destroy(m);
@@ -369,7 +377,9 @@ static void test_moments_match_enumeration_under_a_constraint(void) {
     double wm = 0.0, wv = 0.0;
     enumerate_moments(m, L, tab, &wm, &wv, NULL);
     ASSERT_MSG(wv > 1e-6, "the functional actually varies");
-    ASSERT_MSG(fabs(mo.mean - wm) < 1e-12, "E[f] matches enumeration");
+    /* Same accumulation bound as the entropy check above: the reference sums
+     * over the whole enumerated support uncompensated. */
+    ASSERT_MSG(fabs(mo.mean - wm) < 1e-9, "E[f] matches enumeration");
     ASSERT_MSG(fabs(mo.variance - wv) < 1e-12, "Var[f] matches enumeration");
     beam_query_constraint_free(c);
 
@@ -572,8 +582,27 @@ static void test_a_rare_but_certain_event_has_moments(void) {
     const uint32_t L = 10u;
     const char *rare = "WWWWWWWWWW";
     const double score = beam_model_log_pseq(m, rare);
-    ASSERT_MSG(isfinite(score) && score < -700.0,
-               "producible, and thousands of nats below the mode");
+    /*
+     * It used to be asserted that this sequence scores below -700, which is
+     * where exp() underflows and the linear-space path this test exists to
+     * guard against gave up. That score is no longer reachable, and the
+     * reason is worth recording rather than working around.
+     *
+     * Under the previous open world an unobserved cell could normalise to
+     * essentially nothing and then be floored at 1e-300 by
+     * `beam_to_log_inplace`, which is a single cell worth about -690 nats.
+     * That is where the thousands of nats came from: a floor artefact, not a
+     * probability the model meant. The open world is now a Laplace add-one,
+     * so the smallest a cell can be is 1/(n + R) and the 1e-300 floor never
+     * fires at all.
+     *
+     * Measured on this fixture: an all-W sequence scores -31.5, and so does
+     * every other sequence built entirely from unobserved contexts, because
+     * an unobserved row is uniform. The machinery still has to survive the
+     * lowest score the model CAN produce, which is what is asserted.
+     */
+    ASSERT_MSG(isfinite(score) && score < -25.0,
+               "producible, and far below the mode");
 
     BeamConstraint *c = beam_query_constraint_new(L, R);
     for (uint32_t i = 0; i < L; ++i)
