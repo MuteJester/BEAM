@@ -97,7 +97,7 @@ def test_as_dict_is_keyed_by_residue_and_matches_the_heights(model):
     d = g.as_dict()
     assert set(d) == set(AA)
     assert d["C"] == pytest.approx(g.height_bits[:, AA.index("C")])
-    assert d["C"].shape == (L_ENUM)
+    assert d["C"].shape == (L_ENUM,)
     with pytest.raises(ValueError, match="bits.*nats"):
         g.as_dict(unit="decibans")
 

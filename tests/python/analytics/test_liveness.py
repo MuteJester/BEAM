@@ -46,7 +46,10 @@ def _enumerate_live_trellis(m, length):
     every = ["".join(t) for t in itertools.product(AA, repeat=length)]
     lp = m.log_pseq_batch(every)
     nodes, edges = set(), set()
-    K = 3                                  # state_order for order 2 and 3
+    # The state holds exactly the residues one context needs, so its order is
+    # the model's own. Read from the model rather than assumed: hard-coding it
+    # is what made this oracle agree with a state width it was not checking.
+    K = int(m.config["order"])
     for seq, v in zip(every, lp):
         if not math.isfinite(v):
             continue

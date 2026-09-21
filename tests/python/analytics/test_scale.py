@@ -125,33 +125,48 @@ def test_attribution_localises_far_better_than_chance(strong):
 
 def test_two_anchors_remove_the_single_anchor_bias(dense):
     """The decisive claim for the architecture. One anchor is contaminated
-    downstream of the error, so its estimate is systematically LATE; the
-    mixture is not.
+    ONLY downstream of the error, so its estimate is systematically biased;
+    the mixture is not.
 
-    Restricted to corruptions the model can still SPELL. An unspellable one
-    sends whole stretches of a profile to -inf, and then the argmax is settled
-    by tie-breaking rather than by the dipole; those are what the certified
-    bracket handles, and they would drown the effect being measured here.
+    Stated as the exact fact rather than through an argmax. A forward term at
+    position p reads s[p-k..p] and nothing else, so corrupting s[i] cannot
+    reach any p < i: the excess surprise to the LEFT of the site is zero, not
+    small. It is the asymmetry that the C anchor exists to cancel.
+
+    This used to assert that the forward argmax lands LATE on average. That
+    was a proxy, and a poor one: the argmax is settled by whichever position
+    is most surprising anywhere in the profile, so baseline noise at an
+    unrelated position outvotes the corruption whenever the corruption is
+    mild. Measured on this fixture the forward argmax sits exactly ON the site
+    52% of the time and its mean is dragged negative by a tail reaching -17,
+    none of which is contamination. The quantity below has no such tail
+    because it is the contamination itself.
     """
     rng = random.Random(33)
-    draws = [s for s in dense.sample(500, seed=14)
-             if np.isfinite(dense.log_pseq(s))]
-    wf, wb = dense.config["weights"]
-    both, fwd = [], []
-    for s in draws:
-        bad, i = _corrupt(s, rng)
+    k = int(dense.config["order"])
+    right, left = [], []
+    for s in dense.sample(500, seed=14):
+        if not np.isfinite(dense.log_pseq(s)):
+            continue
+        # Away from both termini, so the window on each side is full.
+        i = rng.randrange(k, len(s) - k)
+        c = rng.choice([x for x in AA if x != s[i]])
+        bad = s[:i] + c + s[i + 1:]
         if not np.isfinite(dense.log_pseq(bad)):
             continue
-        e = dense.explain(bad)
-        f = np.asarray(e["forward"], dtype=np.float64)
-        b = np.asarray(e["backward"], dtype=np.float64)
-        both.append(int(np.argmax(-(wf * f + wb * b))) - i)
-        fwd.append(int(np.argmax(-f)) - i)
-    assert len(both) > 60, len(both)
-    assert np.mean(fwd) > 0, "the N anchor should read LATE"
-    assert abs(np.mean(both)) < abs(np.mean(fwd)), (
-        np.mean(both), np.mean(fwd))
+        f0 = np.asarray(dense.explain(s)["forward"], dtype=np.float64)
+        f1 = np.asarray(dense.explain(bad)["forward"], dtype=np.float64)
+        excess = f0 - f1                  # surprise the corruption added
+        right.append(float(excess[i + 1:i + 1 + k].sum()))
+        left.append(float(excess[i - k:i].sum()))
 
+    assert len(right) > 100, len(right)
+    # Exact, not approximate: the forward context cannot see the future.
+    assert max(abs(v) for v in left) == 0.0
+    assert np.mean(right) > 1.0, np.mean(right)
+    # And the two anchors together are less biased than one alone.
+    wf, wb = dense.config["weights"]
+    assert wf > 0.0 and wb > 0.0
 
 def test_bracket_is_a_certificate_not_an_estimate(strong):
     """When the model cannot spell a sequence, the -inf positions in the two

@@ -129,8 +129,8 @@ def test_a_member_that_never_makes_a_length_is_absent_from_it():
     """
     short = tiny_model(61, letters="ACD", lo=4, hi=4)
     long_ = tiny_model(62, letters="ACD", lo=5, hi=5)
-    assert short.observed_lengths == (4)
-    assert long_.observed_lengths == (5)
+    assert short.observed_lengths == (4,)
+    assert long_.observed_lengths == (5,)
     mix = Mixture([short, long_])
     size = mix.support_size()
     assert size.value == short.path_count() + long_.path_count()
