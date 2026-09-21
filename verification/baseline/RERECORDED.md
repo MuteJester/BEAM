@@ -1068,3 +1068,104 @@ the enumerated support. That is deliberate placement. `numeric.json` pins a
 quantity against a recording of itself, so a logo wrong from the day it was
 written would pass it forever; `exact.py` is the only check with an
 independent reference.
+
+---
+
+# The single-expert model, 2026-09-21
+
+Branch `feature/single-expert-model`. Six baselines move and one does not,
+and this section is written BEFORE the re-record so that what is expected to
+move is on the record independently of what did.
+
+This is a model change, not a refactor. Nothing will be bit-identical and
+nothing should be. The gate below therefore cannot certify the change; it can
+only certify that the change is the ONLY change, which is what re-recording
+in a commit that touches nothing else is for.
+
+## What was verified first
+
+Re-recording to make a failure go away is the hazard this file exists to
+prevent, so the preconditions were checked and are recorded here.
+
+- **C suite: 315 passed, 0 failed.** No tolerance was loosened without the
+  bound that justifies it written beside it.
+- **Python suite: 675 passed, 4 skipped, 0 failed.**
+- **`exact.py`: 336 quantities against brute-force enumeration, worst
+  deviation 8.8% of its tolerance.** This is the check that compares against
+  arithmetic rather than against a recording, so it is the one that can fail
+  when a baseline cannot, and it passes.
+- **The independent reference was PORTED, not deleted.**
+  `tests/reference/beam_model.py` is rewritten from the specification rather
+  than from the new C, because deriving it from the implementation would make
+  the agreement test a tautology. Measured: the two agree to 8.9e-16 and
+  agree exactly on which sequences are in the support.
+- **Thread independence checked directly**, not through the baseline:
+  bit-identical at 1, 4 and 16 threads. The baseline entry fails only because
+  it records the old model's values.
+
+## What moves, and why
+
+`python_api.txt`. `BeamModel.__init__` and `Builder.__init__` lose
+`depth_cap`, `coefficients`, `kappa`, `kappa_wide` and `kappa_len`. The model
+has three free parameters now: the context order and the two anchor weights.
+
+`c_symbols.txt`, `c_public_symbols.txt`. `beam_mix` loses three parameters;
+`beam_depth_part`, the per-expert row accessors and the table-kind enum are
+gone.
+
+`pytest_cases.txt`. Six cases removed, six added. The five
+`test_an_older_file_still_loads_with_the_same_values` parametrisations become
+`test_an_older_file_is_refused_and_says_why`, because formats 1 to 5 are now
+refused: their depth index was clamped, so which depth an observation came
+from was discarded at training time and no transformation recovers it. The
+fixtures are KEPT, unmodified. What they are evidence of has changed from
+"this build reads them" to "this build declines to misread them", and
+regenerating them would turn evidence about the past into a recording of the
+present. `test_coefficients_must_sum_to_one` becomes
+`test_single_anchor_weights_are_accepted`.
+
+`c_cases.txt`. Six removed, four added.
+
+  - `test_depth_cap_is_clamped`, `test_layers_beyond_the_depth_cap` --
+    subject deleted.
+  - `test_state_covers_the_mid_expert` becomes
+    `test_the_state_is_exactly_one_context_wide`, and its assertion INVERTS:
+    an order-2 model carries a 2-residue state where it used to carry 3.
+  - `test_rejects_uncalibrated_coefficients` becomes
+    `test_single_anchor_weights_are_accepted`. The weights should sum to 1 and
+    are deliberately not refused when they do not, because scoring one anchor
+    alone is the only way to separate a partition function below 1 into its
+    two causes.
+  - `test_sparse_requires_strict_zero_backoff` becomes
+    `test_sparse_requires_strict`.
+  - `test_legacy_format_files_still_load` becomes
+    `test_legacy_format_files_are_refused_by_name`.
+
+`numeric.json`. 60 of 78 keys move. **18 do not, and each is principled** --
+this was checked with `BEAM_NUMERIC_ALL=1`, which lists them, because a key
+that should have moved and did not is a code path that was missed:
+
+  - `lenpmf` (6 keys): the empirical length distribution. Same corpus.
+  - `D0` at orders 3 and 4 (4 keys) and `topology` at orders 3 and 4 (4 keys):
+    the closed-world support is set by the BINDING expert. At order 4 that was
+    the order-4 wide table both before and after; at order 3 the old wide and
+    mid were both order 3. `o2/strict/D0` and `o2/*/topology` DID move,
+    because the old order-3 mid expert was WIDER than an order-2 wide one and
+    was the binding constraint there, and because `state_order` went 3 to 2.
+  - `unseen` in strict mode (3 keys): still exactly `-inf`.
+  - `o2/open/D0` (1 key): the open world's support is the full grammar.
+
+  All six blocks have moved keys, which is the check that no code path was
+  missed.
+
+`fixture_sha256`. Different tables, and the file format is now 6.
+
+`threads.json`. Same values at 1, 4 and 16 threads; different values.
+
+## What does not move
+
+`cbeam_methods.txt`. No entry point was added or removed. The wire format
+between `_cbeam` and `config.py` narrowed from `OOiii(ddd)(ddd)dd(dd)pps` to
+`OOii(dd)pps`, which is a change of arity and not of membership.
+
+`header_file_refs_historical.txt`. Eight historical mentions, unchanged.
