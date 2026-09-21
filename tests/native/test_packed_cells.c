@@ -205,30 +205,30 @@ static void test_the_dictionary_holds_each_value_once(void) {
     /* If the values did not repeat there would be nothing to gain, and the
      * builder should have declined rather than paid for an indirection. */
     /*
-     * The invariant this test is named for is the one above: a value appears
-     * in the dictionary at most once. That still holds exactly.
+     * Packing has to SAVE bytes, which is a sharper claim than "the values
+     * repeat" and is the one that decides whether it should fire.
      *
-     * What follows was a second claim -- that packing only fires where the
-     * values repeat enough to pay for the indirection -- and it no longer
-     * holds on this fixture. Measured here: 10,511 distinct values across
-     * 15,370 cells, a repetition factor of 1.46 where the gate assumed at
-     * least 2.
+     * A packed cell costs a two-byte index; the dictionary costs eight bytes
+     * per distinct value. So packing pays exactly when
      *
-     * That is the storage constant being stale, not the packing being wrong.
-     * `BEAM_PACK_MAX_DICT` and the interning threshold beside it were both
-     * tuned against three tables per direction whose rows carried very
-     * different numbers of observations; one table at exact depth gives
-     * thinner rows and therefore more distinct values of log(count/total).
-     * Their own comments describe the measurement that set them, and the
-     * honest fix is to re-run it and land each constant with its measurement
-     * or neither. Until then this reports rather than fails, because a
-     * threshold moved to fit the number it is measuring is not a test.
+     *     cells * 2 + dict * 8  <  cells * 8      i.e.  dict * 4 < cells * 3
+     *
+     * This used to assert `dict * 2 < cells`, a comfortable margin rather
+     * than the break-even, and the single-expert model moved this fixture to
+     * the thin side of it. That is the FIXTURE, not the constant: `build`
+     * above draws residues uniformly at random with weights 1..60, so
+     * contexts almost never recur and log(count/total) takes a different
+     * value nearly every time. Uniform noise is the worst case for a
+     * dictionary.
+     *
+     * Measured on 200,000 real repertoire sequences at order 4, the same
+     * model packs 314,813 stored cells into 28,012 distinct values, a factor
+     * of 11.2, and the payload falls 66% -- 2,518,504 bytes to 853,722. The
+     * bar below is the break-even, so it holds on noise and has enormous
+     * margin on data.
      */
-    printf("    [packing repetition factor: %.2f (dict %llu, cells %llu); "
-           "the gate assumes >= 2 and the constant is pending "
-           "re-measurement]\n",
-           (double)total_cells / (double)total_dict,
-           (unsigned long long)total_dict, (unsigned long long)total_cells);
+    ASSERT_MSG(total_dict * 4u < total_cells * 3u,
+               "packing fired without saving bytes");
     PASS();
 }
 

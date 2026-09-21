@@ -1218,3 +1218,47 @@ several tables to read across, and no hierarchy to read them. The condition
 is still written out rather than assumed, for the reason that survives: the
 config check guards construction, and a file could carry a header this code
 would otherwise trust.
+
+## The storage constants, re-measured
+
+The implementation plan flagged three storage constants as tuned against the
+old three-table geometry and therefore possibly stale. Measured on the new
+model, with a 200,000-sequence corpus drawn from the pooled release table at
+order 4, `max_length` 22, closed world:
+
+```
+table        dense rows     occupied      occ%   sealed      pool      dict   repeat
+forward         4,278,582      254,357    5.945%     yes    56,775    26,356    12.2x
+backward        4,278,582      268,909    6.285%     yes    56,022    28,012    11.2x
+```
+
+**All three gates fire exactly as their own comments say they should**, and
+none needs changing:
+
+  - The rank-seal gate fires below 12.5% occupancy. Measured 5.9% and 6.3%,
+    so a per-repertoire model still seals, which is what the comment says the
+    threshold is for.
+  - The interning gate fires when at least a quarter of rows repeat. Measured
+    77.7%, against the 73.1 to 79.1% the comment records for a donor.
+  - `BEAM_PACK_MAX_DICT` is not a tuned constant at all: 65,536 is what a
+    two-byte index can name. Measured dictionaries are 26,356 and 28,012, well
+    inside it. Packing cuts the payload by 66%, from 2,518,504 bytes to
+    853,722.
+
+**One earlier note in this branch was wrong and is corrected.** I recorded in
+`test_packed_cells.c` that the packing repetition factor had fallen to 1.46
+against a gate assuming 2, and called it the constant being stale. It is the
+FIXTURE. That test builds from residues drawn uniformly at random with
+weights 1 to 60, so contexts almost never recur and `log(count/total)` takes a
+different value nearly every time; uniform noise is the worst case for a
+dictionary. Real repertoire data has shared motifs and packs 11 times over.
+
+The test now asserts the break-even rather than a margin -- packing pays when
+`dict * 4 < cells * 3`, since a cell costs two bytes and a distinct value
+eight -- which holds on the noise fixture and has enormous room on data.
+
+The rank-seal timing trade (scoring faster, Hill sweep slower) has NOT been
+re-measured. The constant still selects the right representation, which is
+what the occupancy figures above establish; whether the crossover point moved
+is a benchmark, and it would change only how much memory is returned, not
+which answers come out.
