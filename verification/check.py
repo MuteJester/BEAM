@@ -361,7 +361,10 @@ else:
 m = BEAM.BeamModel(seqs, abundances=ab, order=4, max_length=15, strict=True)
 tmp = B / "_check_fixture.beam"
 m.save(str(tmp.with_suffix("")))
-digest = hashlib.sha256(tmp.read_bytes()).hexdigest()
+_fixture_bytes = tmp.read_bytes()
+digest = hashlib.sha256(_fixture_bytes).hexdigest()
+fixture_size = len(_fixture_bytes)
+del _fixture_bytes
 check("saved-model bytes", digest, want["fixture_sha256"])
 tmp.unlink(missing_ok=True)
 
@@ -389,6 +392,68 @@ import exact                                                     # noqa: E402
 
 if exact.run():
     fail.append("exact")
+
+# ── Recording ──────────────────────────────────────────────────────────────
+# `--record TAG` writes every baseline from the values THIS run computed,
+# rather than from a second copy of the computation. One derivation, two uses:
+# a recorder that re-derives what it records can record something the gate
+# never checked.
+#
+# Three refusals, because re-recording to make a failure go away is the hazard
+# this whole directory exists to prevent:
+#
+#   - `exact` failing means the model disagrees with brute-force enumeration.
+#     Every other check compares a quantity against a recording of itself, so
+#     recording over them while the independent one fails would bake in a
+#     defect and retire the only witness to it.
+#   - the environment fault means this interpreter cannot collect the whole
+#     suite, and recording would delete the cases it cannot see. The gate
+#     already says so; the recorder must not proceed past it.
+#   - a missing TAG, because the previous file is preserved as
+#     `<name>.<TAG>.<ext>` and an unnamed one cannot be found again.
+if "--record" in sys.argv:
+    _i = sys.argv.index("--record")
+    _tag = sys.argv[_i + 1] if len(sys.argv) > _i + 1 else ""
+    if not _tag or _tag.startswith("-"):
+        print("\nREFUSING TO RECORD: --record needs a TAG, which names the "
+              "preserved copy of what is being replaced")
+        sys.exit(2)
+    if "exact" in fail:
+        print("\nREFUSING TO RECORD: exact.py failed. It is the only check "
+              "here with an independent reference, so recording over the "
+              "others while it fails would pin a defect and retire its only "
+              "witness.")
+        sys.exit(2)
+    if any(f.startswith("pytest inventory (environment)") for f in fail):
+        print("\nREFUSING TO RECORD: this interpreter cannot collect the "
+              "whole suite, so recording would delete the cases it cannot "
+              "see.")
+        sys.exit(2)
+
+    def _write(name, text):
+        path = B / name
+        stem, _, ext = name.rpartition(".")
+        prev = B / f"{stem}.{_tag}.{ext}"
+        if path.exists():
+            if prev.exists():
+                print(f"  REFUSED {name}: {prev.name} already exists")
+                sys.exit(2)
+            prev.write_bytes(path.read_bytes())
+        path.write_text(text)
+        print(f"  recorded {name}  (previous kept as {prev.name})")
+
+    print("\nRECORDING")
+    _write("python_api.txt", "\n".join(current) + "\n")
+    _write("pytest_cases.txt", "\n".join(sorted(py_got_lines)) + "\n")
+    _write("c_cases.txt", "\n".join(sorted(c_got)) + "\n")
+    _num = dict(got)
+    _num["fixture_sha256"] = digest
+    _num["fixture_bytes"] = fixture_size
+    _write("numeric.json", json.dumps(_num, indent=1, sort_keys=True) + "\n")
+    _write("threads.json", json.dumps(tg, indent=1, sort_keys=True) + "\n")
+    print("\nRECORDED. Write the RERECORDED.md section naming every line "
+          "that moved before committing this.")
+    sys.exit(0)
 
 print()
 if fail:
