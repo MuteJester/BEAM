@@ -92,7 +92,7 @@ class BeamModel:
   def __getstate__(self, /)
   def __gt__(self, value, /)
   def __hash__(self, /)
-  def __init__(self, sequences: 'Iterable[str]', *, abundances: 'Iterable[float] | None' = None, alphabet: 'str' = 'aa', order: 'int | None' = None, depth_cap: 'int | None' = None, coefficients: 'tuple[float, float, float]' = (0.6, 0.25, 0.15), kappa: 'tuple[float, float, float] | None' = None, kappa_wide: 'float | None' = None, kappa_len: 'float | None' = None, weights: 'tuple[float, float]' = (0.5, 0.5), max_length: 'int | None' = None, strict: 'bool' = True, sparse: 'bool | None' = None) -> 'None'
+  def __init__(self, sequences: 'Iterable[str]', *, abundances: 'Iterable[float] | None' = None, alphabet: 'str' = 'aa', order: 'int | None' = None, weights: 'tuple[float, float]' = (0.5, 0.5), max_length: 'int | None' = None, strict: 'bool' = True, sparse: 'bool | None' = None) -> 'None'
   def __init_subclass__(?)
   def __le__(self, value, /)
   def __len__(self) -> 'int'
@@ -338,7 +338,7 @@ class Builder:
   def __getstate__(self, /)
   def __gt__(self, value, /)
   def __hash__(self, /)
-  def __init__(self, *, alphabet: 'str' = 'aa', order: 'int | None' = None, depth_cap: 'int | None' = None, coefficients: 'tuple[float, float, float]' = (0.6, 0.25, 0.15), kappa: 'tuple[float, float, float] | None' = None, kappa_wide: 'float | None' = None, kappa_len: 'float | None' = None, weights: 'tuple[float, float]' = (0.5, 0.5), max_length: 'int | None' = None, strict: 'bool' = True, sparse: 'bool | None' = None) -> 'None'
+  def __init__(self, *, alphabet: 'str' = 'aa', order: 'int | None' = None, weights: 'tuple[float, float]' = (0.5, 0.5), max_length: 'int | None' = None, strict: 'bool' = True, sparse: 'bool | None' = None) -> 'None'
   def __init_subclass__(?)
   def __le__(self, value, /)
   def __lt__(self, value, /)

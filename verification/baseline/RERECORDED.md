@@ -1113,16 +1113,40 @@ has three free parameters now: the context order and the two anchor weights.
 `beam_depth_part`, the per-expert row accessors and the table-kind enum are
 gone.
 
-`pytest_cases.txt`. Six cases removed, six added. The five
-`test_an_older_file_still_loads_with_the_same_values` parametrisations become
-`test_an_older_file_is_refused_and_says_why`, because formats 1 to 5 are now
-refused: their depth index was clamped, so which depth an observation came
-from was discarded at training time and no transformation recovers it. The
-fixtures are KEPT, unmodified. What they are evidence of has changed from
-"this build reads them" to "this build declines to misread them", and
-regenerating them would turn evidence about the past into a recording of the
-present. `test_coefficients_must_sum_to_one` becomes
-`test_single_anchor_weights_are_accepted`.
+`pytest_cases.txt`. **Eighteen removed, fourteen added**, and every one is
+accounted for below. The gate prints only the first six of each, so an
+earlier draft of this section said "six and six" from reading its output --
+which is the imprecision this file exists to prevent, and is corrected here
+by diffing the recorded files rather than the report.
+
+Ten of the eighteen are the on-disk compatibility fixtures, five under
+`test_an_older_file_still_loads_with_the_same_values` and five under
+`test_an_older_file_survives_a_round_trip_through_the_current_format`. They
+become ten others, `test_an_older_file_is_refused_and_says_why` and
+`test_the_refusal_is_not_a_checksum_complaint`, because formats 1 to 5 are
+now refused: their depth index was clamped, so which depth an observation
+came from was discarded at training time and no transformation recovers it.
+The five fixture FILES are kept, unmodified. What they are evidence of has
+changed from "this build reads them" to "this build declines to misread
+them", and regenerating them would turn evidence about the past into a
+recording of the present. The second of the two new tests exists because the
+dangerous failure was never refusal: before the format bump an old file
+carried the same magic, header size and format number as a new one, so
+nothing would have rejected it, the payload extents would simply have been
+wrong, and it would have surfaced as a checksum complaint -- blaming an
+intact file for the reader's mistake.
+
+Three more are `test_sparse_strict_is_bit_identical_to_dense_strict`, which
+loses its `depth_cap` axis: `[2-5-None]` becomes `[2-None]`. Reparametrised,
+not deleted.
+
+The remaining five are deletions whose subject is gone:
+`test_coefficients_must_sum_to_one` (replaced by
+`test_single_anchor_weights_are_accepted`, the fourteenth addition),
+`test_strict_defaults_kappa_to_zero_but_explicit_wins`, the two
+`test_out_of_range_configuration_is_refused[...-depth_cap]` parametrisations,
+and `test_incompatible_members_are_refused_at_construction[differs3]`, which
+was the mixture shape-mismatch case built on `depth_cap`.
 
 `c_cases.txt`. Six removed, four added.
 
