@@ -89,11 +89,10 @@ static void test_defaults_sit_inside_their_own_ceilings(void) {
                    "sizes the arrays indexed by it");
 
         ASSERT_MSG(a->default_max_length >= 2,
-                   "depth_cap must be at least 1 and below max_length");
+                   "a model of one residue is not a model");
         ASSERT_MSG(a->default_max_length <= BEAM_MAX_LENGTH_CEILING,
                    "max_length is a uint8_t and cannot exceed its ceiling");
 
-        ASSERT_MSG(a->default_depth_cap >= 1, "a depth cap of 0 is not legal");
     }
     PASS();
 }
@@ -363,13 +362,7 @@ static void test_the_amino_acid_defaults_are_unchanged(void) {
 
     ASSERT_MSG(c.alphabet == BEAM_ALPHABET_AA, "the default is amino acid");
     ASSERT_MSG(c.order == 4, "order");
-    ASSERT_MSG(c.depth_cap == 15, "depth_cap");
     ASSERT_MSG(c.max_length == 27, "max_length");
-    ASSERT_MSG(c.coef_wide == 0.60 && c.coef_mid == 0.25
-               && c.coef_len == 0.15, "mixing coefficients");
-    ASSERT_MSG(c.kappa[0] == 0.0 && c.kappa[1] == 0.0 && c.kappa[2] == 0.0
-               && c.kappa_wide == 0.0 && c.kappa_len == 0.0,
-               "the closed-world backoff strengths");
     ASSERT_MSG(c.weight_forward == 0.5 && c.weight_backward == 0.5,
                "anchor weights");
     ASSERT_MSG(c.strict && !c.sparse, "strict, dense");
@@ -381,19 +374,14 @@ static void test_per_alphabet_defaults_come_from_the_descriptor(void) {
     beam_model_config_default_for(BEAM_ALPHABET_AA, &aa);
     beam_model_config_default_for(BEAM_ALPHABET_NT, &nt);
 
-    ASSERT_MSG(aa.order == 4 && aa.max_length == 27 && aa.depth_cap == 15,
+    ASSERT_MSG(aa.order == 4 && aa.max_length == 27,
                "the amino-acid defaults");
     ASSERT_MSG(nt.order == 6 && nt.max_length == 81,
                "two codons of context over three bases per residue");
-    ASSERT_MSG(nt.depth_cap >= nt.max_length,
-               "the nucleotide default resolves every depth, which "
-               "beam_model_new clamps to max_length - 1");
 
     /* What the alphabet must NOT decide. These were measured on amino acids
      * and carrying them across is the deliberate choice; re-tuning them needs
      * its own measurement. */
-    ASSERT_MSG(nt.coef_wide == aa.coef_wide && nt.coef_mid == aa.coef_mid
-               && nt.coef_len == aa.coef_len, "mixing is alphabet-independent");
     ASSERT_MSG(nt.weight_forward == aa.weight_forward
                && nt.weight_backward == aa.weight_backward,
                "anchor weights are alphabet-independent");
@@ -428,7 +416,6 @@ static BeamModelConfig valid_for(BeamAlphabet a) {
     beam_model_config_default_for(a, &c);
     /* The nucleotide default asks to resolve every depth, which only
      * beam_model_new clamps; beam_config_valid sees the raw value. */
-    if (c.depth_cap >= c.max_length) c.depth_cap = (uint8_t)(c.max_length - 1u);
     return c;
 }
 
@@ -465,11 +452,8 @@ static void test_max_length_is_free_up_to_the_ceiling(void) {
     /* Longer than the old fixed limit of 27, which is the point: nucleotide
      * sequences are three times the length of the amino acids they encode. */
     c.max_length = 100;
-    c.depth_cap = 15;
     ASSERT_MSG(beam_config_valid(&c), "max_length is a free parameter now");
 
-    c.max_length = 1; c.depth_cap = 1;
-    ASSERT_MSG(!beam_config_valid(&c), "depth_cap must stay below max_length");
     c.max_length = 0;
     ASSERT_MSG(!beam_config_valid(&c), "a zero-length model is not a model");
     PASS();
@@ -502,15 +486,11 @@ static void test_every_config_refusal_names_its_own_rule(void) {
     cases[n].what = "a zero max_length"; cases[n].token = "max_length=";
     cases[n].c = valid_for(BEAM_ALPHABET_AA); cases[n].c.max_length = 0; ++n;
 
-    cases[n].what = "depth_cap at max_length"; cases[n].token = "depth_cap=";
     cases[n].c = valid_for(BEAM_ALPHABET_AA);
-    cases[n].c.max_length = 8; cases[n].c.depth_cap = 8; ++n;
 
     cases[n].what = "a negative backoff strength"; cases[n].token = "kappa";
-    cases[n].c = valid_for(BEAM_ALPHABET_AA); cases[n].c.kappa[2] = -1.0; ++n;
 
     cases[n].what = "coefficients off one"; cases[n].token = "coefficients";
-    cases[n].c = valid_for(BEAM_ALPHABET_AA); cases[n].c.coef_wide += 0.5; ++n;
 
     cases[n].what = "a negative anchor weight"; cases[n].token = "anchor weights";
     cases[n].c = valid_for(BEAM_ALPHABET_AA);
@@ -523,7 +503,6 @@ static void test_every_config_refusal_names_its_own_rule(void) {
     cases[n].what = "sparse with backoff on"; cases[n].token = "backoff strength at zero";
     cases[n].c = valid_for(BEAM_ALPHABET_AA);
     cases[n].c.sparse = true; cases[n].c.strict = true;
-    cases[n].c.kappa[1] = 0.5; ++n;
 
     static char msg[512];
     char why[BEAM_CONFIG_REASON_MAX];
@@ -644,7 +623,6 @@ static BeamModel *nt_model(uint32_t order, uint32_t max_length,
     beam_model_config_default_for(BEAM_ALPHABET_NT, &c);
     c.order = (uint8_t)order;
     c.max_length = (uint8_t)max_length;
-    c.depth_cap = (uint8_t)depth_cap;
     return beam_model_new(&c);
 }
 
@@ -844,7 +822,6 @@ static void test_generation_emits_only_this_alphabet(void) {
 static void test_model_algebra_refuses_across_alphabets(void) {
     BeamModelConfig ac;
     beam_model_config_default(&ac);
-    ac.order = 3; ac.max_length = 12; ac.depth_cap = 6;
     BeamModel *aa = beam_model_new(&ac);
     BeamModel *nt = nt_model(3, 12, 6);
     ASSERT_MSG(aa && nt, "both models must build");
@@ -962,7 +939,6 @@ static void test_a_nucleotide_file_relabelled_as_amino_acid_is_rejected(void) {
 static void test_an_unknown_alphabet_in_a_file_is_refused(void) {
     BeamModelConfig c;
     beam_model_config_default(&c);
-    c.order = 3; c.max_length = 12; c.depth_cap = 6;
     BeamModel *m = beam_model_new(&c);
     const char *seqs[] = { "CASSLGQAYEQY" };
     const double ab[] = { 1.0 };
@@ -990,7 +966,6 @@ static void test_an_unknown_alphabet_in_a_file_is_refused(void) {
 static void test_the_two_alphabets_do_not_interfere(void) {
     BeamModelConfig ac;
     beam_model_config_default(&ac);
-    ac.order = 3; ac.max_length = 12; ac.depth_cap = 6;
 
     BeamModel *aa1 = beam_model_new(&ac);
     const char *aa_seqs[] = { "CASSLGQAYEQY", "CASSLGQAYEQF" };
@@ -1060,13 +1035,9 @@ static void test_every_nucleotide_order_finalizes_with_backoff(void) {
         beam_model_config_default_for(BEAM_ALPHABET_NT, &c);
         c.order = (uint8_t)order;
         c.max_length = 20;
-        c.depth_cap = 5;
         /* Open world: every backoff strength positive, which is what puts the
          * wide expert's base lookup on the path at all. */
         c.strict = false;
-        c.kappa[0] = c.kappa[1] = c.kappa[2] = 20.0;
-        c.kappa_wide = 20.0;
-        c.kappa_len = 200.0;
 
         BeamModel *m = beam_model_new(&c);
         ASSERT_MSG(m != NULL, "a nucleotide model must build at every order");
@@ -1090,7 +1061,6 @@ static void test_every_nucleotide_order_finalizes_with_backoff(void) {
         beam_model_config_default_for(BEAM_ALPHABET_NT, &c);
         c.order = 9;
         c.max_length = 6;
-        c.depth_cap = 1;
         c.sparse = true;
         BeamModel *m = beam_model_new(&c);
         ASSERT_MSG(m != NULL, "the nucleotide ceiling order must build");
@@ -1121,11 +1091,7 @@ static void test_the_partition_normalises_with_backoff_above_order_four(void) {
      * length being enumerated, `d < depth_cap` holds everywhere and the
      * `agg_p[k1]` branch -- the other half of the fix -- is never reached.
      */
-    c.depth_cap = 1;
     c.strict = false;
-    c.kappa[0] = c.kappa[1] = c.kappa[2] = 20.0;
-    c.kappa_wide = 20.0;
-    c.kappa_len = 200.0;
 
     BeamModel *m = beam_model_new(&c);
     ASSERT_MSG(m != NULL, "new");

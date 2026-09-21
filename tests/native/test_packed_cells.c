@@ -61,9 +61,9 @@ static BeamModel *build(uint32_t n_seqs, uint8_t order, uint32_t max_length) {
 
 static BeamSparseRows *table_of(BeamModel *m, uint32_t i) {
     const uint32_t d = i / 3u, k = i % 3u;
-    if (k == 0u) return &m->sp_lp_wide[d];
-    if (k == 1u) return &m->sp_lp_mid[d];
-    return &m->sp_lp_len[d];
+    if (k == 0u) return &m->sp_lp[d];
+    if (k == 1u) return &m->sp_lp[d];
+    return &m->sp_lp[d];
 }
 static const char *name_of(uint32_t i) {
     static const char *n[6] = { "fwd wide","fwd mid","fwd len",
@@ -91,11 +91,9 @@ static void test_every_cell_is_still_log_of_its_counts(void) {
     const uint32_t R = m->n_residues;
 
     uint64_t compared = 0, packed_tables = 0;
-    for (uint32_t t = 0; t < 6u; ++t) {
-        const uint32_t dir = t / 3u, k = t % 3u;
-        const BeamTableKind kind = (k == 0u) ? BEAM_TABLE_WIDE
-                                 : (k == 1u) ? BEAM_TABLE_MID : BEAM_TABLE_LEN;
-        const bool reversed = (kind == BEAM_TABLE_WIDE && dir == BEAM_BWD);
+    for (uint32_t t = 0; t < 2u; ++t) {
+        const uint32_t dir = t;
+        const bool reversed = (dir == BEAM_BWD);
         BeamSparseRows *tab = table_of(m, t);
         if (tab->cell_mask) packed_tables++;
 
@@ -105,12 +103,12 @@ static void test_every_cell_is_still_log_of_its_counts(void) {
 
             uint32_t src = row;
             if (reversed) {
-                const uint32_t d = row / m->n_ctx_wide;
-                const uint32_t c = row % m->n_ctx_wide;
-                src = d * m->n_ctx_wide
+                const uint32_t d = row / m->n_ctx;
+                const uint32_t c = row % m->n_ctx;
+                src = d * m->n_ctx
                     + beam_ctx_reverse(c, m->order, m->n_alphabet);
             }
-            const double *counts = beam_count_row(m, dir, kind, src);
+            const double *counts = beam_cnt_row(m, dir, src);
             if (!counts) {
                 printf("FAIL: %s row %u exists with no counts\n", name_of(t), row);
                 fail_count++; beam_model_destroy(m); return;
@@ -151,7 +149,7 @@ static void test_both_accessors_agree(void) {
     double whole[BEAM_MAX_RESIDUES];
 
     uint64_t cells = 0, finite = 0;
-    for (uint32_t t = 0; t < 6u; ++t) {
+    for (uint32_t t = 0; t < 2u; ++t) {
         const BeamSparseRows *tab = table_of(m, t);
         if (!tab->cell_mask) continue;
         for (uint32_t s = 0; s < tab->n_cell_rows; ++s) {
@@ -189,7 +187,7 @@ static void test_the_dictionary_holds_each_value_once(void) {
     const uint32_t R = m->n_residues;
 
     uint64_t total_cells = 0, total_dict = 0;
-    for (uint32_t t = 0; t < 6u; ++t) {
+    for (uint32_t t = 0; t < 2u; ++t) {
         BeamSparseRows *tab = table_of(m, t);
         if (!tab->cell_mask) continue;
 
@@ -240,7 +238,7 @@ static void test_what_cannot_be_packed_is_left_alone(void) {
     ASSERT_MSG(m != NULL, "model did not build");
     ASSERT_MSG(beam_model_thaw_counts(m) == BEAM_OK, "counts did not thaw");
 
-    BeamSparseRows *cnt = &m->sp_cnt_wide[BEAM_FWD];
+    BeamSparseRows *cnt = &m->sp_cnt[BEAM_FWD];
     const uint64_t cb = beam_sparse_memory_bytes(cnt);
     ASSERT_MSG(beam_sparse_pack_cells(cnt) == BEAM_OK, "mutable pack errored");
     ASSERT_MSG(cnt->cell_mask == NULL, "a mutable table was packed");

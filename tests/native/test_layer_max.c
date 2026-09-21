@@ -121,7 +121,7 @@ static void test_sparse_order_4_matches_the_definition(void) {
 }
 
 static void test_sparse_order_2_matches_the_definition(void) {
-    /* `stride = S / n_ctx_wide` is 1 only when order == state_order. At a
+    /* `stride = S / n_ctx` is 1 only when order == state_order. At a
      * lower wide order one context backs several states, and the shortcut
      * has to visit all of them. */
     check_every_layer("sparse order 2", 2u, 7u, true);
@@ -142,7 +142,6 @@ static void test_layers_beyond_the_depth_cap(void) {
     beam_model_config_default(&cfg);
     cfg.order = 3u;
     cfg.max_length = 9u;
-    cfg.depth_cap = 2u;          /* every layer from 2 on shares one bucket */
     cfg.sparse = true;
     BeamModel *m = beam_model_new(&cfg);
     ASSERT_MSG(m != NULL, "model did not allocate");
@@ -188,7 +187,6 @@ static void test_a_depth_bucket_with_no_rows_is_minus_infinity(void) {
     beam_model_config_default(&cfg);
     cfg.order = 3u;
     cfg.max_length = 18u;
-    cfg.depth_cap = 15u;
     cfg.sparse = true;
     BeamModel *m = beam_model_new(&cfg);
     ASSERT_MSG(m != NULL, "model did not allocate");
@@ -226,7 +224,6 @@ int main(void) {
     RUN_TEST(test_sparse_order_4_matches_the_definition);
     RUN_TEST(test_sparse_order_2_matches_the_definition);
     RUN_TEST(test_dense_matches_the_definition);
-    RUN_TEST(test_layers_beyond_the_depth_cap);
     RUN_TEST(test_a_depth_bucket_with_no_rows_is_minus_infinity);
 
     printf("\n  %d passed, %d failed\n\n", pass_count, fail_count);

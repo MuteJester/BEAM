@@ -127,13 +127,9 @@ static BeamModel *build_strict_mode(bool sparse) {
     BeamModelConfig cfg;
     beam_model_config_default(&cfg);
     cfg.order = 2;
-    cfg.depth_cap = 5;
     cfg.max_length = 6;
     cfg.strict = true;
     cfg.sparse = sparse;
-    cfg.kappa[0] = cfg.kappa[1] = cfg.kappa[2] = 0.0;
-    cfg.kappa_wide = 0.0;
-    cfg.kappa_len = 0.0;
 
     BeamModel *m = beam_model_new(&cfg);
     if (!m) return NULL;
@@ -151,9 +147,6 @@ static void test_defaults_are_the_measured_ones(void) {
     BeamModelConfig c;
     beam_model_config_default(&c);
     ASSERT_MSG(c.order == 4, "default order should be 4");
-    ASSERT_MSG(c.depth_cap == 15, "default depth cap should be 15");
-    ASSERT_MSG(fabs(c.coef_wide + c.coef_mid + c.coef_len - 1.0) < 1e-12,
-               "coefficients must sum to 1");
     ASSERT_MSG(c.weight_forward == c.weight_backward,
                "the two anchors are weighted equally by default");
     ASSERT_MSG(!c.sparse, "the low-level C default remains dense");
@@ -166,7 +159,6 @@ static void test_rejects_uncalibrated_coefficients(void) {
      * mis-calibrating global ranking. */
     BeamModelConfig c;
     beam_model_config_default(&c);
-    c.coef_wide = 0.7;
     ASSERT_MSG(beam_model_new(&c) == NULL, "sum 1.1 should be rejected");
     beam_model_config_default(&c);
     c.order = 5;
@@ -179,7 +171,6 @@ static void test_depth_cap_is_clamped(void) {
      * default depth cap of 15. */
     BeamModel *m = build(4, 12);
     ASSERT_MSG(m != NULL, "a max_length below the default depth cap must work");
-    ASSERT_MSG(beam_model_config(m)->depth_cap < 12, "cap should be clamped");
     beam_model_destroy(m);
     PASS();
 }
@@ -192,15 +183,9 @@ static void test_sparse_requires_strict_zero_backoff(void) {
     /* Backoff has to be asked for explicitly now: the default is the closed
      * world, which is exactly the regime sparse storage is valid in, so the
      * defaults alone no longer produce the combination being rejected. */
-    c.kappa[0] = c.kappa[1] = c.kappa[2] = 20.0;
-    c.kappa_wide = 20.0;
-    c.kappa_len = 200.0;
     ASSERT_MSG(beam_model_new(&c) == NULL,
                "positive backoff cannot omit zero-count rows");
 
-    c.kappa[0] = c.kappa[1] = c.kappa[2] = 0.0;
-    c.kappa_wide = 0.0;
-    c.kappa_len = 0.0;
     BeamModel *m = beam_model_new(&c);
     ASSERT_MSG(m != NULL, "strict zero-backoff sparse storage must be valid");
     ASSERT_MSG(beam_model_config(m)->sparse,
@@ -1405,12 +1390,8 @@ static BeamModel *build_regime(uint8_t order, uint8_t max_length,
     beam_model_config_default(&cfg);
     cfg.order = order;
     cfg.max_length = max_length;
-    cfg.depth_cap = (uint8_t)(max_length - 1u);
     cfg.strict = strict;
     if (strict) {
-        cfg.kappa[0] = cfg.kappa[1] = cfg.kappa[2] = 0.0;
-        cfg.kappa_wide = 0.0;
-        cfg.kappa_len = 0.0;
         cfg.sparse = true;
     }
     BeamModel *m = beam_model_new(&cfg);
@@ -1958,11 +1939,11 @@ static void test_failures_carry_a_message(void) {
      */
     BeamModelConfig cfg;
     beam_model_config_default(&cfg);
-    cfg.coef_wide = 0.7;                       /* sum 1.1: uncalibrated */
+    cfg.order = 99u;                           /* past every alphabet's max */
     beam_clear_error();
     ASSERT_MSG(beam_model_new(&cfg) == NULL, "bad config must be refused");
-    ASSERT_MSG(strstr(beam_error_message(), "coef") != NULL,
-               "the config refusal must name the coefficients");
+    ASSERT_MSG(strstr(beam_error_message(), "order") != NULL,
+               "the config refusal must name the field it refused");
 
     beam_model_config_default(&cfg);
     BeamModel *m = beam_model_new(&cfg);
@@ -2537,8 +2518,6 @@ static void test_a_negative_tilt_does_not_overflow_the_sweeps(void) {
     beam_model_config_default(&cfg);
     cfg.alphabet = BEAM_ALPHABET_NT;
     cfg.order = 3; cfg.max_length = 5; cfg.strict = false;
-    cfg.kappa[0] = cfg.kappa[1] = cfg.kappa[2] = 0.0;
-    cfg.kappa_wide = 0.0; cfg.kappa_len = 0.0;
     BeamModel *m = beam_model_new(&cfg);
     ASSERT_MSG(m != NULL, "model built");
     ASSERT_MSG(beam_model_observe(m, NT_TRAIN, NULL, 10) == BEAM_OK, "observed");
@@ -2657,7 +2636,6 @@ int main(void) {
 
     RUN_TEST(test_defaults_are_the_measured_ones);
     RUN_TEST(test_rejects_uncalibrated_coefficients);
-    RUN_TEST(test_depth_cap_is_clamped);
     RUN_TEST(test_sparse_requires_strict_zero_backoff);
     RUN_TEST(test_sparse_rows_boundaries_and_erase);
     RUN_TEST(test_sparse_growth_failure_is_atomic);

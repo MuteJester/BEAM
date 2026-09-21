@@ -92,9 +92,9 @@ static BeamModel *saturated(void)    { return build_model(false, 20000u, 3u, 8u)
 /** Every finalized table of the model, so no direction or kind is skipped. */
 static BeamSparseRows *table_of(BeamModel *m, uint32_t idx) {
     const uint32_t dir = idx / 3u, kind = idx % 3u;
-    if (kind == 0u) return &m->sp_lp_wide[dir];
-    if (kind == 1u) return &m->sp_lp_mid[dir];
-    return &m->sp_lp_len[dir];
+    if (kind == 0u) return &m->sp_lp[dir];
+    if (kind == 1u) return &m->sp_lp[dir];
+    return &m->sp_lp[dir];
 }
 static const char *name_of(uint32_t idx) {
     static const char *n[6] = { "fwd wide", "fwd mid", "fwd len",
@@ -334,7 +334,7 @@ static void test_what_cannot_be_sealed_is_left_alone(void) {
     ASSERT_MSG(beam_model_thaw_counts(m) == BEAM_OK, "counts did not thaw");
 
     /* A count table is mutable. */
-    BeamSparseRows *cnt = &m->sp_cnt_wide[BEAM_FWD];
+    BeamSparseRows *cnt = &m->sp_cnt[BEAM_FWD];
     const uint64_t cnt_bytes = beam_sparse_memory_bytes(cnt);
     ASSERT_MSG(beam_sparse_seal_rank(cnt) == BEAM_OK, "mutable seal errored");
     ASSERT_MSG(cnt->rank == NULL, "a mutable table was sealed");

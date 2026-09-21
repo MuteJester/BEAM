@@ -1251,9 +1251,6 @@ static void test_a_dominant_rejected_path_cannot_collapse_the_answer(void) {
     const double w[3] = {1.0, 1.0, 100.0};
     BeamModelConfig cfg;
     beam_model_config_default(&cfg);
-    cfg.order = 2; cfg.max_length = 4; cfg.depth_cap = 3; cfg.strict = 0;
-    cfg.kappa[0] = cfg.kappa[1] = cfg.kappa[2] = 20.0;
-    cfg.kappa_wide = 20.0; cfg.kappa_len = 200.0;
     cfg.weight_forward = cfg.weight_backward = 100.0;
     BeamModel *m = beam_model_new(&cfg);
     ASSERT_MSG(m != NULL, "model built");

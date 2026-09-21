@@ -62,9 +62,9 @@ static BeamModel *build(uint32_t n_seqs, uint8_t order, uint32_t max_length) {
 
 static BeamSparseRows *table_of(BeamModel *m, uint32_t i) {
     const uint32_t d = i / 3u, k = i % 3u;
-    if (k == 0u) return &m->sp_lp_wide[d];
-    if (k == 1u) return &m->sp_lp_mid[d];
-    return &m->sp_lp_len[d];
+    if (k == 0u) return &m->sp_lp[d];
+    if (k == 1u) return &m->sp_lp[d];
+    return &m->sp_lp[d];
 }
 static const char *name_of(uint32_t i) {
     static const char *n[6] = { "fwd wide","fwd mid","fwd len",
@@ -218,8 +218,8 @@ static void test_finalize_never_transposes_a_forward_table(void) {
                    name_of(t));
             fail_count++; beam_model_destroy(m); return;
         }
-    const bool packed = m->sp_lp_wide[BEAM_BWD].cell_mask != NULL;
-    const bool moved  = m->sp_lp_wide[BEAM_BWD].plane_step > 1u;
+    const bool packed = m->sp_lp[BEAM_BWD].cell_mask != NULL;
+    const bool moved  = m->sp_lp[BEAM_BWD].plane_step > 1u;
     beam_model_destroy(m);
     ASSERT_MSG(packed != moved,
                "the backward wide table is neither packed nor transposed, or "
@@ -407,7 +407,7 @@ static void test_what_cannot_be_transposed_is_left_alone(void) {
     ASSERT_MSG(m != NULL, "model did not build");
     ASSERT_MSG(beam_model_thaw_counts(m) == BEAM_OK, "counts did not thaw");
 
-    BeamSparseRows *cnt = &m->sp_cnt_wide[BEAM_FWD];
+    BeamSparseRows *cnt = &m->sp_cnt[BEAM_FWD];
     ASSERT_MSG(beam_sparse_plane_transpose(cnt) == BEAM_OK, "mutable errored");
     ASSERT_MSG(cnt->plane_step == 1u, "a mutable table was transposed");
 

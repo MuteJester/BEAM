@@ -119,7 +119,7 @@ static uint64_t accumulators_at_rest(const BeamModel *m) {
 static bool blocks_sum_to_expectation(const BeamExpectedCounts *ec) {
     for (uint32_t d = 0; d < 2u; ++d)
         for (uint32_t e = 0; e < 3u; ++e) {
-            const BeamCountBlock *b = &ec->block[d][e];
+            const BeamCountBlock *b = &ec->block[d];
             double s = 0.0;
             for (uint64_t i = 0;
                  i < (uint64_t)b->n_rows * ec->n_residues; ++i)
@@ -226,23 +226,23 @@ static void test_one_block_can_be_released_before_the_rest(void) {
     BeamExpectedCounts ec;
     ASSERT_MSG(beam_model_expected_counts(m, 0u, &ec) == BEAM_OK,
                beam_error_message());
-    ASSERT_MSG(ec.block[0][0].n_rows > 0 && ec.block[0][1].n_rows > 0,
+    ASSERT_MSG(ec.block[0].n_rows > 0 && ec.block[0].n_rows > 0,
                "the model produced an empty block, so this proves nothing");
 
-    const uint32_t kept_rows = ec.block[0][1].n_rows;
+    const uint32_t kept_rows = ec.block[0].n_rows;
     double kept_sum = 0.0;
     for (uint64_t i = 0; i < (uint64_t)kept_rows * ec.n_residues; ++i)
-        kept_sum += ec.block[0][1].counts[i];
+        kept_sum += ec.block[0].counts[i];
 
-    beam_count_block_free(&ec.block[0][0]);
-    ASSERT_MSG(ec.block[0][0].n_rows == 0 && !ec.block[0][0].rows
-               && !ec.block[0][0].counts,
+    beam_count_block_free(&ec.block[0]);
+    ASSERT_MSG(ec.block[0].n_rows == 0 && !ec.block[0].rows
+               && !ec.block[0].counts,
                "the released block was not zeroed");
 
     double still = 0.0;
     for (uint64_t i = 0; i < (uint64_t)kept_rows * ec.n_residues; ++i)
-        still += ec.block[0][1].counts[i];
-    ASSERT_MSG(ec.block[0][1].n_rows == kept_rows && still == kept_sum,
+        still += ec.block[0].counts[i];
+    ASSERT_MSG(ec.block[0].n_rows == kept_rows && still == kept_sum,
                "releasing one block disturbed another");
 
     beam_model_expected_counts_free(&ec);       /* must not double-free */
@@ -352,7 +352,7 @@ static void test_the_doubling_paths_refuse_too(void) {
                beam_error_message());
     uint64_t rows = 0;
     for (uint32_t d = 0; d < 2u; ++d)
-        for (uint32_t e = 0; e < 3u; ++e) rows += ec.block[d][e].n_rows;
+        for (uint32_t e = 0; e < 3u; ++e) rows += ec.block[d].n_rows;
     ASSERT_MSG(rows > 6u * 512u,
                "the wide model did not fill a single map past its starting "
                "capacity, so no doubling path ran");

@@ -34,11 +34,11 @@ static int pass_count = 0, fail_count = 0;
 #include "test_utils.h"
 
 /* The partition a thawed row belongs to, supplied by the caller the way the
- * model will: it is a fact about the table kind, not about the table. */
-typedef struct { const BeamModel *m; BeamTableKind kind; } PartCtx;
+ * model will. One table per direction now, so the partition IS the depth. */
+typedef struct { const BeamModel *m; } PartCtx;
 static uint32_t part_of(uint32_t row, void *ctx) {
     const PartCtx *c = (const PartCtx *)ctx;
-    return beam_count_part_for_row(c->m, c->kind, row);
+    return beam_part_for_row(c->m, row);
 }
 
 static const char AA[] = "ACDEFGHIKLMNPQRSTVWY";
@@ -78,12 +78,8 @@ static BeamModel *build(uint32_t n_seqs, uint8_t order, uint32_t max_length,
     return m;
 }
 
-static BeamSparseRows *count_table(BeamModel *m, uint32_t i, BeamTableKind *k) {
-    const uint32_t d = i / 3u, j = i % 3u;
-    *k = (j == 0u) ? BEAM_TABLE_WIDE : (j == 1u) ? BEAM_TABLE_MID : BEAM_TABLE_LEN;
-    if (j == 0u) return &m->sp_cnt_wide[d];
-    if (j == 1u) return &m->sp_cnt_mid[d];
-    return &m->sp_cnt_len[d];
+static BeamSparseRows *count_table(BeamModel *m, uint32_t i) {
+    return &m->sp_cnt[i];
 }
 static const char *name_of(uint32_t i) {
     static const char *n[6] = { "fwd wide","fwd mid","fwd len",
@@ -105,9 +101,9 @@ static bool round_trips(BeamModel *m, const char *what, uint64_t *saved,
         fail_count++; return false;
     }
     for (uint32_t t = 0; t < 6u; ++t) {
-        BeamTableKind kind;
-        BeamSparseRows *src = count_table(m, t, &kind);
-        const uint32_t nr = beam_count_n_rows(m, kind);
+        uint32_t kind_unused;
+        BeamSparseRows *src = count_table(m, t);
+        const uint32_t nr = beam_count_n_rows(m);
 
         BeamFrozenCounts f;
         const BeamError e = beam_frozen_freeze(src, src->n_parts, &f);
@@ -119,7 +115,7 @@ static bool round_trips(BeamModel *m, const char *what, uint64_t *saved,
         *after_total  += beam_frozen_memory_bytes(&f);
 
         BeamSparseRows back;
-        PartCtx ctx = { m, kind };
+        PartCtx ctx = { m };
         const BeamError te = beam_frozen_thaw(&f, nr, src->n_parts,
                                               part_of, &ctx, &back);
         if (te != BEAM_OK) {
@@ -128,7 +124,7 @@ static bool round_trips(BeamModel *m, const char *what, uint64_t *saved,
         }
 
         for (uint32_t row = 0; row < nr; ++row) {
-            const uint32_t p = beam_count_part_for_row(m, kind, row);
+            const uint32_t p = beam_part_for_row(m, row);
             const double *a = beam_sparse_row(src, row, p);
             const double *b = beam_sparse_row(&back, row, p);
             if ((a != NULL) != (b != NULL)) {
@@ -468,8 +464,8 @@ static void test_rows_are_identified_the_cheaper_way(void) {
             fail_count++; goto out;
         }
         for (uint32_t t = 0; t < 6u; ++t) {
-            BeamTableKind kind;
-            BeamSparseRows *src = count_table(m, t, &kind);
+            uint32_t kind_unused;
+            BeamSparseRows *src = count_table(m, t);
             BeamFrozenCounts f;
             if (beam_frozen_freeze(src, src->n_parts, &f) != BEAM_OK) {
                 printf("FAIL: %s %s did not freeze\n", cases[c].label, name_of(t));
@@ -498,15 +494,15 @@ static void test_rows_are_identified_the_cheaper_way(void) {
 
             /* And whichever it chose, the rows come back. */
             BeamSparseRows back;
-            PartCtx ctx = { m, kind };
-            if (beam_frozen_thaw(&f, beam_count_n_rows(m, kind), src->n_parts,
+            PartCtx ctx = { m };
+            if (beam_frozen_thaw(&f, beam_count_n_rows(m), src->n_parts,
                                  part_of, &ctx, &back) != BEAM_OK) {
                 printf("FAIL: %s %s did not thaw back\n",
                        cases[c].label, name_of(t));
                 fail_count++; beam_frozen_destroy(&f); goto out;
             }
-            for (uint32_t row = 0; row < beam_count_n_rows(m, kind); ++row) {
-                const uint32_t pp = beam_count_part_for_row(m, kind, row);
+            for (uint32_t row = 0; row < beam_count_n_rows(m); ++row) {
+                const uint32_t pp = beam_part_for_row(m, row);
                 const double *a = beam_sparse_row(src, row, pp);
                 const double *b = beam_sparse_row(&back, row, pp);
                 if ((a != NULL) != (b != NULL)

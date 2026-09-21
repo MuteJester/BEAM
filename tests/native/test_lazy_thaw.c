@@ -67,15 +67,15 @@ static BeamModel *build(uint32_t n_seqs, uint8_t order, uint32_t max_length) {
 
 static BeamSparseRows *lp_of(BeamModel *m, uint32_t i) {
     const uint32_t d = i / 3u, k = i % 3u;
-    if (k == 0u) return &m->sp_lp_wide[d];
-    if (k == 1u) return &m->sp_lp_mid[d];
-    return &m->sp_lp_len[d];
+    if (k == 0u) return &m->sp_lp[d];
+    if (k == 1u) return &m->sp_lp[d];
+    return &m->sp_lp[d];
 }
 static BeamSparseRows *cnt_of(BeamModel *m, uint32_t i) {
     const uint32_t d = i / 3u, k = i % 3u;
-    if (k == 0u) return &m->sp_cnt_wide[d];
-    if (k == 1u) return &m->sp_cnt_mid[d];
-    return &m->sp_cnt_len[d];
+    if (k == 0u) return &m->sp_cnt[d];
+    if (k == 1u) return &m->sp_cnt[d];
+    return &m->sp_cnt[d];
 }
 
 /** Every cell of every finalized table, in dense-row order. */
@@ -194,7 +194,6 @@ static void test_a_backoff_model_is_dense_and_unaffected(void) {
     BeamModelConfig cfg;
     beam_model_config_default(&cfg);
     cfg.order = 4u; cfg.max_length = 16u; cfg.strict = false;
-    cfg.kappa[0] = 0.5; cfg.kappa[1] = 0.25; cfg.kappa[2] = 0.125;
 
     cfg.sparse = true;
     BeamModel *bad = beam_model_new(&cfg);
