@@ -1193,3 +1193,28 @@ between `_cbeam` and `config.py` narrowed from `OOiii(ddd)(ddd)dd(dd)pps` to
 `OOii(dd)pps`, which is a change of arity and not of membership.
 
 `header_file_refs_historical.txt`. Eight historical mentions, unchanged.
+
+## `c_symbols.txt`, same branch, one symbol
+
+`beam_build_hierarchy` removed. It built the backoff parent levels, and the
+single-expert change deleted all five backoff strengths, so it had no caller
+left. `smoothing.c` goes from 190 lines to 62: four of its five functions
+were the hierarchy and its helpers, and what survives is
+`beam_to_log_inplace`.
+
+Recorded separately from the re-record above, and after it, because it is a
+different act. The first was "this model produces different numbers"; this is
+"this function no longer exists". Folding them together would have hidden a
+deletion inside a diff nobody would read line by line, which is the failure
+this file exists to prevent.
+
+Nothing else moved: the C suite stays at 315 passing and the Python suite at
+675, both run against a clean rebuild.
+
+One comment in `finalize.c` went stale with it. It justified a sparse-storage
+condition by saying that if the rule ever relaxed, `beam_build_hierarchy`
+reads counts across tables and would find them gone. There are no longer
+several tables to read across, and no hierarchy to read them. The condition
+is still written out rather than assumed, for the reason that survives: the
+config check guards construction, and a file could carry a header this code
+would otherwise trust.

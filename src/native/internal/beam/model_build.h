@@ -53,17 +53,6 @@ void beam_free_counts(BeamModel *m);
 /** Release the finalized log-probability tables, dense or sparse. */
 void beam_free_tables(BeamModel *m);
 
-/**
- * Build the backoff hierarchy for one table.
- *
- * Writes `out[0..order]`, level 0 being the base and level `order` the full
- * context. The arithmetic is unchanged from when this lived in build.c; do
- * not reorder its accumulations.
- */
-BeamError beam_build_hierarchy(const double *counts, uint32_t n_depth,
-                               uint32_t order, uint32_t A, uint32_t R,
-                               const double *kappa,
-                               double **out, bool strict);
 
 /** Convert probabilities to logs in place. Returns false on a dead table. */
 bool beam_to_log_inplace(double *p, size_t n, bool strict);

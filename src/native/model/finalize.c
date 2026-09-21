@@ -224,14 +224,12 @@ static BeamError finalize_sparse_direction(BeamModel *m, uint32_t dir) {
      * freezing. A model whose counts are already mutable has nothing to
      * expand and takes the original path.
      *
-     * The backoff test is belt-and-braces, not load-bearing: `beam_config_ok`
-     * REFUSES sparse storage with any non-zero kappa, because backoff can
-     * populate a row that was never observed and sparse storage has nowhere
-     * to put it. So a sparse model always satisfies this. It is tested anyway
-     * because the config check guards construction, and a file could carry a
-     * header this code would otherwise trust -- and because if that rule ever
-     * relaxes, `beam_build_hierarchy` reads counts ACROSS tables and would
-     * find them gone.
+     * `beam_config_ok` REFUSES sparse storage outside the closed world,
+     * because the open world's add-one gives mass to rows that were never
+     * observed and a sparse table has nowhere to put them. So a sparse model
+     * always satisfies this. The condition is still written out rather than
+     * assumed, because the config check guards construction and a file could
+     * carry a header this code would otherwise trust.
      */
     const bool lazy = m->cfg.sparse && m->counts_frozen;
     if (lazy) {
