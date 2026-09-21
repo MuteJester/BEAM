@@ -347,6 +347,10 @@ for k in sorted(got):
 if bad:
     fail.append("numeric")
     print(f"  FAIL  numeric ({len(bad)}/{len(got)} keys differ)")
+    import os as _os
+    if _os.environ.get("BEAM_NUMERIC_ALL"):
+        same = [k for k in sorted(got) if k not in bad]
+        print("        UNCHANGED (" + str(len(same)) + "): " + ", ".join(same))
     for k in bad[:8]:
         print(f"          {k}")
 else:

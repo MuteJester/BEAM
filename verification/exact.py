@@ -299,7 +299,7 @@ def tier2(report):
                      for _ in range(300)})
     m = BEAM.BeamModel(corpus, alphabet="nt", order=2, max_length=5,
                        strict=False)
-    o = Oracle(m, NT, (5))
+    o = Oracle(m, NT, (5,))
     q = BEAM.BeamQuery(m)
     seqs, cp = o.at(5)
     R = len(NT)
