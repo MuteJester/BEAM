@@ -17,11 +17,20 @@ from _helpers import AA, J_MOTIFS, make_corpus
 
 # ── Configuration guards ─────────────────────────────────────────
 
-def test_coefficients_must_sum_to_one(corpus):
-    """The sum is a cross-length calibration knob, not a free parameter."""
+def test_single_anchor_weights_are_accepted(corpus):
+    """(1, 0) and (0, 1) must build, and are the point.
+
+    The weights should sum to 1 and are deliberately NOT refused when they do
+    not, because scoring each anchor's chain alone is the only way to separate
+    a partition function below 1 into its two causes: the two chains
+    disagreeing, and the closed world leaking mass at rows it never observed.
+    A refusal here would make the model's defining property unmeasurable.
+    """
     seqs, abund = corpus
-    with pytest.raises(ValueError, match="sum to 1"):
-        BeamModel(seqs, abundances=abund)
+    for w in ((1.0, 0.0), (0.0, 1.0)):
+        m = BeamModel(seqs, abundances=abund, order=2, weights=w)
+        assert m.config["weights"] == w
+        assert m.log_partition(len(seqs[0])) <= 1e-12
 
 
 def test_rejects_bad_order(corpus):
@@ -215,8 +224,8 @@ def test_scalar_arguments_return_scalars(small):
         assert isinstance(cal.pvalue(live, value), np.ndarray)
         assert isinstance(small.saddlepoint(value)["cdf"], np.ndarray)
 
-    assert small.surprisal_pdf(np.array([mu, mu + 1.0])).shape == (2)
-    assert small.saddlepoint(np.array([mu, mu + 1.0]))["cdf"].shape == (2)
+    assert small.surprisal_pdf(np.array([mu, mu + 1.0])).shape == (2,)
+    assert small.saddlepoint(np.array([mu, mu + 1.0]))["cdf"].shape == (2,)
 
 
 def test_pvalue_never_exceeds_one(small):
@@ -335,8 +344,5 @@ def test_c_and_python_defaults_describe_the_same_model():
         {**cfg, "sparse": False})))
 
     assert cfg["strict"] is True
-    assert cfg["kappa"] == (0.0, 0.0, 0.0)
-    assert cfg["kappa_wide"] == 0.0 and cfg["kappa_len"] == 0.0
-    for field in ("strict", "kappa", "kappa_wide", "kappa_len",
-                  "order", "weights"):
+    for field in ("strict", "order", "max_length", "weights", "alphabet"):
         assert c_defaults[field] == cfg[field], field

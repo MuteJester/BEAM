@@ -79,11 +79,9 @@ def test_sparse_strict_is_bit_identical_to_dense_strict(
     assert sparse.pgen_diagnostics()["total_mass"] == 1.0
 
     cfg = dense.config
-    expected_cells = 2 * (
-        (["order"] + 1) * 21 ** cfg["order"] * 20
-        + cfg["max_length"] * 21 ** 3 * 20
-        + (cfg["max_length"] + 1) * cfg["max_length"] * 21 ** 2 * 20
-    )
+    # One table per direction: max_length depth slots, A**order contexts,
+    # twenty residues.
+    expected_cells = 2 * cfg["max_length"] * 21 ** cfg["order"] * 20
     assert dense.n_cells == sparse.n_cells == expected_cells
     assert dense.memory_bytes >= 20 * sparse.memory_bytes
 
@@ -102,12 +100,11 @@ def test_sparse_selection_and_positive_backoff_fallback():
     assert automatic.config["sparse"] is True
     assert forced_dense.config["sparse"] is False
     assert open_world.config["sparse"] is False
-    assert backed_off.config["sparse"] is False
-    assert backed_off.hill_number(0) > automatic.hill_number(0)
+    assert open_world.hill_number(0) > automatic.hill_number(0)
 
     with pytest.raises(ValueError, match="sparse=True"):
-        BeamModel(STRICT_SEQS, order=2, max_length=6, strict=True,
-             sparse=True)
+        BeamModel(STRICT_SEQS, order=2, max_length=6, strict=False,
+                  sparse=True)
     # Sparse storage is exact only in the closed world, which is now the
     # default -- so the rejection needs the open world asked for explicitly.
     with pytest.raises(ValueError, match="sparse=True"):
@@ -202,7 +199,8 @@ def test_sparse_add_posterior_without_and_compact_match_dense(tmp_path):
 def test_sparse_single_sequence_has_minimal_support():
     model = BeamModel(["CASSF"], order=2, max_length=6, strict=True)
     assert model.config["sparse"] is True
-    assert model.n_nonzero_cells == 3 * 2 * len("CASSF")
+    # One table per direction, one occupied cell per position in each.
+    assert model.n_nonzero_cells == 2 * len("CASSF")
     assert model.log_pseq("CASSF") == 0.0
     assert model.path_count(5) == 1.0
 

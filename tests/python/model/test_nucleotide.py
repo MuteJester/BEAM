@@ -79,8 +79,8 @@ def test_the_amino_acid_defaults_did_not_move():
     """Making order and max_length alphabet-resolved must not have
     changed what an amino-acid caller gets."""
     cfg = BEAM.BeamModel(["CASSLGQAYEQYF"]).config
-    assert (cfg["alphabet"], cfg["order"], ["order"],
-            cfg["max_length"]) == ("aa", 4, 15, 27)
+    assert (cfg["alphabet"], cfg["order"],
+            cfg["max_length"]) == ("aa", 4, 27)
 
 
 # ═══════════════════════════════════════════════════════════════

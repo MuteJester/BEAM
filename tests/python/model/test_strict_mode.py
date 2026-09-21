@@ -77,27 +77,6 @@ def test_strict_trims_the_trellis():
     assert {s for s, _ in top} == set(STRICT_SEQS)
 
 
-def test_strict_defaults_kappa_to_zero_but_explicit_wins():
-    """Backoff off by default under strict, still reachable when asked for."""
-    auto = BeamModel(STRICT_SEQS, max_length=6, strict=True)
-    assert auto.config["kappa"] == (0.0, 0.0, 0.0)
-    assert auto.config["kappa_wide"] == 0.0
-    assert auto.config["kappa_len"] == 0.0
-    assert auto.config["strict"] is True
-
-    # Strict with backoff on: the floor and add-one are still gone, but a
-    # shorter context can carry mass, so more than the training set survives.
-    partial = BeamModel(STRICT_SEQS, max_length=6, strict=True)
-    assert partial.config["kappa"] == (20.0, 20.0, 20.0)
-    assert partial.hill_number(0) > auto.hill_number(0)
-
-    # Without strict the smoothed defaults come back. That is now the
-    # explicit request, not the default.
-    assert BeamModel(STRICT_SEQS, max_length=6,
-                     strict=False).config["kappa"] == (20.0, 20.0, 20.0)
-    assert BeamModel(STRICT_SEQS, max_length=6).config["kappa"] == (0.0, 0.0, 0.0)
-
-
 def test_strict_builder_matches_one_shot():
     """The streamed path must build the same strict model as the one-shot path."""
     b = BeamModel.builder(max_length=6, strict=True)

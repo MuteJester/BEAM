@@ -278,14 +278,16 @@ def _direct_expected_counts(model, support, length):
     """Expected counts by walking each supported sequence into its cells.
 
     The addressing is transcribed from `observe_one_position` in training.c and
-    the row formulas in indexing.h -- deliberately re-derived here rather than
+    the row formula in indexing.h -- deliberately re-derived here rather than
     read back from the C sweep this is checking, since a shared derivation
     would agree with itself whatever it did.
+
+    One row formula now, not three, and no clamp: `row = depth * A**order +
+    context`, with depth exact and measured from the anchoring terminus.
     """
     cfg = model.config
     A, none = 21, 20
     order = int(cfg["order"])
-    width = int(cfg["max_length"])
     total = sum(math.exp(v) for _, v in support)
 
     def ctx(r, p, k, forward):
@@ -295,23 +297,16 @@ def _direct_expected_counts(model, support, length):
             idx = idx * A + (r[q] if 0 <= q < length else none)
         return idx
 
-    out = {k: defaultdict(lambda: np.zeros(20)) for k in (
-        "forward_wide", "forward_mid", "forward_len",
-        "backward_wide", "backward_mid", "backward_len")}
+    out = {k: defaultdict(lambda: np.zeros(20))
+           for k in ("forward", "backward")}
     for s, v in support:
         w = math.exp(v) / total
         r = [AA.index(c) for c in s]
         for p in range(length):
             for anchor, forward, depth in (("forward", True, p),
                                            ("backward", False, length - 1 - p)):
-                out[anchor + "_wide"][
-                    min(depth, depth_cap) * A ** order
-                    + ctx(r, p, order, forward)][r[p]] += w
-                out[anchor + "_mid"][
-                    depth * A ** 3 + ctx(r, p, 3, forward)][r[p]] += w
-                out[anchor + "_len"][
-                    (length * width + depth) * A ** 2
-                    + ctx(r, p, 2, forward)][r[p]] += w
+                out[anchor][depth * A ** order
+                            + ctx(r, p, order, forward)][r[p]] += w
     return out
 
 
@@ -348,12 +343,11 @@ def test_every_block_sums_to_the_expected_length(model):
     ec = model.expected_counts(length=length)
     assert ec["expected_length"] == pytest.approx(float(length), abs=EXACT)
     for anchor in ("forward", "backward"):
-        for expert in ("wide", "mid", "len"):
-            blk = ec[f"{anchor}_{expert}"]
-            assert blk["counts"].sum() == pytest.approx(float(length),
-                                                        abs=EXACT)
-            assert (blk["counts"] >= 0.0).all()
-            assert (np.diff(blk["rows"]) > 0).all(), "rows must be ascending"
+        blk = ec[anchor]
+        assert blk["counts"].sum() == pytest.approx(float(length),
+                                                    abs=EXACT)
+        assert (blk["counts"] >= 0.0).all()
+        assert (np.diff(blk["rows"]) > 0).all(), "rows must be ascending"
 
 
 def test_pooled_expected_counts_sum_to_the_mean_length(small):
@@ -363,7 +357,7 @@ def test_pooled_expected_counts_sum_to_the_mean_length(small):
     assert ec["expected_length"] == pytest.approx(mean, abs=EXACT)
     for anchor in ("forward", "backward"):
         for expert in ("wide", "mid", "len"):
-            assert ec[f"{anchor}_{expert}"]["counts"].sum() == pytest.approx(
+            assert ec[anchor]["counts"].sum() == pytest.approx(
                 mean, abs=EXACT)
 
 
@@ -372,19 +366,14 @@ def test_the_decoded_columns_rebuild_every_row_index(small):
     that disagrees with the row it was decoded from is worse than none."""
     ec = small.expected_counts(length=small.observed_lengths[0])
     cfg = small.config
-    A, width = 21, int(cfg["max_length"])
-    n_ctx = {"wide": A ** int(cfg["order"]), "mid": A ** 3, "len": A ** 2}
+    A = 21
+    nc = A ** int(cfg["order"])
     for anchor in ("forward", "backward"):
-        for expert, nc in n_ctx.items():
-            blk = ec[f"{anchor}_{expert}"]
-            if expert == "len":
-                rebuilt = (blk["length"] * width + blk["depth"]) * nc \
-                          + blk["context"]
-                assert (blk["length"] == small.observed_lengths[0]).all()
-            else:
-                rebuilt = blk["depth"] * nc + blk["context"]
-            assert (rebuilt == blk["rows"]).all()
-            assert (blk["context"] < nc).all()
+        blk = ec[anchor]
+        assert ((blk["depth"] * nc + blk["context"]) == blk["rows"]).all()
+        assert (blk["context"] < nc).all()
+        # Depth is exact and bounded by the length, not by a cap.
+        assert (blk["depth"] < small.observed_lengths[0]).all()
 
 
 def test_expected_counts_refuse_a_length_the_model_cannot_produce(model):
@@ -403,10 +392,9 @@ def test_expected_counts_land_only_in_cells_the_corpus_could_have_used(small):
     counts' most-distant-first one."""
     ec = small.expected_counts(length=small.observed_lengths[0])
     for anchor in ("forward", "backward"):
-        for expert in ("wide", "mid", "len"):
-            blk = ec[f"{anchor}_{expert}"]
-            assert len(blk["rows"]) > 0
-            assert len(blk["rows"]) <= small.n_nonzero_cells
+        blk = ec[anchor]
+        assert len(blk["rows"]) > 0
+        assert len(blk["rows"]) <= small.n_nonzero_cells
 
 
 # The new methods change nothing that was there before

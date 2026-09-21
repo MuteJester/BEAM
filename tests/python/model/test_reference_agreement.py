@@ -18,14 +18,14 @@ from _helpers import AA, J_MOTIFS, make_corpus, make_nt_corpus
 
 @pytest.mark.parametrize("order", [2, 3, 4])
 def test_scores_match_reference(corpus, order):
-    """The whole pipeline — counting, hierarchical backoff, mixing, the
+    """The whole pipeline — counting, normalisation, both anchors, the
     partition function — reproduced from the specification independently."""
     seqs, abund = corpus
     m = BeamModel(seqs, abundances=abund, order=order, strict=False)
     probe = seqs[:40] + ["CASSLGQGAEQYF", "CASSLGQGAEQYW"]
     probe = [s for s in probe if 11 <= len(s) <= 18]
 
-    ref = reference_build(seqs, abund, order=order)
+    ref = reference_build(seqs, abund, order=order, strict=False)
     want = reference_scores(ref, probe)
     got = np.array([m.log_pseq(s) for s in probe])
 
@@ -37,7 +37,7 @@ def test_scores_match_reference(corpus, order):
 def test_partition_matches_reference(corpus):
     seqs, abund = corpus
     m = BeamModel(seqs, abundances=abund, order=3, strict=False)
-    ref = reference_build(seqs, abund, order=3)
+    ref = reference_build(seqs, abund, order=3, strict=False)
     for length in range(11, 19):
         assert abs(m.log_partition(length) - float(ref.logZ(length))) < 1e-9
 
@@ -46,7 +46,7 @@ def test_path_count_matches_reference(corpus):
     """Support size over the trellis, against the reference DP."""
     seqs, abund = corpus
     m = BeamModel(seqs, abundances=abund, order=2, strict=False)
-    ref = reference_build(seqs, abund, order=2)
+    ref = reference_build(seqs, abund, order=2, strict=False)
     import beam_model as R
     want = R.reference_path_counts(ref, range(11, 19))
     for length in range(11, 19):
@@ -75,7 +75,7 @@ def test_nucleotide_scores_match_reference(nt_corpus, order):
     probe = [s for s in seqs[:40] if len(s) <= 36]
 
     ref = reference_build(seqs, abund, order=order, max_len=36,
-                          alphabet="nt")
+                          alphabet="nt", strict=False)
     want = reference_scores(ref, probe)
     got = np.array([m.log_pseq(s) for s in probe])
 
@@ -89,7 +89,7 @@ def test_nucleotide_partition_matches_reference(nt_corpus):
     m = BeamModel(seqs, abundances=abund, alphabet="nt", order=3,
                   max_length=36, strict=False)
     ref = reference_build(seqs, abund, order=3, max_len=36,
-                          alphabet="nt")
+                          alphabet="nt", strict=False)
     for length in range(21, 26):
         assert abs(m.log_partition(length) - float(ref.logZ(length))) < 1e-9
 
@@ -100,7 +100,7 @@ def test_nucleotide_path_count_matches_reference(nt_corpus):
     m = BeamModel(seqs, abundances=abund, alphabet="nt", order=2,
                   max_length=36, strict=False)
     ref = reference_build(seqs, abund, order=2, max_len=36,
-                          alphabet="nt")
+                          alphabet="nt", strict=False)
     import beam_model as R
     want = R.reference_path_counts(ref, range(21, 26))
     for length in range(21, 26):

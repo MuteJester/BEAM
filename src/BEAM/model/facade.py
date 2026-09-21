@@ -2279,11 +2279,8 @@ class BeamModel:
             cfg = self.config
             other = BeamModel(
                 list(other), abundances=abundances, order=cfg["order"],
-                depth_cap=cfg["depth_cap"], max_length=cfg["max_length"],
-                coefficients=cfg["coefficients"], kappa=cfg["kappa"],
-                kappa_wide=cfg["kappa_wide"], kappa_len=cfg["kappa_len"],
-                weights=cfg["weights"], strict=cfg["strict"],
-                sparse=cfg["sparse"])
+                max_length=cfg["max_length"], weights=cfg["weights"],
+                strict=cfg["strict"], sparse=cfg["sparse"])
         elif abundances is not None:
             raise TypeError(
                 "abundances applies only when `other` is a list of sequences; "

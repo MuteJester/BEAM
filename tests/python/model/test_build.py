@@ -98,11 +98,12 @@ def test_max_length_two_is_the_smallest_model():
 @pytest.mark.parametrize("order", [2, 3, 4])
 def test_degenerate_corpus_matches_the_reference(order):
     """The independent reference, on a corpus small enough that almost every
-    table cell is pure backoff. The agreement tests elsewhere all use a corpus
-    with hundreds of sequences, where a smoothing bug is diluted."""
+    table cell is the open world's add-one and nothing else. The agreement
+    tests elsewhere all use a corpus with hundreds of sequences, where a
+    normalisation bug is diluted."""
     seqs = ["CASF", "CASSF", "CASF", "CAF"]
     m = BeamModel(seqs, order=order, max_length=6, strict=False)
-    ref = reference_build(seqs, order=order, max_len=6)
+    ref = reference_build(seqs, order=order, max_len=6, strict=False)
     probe = ["CASF", "CASSF", "CAF", "WWWW", "YYYYY"]
     got = np.array([m.log_pseq(s) for s in probe])
     want = reference_scores(ref, probe)
