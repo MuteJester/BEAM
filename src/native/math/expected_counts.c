@@ -304,26 +304,23 @@ static BeamError rowmap_emit(RowMap *t, BeamCountBlock *b) {
  */
 
 /**
- * The six maps, indexed [anchor][expert] exactly as BeamExpectedCounts is,
- * together with the budget they share.
+ * The two maps, indexed [anchor] exactly as BeamExpectedCounts is, together
+ * with the budget they share.
  *
- * One struct rather than an array of six plus a pool passed beside it: the
- * budget and the maps it governs have to stay in step through eight call
- * sites, and two parameters that must agree are two chances for them not to.
+ * One struct rather than an array plus a pool passed beside it: the budget
+ * and the maps it governs have to stay in step through eight call sites, and
+ * two parameters that must agree are two chances for them not to.
  */
 typedef struct {
-    RowMap  map[2][3];
+    RowMap  map[2];
     BeamMemAccount pool;
 } Accum;
 
-/** Add `g` to one cell of each of the three tables of one anchor. */
-static bool bump(Accum *ac, uint32_t dir, uint32_t rw, uint32_t rm, uint32_t rl,
-                 uint32_t x, double g) {
-    double *w = rowmap_row(&ac->map[dir][0], rw);
-    double *d = rowmap_row(&ac->map[dir][1], rm);
-    double *l = rowmap_row(&ac->map[dir][2], rl);
-    if (!w || !d || !l) return false;
-    w[x] += g; d[x] += g; l[x] += g;
+/** Add `g` to one cell of one anchor's table. */
+static bool bump(Accum *ac, uint32_t dir, uint32_t row, uint32_t x, double g) {
+    double *w = rowmap_row(&ac->map[dir], row);
+    if (!w) return false;
+    w[x] += g;
     return true;
 }
 
@@ -350,7 +347,7 @@ static bool bump(Accum *ac, uint32_t dir, uint32_t rw, uint32_t rm, uint32_t rl,
  * ONE asymmetry has to be got right and is easy to get wrong. The finalized
  * C-anchored WIDE table is packed nearest-first for cache reasons, but the
  * COUNT table it is derived from keeps the common most-distant-first packing.
- * These are expected COUNTS, so they use `beam_ctx_backward_from_state`, the
+ * These are expected COUNTS, so they use `beam_ctx_backward_counts_from_state`, the
  * most-distant-first reading, and not the `_wide_` variant the edge-weight
  * kernels use. Getting that backwards produces a plausible table addressed by
  * a reversed context, and nothing else in the library would catch it.
@@ -367,9 +364,7 @@ static BeamError expected_one_length(const BeamModel *m, uint32_t len,
     const uint32_t S = m->n_states;
     const uint32_t SK = m->state_shift;
     const uint32_t K = m->state_order;
-    const uint32_t nw = m->n_ctx_wide;
-    const uint32_t n3 = m->n_ctx_mid;
-    const uint32_t n2 = m->n_ctx_len;
+    const uint32_t nc = m->n_ctx;
 
     BeamFBWork k;
     BeamError err = beam_fb_alloc(m, len, &k, &ac->pool);
@@ -404,9 +399,7 @@ static BeamError expected_one_length(const BeamModel *m, uint32_t len,
 
             /* Forward contexts do not depend on the residue emitted, so they
              * are hoisted; the state IS the forward context. */
-            const uint32_t fw = beam_row_wide(m, i, s % nw);
-            const uint32_t fm = beam_row_mid(m, i, s % n3);
-            const uint32_t fl = beam_row_len(m, len, i, s % n2);
+            const uint32_t fw = beam_row(m, i, s % nc);
             const uint32_t scored = beam_state_oldest(s, SK);
             const bool back = settle_back && scored < R;
 
@@ -416,17 +409,11 @@ static BeamError expected_one_length(const BeamModel *m, uint32_t len,
                 if (nb == -INFINITY) continue;
                 const double g = weight * exp(la + row[x] + nb);
                 if (g == 0.0) continue;
-                if (!bump(ac, BEAM_FWD, fw, fm, fl, x, g)) { oom = true; break; }
+                if (!bump(ac, BEAM_FWD, fw, x, g)) { oom = true; break; }
                 if (!back) continue;
-                const uint32_t bw = beam_row_wide(
-                    m, r, beam_ctx_backward_from_state(s, x, K, m->order, A));
-                const uint32_t bm = beam_row_mid(
-                    m, r, beam_ctx_backward_from_state(s, x, K, 3u, A));
-                const uint32_t bl = beam_row_len(
-                    m, len, r, beam_ctx_backward_from_state(s, x, K, 2u, A));
-                if (!bump(ac, BEAM_BWD, bw, bm, bl, scored, g)) {
-                    oom = true; break;
-                }
+                const uint32_t bw = beam_row(
+                    m, r, beam_ctx_backward_counts_from_state(s, x, K, m->order, A));
+                if (!bump(ac, BEAM_BWD, bw, scored, g)) { oom = true; break; }
             }
         }
         if (oom) break;
@@ -458,17 +445,10 @@ static BeamError expected_one_length(const BeamModel *m, uint32_t len,
                 const uint32_t pos = K - 1u - rr;
                 const uint32_t scored = slot[pos];
                 if (scored >= R) break;      /* not a valid ending */
-                uint32_t cw = 0, cm = 0, cl = 0;
+                uint32_t cw = 0;
                 for (uint32_t j = m->order; j >= 1u; --j)
                     cw = cw * A + ((j <= rr) ? slot[pos + j] : m->none_idx);
-                for (uint32_t j = 3u; j >= 1u; --j)
-                    cm = cm * A + ((j <= rr) ? slot[pos + j] : m->none_idx);
-                for (uint32_t j = 2u; j >= 1u; --j)
-                    cl = cl * A + ((j <= rr) ? slot[pos + j] : m->none_idx);
-                const uint32_t bw = beam_row_wide(m, rr, cw);
-                const uint32_t bm = beam_row_mid(m, rr, cm);
-                const uint32_t bl = beam_row_len(m, len, rr, cl);
-                if (!bump(ac, BEAM_BWD, bw, bm, bl, scored, g)) {
+                if (!bump(ac, BEAM_BWD, beam_row(m, rr, cw), scored, g)) {
                     oom = true; break;
                 }
             }
@@ -505,16 +485,14 @@ BeamError beam_model_expected_counts(const BeamModel *m, uint32_t length,
      * those are whatever was on the stack. */
     Accum ac;
     memset(&ac, 0, sizeof(ac));
-    for (uint32_t d = 0; d < 2u; ++d)
-        for (uint32_t e = 0; e < 3u; ++e)
-            if (!rowmap_init(&ac.map[d][e], &ac.pool, m->n_residues)) {
-                const BeamError why = ac.pool.err;
-                for (uint32_t dd = 0; dd < 2u; ++dd)
-                    for (uint32_t ee = 0; ee < 3u; ++ee)
-                        rowmap_free(&ac.map[dd][ee]);
-                return why != BEAM_OK
-                     ? why : BEAM_EALLOC("the expected-count accumulators");
-            }
+    for (uint32_t d = 0; d < 2u; ++d) {
+        if (!rowmap_init(&ac.map[d], &ac.pool, m->n_residues)) {
+            const BeamError why = ac.pool.err;
+            for (uint32_t dd = 0; dd < 2u; ++dd) rowmap_free(&ac.map[dd]);
+            return why != BEAM_OK
+                 ? why : BEAM_EALLOC("the expected-count accumulators");
+        }
+    }
 
     BeamError err = BEAM_OK;
     double total = 0.0;
@@ -549,12 +527,11 @@ BeamError beam_model_expected_counts(const BeamModel *m, uint32_t length,
      * `rowmap_free` runs unconditionally, including on the maps an earlier
      * error skipped, so every map is still freed exactly once.
      */
-    for (uint32_t d = 0; d < 2u; ++d)
-        for (uint32_t e = 0; e < 3u; ++e) {
-            if (err == BEAM_OK)
-                err = rowmap_emit(&ac.map[d][e], &out->block[d][e]);
-            rowmap_free(&ac.map[d][e]);
-        }
+    for (uint32_t d = 0; d < 2u; ++d) {
+        if (err == BEAM_OK)
+            err = rowmap_emit(&ac.map[d], &out->block[d]);
+        rowmap_free(&ac.map[d]);
+    }
 
     if (err != BEAM_OK) { beam_model_expected_counts_free(out); return err; }
     out->expected_length = total;
@@ -571,8 +548,6 @@ void beam_count_block_free(BeamCountBlock *b) {
 
 void beam_model_expected_counts_free(BeamExpectedCounts *ec) {
     if (!ec) return;
-    for (uint32_t d = 0; d < 2u; ++d)
-        for (uint32_t e = 0; e < 3u; ++e)
-            beam_count_block_free(&ec->block[d][e]);
+    for (uint32_t d = 0; d < 2u; ++d) beam_count_block_free(&ec->block[d]);
     memset(ec, 0, sizeof(*ec));
 }

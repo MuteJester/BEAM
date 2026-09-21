@@ -57,21 +57,18 @@ BeamError beam_mixture_check_shape(const BeamModel *const *models,
     for (uint32_t i = 1; i < n_models; ++i) {
         const BeamModel *b = models[i];
         if (a->cfg.alphabet != b->cfg.alphabet
-            || a->order != b->order || a->max_len != b->max_len
-            || a->n_depth_wide != b->n_depth_wide)
+            || a->order != b->order || a->max_len != b->max_len)
             return BEAM_FAIL(BEAM_ERR_VARIANT_MISMATCH,
                              "mixture: shape mismatch, member 0 is %s "
-                             "order=%u max_length=%u depth_cap=%u and member "
-                             "%u is %s order=%u max_length=%u depth_cap=%u; "
+                             "order=%u max_length=%u and member "
+                             "%u is %s order=%u max_length=%u; "
                              "a mixture reads its members at one state index, "
-                             "which only holds when all four agree",
+                             "which only holds when all three agree",
                              a->alpha->name, (unsigned)a->order,
                              (unsigned)a->max_len,
-                             (unsigned)a->n_depth_wide - 1u,
                              (unsigned)i,
                              b->alpha->name, (unsigned)b->order,
-                             (unsigned)b->max_len,
-                             (unsigned)b->n_depth_wide - 1u);
+                             (unsigned)b->max_len);
         /*
          * Implied by the four fields above, and asserted anyway. The whole
          * design rests on one sentence -- a state index is a function of the
@@ -84,7 +81,7 @@ BeamError beam_mixture_check_shape(const BeamModel *const *models,
             || a->state_shift != b->state_shift)
             return BEAM_FAIL(BEAM_ERR_INTERNAL,
                              "mixture: members 0 and %u agree on alphabet, "
-                             "order, max_length and depth_cap but index "
+                             "order and max_length but index "
                              "different state spaces (%u vs %u states); the "
                              "state index is no longer a pure function of the "
                              "configuration, which every sweep here assumes",

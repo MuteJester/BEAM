@@ -231,10 +231,10 @@ BeamError beam_model_thaw_counts(BeamModel *m);
  * The caller owns `out` and must `beam_sparse_destroy` it.
  */
 BeamError beam_model_thaw_count_table(const BeamModel *m, uint32_t dir,
-                                      uint32_t kind, BeamSparseRows *out);
+                                      BeamSparseRows *out);
 void      beam_model_release_frozen(BeamModel *m);
 uint64_t  beam_model_frozen_bytes(const BeamModel *m);
 const BeamFrozenCounts *beam_model_frozen_table(const BeamModel *m,
-                                                uint32_t dir, uint32_t kind);
+                                                uint32_t dir);
 
 #endif /* BEAM_INTERNAL_FROZEN_COUNTS_H */

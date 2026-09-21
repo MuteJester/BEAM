@@ -37,7 +37,7 @@ static inline uint32_t beam_ctx_forward(const uint8_t *s, int32_t pos,
  * Backward context of order `k` for the residue at `pos`, packed
  * most-distant-first with `c_j = s[pos + j]`, sentinel-padded past `len`.
  */
-static inline uint32_t beam_ctx_backward(const uint8_t *s, int32_t pos,
+static inline uint32_t beam_ctx_backward_counts(const uint8_t *s, int32_t pos,
                                              uint32_t len, uint32_t k,
                                              uint32_t radix) {
     const uint32_t none = radix - 1u;
@@ -66,7 +66,7 @@ static inline uint32_t beam_ctx_backward(const uint8_t *s, int32_t pos,
  * nearest the scored one are used, which for the backward direction means
  * dropping `x` first.
  */
-static inline uint32_t beam_ctx_backward_from_state(uint32_t state,
+static inline uint32_t beam_ctx_backward_counts_from_state(uint32_t state,
                                                         uint32_t x,
                                                         uint32_t order,
                                                         uint32_t k,
@@ -146,7 +146,7 @@ static inline uint32_t beam_ctx_reverse(uint32_t ctx, uint32_t order,
  * Backward wide context read off a sequence, packed NEAREST-first:
  * `((c_1 * A + c_2) * A + ...) * A + c_order` with `c_j = s[pos + j]`.
  */
-static inline uint32_t beam_ctx_backward_wide(const uint8_t *s, int32_t pos,
+static inline uint32_t beam_ctx_backward_finalized(const uint8_t *s, int32_t pos,
                                                   uint32_t len, uint32_t order,
                                                   uint32_t radix) {
     const uint32_t none = radix - 1u;
@@ -167,18 +167,15 @@ static inline uint32_t beam_ctx_backward_wide(const uint8_t *s, int32_t pos,
  * `t = state % state_shift` already holds `(c_1 .. c_(K-1))` in order, so a
  * full-width context is `t * A + x` and a narrower one drops trailing digits.
  */
-static inline uint32_t beam_ctx_backward_wide_from_state(uint32_t state,
+static inline uint32_t beam_ctx_backward_finalized_from_state(uint32_t state,
                                                              uint32_t x,
                                                              uint32_t state_shift,
                                                              uint32_t state_order,
                                                              uint32_t order,
                                                              uint32_t radix) {
     const uint32_t t = state % state_shift;      /* c_1 .. c_(K-1), in order */
-    if (order >= state_order) return t * radix + x;
-    uint32_t drop = state_order - 1u - order;    /* digits past c_order      */
-    uint32_t idx = t;
-    while (drop--) idx /= radix;
-    return idx;
+    (void)state_order; (void)order;              /* equal by construction    */
+    return t * radix + x;
 }
 
 /** The residue a DAG state's oldest slot holds. */
@@ -189,66 +186,41 @@ static inline uint32_t beam_state_oldest(uint32_t state,
 
 /* ── Table addressing ────────────────────────────────────────── */
 
-/**
- * The depth a wide-table row is filed under.
- *
- * Depths at or beyond `depth_cap` share one partition: the N-anchored expert
- * stops distinguishing position once it is far enough from its anchor, and the
- * table is sized accordingly. Every wide-table address goes through this, so
- * there is one place the clamp can be got wrong.
- */
-static inline uint32_t beam_depth_part(const BeamModel *m, uint32_t depth) {
-    return depth < m->cfg.depth_cap ? depth : m->cfg.depth_cap;
-}
-
 /*
  * ROW addressing, and the CELL addressing built on it.
  *
- * A row is `(depth, context)` -- or `(length, depth, context)` for the
- * length-conditioned table -- and a cell is a row plus a residue. Both forms
- * are needed: the log tables and the sparse count directory are addressed by
- * ROW, and the dense count arrays by CELL.
+ * A row is `(depth, context)` and a cell is a row plus a residue. Both forms
+ * are needed: the log table and the sparse count directory are addressed by
+ * ROW, and the dense count array by CELL.
  *
- * They were written out four times over: here in cell form, in
- * `table_access.h` inside each `beam_lp_*_row`, in `model/training.c` where
- * counts are incremented, and in `math/expected_counts.c` where the expected
- * usage of those same cells is accumulated. That last pair is the dangerous
- * one. Expected counts mean something only because they land in the cells an
- * observed sequence would have incremented, and `expected_counts.c` said so
- * while keeping its own copy: "Deriving them a second way would be a second
- * thing to keep in step." Four copies IS the second thing to keep in step. If
- * they drift -- a change to the `depth_cap` clamp, or to the `len * max_len`
- * stride -- the expected-count table is still well formed, still sums to the
- * length, and is addressed wrongly, which is a class of error this codebase
- * has already documented as one nothing else would catch.
+ * Depth is EXACT. There is no clamp: a forward depth is `i` and a backward
+ * depth is `L-1-i`, both in `[0, max_len)`. That is what makes the pair of
+ * depths at a position determine the length, since `i + (L-1-i) = L-1`, and
+ * it is why no table needs a length axis of its own.
  *
- * The cell forms are defined in terms of the row forms so the two cannot
+ * This is written out three times over: here in cell form, in
+ * `table_access.h` inside `beam_lp_row`, and in `model/training.c` where
+ * counts are incremented, with `math/expected_counts.c` accumulating the
+ * expected usage of those same cells. That last pair is the dangerous one.
+ * Expected counts mean something only because they land in the cells an
+ * observed sequence would have incremented, and `expected_counts.c` keeps its
+ * own copy: "Deriving them a second way would be a second thing to keep in
+ * step." The copies ARE the thing to keep in step. If they drift, the
+ * expected-count table is still well formed, still sums to the length, and is
+ * addressed wrongly, which is a class of error this codebase has already
+ * documented as one nothing else would catch.
+ *
+ * The cell form is defined in terms of the row form so the two cannot
  * disagree about what a row is.
  */
-static inline uint32_t beam_row_wide(const BeamModel *m, uint32_t depth,
-                                     uint32_t ctx) {
-    return beam_depth_part(m, depth) * m->n_ctx_wide + ctx;
-}
-static inline uint32_t beam_row_mid(const BeamModel *m, uint32_t depth,
-                                    uint32_t ctx) {
-    return depth * m->n_ctx_mid + ctx;
-}
-static inline uint32_t beam_row_len(const BeamModel *m, uint32_t len,
-                                    uint32_t depth, uint32_t ctx) {
-    return (len * m->max_len + depth) * m->n_ctx_len + ctx;
+static inline uint32_t beam_row(const BeamModel *m, uint32_t depth,
+                                uint32_t ctx) {
+    return depth * m->n_ctx + ctx;
 }
 
-static inline size_t beam_ix_wide(const BeamModel *m, uint32_t depth,
-                                      uint32_t ctx, uint32_t x) {
-    return (size_t)beam_row_wide(m, depth, ctx) * m->n_residues + x;
-}
-static inline size_t beam_ix_mid(const BeamModel *m, uint32_t depth,
-                                     uint32_t ctx, uint32_t x) {
-    return (size_t)beam_row_mid(m, depth, ctx) * m->n_residues + x;
-}
-static inline size_t beam_ix_len(const BeamModel *m, uint32_t len,
-                                     uint32_t depth, uint32_t ctx, uint32_t x) {
-    return (size_t)beam_row_len(m, len, depth, ctx) * m->n_residues + x;
+static inline size_t beam_ix(const BeamModel *m, uint32_t depth,
+                             uint32_t ctx, uint32_t x) {
+    return (size_t)beam_row(m, depth, ctx) * m->n_residues + x;
 }
 
 #endif /* BEAM_INTERNAL_INDEXING_H */

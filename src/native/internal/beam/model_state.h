@@ -72,46 +72,36 @@ struct BeamModel_ {
     uint32_t none_idx;       /* the context sentinel, == n_residues          */
 
     /* Derived dimensions, all fixed at construction. */
-    uint32_t order;          /* the WIDE expert's context order               */
+    uint32_t order;          /* k, the context order of both tables           */
     /**
-     * Context order of the DAG state, `max(order, 3)`.
+     * Context order of the DAG state. Identical to `order`.
      *
-     * Not the same as `order`, and conflating them is a real bug rather than a
-     * tidiness issue: the mid expert is always order 3, so a state holding
-     * fewer than 3 residues cannot supply its context and the order-3 index
-     * would silently read a neighbouring cell instead. Everything about the
-     * trellis — node count, window slide, which residue the backward expert
-     * settles, the lag before it can settle anything — is governed by this,
-     * while `order` governs only the wide table's own width.
+     * The field stays because the trellis reads more clearly for it: `order`
+     * is a statement about the tables and `state_order` about the graph, and
+     * every window slide, settle lag and node count below is a property of
+     * the graph. They were different while a second expert of fixed order 3
+     * existed, because a state holding fewer than 3 residues could not supply
+     * that expert's context. With one table per direction there is nothing to
+     * be wider than, so a state holds exactly the `k` residues its context
+     * needs.
      */
     uint32_t state_order;
     uint32_t n_states;       /* A^state_order, nodes per DAG layer            */
     uint32_t state_shift;    /* A^(state_order-1), slides the state window    */
-    uint32_t n_ctx_wide;     /* A^order, the wide table's own context count   */
-    uint32_t n_ctx_mid;      /* A^3                                           */
-    uint32_t n_ctx_len;      /* A^2                                           */
-    uint32_t n_depth_wide;   /* depth_cap + 1                                 */
-    uint32_t max_len;        /* W                                             */
+    uint32_t n_ctx;          /* A^order, the context count of both tables     */
+    uint32_t max_len;        /* W, and the depth axis: depth is in [0, W)     */
     uint32_t n_len_slots;    /* W + 1, so index [L] is valid for L = max_len  */
 
     /* Raw abundance counts. NULL after beam_model_compact(). */
-    double *cnt_wide[BEAM_DIRS];
-    double *cnt_mid[BEAM_DIRS];
-    double *cnt_len[BEAM_DIRS];
+    double *cnt[BEAM_DIRS];
     double *cnt_length;      /* [n_len_slots] observed length distribution    */
 
     /* Finalized natural-log probability tables. NULL until finalize. */
-    double *lp_wide[BEAM_DIRS];
-    double *lp_mid[BEAM_DIRS];
-    double *lp_len[BEAM_DIRS];
+    double *lp[BEAM_DIRS];
 
     /* Sparse counterparts. Populated only when cfg.sparse is true. */
-    BeamSparseRows sp_cnt_wide[BEAM_DIRS];
-    BeamSparseRows sp_cnt_mid[BEAM_DIRS];
-    BeamSparseRows sp_cnt_len[BEAM_DIRS];
-    BeamSparseRows sp_lp_wide[BEAM_DIRS];
-    BeamSparseRows sp_lp_mid[BEAM_DIRS];
-    BeamSparseRows sp_lp_len[BEAM_DIRS];
+    BeamSparseRows sp_cnt[BEAM_DIRS];
+    BeamSparseRows sp_lp[BEAM_DIRS];
 
     /**
      * Counts after observation stopped, or empty structs when they are still
@@ -124,9 +114,7 @@ struct BeamModel_ {
      * the sorted rows is both cheaper than a thaw and cheaper than the dense
      * probe it replaces.
      */
-    BeamFrozenCounts frz_wide[BEAM_DIRS];
-    BeamFrozenCounts frz_mid[BEAM_DIRS];
-    BeamFrozenCounts frz_len[BEAM_DIRS];
+    BeamFrozenCounts frz[BEAM_DIRS];
     bool     counts_frozen;
 
     double *log_pi;          /* [n_len_slots] ln pi(L)                        */
@@ -166,16 +154,15 @@ struct BeamModel_ {
     BeamLiveCache *live_cache;
 };
 
-/* ── Element counts of each table ────────────────────────────── */
+/* ── Element count of one direction's table ──────────────────── */
 
-static inline size_t beam_n_wide(const BeamModel *m) {
-    return (size_t)m->n_depth_wide * m->n_ctx_wide * m->n_residues;
-}
-static inline size_t beam_n_mid(const BeamModel *m) {
-    return (size_t)m->max_len * m->n_ctx_mid * m->n_residues;
-}
-static inline size_t beam_n_len(const BeamModel *m) {
-    return (size_t)m->n_len_slots * m->max_len * m->n_ctx_len * m->n_residues;
+/*
+ * One row per (depth, context), one cell per residue. The depth axis is
+ * `max_len` because a forward depth is at most `L-1` and a backward depth is
+ * at most `L-1`, and `L <= max_len`.
+ */
+static inline size_t beam_n_table(const BeamModel *m) {
+    return (size_t)m->max_len * m->n_ctx * m->n_residues;
 }
 
 #endif /* BEAM_INTERNAL_MODEL_STATE_H */

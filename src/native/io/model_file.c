@@ -34,7 +34,8 @@
  * rebuilt. */
 #define BEAM_MAGIC        0x4245414Du   /* "BEAM" */
 #define BEAM_MAGIC_LEGACY 0x45444745u   /* "EDGE", pre-split; rejected */
-#define BEAM_FORMAT   5u
+#define BEAM_FORMAT   6u
+#define BEAM_FORMAT_V5       5u
 #define BEAM_FORMAT_V4       4u
 #define BEAM_FORMAT_V3       3u
 #define BEAM_FORMAT_V2       2u
@@ -162,12 +163,11 @@ static bool write_frozen_count_table(FILE *f, const BeamFrozenCounts *z,
         && (vbytes == 0u || write_all(f, z->values, vbytes, crc));
 }
 
-static bool write_count_table(FILE *f, const BeamModel *m, uint32_t dir,
-                              BeamTableKind kind, uint32_t *crc) {
-    const uint32_t nr = beam_count_n_rows(m, kind);
+static bool write_count_table(FILE *f, const BeamModel *m, uint32_t dir, uint32_t *crc) {
+    const uint32_t nr = beam_count_n_rows(m);
     const size_t row_bytes = (size_t)m->n_residues * sizeof(double);
     if (!m->cfg.sparse) {
-        const double *p = beam_dense_count_table_const(m, dir, kind);
+        const double *p = m->cnt[dir];
         return write_all(f, p, (size_t)nr * row_bytes, crc);
     }
 
@@ -187,7 +187,7 @@ static bool write_count_table(FILE *f, const BeamModel *m, uint32_t dir,
      */
     if (m->counts_frozen)
         return write_frozen_count_table(
-                   f, beam_model_frozen_table(m, dir, kind), crc);
+                   f, beam_model_frozen_table(m, dir), crc);
 
     /*
      * A sparse model whose counts are still mutable -- saved before it was
@@ -201,7 +201,7 @@ static bool write_count_table(FILE *f, const BeamModel *m, uint32_t dir,
      * const here and saving is not a reason to change what the caller holds.
      */
     BeamFrozenCounts tmp;
-    const BeamSparseRows *src = beam_sparse_count_table_const(m, dir, kind);
+    const BeamSparseRows *src = &m->sp_cnt[dir];
     if (beam_frozen_freeze(src, src->n_parts, &tmp) != BEAM_OK) return false;
     const bool wrote = write_frozen_count_table(f, &tmp, crc);
     beam_frozen_destroy(&tmp);
@@ -219,9 +219,8 @@ static bool write_count_table(FILE *f, const BeamModel *m, uint32_t dir,
  * any of them is refused rather than decoded into whatever the bytes happen
  * to address.
  */
-static bool read_frozen_count_table(FILE *f, BeamModel *m, uint32_t dir,
-                                    BeamTableKind kind, uint32_t *crc) {
-    const uint32_t nr = beam_count_n_rows(m, kind);
+static bool read_frozen_count_table(FILE *f, BeamModel *m, uint32_t dir, uint32_t *crc) {
+    const uint32_t nr = beam_count_n_rows(m);
     uint64_t rows = 0, dense = 0, blocks = 0, vbits = 0;
     if (!read_all(f, &rows, sizeof rows, crc)
         || !read_all(f, &dense, sizeof dense, crc)
@@ -235,7 +234,7 @@ static bool read_frozen_count_table(FILE *f, BeamModel *m, uint32_t dir,
     z.stride = m->n_residues;
     z.n_dense_rows = nr;
     if (rows == 0u) {
-        *(BeamFrozenCounts *)beam_model_frozen_table(m, dir, kind) = z;
+        *(BeamFrozenCounts *)beam_model_frozen_table(m, dir) = z;
         return true;
     }
     if (blocks != beam_frozen_blocks((uint32_t)rows)) return false;
@@ -304,7 +303,7 @@ static bool read_frozen_count_table(FILE *f, BeamModel *m, uint32_t dir,
         beam_frozen_destroy(&z); return false;
     }
 
-    *(BeamFrozenCounts *)beam_model_frozen_table(m, dir, kind) = z;
+    *(BeamFrozenCounts *)beam_model_frozen_table(m, dir) = z;
     return true;
 }
 
@@ -318,58 +317,8 @@ static bool read_frozen_count_table(FILE *f, BeamModel *m, uint32_t dir,
  * them into the current form afterwards. A legacy path is exercised once per
  * file and should be the simplest thing that is correct, not the fastest.
  */
-static bool read_frozen_count_table_v4(FILE *f, BeamModel *m, uint32_t dir,
-                                       BeamTableKind kind, uint32_t *crc) {
-    const uint32_t nr = beam_count_n_rows(m, kind);
-    const uint32_t R = m->n_residues;
-    uint64_t rows = 0, blocks = 0, vbytes = 0;
-    if (!read_all(f, &rows, sizeof rows, crc)
-        || !read_all(f, &blocks, sizeof blocks, crc)
-        || !read_all(f, &vbytes, sizeof vbytes, crc))
-        return false;
-    if (rows > nr) return false;
-    if (rows == 0u) return true;
-    if (blocks != (rows + 255u) / 256u) return false;
-
-    uint32_t *row_id = (uint32_t *)malloc((size_t)rows * sizeof *row_id);
-    uint32_t *mask_tier = (uint32_t *)malloc((size_t)rows * sizeof *mask_tier);
-    uint16_t *sub = (uint16_t *)malloc((size_t)rows * sizeof *sub);
-    uint64_t *base = (uint64_t *)malloc(((size_t)blocks + 1u) * sizeof *base);
-    unsigned char *vals = (unsigned char *)malloc(vbytes ? (size_t)vbytes : 1u);
-    bool ok = row_id && mask_tier && sub && base && vals
-        && read_all(f, row_id, (size_t)rows * sizeof *row_id, crc)
-        && read_all(f, mask_tier, (size_t)rows * sizeof *mask_tier, crc)
-        && read_all(f, sub, (size_t)rows * sizeof *sub, crc)
-        && read_all(f, base, ((size_t)blocks + 1u) * sizeof *base, crc)
-        && (vbytes == 0u || read_all(f, vals, (size_t)vbytes, crc));
-
-    static const uint32_t V4_WIDTH[4] = { 1u, 2u, 4u, 8u };
-    for (uint64_t i = 0; ok && i < rows; ++i) {
-        const uint32_t id = row_id[i];
-        const uint32_t mt = mask_tier[i];
-        const uint32_t mask = mt & 0xFFFFFu, tier = (mt >> 20u) & 3u;
-        if (id >= nr || mask == 0u) { ok = false; break; }
-        const unsigned char *src = vals + base[i / 256u] + sub[i];
-        double *dst = beam_count_row_mut(m, dir, kind, id, true);
-        if (!dst) { ok = false; break; }
-        for (uint32_t x = 0; x < R; ++x) {
-            if (!((mask >> x) & 1u)) { dst[x] = 0.0; continue; }
-            switch (tier) {
-            case 0u: { uint8_t  t; memcpy(&t, src, 1); dst[x] = (double)t; break; }
-            case 1u: { uint16_t t; memcpy(&t, src, 2); dst[x] = (double)t; break; }
-            case 2u: { uint32_t t; memcpy(&t, src, 4); dst[x] = (double)t; break; }
-            default: {                memcpy(&dst[x], src, 8);             break; }
-            }
-            src += V4_WIDTH[tier];
-        }
-    }
-    free(row_id); free(mask_tier); free(sub); free(base); free(vals);
-    return ok;
-}
-
-static bool read_sparse_count_table(FILE *f, BeamModel *m, uint32_t dir,
-                                    BeamTableKind kind, uint32_t *crc) {
-    const uint32_t nr = beam_count_n_rows(m, kind);
+static bool read_sparse_count_table(FILE *f, BeamModel *m, uint32_t dir, uint32_t *crc) {
+    const uint32_t nr = beam_count_n_rows(m);
     const size_t row_bytes = (size_t)m->n_residues * sizeof(double);
     const size_t rec = sizeof(uint32_t) + row_bytes;
     uint64_t occupied = 0;
@@ -398,7 +347,7 @@ static bool read_sparse_count_table(FILE *f, BeamModel *m, uint32_t dir,
                 if (values[x] > 0.0) any = true;
             }
             if (!any) return false;
-            double *dst = beam_count_row_mut(m, dir, kind, row, true);
+            double *dst = beam_cnt_row_mut(m, dir, row, true);
             if (!dst) return false;
             memcpy(dst, values, row_bytes);
             previous = row;
@@ -424,17 +373,17 @@ BeamError beam_model_save(const BeamModel *m, const char *path) {
     h.magic           = BEAM_MAGIC;
     h.format          = BEAM_FORMAT;
     h.order           = m->cfg.order;
-    h.depth_cap       = m->cfg.depth_cap;
+    h.depth_cap       = 0u;   /* dead since format 6; slot kept */
     h.max_length      = m->cfg.max_length;
     h.strict          = m->cfg.strict ? 1u : 0u;
-    h.coef_wide       = m->cfg.coef_wide;
-    h.coef_mid        = m->cfg.coef_mid;
-    h.coef_len        = m->cfg.coef_len;
-    h.kappa0          = m->cfg.kappa[0];
-    h.kappa1          = m->cfg.kappa[1];
-    h.kappa2          = m->cfg.kappa[2];
-    h.kappa_wide      = m->cfg.kappa_wide;
-    h.kappa_len       = m->cfg.kappa_len;
+    h.coef_wide       = 0.0;
+    h.coef_mid        = 0.0;
+    h.coef_len        = 0.0;
+
+
+
+
+
     h.weight_forward  = m->cfg.weight_forward;
     h.weight_backward = m->cfg.weight_backward;
     h.storage_sparse  = m->cfg.sparse ? 1.0 : 0.0;
@@ -447,9 +396,7 @@ BeamError beam_model_save(const BeamModel *m, const char *path) {
     uint32_t crc = 0;
     bool ok = write_all(f, &h, sizeof h, &crc);
     for (uint32_t d = 0; d < BEAM_DIRS && ok; ++d) {
-        ok = write_count_table(f, m, d, BEAM_TABLE_WIDE, &crc)
-          && write_count_table(f, m, d, BEAM_TABLE_MID, &crc)
-          && write_count_table(f, m, d, BEAM_TABLE_LEN, &crc);
+        ok = write_count_table(f, m, d, &crc);
     }
     if (ok) ok = write_all(f, m->cnt_length,
                            (size_t)m->n_len_slots * sizeof(double), &crc);
@@ -522,13 +469,10 @@ BeamModel *beam_model_load(const char *path) {
     uint32_t crc = 0;
     if (!read_all(f, &h, BEAM_HEADER_V2_BYTES, &crc)
         || h.magic != BEAM_MAGIC
-        || (h.format != BEAM_FORMAT
-            && h.format != BEAM_FORMAT_V4
-            && h.format != BEAM_FORMAT_V3
-            && h.format != BEAM_FORMAT_V2
-            && h.format != BEAM_FORMAT_DENSE_V1)) {
+        || h.format != BEAM_FORMAT) {
         const bool short_read = h.magic != BEAM_MAGIC && h.magic == 0u;
         const bool bad_magic  = h.magic != BEAM_MAGIC;
+        const uint32_t got    = h.format;
         fclose(f);
         if (short_read)
             return (void)BEAM_FAIL(BEAM_ERR_IO_READ,
@@ -538,6 +482,20 @@ BeamModel *beam_model_load(const char *path) {
             return (void)BEAM_FAIL(BEAM_ERR_IO_CORRUPT,
                                   "beam_model_load: '%s' is not a BEAM model "
                                   "file (wrong magic number)", path), NULL;
+        if (got >= BEAM_FORMAT_DENSE_V1 && got <= BEAM_FORMAT_V5)
+            return (void)BEAM_FAIL(BEAM_ERR_IO_CORRUPT,
+                                  "beam_model_load: '%s' is a format %u BEAM "
+                                  "model, written by a build with three "
+                                  "experts per direction and a capped depth "
+                                  "index. It cannot be converted: the cap "
+                                  "merged every depth at or beyond it, so "
+                                  "which depth an observation came from was "
+                                  "discarded when the model was trained, and "
+                                  "no table in the file holds order-%u "
+                                  "context at exact depth. Retrain the model "
+                                  "with this build",
+                                  path, (unsigned)got,
+                                  (unsigned)h.order), NULL;
         return (void)BEAM_FAIL(BEAM_ERR_IO_VERSION,
                               "beam_model_load: '%s' is a BEAM model file in "
                               "format %u, which this build does not read",
@@ -570,7 +528,7 @@ BeamModel *beam_model_load(const char *path) {
     BeamModelConfig cfg;
     beam_model_config_default_for((BeamAlphabet)h.alphabet, &cfg);
     cfg.order           = (uint8_t)h.order;
-    cfg.depth_cap       = (uint8_t)h.depth_cap;
+
     cfg.max_length      = (uint8_t)h.max_length;
     cfg.strict          = (h.strict != 0u);
     /* Format 1 predates sparse storage entirely; from format 2 the word is
@@ -585,14 +543,6 @@ BeamModel *beam_model_load(const char *path) {
                               "is neither 0 nor 1, so its header is corrupt",
                               path), NULL;
     }
-    cfg.coef_wide       = h.coef_wide;
-    cfg.coef_mid        = h.coef_mid;
-    cfg.coef_len        = h.coef_len;
-    cfg.kappa[0]        = h.kappa0;
-    cfg.kappa[1]        = h.kappa1;
-    cfg.kappa[2]        = h.kappa2;
-    cfg.kappa_wide      = h.kappa_wide;
-    cfg.kappa_len       = h.kappa_len;
     cfg.weight_forward  = h.weight_forward;
     cfg.weight_backward = h.weight_backward;
 
@@ -607,31 +557,17 @@ BeamModel *beam_model_load(const char *path) {
      * the same shape a finalized one is in rather than being expanded and
      * frozen again. */
     const bool frozen_on_disk = (h.format >= BEAM_FORMAT) && m->cfg.sparse;
-    const bool frozen_v4 = (h.format == BEAM_FORMAT_V4) && m->cfg.sparse;
     bool ok = true;
     for (uint32_t d = 0; d < BEAM_DIRS && ok; ++d) {
         if (frozen_on_disk) {
-            ok = read_frozen_count_table(f, m, d, BEAM_TABLE_WIDE, &crc)
-              && read_frozen_count_table(f, m, d, BEAM_TABLE_MID, &crc)
-              && read_frozen_count_table(f, m, d, BEAM_TABLE_LEN, &crc);
-        } else if (frozen_v4) {
-            ok = read_frozen_count_table_v4(f, m, d, BEAM_TABLE_WIDE, &crc)
-              && read_frozen_count_table_v4(f, m, d, BEAM_TABLE_MID, &crc)
-              && read_frozen_count_table_v4(f, m, d, BEAM_TABLE_LEN, &crc);
+            ok = read_frozen_count_table(f, m, d, &crc);
         } else if (m->cfg.sparse) {
-            ok = read_sparse_count_table(f, m, d, BEAM_TABLE_WIDE, &crc)
-              && read_sparse_count_table(f, m, d, BEAM_TABLE_MID, &crc)
-              && read_sparse_count_table(f, m, d, BEAM_TABLE_LEN, &crc);
+            ok = read_sparse_count_table(f, m, d, &crc);
         } else {
-            ok = read_all(f, m->cnt_wide[d],
-                          beam_n_wide(m) * sizeof(double), &crc)
-              && read_all(f, m->cnt_mid[d],
-                          beam_n_mid(m) * sizeof(double), &crc)
-              && read_all(f, m->cnt_len[d],
-                          beam_n_len(m) * sizeof(double), &crc);
+            ok = read_all(f, m->cnt[d], beam_n_table(m) * sizeof(double), &crc);
         }
     }
-    /* All six installed, so the model may now say it is carrying them. Set
+    /* Both installed, so the model may now say it is carrying them. Set
      * after the loop rather than inside it: a failure part way through leaves
      * the flag false, and destroy releases the frozen tables either way. */
     if (ok && frozen_on_disk) m->counts_frozen = true;

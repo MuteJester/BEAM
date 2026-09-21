@@ -31,18 +31,15 @@ BeamError beam_model_subtract(BeamModel *m, const BeamModel *o) {
      * on order, length and depth and still have tables of different widths,
      * and the loops below would then read the operand off the end. */
     if (m->cfg.alphabet != o->cfg.alphabet
-        || m->order != o->order || m->max_len != o->max_len
-        || m->n_depth_wide != o->n_depth_wide)
+        || m->order != o->order || m->max_len != o->max_len)
         return BEAM_FAIL(BEAM_ERR_VARIANT_MISMATCH,
                         "subtract: shape mismatch, target is %s "
-                        "order=%u max_length=%u depth_cap=%u and the operand "
-                        "is %s order=%u max_length=%u depth_cap=%u",
+                        "order=%u max_length=%u and the operand "
+                        "is %s order=%u max_length=%u",
                         m->alpha->name,
                         (unsigned)m->order, (unsigned)m->max_len,
-                        (unsigned)m->n_depth_wide - 1u,
                         o->alpha->name,
-                        (unsigned)o->order, (unsigned)o->max_len,
-                        (unsigned)o->n_depth_wide - 1u);
+                        (unsigned)o->order, (unsigned)o->max_len);
 
     /*
      * Refuse a subtraction that would leave nothing behind, BEFORE touching a
@@ -71,23 +68,19 @@ BeamError beam_model_subtract(BeamModel *m, const BeamModel *o) {
     }
 
     for (uint32_t d = 0; d < BEAM_DIRS; ++d) {
-        for (uint32_t kind = BEAM_TABLE_WIDE;
-             kind <= BEAM_TABLE_LEN; ++kind) {
-            const BeamTableKind k = (BeamTableKind)kind;
-            const uint32_t nr = beam_count_n_rows(m, k);
-            for (uint32_t row = 0; row < nr; ++row) {
-                double *dst = beam_count_row_mut(m, d, k, row, false);
-                if (!dst) continue;
-                const double *src = beam_count_row(o, d, k, row);
-                if (!src) continue;
-                bool any = false;
-                for (uint32_t x = 0; x < m->n_residues; ++x) {
-                    const double v = dst[x] - src[x];
-                    dst[x] = v > 0.0 ? v : 0.0;
-                    if (dst[x] > 0.0) any = true;
-                }
-                if (!any) (void)beam_count_erase(m, d, k, row);
+        const uint32_t nr = beam_count_n_rows(m);
+        for (uint32_t row = 0; row < nr; ++row) {
+            double *dst = beam_cnt_row_mut(m, d, row, false);
+            if (!dst) continue;
+            const double *src = beam_cnt_row(o, d, row);
+            if (!src) continue;
+            bool any = false;
+            for (uint32_t x = 0; x < m->n_residues; ++x) {
+                const double v = dst[x] - src[x];
+                dst[x] = v > 0.0 ? v : 0.0;
+                if (dst[x] > 0.0) any = true;
             }
+            if (!any) (void)beam_count_erase(m, d, row);
         }
     }
     for (uint32_t L = 0; L < m->n_len_slots; ++L) {
@@ -125,18 +118,15 @@ BeamError beam_model_add(BeamModel *m, const BeamModel *o) {
     if (m->compacted || o->compacted)
         return BEAM_ECOMPACTED("its counts are gone");
     if (m->cfg.alphabet != o->cfg.alphabet
-        || m->order != o->order || m->max_len != o->max_len
-        || m->n_depth_wide != o->n_depth_wide)
+        || m->order != o->order || m->max_len != o->max_len)
         return BEAM_FAIL(BEAM_ERR_VARIANT_MISMATCH,
                         "add: shape mismatch, target is %s order=%u "
-                        "max_length=%u depth_cap=%u and the operand is "
-                        "%s order=%u max_length=%u depth_cap=%u",
+                        "max_length=%u and the operand is "
+                        "%s order=%u max_length=%u",
                         m->alpha->name,
                         (unsigned)m->order, (unsigned)m->max_len,
-                        (unsigned)m->n_depth_wide - 1u,
                         o->alpha->name,
-                        (unsigned)o->order, (unsigned)o->max_len,
-                        (unsigned)o->n_depth_wide - 1u);
+                        (unsigned)o->order, (unsigned)o->max_len);
 
     if (!m->cfg.sparse && !o->cfg.sparse) {
         /* Preserve the original dense/open-world traversal exactly. */
@@ -146,32 +136,26 @@ BeamError beam_model_add(BeamModel *m, const BeamModel *o) {
                      (dst)[_i] += (src)[_i];                             \
             } while (0)
         for (uint32_t d = 0; d < BEAM_DIRS; ++d) {
-            ADD(m->cnt_wide[d], o->cnt_wide[d], beam_n_wide(m));
-            ADD(m->cnt_mid[d],  o->cnt_mid[d],  beam_n_mid(m));
-            ADD(m->cnt_len[d],  o->cnt_len[d],  beam_n_len(m));
+            ADD(m->cnt[d], o->cnt[d], beam_n_table(m));
         }
         #undef ADD
     } else {
         for (uint32_t d = 0; d < BEAM_DIRS; ++d) {
-            for (uint32_t kind = BEAM_TABLE_WIDE;
-                 kind <= BEAM_TABLE_LEN; ++kind) {
-                const BeamTableKind k = (BeamTableKind)kind;
-                const uint32_t nr = beam_count_n_rows(m, k);
-                for (uint32_t row = 0; row < nr; ++row) {
-                    const double *src = beam_count_row(o, d, k, row);
-                    if (!src) continue;
-                    bool any = false;
-                    for (uint32_t x = 0; x < m->n_residues; ++x)
-                        if (src[x] != 0.0) { any = true; break; }
-                    if (!any) continue;
-                    double *dst = beam_count_row_mut(m, d, k, row, true);
-                    if (!dst) {
-                        m->finalized = false;
-                        return BEAM_EALLOC("a sparse count row during add");
-                    }
-                    for (uint32_t x = 0; x < m->n_residues; ++x)
-                        dst[x] += src[x];
+            const uint32_t nr = beam_count_n_rows(m);
+            for (uint32_t row = 0; row < nr; ++row) {
+                const double *src = beam_cnt_row(o, d, row);
+                if (!src) continue;
+                bool any = false;
+                for (uint32_t x = 0; x < m->n_residues; ++x)
+                    if (src[x] != 0.0) { any = true; break; }
+                if (!any) continue;
+                double *dst = beam_cnt_row_mut(m, d, row, true);
+                if (!dst) {
+                    m->finalized = false;
+                    return BEAM_EALLOC("a sparse count row during add");
                 }
+                for (uint32_t x = 0; x < m->n_residues; ++x)
+                    dst[x] += src[x];
             }
         }
     }

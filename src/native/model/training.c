@@ -19,34 +19,27 @@
 static bool observe_one_position(BeamModel *m, uint32_t dir,
                                  const uint8_t *s, uint32_t len, uint32_t p,
                                  uint32_t depth, double w) {
-    uint32_t cw_ix, cm_ix, cl_ix;
-    if (dir == BEAM_FWD) {
-        cw_ix = beam_ctx_forward(s, (int32_t)p, m->order, m->n_alphabet);
-        cm_ix = beam_ctx_forward(s, (int32_t)p, 3u, m->n_alphabet);
-        cl_ix = beam_ctx_forward(s, (int32_t)p, 2u, m->n_alphabet);
-    } else {
-        cw_ix = beam_ctx_backward(s, (int32_t)p, len, m->order, m->n_alphabet);
-        cm_ix = beam_ctx_backward(s, (int32_t)p, len, 3u, m->n_alphabet);
-        cl_ix = beam_ctx_backward(s, (int32_t)p, len, 2u, m->n_alphabet);
-    }
+    /*
+     * Counts are packed most-distant-first in BOTH directions. The finalized
+     * C-anchored table is repacked nearest-first for cache reasons at the end
+     * of finalize; these are counts, so they are not. Reading the two forms
+     * as interchangeable is the one mistake here that produces a plausible,
+     * wrongly-addressed model, which is why the two context helpers are named
+     * apart.
+     */
+    const uint32_t ctx = (dir == BEAM_FWD)
+        ? beam_ctx_forward(s, (int32_t)p, m->order, m->n_alphabet)
+        : beam_ctx_backward_counts(s, (int32_t)p, len, m->order,
+                                   m->n_alphabet);
     const uint32_t x = s[p];
     if (!m->cfg.sparse) {
-        m->cnt_wide[dir][beam_ix_wide(m, depth, cw_ix, x)] += w;
-        m->cnt_mid[dir][beam_ix_mid(m, depth, cm_ix, x)]   += w;
-        m->cnt_len[dir][beam_ix_len(m, len, depth, cl_ix, x)] += w;
+        m->cnt[dir][beam_ix(m, depth, ctx, x)] += w;
         return true;
     }
 
-    const uint32_t rw = beam_row_wide(m, depth, cw_ix);
-    const uint32_t rm = beam_row_mid(m, depth, cm_ix);
-    const uint32_t rl = beam_row_len(m, len, depth, cl_ix);
-    double *wide = beam_cnt_wide_row_mut(m, dir, rw, true);
-    double *mid  = beam_cnt_mid_row_mut(m, dir, rm, true);
-    double *lng  = beam_cnt_len_row_mut(m, dir, rl, true);
-    if (!wide || !mid || !lng) return false;
-    wide[x] += w;
-    mid[x]  += w;
-    lng[x]  += w;
+    double *row = beam_cnt_row_mut(m, dir, beam_row(m, depth, ctx), true);
+    if (!row) return false;
+    row[x] += w;
     return true;
 }
 
@@ -64,18 +57,17 @@ static bool observe_one_position(BeamModel *m, uint32_t dir,
  * its contributions in exactly the order the serial loop would have added
  * them. The counts are bit-identical, not just equivalent.
  *
- * Two details make that true rather than nearly true. The wide table caps its
- * depth index at `depth_cap`, so every depth at or beyond the cap shares one
- * cell and they must be handled by ONE task, not spread across several. And
- * within that merged task the depths have to be visited in the order the
- * serial pass met them, which is ascending position: ascending depth going
- * forwards, descending depth going backwards.
+ * That used to need two qualifications, and no longer does. The wide table
+ * capped its depth index, so every depth at or beyond the cap shared one cell
+ * and a single task had to own all of them, visiting them in the order the
+ * serial pass met them. With depth exact there is no merged bucket: one task
+ * owns one depth, one depth owns its own cells, and each is written by one
+ * task in sequence order.
  */
 static bool observe_chunk(BeamModel *m, const uint8_t *enc,
                           const uint32_t *len_of, const double *wt,
                           uint32_t n) {
-    const uint32_t dc = m->cfg.depth_cap;
-    const uint32_t nb = dc + 1u;
+    const uint32_t nb = m->max_len;
     const uint32_t stride = m->max_len;
     const int64_t ntask = 2 * (int64_t)nb;
     int failed = 0;
@@ -92,7 +84,7 @@ static bool observe_chunk(BeamModel *m, const uint8_t *enc,
             if (len == 0 || b >= len) continue;
             const uint8_t *s = enc + (size_t)i * stride;
             const double w = wt[i];
-            const uint32_t hi = (b == dc) ? len : b + 1u;   /* half-open */
+            const uint32_t hi = b + 1u;                     /* half-open */
             if (dir == BEAM_FWD) {
                 for (uint32_t d = b; d < hi; ++d)
                     if (!observe_one_position(m, dir, s, len, d, d, w))

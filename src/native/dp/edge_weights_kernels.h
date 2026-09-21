@@ -80,19 +80,17 @@ static inline void BEAM_KFN(state_weights_dense)(const BeamModel *m, uint32_t i,
     const uint32_t R  = BEAM_K_R;
     const uint32_t A  = BEAM_K_A;
     const uint32_t K  = m->state_order;
-    const uint32_t n2 = m->n_ctx_len;
-    const uint32_t n3 = m->n_ctx_mid;
-    const uint32_t nw = m->n_ctx_wide;
+    const uint32_t nc = m->n_ctx;
+    (void)len;
 
-    /* Forward: the context IS the state. A state whose newest slots hold
-     * sentinels is only reachable in the first few layers, and the tables
-     * carry sentinel-padded rows for exactly that case. Every forward context
-     * is a suffix of the state, because the state is packed oldest-first and
-     * a shorter context is simply the nearer residues. */
+    /* Forward: the context IS the state, because the state is packed
+     * oldest-first and holds exactly `order` residues. A state whose newest
+     * slots hold sentinels is only reachable in the first few layers, and the
+     * table carries sentinel-padded rows for exactly that case. */
     /*
      * The forward half is guarded the way the backward half already is. A dead
-     * cell mixes to -inf, and `weight_forward = 0` then makes `0 * -inf` a
-     * NaN rather than the -inf it must be. Nothing rejected that weight --
+     * cell reads -inf, and `weight_forward = 0` then makes `0 * -inf` a
+     * NaN rather than the -inf it must be. Nothing rejects that weight --
      * `config.c` validates only `>= 0` -- and the NaNs were latent, because
      * every sweep iterates reached states and skipped them. On a
      * 200-sequence closed-world model they were not latent: `finalize`
@@ -101,8 +99,7 @@ static inline void BEAM_KFN(state_weights_dense)(const BeamModel *m, uint32_t i,
      * the asymmetry with the backward half below was the tell.
      */
     for (uint32_t x = 0; x < R; ++x) {
-        const double f = mix_dense(m, BEAM_FWD, len, i,
-                                   s % nw, s % n3, s % n2, x);
+        const double f = beam_cell_dense(m, BEAM_FWD, i, s % nc, x);
         row[x] = (f == -INFINITY) ? -INFINITY : m->cfg.weight_forward * f;
     }
     if (!settle_back) return;
@@ -113,53 +110,30 @@ static inline void BEAM_KFN(state_weights_dense)(const BeamModel *m, uint32_t i,
     if (scored >= R) return;
 
     /*
-     * The same hoist the sparse path performs below, and for the same reason.
-     * See the long comment there for why it is sound and why the gate is what
-     * it is: at order 4 the mid and length backward contexts sit entirely
-     * inside the DAG state, so `x` cannot reach them, and the wide context is
-     * `cw(0) + x` exactly.
+     * The backward context is hoisted out of the residue loop. It used to be
+     * gated on `K > 3 && m->order == K`, because a second expert of fixed
+     * order 3 had a context wider than the state at low order, so `x` could
+     * reach it; run ungated the hoist rewrote 99.76% of the output at orders
+     * 2 and 3. With one table per direction the state holds exactly the
+     * residues the context needs, so `cw0 + x` is the whole context at every
+     * order and the gate has nothing left to guard.
      *
-     * The dense path was left out when the sparse one was done, and here it
-     * costs more than a lookup: each of these helpers runs a base-21 digit
-     * loop with an integer division, twenty times per state, to recompute
-     * three values that do not move. Worth 2.60x single-threaded and 1.69x on
-     * sixteen threads over a full layer, with a bit-identical result -- the
-     * prototype in `.dev/loop_study/` checks the whole 194,481 x 20 output
-     * with memcmp and reports a maximum difference of 0 ULP.
-     *
-     * The gate is not optional. Run ungated, this rewrites 99.76% of the
-     * output at orders 2 and 3, because `n_ctx_mid` is 21^3 while the state
-     * shift is only 21^2 there, so the mid context does move with `x`.
+     * Worth 2.60x single-threaded and 1.69x on sixteen threads over a full
+     * layer, with a bit-identical result -- the prototype in
+     * `.dev/loop_study/` checks the whole 194,481 x 20 output with memcmp and
+     * reports a maximum difference of 0 ULP.
      */
-    if (K > 3u && m->order == K) {
-        const uint32_t cw0 = beam_ctx_backward_wide_from_state(
-            s, 0u, m->state_shift, K, m->order, A);
-        const uint32_t cm = beam_ctx_backward_from_state(s, 0u, K, 3u, A);
-        const uint32_t cl = beam_ctx_backward_from_state(s, 0u, K, 2u, A);
-        for (uint32_t x = 0; x < R; ++x) {
-            if (row[x] == -INFINITY) continue;
-            const double b = mix_dense(m, BEAM_BWD, len, r,
-                                       cw0 + x, cm, cl, scored);
-            row[x] = (b == -INFINITY) ? -INFINITY
-                                      : row[x] + m->cfg.weight_backward * b;
-        }
-        return;
-    }
-
+    const uint32_t cw0 = beam_ctx_backward_finalized_from_state(
+        s, 0u, m->state_shift, K, m->order, A);
     for (uint32_t x = 0; x < R; ++x) {
         if (row[x] == -INFINITY) continue;
-        const double b = mix_dense(
-            m, BEAM_BWD, len, r,
-            beam_ctx_backward_wide_from_state(s, x, m->state_shift, K,
-                                                  m->order, A),
-            beam_ctx_backward_from_state(s, x, K, 3u, A),
-            beam_ctx_backward_from_state(s, x, K, 2u, A), scored);
+        const double b = beam_cell_dense(m, BEAM_BWD, r, cw0 + x, scored);
         row[x] = (b == -INFINITY) ? -INFINITY
                                   : row[x] + m->cfg.weight_backward * b;
     }
 }
 
-/** Sparse counterpart with the three forward directory lookups hoisted. */
+/** Sparse counterpart, with the forward directory lookup hoisted. */
 static inline void BEAM_KFN(state_weights_sparse)(const BeamModel *m, uint32_t i,
                                         uint32_t len, uint32_t s,
                                         bool settle_back, uint32_t r,
@@ -167,20 +141,17 @@ static inline void BEAM_KFN(state_weights_sparse)(const BeamModel *m, uint32_t i
     const uint32_t R  = BEAM_K_R;
     const uint32_t A  = BEAM_K_A;
     const uint32_t K  = m->state_order;
-    const uint32_t n2 = m->n_ctx_len;
-    const uint32_t n3 = m->n_ctx_mid;
-    const uint32_t nw = m->n_ctx_wide;
+    const uint32_t nc = m->n_ctx;
+    (void)len;
 
-    const BeamLogRow fw = beam_lp_wide_row(m, BEAM_FWD, i, s % nw);
-    const BeamLogRow fm = beam_lp_mid_row(m, BEAM_FWD, i, s % n3);
-    const BeamLogRow fl = beam_lp_len_row(m, BEAM_FWD, len, i, s % n2);
-    if (!fw.present || !fm.present || !fl.present) {
+    const BeamLogRow fw = beam_lp_row(m, BEAM_FWD, i, s % nc);
+    if (!fw.present) {
         for (uint32_t x = 0; x < R; ++x) row[x] = -INFINITY;
     } else {
         /*
          * Guarded exactly as the dense kernel above is, and for the same
-         * reason: `mix_values` returns -INFINITY when any expert cell is
-         * dead, and `weight_forward = 0` makes that `0 * -inf`, which is NaN.
+         * reason: a dead cell reads -INFINITY, and `weight_forward = 0` makes
+         * that `0 * -inf`, which is NaN.
          *
          * The dense half was fixed and this one was not, because the
          * regression test that caught it builds from `beam_model_config_default`,
@@ -190,17 +161,14 @@ static inline void BEAM_KFN(state_weights_sparse)(const BeamModel *m, uint32_t i
          * order-3 strict model. The sparse BACKWARD half below was already
          * guarded, and that asymmetry is what gave this away.
          */
-        /* Decoded once each rather than ranked per residue: this loop reads
-         * every cell of all three rows, and a packed row's indices are in
-         * residue order, so one walk beats twenty popcounts. */
-        double fwv[BEAM_MAX_RESIDUES], fmv[BEAM_MAX_RESIDUES],
-               flv[BEAM_MAX_RESIDUES];
+        /* Decoded once rather than ranked per residue: this loop reads every
+         * cell of the row, and a packed row's indices are in residue order,
+         * so one walk beats twenty popcounts. */
+        double fwv[BEAM_MAX_RESIDUES];
         beam_log_row_into(&fw, R, fwv);
-        beam_log_row_into(&fm, R, fmv);
-        beam_log_row_into(&fl, R, flv);
         for (uint32_t x = 0; x < R; ++x) {
-            const double f = mix_values(m, fwv[x], fmv[x], flv[x]);
-            row[x] = (f == -INFINITY) ? -INFINITY : m->cfg.weight_forward * f;
+            row[x] = (fwv[x] == -INFINITY) ? -INFINITY
+                                           : m->cfg.weight_forward * fwv[x];
         }
     }
     if (!settle_back) return;
@@ -209,88 +177,32 @@ static inline void BEAM_KFN(state_weights_sparse)(const BeamModel *m, uint32_t i
     if (scored >= R) return;
 
     /*
-     * Forty of every sixty lookups in this loop were loop-invariant.
+     * The backward context is hoisted out of the residue loop.
      *
-     * The settled residue sits at p = i - K. Its order-3 and order-2 backward
-     * contexts are s[p+1..p+3] and s[p+1..p+2], every one of them INSIDE the
-     * DAG state; the residue x being emitted is s[p+4], outside it. So the mid
-     * and length rows do not depend on x and were being refetched twenty times
-     * with byte-identical arguments. Only the wide expert sees x, and because
-     * the finalized C-anchored table is packed nearest-first, x lands in the
-     * last context digit -- so its twenty rows are twenty CONSECUTIVE dense
-     * indices starting at the x = 0 context.
+     * The settled residue sits at p = i - K, and its order-K backward context
+     * is s[p+1 .. p+K] = s[i-K+1 .. i]. The emitted residue x is s[i], the
+     * last digit of that context, and because the finalized C-anchored table
+     * is packed nearest-first, x lands in the last context digit -- so its
+     * twenty rows are twenty CONSECUTIVE dense indices starting at the x = 0
+     * context. Hence `cw0 + x`, exactly.
      *
-     * Verified exhaustively over all 194,481 states rather than argued: the
-     * wide context is exactly cw(0) + x every time, and the mid and len
-     * contexts are byte-identical across x. On the 927M foundation this loop
-     * was 1.49e9 of 1.75e9 row lookups, and hoisting is worth 1.75x there.
+     * This used to be gated on `K > 3 && m->order == K`. The gate existed
+     * because a second expert of fixed order 3 had a context wider than the
+     * state at low order, so `x` sat inside it and `cw(x) = cw(0) + x` was
+     * false; hoisting unconditionally then made every partition function -inf
+     * at order 2. With one table per direction the state holds exactly the
+     * `order` residues the context needs, `J = K` at every order, and the
+     * relation holds unconditionally.
      *
-     * The invariance needs state_order >= 3 so the order-3 context fits inside
-     * the state. That is enforced once at construction rather than tested
-     * here -- this function runs tens of millions of times per analytic and a
-     * branch that can never be taken still costs.
+     * Verified exhaustively over all 194,481 states rather than argued. On the
+     * 927M foundation this loop was 1.49e9 of 1.75e9 row lookups.
      */
-    /*
-     * Which of the three backward lookups depend on the residue x being
-     * emitted is a function of the CONFIGURATION, not a constant.
-     *
-     * The settled residue sits at p = i - K, and its order-J backward context
-     * is s[p+1 .. p+J] = s[i-K+1 .. i-K+J]. The emitted residue is s[i]. So x
-     * is inside that context exactly when J >= K. With K = max(order, 3):
-     *
-     *   order 4  K=4:  wide J=4 >= K -> x is the last digit, cw(x) = cw(0)+x
-     *                  mid  J=3 <  K -> INVARIANT, hoistable
-     *                  len  J=2 <  K -> INVARIANT, hoistable
-     *   order 3  K=3:  wide J=3 >= K -> x in context
-     *                  mid  J=3 >= K -> x IN CONTEXT, NOT hoistable
-     *   order 2  K=3:  wide J=2 <  K -> x NOT in the wide context at all,
-     *                                   so cw(x) = cw(0) and "+x" is WRONG
-     *
-     * Only order 4 has both properties the hoist needs, and it is the default
-     * and the only configuration the exhaustive 194,481-state verification
-     * covered. Hoisting unconditionally made every partition function -inf at
-     * order 2 -- the model could generate nothing -- which is what this gate
-     * exists to prevent. Other orders take the original path; they are rare
-     * and correctness is not negotiable for a speedup.
-     */
-    if (K > 3u && m->order == K) {
-        const uint32_t cm = beam_ctx_backward_from_state(s, 0u, K, 3u, A);
-        const uint32_t cl = beam_ctx_backward_from_state(s, 0u, K, 2u, A);
-        const BeamLogRow bm = beam_lp_mid_row(m, BEAM_BWD, r, cm);
-        const BeamLogRow bl = beam_lp_len_row(m, BEAM_BWD, len, r, cl);
-        if (!bm.present || !bl.present) {
-            for (uint32_t x = 0; x < R; ++x) row[x] = -INFINITY;
-            return;
-        }
-        const uint32_t cw0 = beam_ctx_backward_wide_from_state(
-            s, 0u, m->state_shift, K, m->order, A);
-        for (uint32_t x = 0; x < R; ++x) {
-            if (row[x] == -INFINITY) continue;
-            const BeamLogRow bw = beam_lp_wide_row(m, BEAM_BWD, r, cw0 + x);
-            const double b = !bw.present ? -INFINITY
-                           : mix_values(m, beam_log_cell(&bw, scored),
-                                        beam_log_cell(&bm, scored),
-                                        beam_log_cell(&bl, scored));
-            row[x] = (b == -INFINITY) ? -INFINITY
-                                      : row[x] + m->cfg.weight_backward * b;
-        }
-        return;
-    }
-
+    const uint32_t cw0 = beam_ctx_backward_finalized_from_state(
+        s, 0u, m->state_shift, K, m->order, A);
     for (uint32_t x = 0; x < R; ++x) {
         if (row[x] == -INFINITY) continue;
-        const uint32_t cw = beam_ctx_backward_wide_from_state(
-            s, x, m->state_shift, K, m->order, A);
-        const uint32_t cm = beam_ctx_backward_from_state(s, x, K, 3u, A);
-        const uint32_t cl = beam_ctx_backward_from_state(s, x, K, 2u, A);
-        const BeamLogRow bw = beam_lp_wide_row(m, BEAM_BWD, r, cw);
-        const BeamLogRow bm = beam_lp_mid_row(m, BEAM_BWD, r, cm);
-        const BeamLogRow bl = beam_lp_len_row(m, BEAM_BWD, len, r, cl);
-        const double b = (!bw.present || !bm.present || !bl.present)
-                       ? -INFINITY
-                       : mix_values(m, beam_log_cell(&bw, scored),
-                                    beam_log_cell(&bm, scored),
-                                    beam_log_cell(&bl, scored));
+        const BeamLogRow bw = beam_lp_row(m, BEAM_BWD, r, cw0 + x);
+        const double b = !bw.present ? -INFINITY : beam_log_cell(&bw, scored);
         row[x] = (b == -INFINITY) ? -INFINITY
                                   : row[x] + m->cfg.weight_backward * b;
     }
@@ -334,7 +246,7 @@ static double BEAM_KFN(layer_max)(const BeamModel *m, uint32_t i, uint32_t len) 
     const uint32_t R  = BEAM_K_R;
     const uint32_t K  = m->state_order;
     const uint32_t S  = m->n_states;
-    const uint32_t nw = m->n_ctx_wide;
+    const uint32_t nc = m->n_ctx;
     const bool settle_back = (i >= K);
     const uint32_t r = settle_back ? (len - 1u - (i - K)) : 0u;
 
@@ -348,12 +260,12 @@ static double BEAM_KFN(layer_max)(const BeamModel *m, uint32_t i, uint32_t len) 
     }
 
     /*
-     * Rows carry the depth bucket in their high digits, so this layer's rows
-     * are exactly the directory slice [want * nw, (want + 1) * nw). Walking
-     * the slice reaches the same rows in the same ascending order as filtering
-     * the whole slot -> row map did, and visits n_ctx_wide entries instead of
-     * every occupied row in the table -- 194,481 rather than 1,846,623 on the
-     * foundation, at any depth.
+     * Rows carry the depth in their high digits, so this layer's rows are
+     * exactly the directory slice [i * nc, (i + 1) * nc). Walking the slice
+     * reaches the same rows in the same ascending order as filtering the whole
+     * slot -> row map did, and visits n_ctx entries instead of every occupied
+     * row in the table. Depth is exact now, so the slice is the layer's own
+     * and no longer shared with every deeper layer.
      *
      * That map was this function's only reader anywhere in the library, so
      * reading the directory instead is also what lets a finalized table stop
@@ -361,14 +273,13 @@ static double BEAM_KFN(layer_max)(const BeamModel *m, uint32_t i, uint32_t len) 
      * against the DEFINITION -- every state, no shortcut -- rather than
      * against whichever row source came before.
      */
-    const BeamSparseRows *fw = &m->sp_lp_wide[BEAM_FWD];
-    const uint32_t want = beam_depth_part(m, i);
-    const uint32_t base = want * nw;
+    const BeamSparseRows *fw = &m->sp_lp[BEAM_FWD];
+    const uint32_t base = i * nc;
     if ((!fw->index && !fw->rank)
-        || (uint64_t)base + nw > (uint64_t)fw->n_dense_rows)
+        || (uint64_t)base + nc > (uint64_t)fw->n_dense_rows)
         return -INFINITY;
 
-    const uint32_t stride = S / nw;      /* 1 when order == state_order */
+    const uint32_t stride = S / nc;      /* identically 1: state_order == order */
 
     double hi = -INFINITY;
     /*
@@ -383,14 +294,14 @@ static double BEAM_KFN(layer_max)(const BeamModel *m, uint32_t i, uint32_t len) 
      * bit of the answer.
      */
     const uint32_t chunk = 4096u;                 /* 64 words */
-    const int64_t n_chunks = (int64_t)((nw + chunk - 1u) / chunk);
+    const int64_t n_chunks = (int64_t)((nc + chunk - 1u) / chunk);
 #ifdef _OPENMP
     #pragma omp parallel for schedule(static) reduction(max:hi) \
-            num_threads(beam_threads()) if(nw > 4096)
+            num_threads(beam_threads()) if(nc > 4096)
 #endif
     for (int64_t ch = 0; ch < n_chunks; ++ch) {
         const uint32_t lo   = (uint32_t)ch * chunk;
-        const uint32_t stop = (lo + chunk < nw) ? lo + chunk : nw;
+        const uint32_t stop = (lo + chunk < nc) ? lo + chunk : nc;
         BeamRowCursor cur;
         beam_row_cursor_init(&cur, fw, base + lo, base + stop);
         uint32_t got;
@@ -400,7 +311,7 @@ static double BEAM_KFN(layer_max)(const BeamModel *m, uint32_t i, uint32_t len) 
         /* One wide context can back several states when the state carries
          * more residues than the wide expert's order. */
         for (uint32_t rep = 0; rep < stride; ++rep) {
-            const uint32_t st = rep * nw + ctx;
+            const uint32_t st = rep * nc + ctx;
             if (st >= S) break;
             /* The directory just said this row is present, so the sparse
              * scorer needs no probe of its own here. */
@@ -452,7 +363,7 @@ static void BEAM_KFN(layer_weights_live)(const BeamModel *m, uint32_t i, uint32_
     double hi = -INFINITY;
 
     if (m->cfg.sparse) {
-        const uint32_t nw_fwd = m->n_ctx_wide;
+        const uint32_t nc_fwd = m->n_ctx;
 #ifdef _OPENMP
         #pragma omp parallel for schedule(static) reduction(max:hi) \
                 num_threads(beam_threads())
@@ -470,14 +381,19 @@ static void BEAM_KFN(layer_weights_live)(const BeamModel *m, uint32_t i, uint32_
                  * makes this safe: dead rows are never read. */
                 if (alive && !alive[s]) continue;
                 /*
-                 * Probe the forward wide row first. A state missing it scores
+                 * Probe the forward row first. A state missing it scores
                  * exactly twenty -inf and nothing else, so deciding that with
-                 * ONE lookup saves two further probes and the whole backward
-                 * settle loop. On a per-repertoire model 98.6% of states have
-                 * no such row, which is why this is worth 3.4x there -- and
-                 * it writes the identical bytes, so the outputs do not move.
+                 * ONE lookup saves the whole backward settle loop. On a
+                 * per-repertoire model 98.6% of states have no such row, which
+                 * is why this is worth 3.4x there -- and it writes the
+                 * identical bytes, so the outputs do not move.
+                 *
+                 * The depth here MUST match the one `state_weights_sparse`
+                 * reads. Probing a clamped depth while the kernel reads an
+                 * exact one would disagree only at deep positions, which is
+                 * the quietest failure this file can have.
                  */
-                if (!beam_lp_wide_row(m, BEAM_FWD, i, s % nw_fwd).present) {
+                if (!beam_lp_row(m, BEAM_FWD, i, s % nc_fwd).present) {
                     for (uint32_t x = 0; x < R; ++x) row[x] = -INFINITY;
                     continue;
                 }
@@ -572,23 +488,15 @@ static void BEAM_KFN(tail_weights)(const BeamModel *m, uint32_t len, double *out
             const uint32_t scored = slot[pos];
             if (scored >= R) { total = -INFINITY; break; }
 
-            /* c_j = the residue j places to the right, or a sentinel past the
-             * end of the sequence. The mid and length tables are packed
-             * most-distant-first, so they take the digits descending; the
-             * wide table is packed nearest-first, so it takes them ascending.
-             * See edge_model_internal.h for why the wide one differs. */
-            uint32_t cm = 0, cl = 0;
-            for (uint32_t j = K; j >= 1; --j) {
-                uint32_t c = (j <= r) ? slot[pos + j] : m->none_idx;
-                if (j <= 3u) cm = cm * A + c;
-                if (j <= 2u) cl = cl * A + c;
-            }
+            /* c_j = the residue j places to the right, or a sentinel past
+             * the end of the sequence. The finalized C-anchored table is
+             * packed nearest-first, so the digits go on ascending. See
+             * beam/internal.h for why that packing differs from the counts. */
             uint32_t cw = 0;
             for (uint32_t j = 1; j <= m->order; ++j) {
                 cw = cw * A + ((j <= r) ? slot[pos + j] : m->none_idx);
             }
-            const double b = beam_mix(m, BEAM_BWD, len, r,
-                                          cw, cm, cl, scored);
+            const double b = beam_mix(m, BEAM_BWD, r, cw, scored);
             if (b == -INFINITY) { total = -INFINITY; break; }
             total += m->cfg.weight_backward * b;
         }

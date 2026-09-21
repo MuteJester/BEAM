@@ -15,24 +15,16 @@ void beam_free_counts(BeamModel *m) {
     /* Counts live in one of two forms and this releases whichever it is. */
     beam_model_release_frozen(m);
     for (uint32_t d = 0; d < BEAM_DIRS; ++d) {
-        free(m->cnt_wide[d]); m->cnt_wide[d] = NULL;
-        free(m->cnt_mid[d]);  m->cnt_mid[d]  = NULL;
-        free(m->cnt_len[d]);  m->cnt_len[d]  = NULL;
-        beam_sparse_destroy(&m->sp_cnt_wide[d]);
-        beam_sparse_destroy(&m->sp_cnt_mid[d]);
-        beam_sparse_destroy(&m->sp_cnt_len[d]);
+        free(m->cnt[d]); m->cnt[d] = NULL;
+        beam_sparse_destroy(&m->sp_cnt[d]);
     }
     free(m->cnt_length); m->cnt_length = NULL;
 }
 
 void beam_free_tables(BeamModel *m) {
     for (uint32_t d = 0; d < BEAM_DIRS; ++d) {
-        free(m->lp_wide[d]); m->lp_wide[d] = NULL;
-        free(m->lp_mid[d]);  m->lp_mid[d]  = NULL;
-        free(m->lp_len[d]);  m->lp_len[d]  = NULL;
-        beam_sparse_destroy(&m->sp_lp_wide[d]);
-        beam_sparse_destroy(&m->sp_lp_mid[d]);
-        beam_sparse_destroy(&m->sp_lp_len[d]);
+        free(m->lp[d]); m->lp[d] = NULL;
+        beam_sparse_destroy(&m->sp_lp[d]);
     }
     free(m->log_pi); m->log_pi = NULL;
     free(m->log_z);  m->log_z  = NULL;
@@ -44,12 +36,6 @@ BeamModel *beam_model_new(const BeamModelConfig *cfg) {
     beam_memory_init();
     BeamModelConfig c;
     if (cfg) c = *cfg; else beam_model_config_default(&c);
-    /* A depth cap at or beyond the longest sequence resolves every depth
-     * exactly, so clamping it is a no-op semantically and saves the caller
-     * from having to match the two whenever max_length is reduced. */
-    if (c.max_length >= 1 && c.depth_cap >= c.max_length)
-        c.depth_cap = (uint8_t)(c.max_length - 1u);
-
     /* Resolved before validation, because the legal range of `order` is read
      * from it and an unknown alphabet is a config that cannot be interpreted
      * rather than one that is merely out of range. */
@@ -78,7 +64,7 @@ BeamModel *beam_model_new(const BeamModelConfig *cfg) {
      * loop with no overflow check -- and sizing every table from the wrapped
      * value.
      */
-    const uint32_t state_order = c.order > 3u ? c.order : 3u;
+    const uint32_t state_order = c.order;   /* the state holds exactly one context */
     uint64_t n_states64 = 1;
     for (uint32_t i = 0; i < state_order; ++i) n_states64 *= a->radix;
     if (n_states64 > UINT32_MAX) {
@@ -103,25 +89,22 @@ BeamModel *beam_model_new(const BeamModelConfig *cfg) {
     m->order        = c.order;
     m->max_len      = c.max_length;
     m->n_len_slots  = (uint32_t)c.max_length + 1u;
-    /* The mid expert is order 3, so the state can never be narrower. */
-    /* At least 3, and `state_weights_sparse` depends on it: its backward
-     * hoist assumes the order-3 context lies entirely inside the state. */
+    /* The state holds exactly the residues one context needs, no more. */
     m->state_order  = state_order;
     m->n_states     = beam_ipow_u32(m->n_alphabet, m->state_order);
     m->state_shift  = beam_ipow_u32(m->n_alphabet, m->state_order - 1u);
-    m->n_ctx_wide   = beam_ipow_u32(m->n_alphabet, m->order);
-    m->n_ctx_mid    = beam_ipow_u32(m->n_alphabet, 3u);
-    m->n_ctx_len    = beam_ipow_u32(m->n_alphabet, 2u);
-    m->n_depth_wide = (uint32_t)c.depth_cap + 1u;
+    m->n_ctx        = beam_ipow_u32(m->n_alphabet, m->order);
 
     /*
-     * A sparse table addresses its rows with a uint32, and the three row
-     * counts below are cast to one. The widest, `n_depth_wide * n_ctx_wide`,
-     * reaches 2.57e9 at the largest configuration the ceilings currently
-     * allow -- inside the 4.29e9 a uint32 holds, but by less than a factor of
-     * two. That margin is not a thing to rely on silently: a truncating cast
-     * would size the row directory from the wrapped value and every lookup
-     * past the wrap would alias another row's counts.
+     * A sparse table addresses its rows with a uint32, and the row count
+     * below is cast to one. `max_len * n_ctx` reaches 2.57e9 at the largest
+     * configuration the ceilings currently allow -- inside the 4.29e9 a
+     * uint32 holds, but by less than a factor of two. That is the same bound
+     * the capped wide table had, because the cap was itself clamped to
+     * `max_length - 1`, so removing it moved nothing here. The margin is not
+     * a thing to rely on silently: a truncating cast would size the row
+     * directory from the wrapped value and every lookup past the wrap would
+     * alias another row's counts.
      *
      * Checked here rather than in beam_config_valid because it needs the
      * derived dimensions, and checked for every model rather than only sparse
@@ -129,10 +112,7 @@ BeamModel *beam_model_new(const BeamModelConfig *cfg) {
      * that still works.
      */
     {
-        const uint64_t rows_wide = (uint64_t)m->n_depth_wide * m->n_ctx_wide;
-        const uint64_t rows_mid  = (uint64_t)m->max_len * m->n_ctx_mid;
-        const uint64_t rows_len  = (uint64_t)m->n_len_slots * m->max_len
-                                 * m->n_ctx_len;
+        const uint64_t rows = (uint64_t)m->max_len * m->n_ctx;
         /*
          * And refuse a configuration that cannot fit before allocating for
          * it, rather than after.
@@ -146,18 +126,14 @@ BeamModel *beam_model_new(const BeamModelConfig *cfg) {
          * refusing is still cheap.
          *
          * The estimate is what construction and finalize allocate together:
-         * the count tables now and the finalized log tables later, both
+         * the count table now and the finalized log table later, both
          * directions. Sparse storage grows its payloads with the data instead,
          * so what a sparse config commits to up front is the row directory.
-         *
-         * The bound is beam_model_memory_budget(), which is already the
-         * library's answer to "how much may BEAM use" and is settable from
-         * Python. A caller with the memory raises it and proceeds.
          */
-        const uint64_t rows_total = rows_wide + rows_mid + rows_len;
+        const uint64_t rows_total = rows * BEAM_DIRS;
         const uint64_t need = c.sparse
-            ? rows_total * BEAM_DIRS * 2ull * sizeof(uint32_t)
-            : rows_total * m->n_residues * BEAM_DIRS * 2ull * sizeof(double);
+            ? rows_total * 2ull * sizeof(uint32_t)
+            : rows_total * m->n_residues * 2ull * sizeof(double);
         const uint64_t budget = beam_model_memory_budget();
         if (need > budget) {
             const char *nu, *bu;
@@ -165,28 +141,25 @@ BeamModel *beam_model_new(const BeamModelConfig *cfg) {
             const double bv = beam_budget_scaled(budget, &bu);
             beam_set_error(BEAM_ERR_BUDGET,
                           "this %s configuration needs about %.2f %s for its "
-                          "tables (order %u, max_length %u, depth_cap %u, %s) "
+                          "tables (order %u, max_length %u, %s) "
                           "and the memory budget is %.2f %s; raise it with "
                           "beam_model_set_memory_budget / "
                           "BEAM.set_memory_budget, or build a smaller model",
                           a->name, nv, nu,
                           (unsigned)c.order, (unsigned)c.max_length,
-                          (unsigned)c.depth_cap,
                           c.sparse ? "sparse" : "dense",
                           bv, bu);
             free(m);
             return NULL;
         }
 
-        const uint64_t w1 = rows_wide > rows_mid ? rows_wide : rows_mid;
-        const uint64_t widest = w1 > rows_len ? w1 : rows_len;
-        if (widest > UINT32_MAX) {
+        if (rows > UINT32_MAX) {
             beam_set_error(BEAM_ERR_PARAM_OUT_OF_RANGE,
                           "the %s alphabet at order %u with max_length %u "
                           "needs %llu table rows, which does not fit the 32 "
                           "bits a row index is held in",
                           a->name, (unsigned)c.order, (unsigned)c.max_length,
-                          (unsigned long long)widest);
+                          (unsigned long long)rows);
             free(m);
             return NULL;
         }
@@ -196,22 +169,12 @@ BeamModel *beam_model_new(const BeamModelConfig *cfg) {
     for (uint32_t d = 0; d < BEAM_DIRS && ok; ++d) {
         if (m->cfg.sparse) {
             ok = beam_sparse_init(
-                     &m->sp_cnt_wide[d],
-                     (uint32_t)(beam_n_wide(m) / m->n_residues),
-                     m->n_depth_wide, m->n_residues, true) == BEAM_OK
-              && beam_sparse_init(
-                     &m->sp_cnt_mid[d],
-                     (uint32_t)(beam_n_mid(m) / m->n_residues),
-                     m->n_depth_wide, m->n_residues, true) == BEAM_OK
-              && beam_sparse_init(
-                     &m->sp_cnt_len[d],
-                     (uint32_t)(beam_n_len(m) / m->n_residues),
-                     m->n_depth_wide, m->n_residues, true) == BEAM_OK;
+                     &m->sp_cnt[d],
+                     (uint32_t)(beam_n_table(m) / m->n_residues),
+                     m->max_len, m->n_residues, true) == BEAM_OK;
         } else {
-            m->cnt_wide[d] = (double *)calloc(beam_n_wide(m), sizeof(double));
-            m->cnt_mid[d]  = (double *)calloc(beam_n_mid(m),  sizeof(double));
-            m->cnt_len[d]  = (double *)calloc(beam_n_len(m),  sizeof(double));
-            ok = m->cnt_wide[d] && m->cnt_mid[d] && m->cnt_len[d];
+            m->cnt[d] = (double *)calloc(beam_n_table(m), sizeof(double));
+            ok = m->cnt[d] != NULL;
         }
     }
     m->cnt_length = (double *)calloc(m->n_len_slots, sizeof(double));

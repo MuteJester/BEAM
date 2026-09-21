@@ -38,21 +38,20 @@ uint32_t beam_model_n_states(const BeamModel *m) {
 uint64_t beam_model_n_cells(const BeamModel *m) {
     if (!m) return 0;
     return (uint64_t)BEAM_DIRS
-         * (beam_n_wide(m) + beam_n_mid(m) + beam_n_len(m));
+         * beam_n_table(m);
 }
 uint64_t beam_model_n_nonzero_cells(const BeamModel *m) {
     if (!m || m->compacted) return 0;
     uint64_t n = 0;
     if (m->cfg.sparse) {
         for (uint32_t d = 0; d < BEAM_DIRS; ++d) {
-            for (uint32_t kind = BEAM_TABLE_WIDE;
-                 kind <= BEAM_TABLE_LEN; ++kind) {
+            {
                 /* Frozen counts already know this: a cell is stored only
                  * when it is present, so the answer is the set bits of the
                  * masks. Counting them beats thawing 95 MB to look. */
                 if (m->counts_frozen) {
                     const BeamFrozenCounts *f =
-                        beam_model_frozen_table(m, d, kind);
+                        beam_model_frozen_table(m, d);
                     for (uint32_t r = 0; r < f->n_rows; ++r)
                         n += (uint64_t)__builtin_popcount(
                             f->mask_width[r]
@@ -60,7 +59,7 @@ uint64_t beam_model_n_nonzero_cells(const BeamModel *m) {
                     continue;
                 }
                 const BeamSparseRows *t = beam_sparse_count_table_const(
-                    m, d, (BeamTableKind)kind);
+                    m, d);
                 /*
                  * Through the accessor rather than over `values[p]` directly.
                  * This walked the payload as doubles, which is right for a
@@ -87,12 +86,8 @@ uint64_t beam_model_n_nonzero_cells(const BeamModel *m) {
     }
     for (uint32_t d = 0; d < BEAM_DIRS; ++d) {
         size_t c;
-        c = beam_n_wide(m);
-        for (size_t i = 0; i < c; ++i) if (m->cnt_wide[d][i] > 0.0) n++;
-        c = beam_n_mid(m);
-        for (size_t i = 0; i < c; ++i) if (m->cnt_mid[d][i] > 0.0) n++;
-        c = beam_n_len(m);
-        for (size_t i = 0; i < c; ++i) if (m->cnt_len[d][i] > 0.0) n++;
+        c = beam_n_table(m);
+        for (size_t i = 0; i < c; ++i) if (m->cnt[d][i] > 0.0) n++;
     }
     return n;
 }

@@ -958,7 +958,7 @@ typedef struct {
  * layers correctly, and it is worth running rather than assuming.
  */
 typedef struct {
-    BeamCountBlock block[2][3];
+    BeamCountBlock block[2];
     uint32_t n_residues;
     double   expected_length;
     /**

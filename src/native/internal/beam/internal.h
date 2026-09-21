@@ -25,7 +25,7 @@
  * nearest-first, `[ min(d, depth_cap) ][ c_1 ]...[ c_k ][ x ]`. That is a
  * performance decision, it is confined to the finalized table (the counts and
  * the file format keep the common packing), and the reasoning is set out in
- * full at `beam_ctx_backward_wide` below. Anything reading
+ * full at `beam_ctx_backward_finalized` below. Anything reading
  * `lp_wide[BEAM_BWD]` must index it through one of the two helpers there.
  *
  * ## The two directions read opposite ways, and the packing follows
@@ -34,7 +34,7 @@
  * the context is exactly the DAG state read oldest-first and a flat context
  * index is a suffix of the state index. For the backward (C-anchored)
  * direction, `c_j = s[p+j]`, so the digits come out of the state in the
- * REVERSE order. `beam_ctx_backward_from_state` is the only place that
+ * REVERSE order. `beam_ctx_backward_counts_from_state` is the only place that
  * asymmetry lives; getting it backwards is the single most likely way to
  * produce a model that looks plausible and is wrong, so it is isolated and
  * unit-tested directly by `test_backward_context_from_state_matches_the_sequence`

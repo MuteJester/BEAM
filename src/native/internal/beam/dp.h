@@ -57,9 +57,8 @@ static inline double beam_rescale(double v, double nmax) {
  * weight is applied. `ctx_wide`, `ctx_mid` and `ctx_len` are pre-packed
  * context indices of order `order`, 3 and 2 respectively.
  */
-double beam_mix(const BeamModel *m, uint32_t dir, uint32_t len,
-                    uint32_t depth, uint32_t ctx_wide, uint32_t ctx_mid,
-                    uint32_t ctx_len, uint32_t x);
+double beam_mix(const BeamModel *m, uint32_t dir, uint32_t depth,
+                    uint32_t ctx, uint32_t x);
 
 /**
  * Edge weights of one DAG layer: `out[state * 20 + x]`, the full weight of
