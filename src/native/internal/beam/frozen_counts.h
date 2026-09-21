@@ -216,9 +216,9 @@ BeamError beam_model_thaw_counts(BeamModel *m);
  * Thaw ONE count table into a caller-owned mutable table, leaving the model
  * untouched.
  *
- * `beam_model_thaw_counts` expands all six at once and installs them, which
+ * `beam_model_thaw_counts` expands both at once and installs them, which
  * is what finalize used to do: on the foundation that turns 29.6 MB of frozen
- * counts into 731.3 MB of mutable rows, all six alive for the whole build
+ * counts into mutable rows, both alive for the whole build
  * while 714.2 MB of log tables accumulate beside them. Measured peak 1,969.5
  * MB for a model that ends up occupying 806.7.
  *

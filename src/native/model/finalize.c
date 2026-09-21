@@ -416,7 +416,7 @@ BeamError beam_model_finalize(BeamModel *m) {
      * A no-op on the first finalize, which is the only one most models see. */
     {
         /* Left frozen when `finalize_sparse_direction` will expand one table
-         * at a time; expanding all six here is what made the peak 2.4x the
+         * at a time; expanding both here is what made the peak 2.4x the
          * finished model. */
         if (!m->cfg.sparse) {
             const BeamError thaw = beam_model_thaw_counts(m);
@@ -480,7 +480,7 @@ BeamError beam_model_finalize(BeamModel *m) {
      * local and destroyed with it -- but the loader allocates their
      * directories, four bytes per dense row whether or not a row exists, and
      * `beam_model_freeze_counts` returns early on an already-frozen model
-     * rather than clearing them. That left 29,563,416 B of empty directory on
+     * rather than clearing them. That left 42,007,896 B of empty directory on
      * the foundation, which is exactly what the thaw-then-freeze cycle used to
      * dispose of as a side effect. Zeroed is the state that cycle left them
      * in, and what `beam_model_thaw_counts` overwrites.

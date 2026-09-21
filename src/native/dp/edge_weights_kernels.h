@@ -428,7 +428,7 @@ static void BEAM_KFN(layer_weights_live)(const BeamModel *m, uint32_t i, uint32_
      *     the rows a given `t` needs are read once and reused across all 21
      *     `oldest` values instead of being re-fetched for each.
      *
-     * This is the hot path of every dynamic program in the library: six table
+     * This is the hot path of every dynamic program in the library: two table
      * lookups per edge, 20 edges per state, called once per layer per length.
      */
     /* A maximum is order-independent, so the fused value is bit-identical to

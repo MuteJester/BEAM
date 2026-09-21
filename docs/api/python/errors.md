@@ -45,7 +45,7 @@ The mixture layer adds three more, on the same pattern:
 | exception | means | also a |
 |---|---|---|
 | `MixtureError` | base of every refusal from the mixture layer | `BeamError` |
-| `IncompatibleMembers` | the members cannot share a trellis: different alphabet, order, `max_length` or `depth_cap` | `ModelMismatch`, `RuntimeError` |
+| `IncompatibleMembers` | the members cannot share a trellis: different alphabet, `order` or `max_length` | `ModelMismatch`, `RuntimeError` |
 | `UnsupportedOrder` | that Hill order has no exact answer for a mixture | `BeamValueError`, `ValueError` |
 | `MixtureTooLarge` | exactly answerable, and over the memory budget | `BudgetExceeded`, `MemoryError` |
 

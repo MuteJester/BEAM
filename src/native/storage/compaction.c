@@ -14,7 +14,7 @@
  * Seal before intern: sealing requires each row's slot to be the count of rows
  * before it, and interning is precisely what breaks that -- it points several
  * slots at one row. The other way round the seal refuses, correctly, and the
- * directory stays 28.19 MiB per generation at order 4.
+ * directory stays 40.06 MiB per generation at order 4.
  *
  * Pack after both: it is the step that gives up the contiguous twenty-double
  * row. Sealing and interning still address rows; after packing a row is a mask
@@ -55,7 +55,7 @@ BeamError beam_sparse_compact_finalized(BeamSparseRows *t, uint32_t n_dense,
 
     /*
      * A table almost none of whose rows exist spends nearly all of itself on
-     * a directory of absences: 28.19 MiB per generation at order 4 whether the
+     * a directory of absences: 40.06 MiB per generation at order 4 whether the
      * corpus was nine hundred million sequences or nine hundred. Below the
      * measured threshold, swap that directory for the rank form -- see
      * BEAM_RANK_SEAL_MAX_OCCUPANCY_DENOM for what was measured and why the

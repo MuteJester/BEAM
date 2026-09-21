@@ -206,7 +206,7 @@ peak it reached in `peak_states`.
 | `UnsupportedOrder` | that Hill order has no exact answer | `BeamValueError`, `ValueError` |
 | `MixtureTooLarge` | exactly answerable, too large for the budget | `BudgetExceeded`, `MemoryError` |
 
-Members must agree on alphabet, `order`, `max_length` and `depth_cap` — the same four fields `add` checks, for the same reason: a mixture reads all its members at **one state index**, which is sound only because a state index is a function of the configuration and never of the data. Disagreement is caught at construction, not at the first analytic.
+Members must agree on alphabet, `order` and `max_length` — the same three fields `add` checks, for the same reason: a mixture reads all its members at **one state index**, which is sound only because a state index is a function of the configuration and never of the data. Disagreement is caught at construction, not at the first analytic.
 
 A model may appear more than once. Unlike `add` and `subtract`, nothing here mutates a member, so aliasing is harmless and a mixture of a model with itself is a useful degenerate case.
 

@@ -890,7 +890,7 @@ BeamError beam_model_positional_banded(const BeamModel *m, uint32_t length,
 /**
  * One expert's expected counts: the rows that carry any expected use at all.
  *
- * Sparse by row because the answer is: an order-4 model has 147.8 million
+ * Sparse by row because the answer is: an order-4 model has 210.0 million
  * cells and the support of this expectation is typically tens of thousands of
  * rows, so a dense block would be gigabytes of zeros. A row absent from
  * `rows` has expected count exactly zero.
@@ -922,7 +922,7 @@ typedef struct {
  * and the wide/mid/len order used throughout the implementation.
  *
  * Every block sums to `expected_length`, because each position of a sequence
- * increments exactly one cell of each of the six tables. That identity is the
+ * increments exactly one cell of each of the two tables. That identity is the
  * cheapest available check that the sweep covered the sink and the first `K`
  * layers correctly, and it is worth running rather than assuming.
  */

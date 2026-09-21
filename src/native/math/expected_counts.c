@@ -25,7 +25,7 @@
  *
  * It cannot be bounded the way `beam_fb_alloc` bounds itself, by multiplying
  * out a shape known in advance. The only shape-derived bound here is the dense
- * table -- 147.8 million cells at order 4 -- which is the address space the
+ * table -- 210.0 million cells at order 4 -- which is the address space the
  * sparse accumulator exists in order not to allocate, and a guard built on it
  * refuses every call. So the account is charged AS the maps grow, where the
  * figure being asked for is exactly known, and the peak is returned in
@@ -47,7 +47,7 @@
  * A growable map from a table's dense row index to an accumulator row.
  *
  * The alternative was an array the shape of the table itself, and it does not
- * fit: an order-4 model has 147.8 million cells, so six dense accumulators
+ * fit: an order-4 model has 210.0 million cells, so two dense accumulators
  * would be seven gigabytes to hold an answer whose support is typically fifty
  * thousand rows. Keying only the rows an edge actually reaches makes the cost
  * proportional to the answer instead of to the address space.
@@ -261,7 +261,7 @@ static BeamError rowmap_emit(RowMap *t, BeamCountBlock *b) {
      * behind us by the time we get here.
      *
      * It stays because that argument is a property of the emit ordering
-     * above, not of this function. Emit all six before releasing any -- which
+     * above, not of this function. Emit both before releasing either -- which
      * is what this code did until it was measured at 1,566 MB on the
      * foundation model -- and this becomes the check that binds.
      */
@@ -515,9 +515,9 @@ BeamError beam_model_expected_counts(const BeamModel *m, uint32_t length,
     }
 
     /*
-     * Emit and free ONE MAP AT A TIME, not all six then all six.
+     * Emit and free ONE MAP AT A TIME, not both then both.
      *
-     * A block is a second copy of its map, so emitting all six before
+     * A block is a second copy of its map, so emitting both before
      * releasing any means the peak is every map plus every block at once --
      * measured at 1,566 MB on the foundation model, where releasing each map
      * as its block lands peaks at 1,185 MB for the same answer. The largest

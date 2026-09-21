@@ -403,7 +403,7 @@ class BeamModel:
 
     @property
     def n_cells(self) -> int:
-        """Total table cells across both directions and all three experts."""
+        """Total table cells across both directions."""
         return int(_c.n_cells(self._g))
 
     @property
@@ -1877,7 +1877,7 @@ class BeamModel:
 
         Every block sums to ``expected_length`` -- ``length`` when one is
         given, and ``E[L]`` when pooled -- because each position of a sequence
-        increments exactly one cell of each of the six tables. That identity is
+        increments exactly one cell of each of the two tables. That identity is
         the cheapest check that the sweep covered the sink and the first ``K``
         layers, and it is returned so it can be run rather than assumed.
 

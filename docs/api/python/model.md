@@ -9,11 +9,6 @@ BeamModel(
     abundances=None,
     alphabet="aa",
     order=None,
-    depth_cap=None,
-    coefficients=(0.60, 0.25, 0.15),
-    kappa=None,
-    kappa_wide=None,
-    kappa_len=None,
     weights=(0.5, 0.5),
     max_length=None,
     strict=True,
@@ -28,13 +23,9 @@ BeamModel(
 | `sequences` | `list[str]` | Training CDR3 strings. Anything empty, longer than `max_length`, or containing a character outside the model's alphabet is skipped; see `n_skipped`. |
 | `abundances` | `list[float]` | Per-sequence observed counts (default: all 1). A non-positive or non-finite weight skips the sequence. |
 | `alphabet` | `str` | `"aa"` for the twenty amino acids or `"nt"` for the five nucleotide residues `ACGTN`. Decides what the model accepts, the width of every table, and the legal range of `order`. See [Alphabets](#alphabets). |
-| `order` | `int \| None` | Context order of the wide expert, from 2 up to the alphabet's ceiling: **4** for `aa`, **9** for `nt`. `None` takes the alphabet's default, 4 and 6 respectively. |
-| `depth_cap` | `int \| None` | Depth at which the wide expert stops resolving position exactly. Clamped to `max_length - 1`. `None` takes the alphabet's default: 15 for `aa`, and every depth for `nt`, where the table is small enough that the cap buys nothing. |
-| `coefficients` | `tuple` | Log-linear mixing weights for the wide, mid and length-conditioned experts. **Must sum to 1.** |
-| `kappa` | `tuple \| None` | Hierarchical backoff strengths for orders 1-3. All zero by default; `(20, 20, 20)` under `strict=False`. |
-| `kappa_wide`, `kappa_len` | `float \| None` | Backoff strength for the wide and length-conditioned experts. Zero by default; 20 and 200 under `strict=False`. |
+| `order` | `int \| None` | Context order, from 2 up to the alphabet's ceiling: **4** for `aa`, **9** for `nt`. `None` takes the alphabet's default, 4 and 6 respectively. |
 | `weights` | `tuple` | Weight on the N-anchored and C-anchored readings. Both must be non-negative. |
-| `max_length` | `int \| None` | Longest sequence the model represents, **2 to 255**. `None` takes the alphabet's default: 27 for `aa`, 81 for `nt`, three bases to the residue. The floor is 2, not 1, because `depth_cap` must be at least 1 and strictly below `max_length`. |
+| `max_length` | `int \| None` | Longest sequence the model represents, **2 to 255**. `None` takes the alphabet's default: 27 for `aa`, 81 for `nt`, three bases to the residue. The floor is 2, not 1: a model of one residue has no settled position and no anchored one. |
 | `strict` | `bool` | Closed-world scoring, and the **default**. Removes the order-0 add-one and probability floor, and defaults all backoff strengths to zero, so the model holds only what the training sequences spell. `strict=False` selects the open world. |
 | `sparse` | `bool \| None` | Storage selection. `None` automatically uses sparse storage exactly when `strict` is true and all five backoff strengths are zero, which is the default; `False` forces dense storage. |
 
@@ -42,7 +33,7 @@ BeamModel(
 
 The model is the same whichever alphabet it is built over — two anchored experts, log-linear mixing, hierarchical backoff, exact dynamic programs. Only the symbols change, and with them the size of every table.
 
-| | symbols | residues `R` | radix `A` | default `order` | max `order` | default `max_length` | default `depth_cap` |
+| | symbols | residues `R` | radix `A` | default `order` | max `order` | default `max_length` |
 |---|---|---|---|---|---|---|---|
 | `aa` | `ACDEFGHIKLMNPQRSTVWY` | 20 | 21 | 4 | 4 | 27 | 15 |
 | `nt` | `ACGTN` | 5 | 6 | 6 | 9 | 81 | every depth |
@@ -76,26 +67,27 @@ Models of different alphabets cannot be combined: `add`, `subtract` and `posteri
     failed later, when the tables were first written, with the OOM killer
     choosing which process on the machine died. High orders reach that quickly
     on the nucleotide alphabet, where a dense wide table is
-    `(depth_cap + 1) * 6**order * 5` doubles per direction: 0.3 GB at order 7
-    and 11 GB at order 9.
+    `max_length * 6**order * 5` doubles per direction: 1.7 GB at order 7 and
+    62 GB at order 9.
 
     Raise it with `BEAM.set_memory_budget(bytes)` if you have the memory, or
     use the closed-world default, whose sparse storage is far smaller.
 
-!!! warning "The coefficient sum is not a free parameter"
-    It is a pure cross-length calibration knob. Moving it off 1 leaves *within-length* ranking untouched while wrecking *global* ranking: at sum 1.15 average precision falls from 0.847 to 0.830, and at 1.45 to 0.739. A sum other than 1 is rejected at construction rather than silently mis-calibrating.
+!!! warning "The anchor weights should sum to 1, and are not forced to"
+    The sum is a pure cross-length calibration knob. Off 1, `log W` scales with the length, which leaves *within-length* ranking untouched and wrecks *cross-length* comparison.
+
+    It is not refused, deliberately. `(1, 0)` and `(0, 1)` score one anchor's chain on its own, and that is the only way to separate a partition function below 1 into the two causes that can put it there: the two chains disagreeing, and the closed world leaking mass at rows it never observed. A refusal here would make the model's defining property unmeasurable.
 
 ### Configuration
 
-Each direction is a log-linear product of three abundance-counted, hierarchically smoothed tables:
+Each direction is one abundance-counted table:
 
-| expert | context | depth resolution | coefficient |
-|---|---|---|---|
-| wide | previous `order` residues | fine, capped at `depth_cap` | 0.60 |
-| mid | previous 3 residues | full | 0.25 |
-| length-conditioned | previous 2 residues + total length | full | 0.15 |
+| anchor | context | depth |
+|---|---|---|
+| N-anchored | previous `order` residues | `i`, exact |
+| C-anchored | next `order` residues | `L-1-i`, exact |
 
-The wide table carries sharp motif memory; the length-conditioned table is the only one that knows `L` explicitly, which is what lets a 12-mer and a 20-mer place their junction differently.
+Neither table is indexed by length and neither needs to be. The two depths at a position sum to `L-1`, so the pair determines the length exactly, at every position and every length. Length awareness lives in the *combination*; length pooling lives in the *estimates*, since each row is learned from every sequence that carried that context at that distance from that terminus, whatever its length.
 
 `strict=True` makes an unobserved transition genuinely impossible rather than
 merely improbable: the order-0 base is a raw MLE and zero probabilities are
@@ -107,15 +99,15 @@ otherwise unobserved row.
 Sparse storage is a representation of that exact closed-world model, not a
 different estimator. It stores occupied 20-residue rows and preserves the
 same counts and probabilities as dense strict storage. The default
-`sparse=None` enables it only when `strict=True` and `kappa`, `kappa_wide`, and
-`kappa_len` are all zero. `sparse=False` forces dense storage for equivalence
-checks and reproducibility. Explicit `sparse=True` with open-world scoring or
-positive backoff raises `ValueError`, because omitting empty rows in either
-case would change the model.
+`sparse=None` enables it whenever `strict=True`. `sparse=False` forces dense
+storage for equivalence checks and reproducibility. Explicit `sparse=True`
+with open-world scoring raises `ValueError`: the open world gives every row
+mass, including rows nothing was ever observed at, so omitting empty rows
+would change the model.
 
 `model.config` returns the configuration actually built, including the
-resolved `strict` and `sparse` booleans. This is what to inspect after
-construction — `depth_cap` in particular may have been clamped.
+resolved `strict` and `sparse` booleans and the alphabet's defaults for
+`order` and `max_length`. This is what to inspect after construction.
 
 ### There is no pruning
 
@@ -195,7 +187,7 @@ foundation = BeamModel.from_file("foundation.beam")
 foundation.subtract(BeamModel(held_out_sequences, abundances=held_out_counts))
 ```
 
-Both models must share `order`, `max_length` and `depth_cap`. The smoothing parameters need not match: counts do not depend on them, and this model's own smoothing is what gets reapplied. `other` must be a *different* `BeamModel`; passing the model itself is refused, because the C layer aliases source and destination.
+Both models must share `order` and `max_length`. `strict` need not match: counts do not depend on it, and this model's own setting is what gets reapplied when it re-finalizes. `other` must be a *different* `BeamModel`; passing the model itself is refused, because the C layer aliases source and destination.
 
 !!! warning "`n_observed` is not decremented by `subtract`"
     `add` adjusts `n_observed` and `n_skipped`; `subtract` does not. After a subtraction those two — and `len(model)` — count everything ever added rather than what is currently in the tables. **`total_weight` is adjusted on both sides and is the number to trust.**
@@ -282,10 +274,12 @@ n_states, n_cells, n_nonzero_cells
 
 `save` writes **counts**, not the derived tables, so a loaded model can still be subtracted from and re-finalized under different smoothing. Sparse models are written as sorted occupied-row records; dense files retain their flat count blocks, and the reader remains compatible with the previous dense format. Files carry a CRC-32C over row metadata as well as values, and a corrupt one is refused.
 
-An order-4 dense model over the full 27-residue range holds 147.8 million conceptual table cells per copy, so about 2.2 GB with counts and 1.1 GB after `compact()`. Order 3 is about five times smaller (29.3 million cells, 440 MB and 220 MB), and order 2 is the same size as order 3 because the DAG state can never hold fewer than three residues.
+An order-4 dense model over the full 27-residue range holds 210.0 million conceptual table cells per copy, so about 3.4 GB with counts and 1.7 GB after `compact()`. Each step down in order divides that by the radix: order 3 is 10.0 million cells (160 MB and 80 MB) and order 2 is 476 thousand (8 MB and 4 MB). Order 2 is no longer the same size as order 3 — it used to be, because the DAG state could not hold fewer than three residues while a second expert of fixed order 3 existed. A state now holds exactly the `order` residues one context needs.
 
-A strict zero-backoff model uses sparse storage by default. Its resident size
-tracks occupied rows rather than all 147.8 million cells; `n_cells` still
+Dense storage at order 4 is close to the 4 GiB default memory budget, which counts the count tables and the finalized log tables together. A dense configuration that does not fit is refused at construction rather than when the tables are first written.
+
+A strict model uses sparse storage by default. Its resident size
+tracks occupied rows rather than all 210.0 million cells; `n_cells` still
 reports the conceptual dense shape, while `n_nonzero_cells` reports actual
 occupancy and `memory_bytes` reports the representation's resident storage.
 

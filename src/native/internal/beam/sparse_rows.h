@@ -22,11 +22,11 @@
  * popcount.
  *
  * The direct directory spends four bytes on EVERY dense row, occupied or not.
- * That is 28.19 MiB per generation at order 4 whatever the corpus, which is
+ * That is 40.06 MiB per generation at order 4 whatever the corpus, which is
  * fine for the foundation -- it occupies 57.90% of its rows -- and is most of
  * a per-repertoire model, which occupies far less -- 8.08% on P00322, and
  * 0.86% to 31.23% across the donors measured below. This form spends 1.25 bits
- * per row instead: 40 bytes per 256 rows, 1.10 MiB for the same directory.
+ * per row instead: 40 bytes per 256 rows, 1.56 MiB for the same directory.
  *
  * It works only because a finalized table assigns slots in ascending row
  * order, so a row's slot IS the number of occupied rows before it. `sub`
@@ -61,7 +61,7 @@ typedef struct {
  *    31.23%  375.8 -> 349  MB  1.3x       1.06x           0.93x
  *
  * Scoring and the mixture inner product get faster because a 1.1 MiB
- * directory stays in cache where a 28.19 MiB one cannot. The Hill sweep gets
+ * directory stays in cache where a 40.06 MiB one cannot. The Hill sweep gets
  * 5-20% slower: it walks rows in order, so it was never paying for the misses
  * the rank form avoids, and only pays the popcount it adds.
  *
@@ -153,7 +153,7 @@ typedef struct {
      * the dictionary holds the same bit patterns -- and 5.35x smaller.
      *
      * IT IS NOT FREE, and the cost is on the hottest path. Measured on a
-     * 197,139-sequence per-repertoire model, all six tables packed, best of
+     * 197,139-sequence per-repertoire model, both tables packed, best of
      * five, identical checksums either way:
      *
      *                       packed      plain     ratio
@@ -593,7 +593,7 @@ bool beam_sparse_occupied_rows(const BeamSparseRows *t, uint32_t *out,
  * All four keep the table as it is and report `BEAM_OK` when they cannot
  * apply, which for a single call is right -- none is needed for correctness,
  * only for size. The cost of that is a pipeline whose failure to compact is
- * invisible: a model can keep a 28.19 MiB directory on each of six tables with
+ * invisible: a model can keep a 40.06 MiB directory on each of two tables with
  * no error, no log, and `beam_model_memory_bytes` reporting the larger figure
  * with nothing to compare it against. This is the signal.
  *

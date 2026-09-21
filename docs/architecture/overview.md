@@ -43,7 +43,7 @@ A left-to-right model has no strong opinion at that position. The C-anchored exp
 
 For a fixed length `L` the model is a layered directed acyclic graph.
 
-- A **node** is a position `i` plus the last `K` residues emitted, sentinel-padded at the start, so there are `A**K` nodes per layer, where `A` is the alphabet's radix: its residues plus one sentinel, so 21 for amino acids and 6 for nucleotides. `K = max(order, 3)`, not `order`: the mid expert is always order 3, so a narrower state could not supply its context. This is what `n_states` reports.
+- A **node** is a position `i` plus the last `K` residues emitted, sentinel-padded at the start, so there are `A**K` nodes per layer, where `A` is the alphabet's radix: its residues plus one sentinel, so 21 for amino acids and 6 for nucleotides. `K = order`: a state holds exactly the residues one context needs. This is what `n_states` reports. It used to be `max(order, 3)`, because a second expert of fixed order 3 had a context a narrower state could not supply; with one table per anchor there is nothing to be wider than.
 - An **edge** emits the next residue and carries a weight fixed at build time, depending only on `(node, residue, i, L)`.
 - A **path** through all `L` layers is in bijection with a length-`L` sequence.
 
@@ -83,8 +83,8 @@ ln P(s) = ln pi(L) + sum over residues of ( 0.5 * forward + 0.5 * backward ) - l
 ```
 
 - `pi(L)` is the observed length distribution.
-- Each per-residue term is itself a log-linear mix of three experts (see [Configuration](#configuration)).
-- `Z(L)` is the total weight of every possible length-`L` path, computed once per length by a forward sweep. It is needed because a geometric product of two experts is not normalised on its own.
+- Each per-residue term is one table lookup per anchor, at exact depth: `i` from the N-terminus and `L-1-i` from the C-terminus. Those two depths sum to `L-1`, which is why neither table needs a length axis of its own.
+- `Z(L)` is the total weight of every possible length-`L` path, computed once per length by a forward sweep. It is needed because a geometric mean of two experts is not normalised on its own, and with equal anchor weights it has a closed form: `Z(L)` is the **Bhattacharyya coefficient** between the N-anchored and C-anchored chains, so `Z(L) <= 1` with equality exactly when the two readings agree, and `-log Z(L)` measures how much they disagree at that length.
 
 `sum over all R**L sequences of P(s|L)` is exactly 1, for an alphabet of `R` residues; the test suite verifies this by brute-force enumeration at short lengths — over all 8,000 length-3 peptides and all 125 length-3 nucleotide sequences — including on degenerate corpora of a single sequence.
 

@@ -30,16 +30,16 @@ model.save("foundation")             # -> foundation.beam
 
 ### Amino acids or nucleotides
 
-The same model either way — two anchored experts, log-linear mixing,
-hierarchical backoff, exact dynamic programs. Only the symbols change, and
-with them the size of every table.
+The same model either way — two anchored experts, one table each, exact
+dynamic programs. Only the symbols change, and with them the size of every
+table.
 
 ```python
 BeamModel(seqs)                        # amino acids: ACDEFGHIKLMNPQRSTVWY
 BeamModel(seqs, alphabet="nt")         # nucleotides: ACGTN
 ```
 
-`order`, `max_length` and `depth_cap` default to what the alphabet needs:
+`order` and `max_length` default to what the alphabet needs:
 order 4 over 27 residues, or order 6 over 81 bases, three bases to the
 residue. An amino acid is a compressed codon, so matching the amino-acid
 model's context *span* would need order 12 and is not buildable; order 6 is
