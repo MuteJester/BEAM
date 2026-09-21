@@ -353,7 +353,19 @@ def test_a_condition_that_pins_a_position_is_told_by_that_position(nt_model):
     h_y = -(p * math.log(p) + (1 - p) * math.log(1 - p))
     assert info[0] == pytest.approx(h_y, abs=1e-12), \
         "knowing position 0 settles the condition entirely"
-    assert info[1:].max() < 0.01, "and the rest say almost nothing"
+    # The rest say far less, and what they do say DECAYS with distance,
+    # because a pinned residue reaches its neighbours only through the
+    # context window. Measured here: 0.042, 0.029, 0.007, 0.002.
+    #
+    # This used to be asserted as a flat "< 0.01". That held while the
+    # per-position term was a geometric blend of an order-4, an order-3 and
+    # an order-2 expert, which diluted how far one residue reached. A single
+    # expert at the model's own order reaches further, so the neighbours
+    # genuinely learn more. The shape of the decay is the better claim and
+    # the one the architecture actually predicts.
+    rest = info[1:]
+    assert rest.max() < info[0] / 5.0, (info[0], rest)
+    assert list(rest) == sorted(rest, reverse=True), rest
 
 
 def test_a_constant_condition_carries_no_information(nt_model):

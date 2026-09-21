@@ -311,11 +311,28 @@ def test_calibration_median_converges_with_the_grid(small):
     u = -small.log_pseq_batch(drawn)
     lengths = np.array([len(s) for s in drawn])
     L = int(np.bincount(lengths).argmax())
+
+    # Convergence is measured against a much finer grid, not against the
+    # sample median, and the reason is that the sample median is the noisier
+    # of the two. About 780 draws land on this length, so its own standard
+    # error is around 0.15 nats, while the grid error at 1024 bins is 0.012.
+    # Comparing against it therefore measured the sample and not the grid:
+    # at 256 bins the estimate came out CLOSER than at 1024, by luck, which
+    # is what a reference noisier than the effect will do.
+    ref = small.calibrate(bins=65536).median(L)
+    errors = [abs(small.calibrate(bins=b).median(L) - ref)
+              for b in (64, 256, 1024, 4096)]
+    # The coarse grid is decisively worse and the fine one has converged.
+    # Monotonicity across every step is NOT asserted, because beyond about
+    # 256 bins the remaining differences are where a bin boundary happens to
+    # fall relative to the median, which is not ordered in the grid.
+    assert errors[0] > 10 * errors[-1], errors
+    assert errors[-1] < 0.01, errors
+
+    # And the estimate is close to the drawn sample, within that sample's own
+    # resolution rather than within the grid's.
     truth = float(np.median(u[lengths == L]))
-    errors = [abs(small.calibrate(bins=b).median(L) - truth)
-              for b in (256, 1024)]
-    assert errors[0] > errors[1]
-    assert errors[1] < 0.06
+    assert abs(small.calibrate(bins=1024).median(L) - truth) < 0.3
 
 
 # ════════════════════════════════════════════════════════════════════════

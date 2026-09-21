@@ -175,6 +175,8 @@ def test_atom_mass_is_exactly_one_where_exp_surprisal_is_not(open_small):
     a = open_small.pseq_analysis()
     for bins in (128, ANALYSIS_BINS):
         atoms = a.atoms(bins)
+        # Exact at EVERY grid. That is the whole claim, and it is the half
+        # that does not depend on the model's surprisal span.
         assert atoms.mass == pytest.approx(1.0, rel=1e-12)
         assert atoms.support_size == pytest.approx(open_small.path_count(), rel=1e-9)
 
@@ -183,9 +185,24 @@ def test_atom_mass_is_exactly_one_where_exp_surprisal_is_not(open_small):
         naive = float(np.sum(
             h.weights[keep].astype(np.longdouble)
             * np.exp(-h.surprisal[keep].astype(np.longdouble))))
-        assert naive > 1.01, (
-            "the naive exp(-surprisal) route is supposed to be biased here; "
-            "if it is not, this test is no longer proving anything")
+        # The naive route's error is O(bin spacing), so it appears at a coarse
+        # grid and vanishes at a fine one. Both halves are asserted, because
+        # only the pair distinguishes "biased" from "broken".
+        #
+        # This used to demand bias at BOTH grids. That held only because the
+        # surprisal span happened to make ANALYSIS_BINS coarse enough; the
+        # span is a property of the model and it moved. Measured here:
+        # 1.094 at 128 bins, 1.005 at 512, 1.0003 at 2048.
+        if bins == 128:
+            assert naive > 1.01, (
+                "the naive exp(-surprisal) route is supposed to be biased at "
+                "a coarse grid; if it is not, this test is no longer proving "
+                "anything")
+        else:
+            assert naive == pytest.approx(1.0, rel=1e-2), naive
+            assert abs(naive - 1.0) < abs(coarse - 1.0), (naive, coarse)
+        if bins == 128:
+            coarse = naive
 
 
 def test_discovery_curve_matches_exhaustive_enumeration(tiny, tiny_exact):
