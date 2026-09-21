@@ -632,8 +632,6 @@ BeamModel *beam_model_load(const char *path) {
      * Provenance survives the round trip, and that is the point of storing
      * it. A model loaded from disk reports when it was FIRST built and what
      * the whole build cost, not when it was loaded and what loading cost.
-     * Re-finalizing on load adds to `finalize_nanos`, which is honest: that
-     * is work this model has had done to it.
      */
     m->created_unix   = h.created_unix;
     m->observe_nanos  = h.observe_nanos;
@@ -644,5 +642,21 @@ BeamModel *beam_model_load(const char *path) {
         beam_model_destroy(m);
         return NULL;
     }
+    /*
+     * And the finalize just above is NOT charged to the model.
+     *
+     * It is an artefact of the format rather than work anyone asked for: the
+     * file stores counts so that a loaded model can still be subtracted from
+     * and re-finalized under different smoothing, so every load has to
+     * rebuild the tables. Charging it would make a build time that rises
+     * every time the model is opened, and that is permanent once such a model
+     * is saved again -- the foundation model would accrue a load's finalize
+     * per session for ever.
+     *
+     * A re-finalize the CALLER asks for still counts, which is the difference
+     * this restore draws: `finalize_nanos` means finalizes of this model's
+     * content, not finalizes of its representation.
+     */
+    m->finalize_nanos = h.finalize_nanos;
     return m;
 }

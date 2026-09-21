@@ -188,6 +188,36 @@ static void test_provenance_is_recorded_and_aggregated(void) {
     /* NULL means "do not want it", not "no answer". */
     ASSERT_MSG(beam_model_provenance(m, NULL, NULL, NULL) == BEAM_OK,
                "every output is optional");
+
+    /*
+     * A round trip returns all three unchanged -- INCLUDING the finalize
+     * total, which is the part that is easy to get wrong.
+     *
+     * A file stores counts rather than finalized tables, so every load
+     * rebuilds them. Charging that rebuild to the model made the reported
+     * build time rise each time the model was opened, and stay risen once
+     * such a model was saved again: the foundation model would accrue a
+     * load's finalize per session for ever. So the load's own finalize is
+     * not counted, while one the caller asks for still is.
+     */
+    const char *path = "/tmp/beam_provenance_rt.beam";
+    ASSERT_MSG(beam_model_save(m, path) == BEAM_OK, "save");
+    BeamModel *back = beam_model_load(path);
+    remove(path);
+    ASSERT_MSG(back != NULL, "load");
+    int64_t created3 = 0, obs3 = 0, fin3 = 0;
+    beam_model_provenance(back, &created3, &obs3, &fin3);
+    ASSERT_MSG(created3 == created, "a loaded model was built when it was built");
+    ASSERT_MSG(obs3 == obs2, "observing is not redone by a load");
+    ASSERT_MSG(fin3 == fin1, "a load's own finalize is not charged");
+
+    /* And the exclusion does not widen into "finalize is never timed". */
+    ASSERT_MSG(beam_model_finalize(back) == BEAM_OK, "explicit re-finalize");
+    int64_t fin4 = 0;
+    beam_model_provenance(back, NULL, NULL, &fin4);
+    ASSERT_MSG(fin4 > fin3, "a finalize the caller asks for is still timed");
+
+    beam_model_destroy(back);
     beam_model_destroy(m);
     PASS();
 }

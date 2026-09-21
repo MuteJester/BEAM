@@ -473,9 +473,14 @@ class BeamModel:
         them: when it was first built, and how much wall time went into
         observing and into finalizing. They survive :meth:`save` and
         :meth:`from_file`, so a model loaded from disk reports when it was
-        built rather than when it was loaded. Re-finalizing adds to the
-        finalize total, which is the honest reading: that is work this model
-        has had done to it.
+        built rather than when it was loaded.
+
+        A re-finalize the CALLER asks for -- after :meth:`add` or
+        :meth:`subtract` -- adds to the finalize total. The one every load
+        performs does not: the file stores counts rather than tables, so
+        rebuilding them is the format's cost and not this model's, and
+        charging it would make the build time rise every time the model was
+        opened.
 
         Everything else is derived on demand. Storing it would be a second
         copy to keep in step with the tables, and the tables are the truth.
@@ -515,6 +520,12 @@ class BeamModel:
         order = int(cfg["order"])
         n_ctx = radix ** order
         cells = self.n_cells
+        # `n_nonzero_cells` inspects the raw counts, which `compact()`
+        # releases. A compacted model is a normal thing to be handed -- it is
+        # the form a large model is deployed in -- so this reports None rather
+        # than raising, and `compacted` says why. None rather than a zero or a
+        # dense stand-in, because both would read as a real occupancy.
+        nonzero = None if self._compacted else self.n_nonzero_cells
 
         out: dict[str, Any] = {
             "created": _datetime.datetime.fromtimestamp(
@@ -536,9 +547,11 @@ class BeamModel:
             "size": {
                 "n_states": self.n_states,
                 "n_cells": cells,
-                "n_nonzero_cells": self.n_nonzero_cells,
-                "occupancy": (self.n_nonzero_cells / cells) if cells else 0.0,
+                "n_nonzero_cells": nonzero,
+                "occupancy": ((nonzero / cells) if cells else 0.0)
+                             if nonzero is not None else None,
                 "memory_bytes": self.memory_bytes,
+                "compacted": self._compacted,
             },
         }
         if not lengths:

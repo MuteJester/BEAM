@@ -1348,3 +1348,51 @@ brute-force enumeration at 8.8% of its worst tolerance. Metadata only reads
 the model -- it computes occupancy from the tables and returns stored
 timestamps -- so no count, no probability and no table could move, and these
 three are what say so rather than the claim.
+
+## Addendum, same day, tag `prova`: two defects the suite did not catch
+
+Both were found by probing `metadata()` on a loaded and on a compacted model
+rather than by the tests, which is worth recording as plainly as the fixes.
+
+    pytest_cases.txt   2 added, 0 gone
+    everything else    unchanged
+
+`python_api.txt`, `c_cases.txt`, `numeric.json` and `threads.json` came back
+byte-identical, so their `*.prova.*` snapshots were deleted rather than
+committed: a snapshot that records no change records nothing.
+`c_cases.txt` is unchanged because the new C assertions went INSIDE
+`test_provenance_is_recorded_and_aggregated` rather than adding a case, and
+`python_api.txt` because `metadata()`'s signature did not move -- only what
+its `size` dictionary contains.
+
+### The build timer rose every time the model was opened
+
+A `.beam` file stores counts rather than finalized tables, which is what keeps
+a loaded model expandable, so every load rebuilds the tables. That finalize
+was being charged to the model. The reported build time therefore grew on
+each load, and grew PERMANENTLY if the model was then saved: the foundation
+model would accrue a load's finalize per session for ever.
+
+It also contradicted the requirement, which is that the timer aggregate each
+time sequences are ADDED. A load adds none.
+
+The load's own finalize is now excluded and a caller's re-finalize still
+counts. The round-trip test previously asserted `finalize_seconds >= before`
+with a comment explaining why growth was acceptable -- the comment
+rationalised the behaviour instead of checking it -- and now asserts equality.
+`test_a_caller_s_own_refinalize_still_counts` is the counterweight: without
+it, the cheapest way to make the round trip exact would be to stop timing
+finalizes at all. The C test gained the same round trip next to the code.
+
+### metadata() raised on a compacted model
+
+`compact()` releases the raw counts, `n_nonzero_cells` inspects them, so
+`metadata()` raised on exactly the models most worth asking about: a large
+model is deployed compacted. It now reports those two as `None` with
+`compacted: True` beside them, rather than raising or substituting a figure
+that would read as a real occupancy. The per-length breakdown is unaffected
+and asserted equal across `compact()`, since it comes from the finalized
+tables that compaction keeps.
+
+`numeric`, `saved-model bytes`, `thread independence` and `exact` are all
+unchanged across both fixes, which is what says neither touched the model.

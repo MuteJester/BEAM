@@ -62,10 +62,32 @@ def test_provenance_survives_a_round_trip(small, tmp_path):
     after = BeamModel.from_file(str(p)).metadata(lengths=False)
 
     assert after["created_unix"] == before["created_unix"]
-    assert after["build"]["observe_seconds"] == before["build"]["observe_seconds"]
-    # Loading re-finalizes, which is work this model has had done to it, so
-    # the finalize total is allowed to grow and nothing else is.
-    assert after["build"]["finalize_seconds"] >= before["build"]["finalize_seconds"]
+    assert after["build"] == before["build"]
+
+    # Exactly equal, not merely close, and that is the part worth pinning.
+    # A `.beam` file stores counts rather than finalized tables, so every load
+    # rebuilds them -- and the first version of this charged that finalize to
+    # the model, which made the reported build time rise each time the model
+    # was opened and bake the rise in if it was ever saved again. The load's
+    # own finalize is now excluded; a re-finalize the caller asks for is not.
+    assert after["build"]["finalize_seconds"] == before["build"]["finalize_seconds"]
+
+
+def test_a_caller_s_own_refinalize_still_counts(small, tmp_path):
+    """The counterpart to the line above, so the exclusion cannot widen.
+
+    Excluding the load's finalize is right because nobody asked for it. It
+    would be wrong to stop counting a finalize that someone did ask for, and
+    without this test the cheapest way to make the round trip exact would be
+    to stop counting finalizes altogether.
+    """
+    seqs = ["CASSLGQ", "CASSLGT", "CASRDTQ"]
+    m = BeamModel(seqs, abundances=[3.0, 2.0, 1.0], order=2, max_length=9)
+    before = m.metadata(lengths=False)["build"]["finalize_seconds"]
+    other = BeamModel(["CASSLGY"], abundances=[1.0], order=2, max_length=9)
+    m.add(other)
+    after = m.metadata(lengths=False)["build"]["finalize_seconds"]
+    assert after > before
 
 
 def test_size_agrees_with_the_accessors(small):
@@ -171,3 +193,37 @@ def test_provenance_is_the_only_thing_two_identical_builds_disagree_on(tmp_path)
     created, observed, finalized = struct.unpack_from("<qqq", a, off)
     assert created == m.metadata()["created_unix"]
     assert observed > 0 and finalized > 0
+
+
+def test_metadata_describes_a_compacted_model(small, tmp_path):
+    """A compacted model is a normal thing to be handed, not an error.
+
+    `compact()` releases the raw counts, and `n_nonzero_cells` inspects them,
+    so the first version of this raised and metadata was unavailable on
+    exactly the models most worth asking about -- a large one is deployed
+    compacted. It now reports None for the two figures that genuinely cannot
+    be known and everything else as usual.
+
+    The per-length coverage is the part that matters, and it is unaffected:
+    it is computed from the finalized tables, which compaction keeps.
+    """
+    seqs, abund = make_corpus(n=300, seed=11, lo=9, hi=12)
+    m = BeamModel(seqs, abundances=abund, order=2, max_length=14)
+    before = m.metadata()
+    m.compact()
+    after = m.metadata()
+
+    assert before["size"]["compacted"] is False
+    assert after["size"]["compacted"] is True
+
+    # Unknowable after compaction, and said so rather than guessed.
+    assert after["size"]["n_nonzero_cells"] is None
+    assert after["size"]["occupancy"] is None
+    assert before["size"]["n_nonzero_cells"] is not None
+
+    # Everything derived from the finalized tables is untouched.
+    assert after["lengths"] == before["lengths"]
+    assert after["created_unix"] == before["created_unix"]
+    assert after["build"] == before["build"]
+    assert after["size"]["n_states"] == before["size"]["n_states"]
+    assert after["size"]["n_cells"] == before["size"]["n_cells"]

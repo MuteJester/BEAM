@@ -823,10 +823,15 @@ BeamError beam_model_length_marginals(const BeamModel *m,
  *
  * `created_unix` is seconds since the epoch. The two durations are
  * nanoseconds of WALL time, aggregated across every call: a model built by
- * streaming a hundred chunks reports what the whole build cost, and one
- * re-finalized reports every finalize it has had. They survive save and load,
- * because a loaded model was built when it was built and not when it was
- * loaded.
+ * streaming a hundred chunks reports what the whole build cost, and one the
+ * caller re-finalizes reports every such finalize. They survive save and
+ * load, because a loaded model was built when it was built and not when it
+ * was loaded.
+ *
+ * The finalize every LOAD performs is excluded. A file stores counts rather
+ * than finalized tables, so loading has to rebuild them; that is the format's
+ * cost, not this model's, and charging it would make the build time rise each
+ * time the model was opened and stay risen if it were saved again.
  *
  * Wall rather than CPU, because the counting pass is parallel and CPU time
  * would report a figure that depends on the thread count. Any argument may be

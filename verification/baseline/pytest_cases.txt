@@ -478,10 +478,12 @@ tests/python/model/test_generation.py::test_sample_is_reproducible
 tests/python/model/test_generation.py::test_sample_respects_the_model
 tests/python/model/test_generation.py::test_simulate_is_reproducible
 tests/python/model/test_generation.py::test_simulate_returns_a_simulation_result
+tests/python/model/test_metadata.py::test_a_caller_s_own_refinalize_still_counts
 tests/python/model/test_metadata.py::test_build_time_aggregates_across_observe_calls
 tests/python/model/test_metadata.py::test_coverage_grows_with_length_while_the_data_does
 tests/python/model/test_metadata.py::test_coverage_is_a_fraction_and_rows_bound_cells
 tests/python/model/test_metadata.py::test_lengths_can_be_skipped
+tests/python/model/test_metadata.py::test_metadata_describes_a_compacted_model
 tests/python/model/test_metadata.py::test_metadata_reports_a_real_creation_time
 tests/python/model/test_metadata.py::test_provenance_is_the_only_thing_two_identical_builds_disagree_on
 tests/python/model/test_metadata.py::test_provenance_survives_a_round_trip

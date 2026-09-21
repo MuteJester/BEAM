@@ -335,10 +335,14 @@ Three facts are **stored in the file**, because they are not recoverable from th
 | `beam_version`, `variant`, `finalized` | which code wrote it, and whether it is scoreable yet |
 | `config` | the build configuration as given, including `order`, `max_length`, `strict` and the alphabet |
 | `build` | `observe_seconds`, `finalize_seconds`, `total_seconds`, and the corpus as ingested: `n_observed`, `n_skipped`, `n_sequences`, `total_weight` |
-| `size` | `n_states`, `n_cells`, `n_nonzero_cells`, `occupancy`, `memory_bytes` |
+| `size` | `n_states`, `n_cells`, `n_nonzero_cells`, `occupancy`, `memory_bytes`, `compacted` |
 | `lengths` | one entry per observed length; see below |
 
-The two durations **aggregate**. A model built by streaming a hundred chunks reports what the whole build cost, not what the last chunk cost, and one that has been re-finalized reports every finalize it has had. They are wall time rather than CPU time, because the counting pass is parallel and a CPU figure would depend on the thread count.
+The two durations **aggregate**. A model built by streaming a hundred chunks reports what the whole build cost, not what the last chunk cost, and one re-finalized after an `add` or `subtract` reports every finalize it has had. They are wall time rather than CPU time, because the counting pass is parallel and a CPU figure would depend on the thread count.
+
+Loading does **not** add to them. A `.beam` file stores counts rather than finalized tables — that is what keeps a loaded model expandable — so every load rebuilds the tables, and charging that would make the reported build time rise each time the model was opened, permanently if it were saved again. A finalize the caller asks for still counts; a finalize the format needs does not.
+
+On a **compacted** model, `n_nonzero_cells` and `occupancy` are `None` and `compacted` is `True`. `compact()` releases the raw counts those two inspect, and a large model is normally deployed compacted, so this reports what it cannot know rather than raising or substituting a figure that would read as a real occupancy. The per-length breakdown is unaffected — it comes from the finalized tables, which compaction keeps.
 
 ### Per length: how much of the dictionary was found
 
