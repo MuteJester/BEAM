@@ -55,7 +55,7 @@ void beam_model_config_default_for(BeamAlphabet alphabet,
  * WHY a config is invalid, not merely that it is.
  *
  * This returned a bare `bool`, and the caller built a refusal from a
- * hard-coded list of fields: order, max_length, depth_cap, the coefficient
+ * hard-coded list of fields: order, max_length, the anchor weights
  * sum, the two weights. Every one of them printed with its value and its
  * permitted range, and none of them was necessarily the one that failed --
  * the kappas were not in the list at all, and neither was the rule that
@@ -63,7 +63,7 @@ void beam_model_config_default_for(BeamAlphabet alphabet,
  * nucleotide model produced
  *
  *   invalid BEAM config for the nt alphabet: order=2 (need 2..9),
- *   max_length=24 (need 1..255), depth_cap=15 (need 1..23), coef sum=1
+ *   max_length=24 (need 1..255), order=4 (need 2..4)
  *   (need 1), weights=0.5/0.5 (need >= 0)
  *
  * -- five fields, all of them inside their stated ranges, and the reason

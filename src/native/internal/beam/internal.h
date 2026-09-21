@@ -13,20 +13,23 @@
  * same row index in a dense uint32 directory and stores only occupied
  * 20-double rows. For a context of order `k` at depth `d`, scoring residue `x`:
  *
- *     wide : [ min(d, depth_cap) ][ c_k ]...[ c_1 ][ x ]
- *     mid  : [ d                 ][ c_3 ][ c_2 ][ c_1 ][ x ]
- *     len  : [ L ][ d            ][ c_2 ][ c_1 ][ x ]
+ *     [ d ][ c_k ]...[ c_1 ][ x ]
+ *
+ * with `d` EXACT: the distance from the anchoring terminus, `i` forward and
+ * `L-1-i` backward, and no clamp. Those two sum to `L-1`, which is why no
+ * table is indexed by length.
  *
  * where `c_1` is the context residue NEAREST the scored one and `c_k` the
  * furthest. Context slots that fall outside the sequence hold the
  * alphabet's sentinel, `m->none_idx`.
  *
- * ONE table breaks that rule: the finalized C-anchored WIDE table is packed
- * nearest-first, `[ min(d, depth_cap) ][ c_1 ]...[ c_k ][ x ]`. That is a
- * performance decision, it is confined to the finalized table (the counts and
- * the file format keep the common packing), and the reasoning is set out in
- * full at `beam_ctx_backward_finalized` below. Anything reading
- * `lp_wide[BEAM_BWD]` must index it through one of the two helpers there.
+ * ONE table breaks that rule: the finalized C-anchored table is packed
+ * nearest-first, `[ d ][ c_1 ]...[ c_k ][ x ]`. That is a performance
+ * decision, it is confined to the finalized table (the counts and the file
+ * format keep the common packing), and the reasoning is set out in full at
+ * `beam_ctx_backward_finalized` below. Anything reading `lp[BEAM_BWD]` must
+ * index it through one of the two helpers there, which are named apart for
+ * exactly that reason.
  *
  * ## The two directions read opposite ways, and the packing follows
  *

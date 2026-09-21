@@ -56,7 +56,7 @@
  *
  * A state is a position and the last `max(order, 3)` residues, so the state
  * INDEX is a function of the alphabet and the order and not of the data. Two
- * models that agree on alphabet, order, max_length and depth_cap therefore
+ * models that agree on alphabet, order and max_length therefore
  * index the same trellis, cell for cell, and a sweep can read both models'
  * weights at one state index without any translation. Every entry point here
  * enforces that agreement with the same shape test `beam_model_add` uses and
@@ -200,7 +200,7 @@ BeamError beam_mixture_support_union_by_length(
  * Refuse a set of models that cannot share a trellis.
  *
  * Checks the same four fields `beam_model_add` checks -- alphabet, order,
- * max_length and depth_cap -- plus that every member is finalized. Exposed
+ * and max_length -- plus that every member is finalized. Exposed
  * because a caller assembling a mixture wants to fail at construction rather
  * than at the first analytic.
  */

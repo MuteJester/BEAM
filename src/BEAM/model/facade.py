@@ -70,14 +70,10 @@ class BeamModel:
             and folding residues would silently widen what is accepted.
             ``N`` is a residue rather than a wildcard, so a read carrying one
             is data; the other IUPAC ambiguity codes are refused.
-        order: Context order of the wide expert, from 2 up to the alphabet's
-            own ceiling -- 4 for amino acids, 9 for nucleotides, because the
-            real bound is on ``radix ** order``. Defaults to the alphabet's
-            measured optimum: 4 and 6 respectively.
-        depth_cap: Depth at which the wide expert stops resolving position
-            exactly and pools everything deeper into one bucket. Defaults to
-            15 for amino acids and to every depth for nucleotides, where the
-            table is small enough that the cap buys nothing.
+        order: Context order, from 2 up to the alphabet's own ceiling -- 4
+            for amino acids, 9 for nucleotides, because the real bound is on
+            ``radix ** order``. Defaults to the alphabet's measured optimum:
+            4 and 6 respectively.
         coefficients: Log-linear mixing weights for the wide, mid and
             length-conditioned experts. **They must sum to 1.** The sum is not
             a free parameter: it is a pure cross-length calibration knob, and
@@ -394,10 +390,11 @@ class BeamModel:
 
     @property
     def n_states(self) -> int:
-        """Nodes per layer of the DAG, ``21 ** max(order, 3)``.
+        """Nodes per layer of the DAG, ``21 ** order``.
 
-        Not ``21 ** order``: the mid expert is always order 3, so the state
-        can never hold fewer than three residues.
+        A state holds exactly the residues one context needs. It was
+        ``max(order, 3)`` while a second expert of fixed order 3 existed,
+        because a narrower state could not have supplied its context.
         """
         return int(_c.n_states(self._g))
 
@@ -2141,7 +2138,7 @@ class BeamModel:
         additive, so a corpus can be counted in shards and combined without
         re-reading anything. The model is re-finalized afterwards.
 
-        Both models must share ``order``, ``max_length`` and ``depth_cap``;
+        Both models must share ``order`` and ``max_length``;
         the smoothing parameters need not match, because counts do not depend
         on them and this model's own smoothing is what gets reapplied.
         """
@@ -2153,7 +2150,7 @@ class BeamModel:
 
         Counts are additive, which is what makes holding a cohort out of a
         foundation model a subtraction rather than a recount of the corpus.
-        Both models must share ``order``, ``max_length`` and ``depth_cap``.
+        Both models must share ``order`` and ``max_length``.
         The model is re-finalized afterwards.
 
         .. warning::
@@ -2200,7 +2197,7 @@ class BeamModel:
         an observation, so a corpus size does not shift when the smoothing
         strength does.
 
-        Both models must share ``order``, ``max_length`` and ``depth_cap``,
+        Both models must share ``order`` and ``max_length``,
         and neither may be compacted. The model is re-finalized afterwards.
 
         Example:

@@ -68,7 +68,7 @@ class Mixture:
 
     Args:
         models: Two or more finalized :class:`~BEAM.BeamModel` instances that
-            agree on alphabet, ``order``, ``max_length`` and ``depth_cap``.
+            agree on alphabet, ``order`` and ``max_length``.
             One model may appear more than once; unlike :meth:`BeamModel.add`,
             nothing here mutates a member, so aliasing is harmless and a
             mixture of a model with itself is a useful degenerate case.

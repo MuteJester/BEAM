@@ -35,7 +35,7 @@ class IncompatibleMembers(MixtureError, ModelMismatch):
     A mixture reads all its members at ONE state index. That is sound only
     because a state index is a function of the alphabet and the order and never
     of the data, which in turn requires the members to agree on alphabet,
-    order, ``max_length`` and ``depth_cap``. Disagree on any of them and the
+    order and ``max_length``. Disagree on any of them and the
     sweeps would be reading different trellises through the same subscript.
 
     Raised at construction rather than at the first analytic: the mixture is

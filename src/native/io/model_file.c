@@ -47,7 +47,7 @@ typedef struct {
     uint32_t magic;
     uint32_t format;
     uint32_t order;
-    uint32_t depth_cap;
+    uint32_t dead_depth_cap;   /* format 5 and older; zero since 6 */
     uint32_t max_length;
     /*
      * Closed-world flag. Occupies what used to be a reserved word, so the
@@ -62,9 +62,9 @@ typedef struct {
      * from ~230 to ~17,500 nats.
      */
     uint32_t strict;
-    double   coef_wide, coef_mid, coef_len;
+    double   dead_coef[3];     /* format 5 and older; zero since 6 */
     double   kappa0, kappa1, kappa2;
-    double   kappa_wide, kappa_len;
+    double   dead_kappa[2];    /* format 5 and older; zero since 6 */
     double   weight_forward, weight_backward;
     /* Format 2: 0.0 for dense count blocks, 1.0 for sparse row records.
      * Reuses the old reserved word, so the fixed header itself stays stable. */
@@ -373,12 +373,10 @@ BeamError beam_model_save(const BeamModel *m, const char *path) {
     h.magic           = BEAM_MAGIC;
     h.format          = BEAM_FORMAT;
     h.order           = m->cfg.order;
-    h.depth_cap       = 0u;   /* dead since format 6; slot kept */
+    h.dead_depth_cap  = 0u;
     h.max_length      = m->cfg.max_length;
     h.strict          = m->cfg.strict ? 1u : 0u;
-    h.coef_wide       = 0.0;
-    h.coef_mid        = 0.0;
-    h.coef_len        = 0.0;
+    h.dead_coef[0] = h.dead_coef[1] = h.dead_coef[2] = 0.0;
 
 
 

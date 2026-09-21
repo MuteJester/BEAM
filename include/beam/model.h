@@ -35,8 +35,10 @@
  *
  *   - a **node** is a position `i` plus the last `K` residues emitted,
  *     sentinel-padded at the start, so there are `radix^K` nodes
- *     per layer. `K = max(order, 3)`, not `order`: the mid expert is always
- *     order 3, so a narrower state could not supply its context;
+ *     per layer, with `K = order`: a state holds exactly the residues one
+ *     context needs. It was `max(order, 3)` while a second expert of fixed
+ *     order 3 existed, because a narrower state could not supply its
+ *     context;
  *   - an **edge** emits the next residue and carries a weight fixed at build
  *     time, depending only on `(node, residue, i, L)`;
  *   - a **path** from the start node through all `L` layers is in bijection
@@ -185,9 +187,8 @@ typedef struct {
     BeamAlphabet alphabet;
 
     /**
-     * Context order of the wide expert, from 2 up to the alphabet's own
-     * ceiling: 4 for amino acids, 9 for nucleotides. Defaults to 4 and 6
-     * respectively.
+     * Context order, from 2 up to the alphabet's own ceiling: 4 for amino
+     * acids, 9 for nucleotides. Defaults to 4 and 6 respectively.
      *
      * The ceiling is per-alphabet because it bounds `radix^order`, and the
      * two radices are far apart: 21^9 does not fit in the `uint32_t` the
@@ -261,10 +262,9 @@ typedef struct {
      * Store closed-world count and probability tables as occupied 20-residue
      * rows instead of dense cell arrays. Default false at the C API level.
      *
-     * Sparse storage is exact only when `strict` is true and every backoff
-     * strength (`kappa[0..2]`, `kappa_wide`, and `kappa_len`) is zero. A
-     * configuration that requests sparse storage outside that regime is
-     * rejected: positive backoff can give an unobserved row non-zero mass, so
+     * Sparse storage is exact only when `strict` is true. A configuration
+     * that requests it in the open world is rejected: the open world's
+     * add-one gives an unobserved row non-zero mass, so
      * omitting it would change the model.
      *
      * The Python API selects this mode automatically for the usual
@@ -283,9 +283,8 @@ void beam_model_config_default(BeamModelConfig *cfg);
  * The mixing coefficients, backoff strengths and anchor weights are the same
  * whichever alphabet is asked for: they were measured on amino acids, and
  * re-tuning them for nucleotides needs its own measurement rather than a
- * guess. What the alphabet decides is `order`, `max_length` and `depth_cap`,
- * which follow from how much context it can afford and how long its
- * sequences are.
+ * guess. What the alphabet decides is `order` and `max_length`, which follow
+ * from how much context it can afford and how long its sequences are.
  *
  * An unknown alphabet leaves `cfg` untouched.
  */
@@ -899,9 +898,9 @@ BeamError beam_model_positional_banded(const BeamModel *m, uint32_t length,
  * consecutive rows of `n_residues` doubles each. The row index is the same one
  * the count tables use, so `row` decomposes as
  *
- *     wide : row = min(depth, depth_cap) * A^order + context
- *     mid  : row = depth                * A^3     + context
- *     len  : row = (length * max_length + depth)  * A^2 + context
+ *     row = depth * A^order + context
+ *
+ * with `depth` EXACT and measured from the anchoring terminus.
  *
  * with contexts packed most-distant-first in BOTH anchors, matching the counts
  * rather than the finalized C-anchored wide table, which is repacked for cache
