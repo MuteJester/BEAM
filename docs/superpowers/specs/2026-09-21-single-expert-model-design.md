@@ -174,22 +174,55 @@ of six supports rather than two: dead positions 33.4% with the mixture against
 | dead positions from dropping the mixture | 33.4% | 31.7% | measured, wide-only gate |
 | dead positions from uncapping depth | 31.7% | worse, by an unmeasured amount | see below |
 
-Uncapping depth has NOT been measured. The recorded cap sweep covers 4, 8 and
-15, and reach falls monotonically as the cap rises: 49.0% at cap 4, 40.5% at
-cap 8, 23.3% at cap 15. Uncapping continues in that direction. The effect should
-be small for this cohort, because depths at or beyond 15 occur only in sequences
-longer than 15 and only at their last few positions, and the modal CDR3 is 15
-residues. But it is a prediction, not a measurement, and it must be measured.
+**Uncapping depth has now been measured, and it costs nothing.**
 
-That same sweep also recorded that at `depth_cap = 15` the model assigns more
-mass to a stranger's held-out sequences than to its own donor's, a ratio of
-0.960, which cap 4 flips to 1.254. That measurement is one donor, one foreign
-control and a single split, and it was taken on coverage and held-out mass
-rather than average precision. It is the strongest available evidence that the
-depth axis is mis-specified, and it points toward LESS depth resolution, not
-more. Removing the cap moves the other way. **This is the one place where the
-agreed definition and the available evidence disagree, and the disagreement
-should be resolved by measurement on this branch rather than by argument.**
+Measured on `main`, where `depth_cap` is still a free parameter and the
+three-expert mixture is unchanged, so the only thing differing between rows is
+how finely position is resolved. 200,000 distinct training sequences drawn
+from the pooled release table, 50,000 held-out sequences absent from the
+training set, `order=4`, `max_length=22`, closed world.
+
+| depth_cap | reach | dead positions | cells |
+|---:|---:|---:|---:|
+| 2 | 38.136% | 16.34% | 40,413,240 |
+| 4 | 38.136% | 16.34% | 55,971,720 |
+| 8 | 33.668% | 17.48% | 87,088,680 |
+| 15 (the old default) | 12.636% | 26.51% | 141,543,360 |
+| 21 (exact depth) | 12.624% | 26.69% | 188,218,800 |
+
+**Going from a cap of 15 to exact depth costs 0.012 points of reach and 0.18
+points of dead positions.** The harm on this axis is all between 4 and 15, and
+uncapping past 15 is free, because depths at or beyond 15 occur only in
+sequences longer than 15 and only at their last few positions.
+
+Caps 2 and 4 are identical, which corroborates the recorded observation that
+order-4 sentinel padding already separates depths 0 to 3.
+
+**And the change as a whole did not cost coverage.** The same corpus, the same
+split, the new model against the old one at its shipped default:
+
+| model | reach | dead positions | cells |
+|---|---:|---:|---:|
+| old: three experts, cap 15 | 12.636% | 26.51% | 141,543,360 |
+| new: one expert, exact depth | 12.634% | **25.51%** | 171,143,280 |
+
+Reach is the same to three decimal places and the dead-position rate is a
+point BETTER, which is the direction section 7 predicted from the support
+being an intersection of two rather than six.
+
+**What the sweep does show is that the depth axis was mis-specified, and still
+is.** A cap of 4 reaches 38.1% where 15 reaches 12.6%, on the same data with
+the same model: three times the coverage for 39% of the cells. That was
+recorded before this change and it survives it. It is a live question about
+the model and not about this proposal, and answering it would mean giving the
+single table a depth cap back.
+
+Recorded for completeness: the sweep uses a POOLED sample rather than one
+donor, so absolute reach is lower than the one-donor figures quoted below
+(49.0 / 40.5 / 23.3 at caps 4 / 8 / 15). The shape is the same and the shape
+is what this measures. The own-versus-foreign mass ratio cannot be reproduced
+here at all, because it needs two donors and per-repertoire files are ig05
+only; it remains unsourced.
 
 ## 9. This is a different model, not a refactor
 
