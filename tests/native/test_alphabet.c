@@ -573,6 +573,16 @@ static void test_a_model_longer_than_the_old_ceiling_builds_and_scores(void) {
 
     BeamModelConfig lng = valid_for(BEAM_ALPHABET_AA);
     lng.max_length = 60;
+    /*
+     * Sparse, and that is not incidental. The depth axis is now `max_length`
+     * slots rather than `depth_cap + 1`, so a DENSE table at this length asks
+     * for about 7.5 GB and `beam_model_new` refuses it against the 4 GiB
+     * budget -- correctly, and before allocating. The claim here is about the
+     * LENGTH ceiling, not about storage, so the model is built in the mode
+     * that a length this long is actually usable in.
+     */
+    lng.strict = true;
+    lng.sparse = true;
     BeamModel *m = beam_model_new(&lng);
     ASSERT_MSG(m != NULL, "a max_length of 60 must build now");
     ASSERT_MSG(beam_model_config(m)->max_length == 60, "and keep its length");
@@ -617,8 +627,7 @@ static void test_a_model_longer_than_the_old_ceiling_builds_and_scores(void) {
 /* Small on purpose. A nucleotide model at its own defaults is order 6 over 81
  * positions with every depth resolved, which is a 151 MB wide table per
  * direction -- correct, and not something a unit test should allocate. */
-static BeamModel *nt_model(uint32_t order, uint32_t max_length,
-                           uint32_t depth_cap) {
+static BeamModel *nt_model(uint32_t order, uint32_t max_length) {
     BeamModelConfig c;
     beam_model_config_default_for(BEAM_ALPHABET_NT, &c);
     c.order = (uint8_t)order;
@@ -627,7 +636,7 @@ static BeamModel *nt_model(uint32_t order, uint32_t max_length,
 }
 
 static void test_a_nucleotide_model_builds_and_scores(void) {
-    BeamModel *m = nt_model(3, 12, 6);
+    BeamModel *m = nt_model(3, 12);
     ASSERT_MSG(m != NULL, "a nucleotide model must build now");
     ASSERT_MSG(beam_model_alphabet(m) == BEAM_ALPHABET_NT, "reports nt");
     ASSERT_MSG(beam_model_n_residues(m) == 5, "five residues");
@@ -657,7 +666,7 @@ static void test_a_nucleotide_model_builds_and_scores(void) {
  * up here and nowhere cheaper.
  */
 static void test_the_partition_normalises_over_nucleotides(void) {
-    BeamModel *m = nt_model(3, 5, 3);
+    BeamModel *m = nt_model(3, 5);
     ASSERT_MSG(m != NULL, "new");
     const char *tiny[] = { "TGT", "TGC", "GCC", "TCA", "TGT", "AGT" };
     const double tw[] = { 5, 3, 2, 4, 1, 2 };
@@ -689,7 +698,7 @@ static void test_the_partition_normalises_over_nucleotides(void) {
  * alone would not catch a frontier that mis-decodes a state at radix 6.
  */
 static void test_path_count_matches_enumeration_for_nucleotides(void) {
-    BeamModel *m = nt_model(3, 5, 3);
+    BeamModel *m = nt_model(3, 5);
     ASSERT_MSG(m != NULL, "new");
     const char *tiny[] = { "TGT", "TGC", "GCC", "TCA", "TGT", "AGT" };
     const double tw[] = { 5, 3, 2, 4, 1, 2 };
@@ -723,7 +732,7 @@ static void test_path_count_matches_enumeration_for_nucleotides(void) {
 }
 
 static void test_lower_case_scores_as_upper_case(void) {
-    BeamModel *m = nt_model(3, 12, 6);
+    BeamModel *m = nt_model(3, 12);
     ASSERT_MSG(m != NULL, "new");
     const char *seqs[] = { "TGTGCCAGCAGT", "TGTGCCAGCAGC" };
     const double ab[] = { 3.0, 1.0 };
@@ -749,8 +758,8 @@ static void test_lower_case_trains_as_upper_case(void) {
     const char *lower_seqs[] = { "tgtgccagcagt", "tgtgccagcagc" };
     const double ab[] = { 3.0, 1.0 };
 
-    BeamModel *u = nt_model(3, 12, 6);
-    BeamModel *l = nt_model(3, 12, 6);
+    BeamModel *u = nt_model(3, 12);
+    BeamModel *l = nt_model(3, 12);
     ASSERT_MSG(u && l, "new");
     ASSERT_MSG(beam_model_observe(u, upper_seqs, ab, 2) == BEAM_OK, "observe u");
     ASSERT_MSG(beam_model_observe(l, lower_seqs, ab, 2) == BEAM_OK, "observe l");
@@ -768,7 +777,7 @@ static void test_lower_case_trains_as_upper_case(void) {
 /* N is a residue, so a read carrying one is data rather than an error. The
  * amino-acid alphabet has no equivalent: 'X' is rejected. */
 static void test_N_is_a_residue_and_other_codes_are_not(void) {
-    BeamModel *m = nt_model(3, 12, 6);
+    BeamModel *m = nt_model(3, 12);
     ASSERT_MSG(m != NULL, "new");
     const char *seqs[] = { "TGTGCCAGCAGN", "TGTGCCAGCAGT" };
     const double ab[] = { 2.0, 2.0 };
@@ -789,7 +798,7 @@ static void test_N_is_a_residue_and_other_codes_are_not(void) {
 }
 
 static void test_generation_emits_only_this_alphabet(void) {
-    BeamModel *m = nt_model(3, 12, 6);
+    BeamModel *m = nt_model(3, 12);
     ASSERT_MSG(m != NULL, "new");
     const char *seqs[] = { "TGTGCCAGCAGT", "TGTGCCAGCAGC", "TGTGCCAGTTCA" };
     const double ab[] = { 4.0, 2.0, 1.0 };
@@ -822,12 +831,14 @@ static void test_generation_emits_only_this_alphabet(void) {
 static void test_model_algebra_refuses_across_alphabets(void) {
     BeamModelConfig ac;
     beam_model_config_default(&ac);
+    ac.order = 3u;                 /* matched to the nt model below, so the */
+    ac.max_length = 12u;           /* alphabet is the ONLY thing differing  */
     BeamModel *aa = beam_model_new(&ac);
-    BeamModel *nt = nt_model(3, 12, 6);
+    BeamModel *nt = nt_model(3, 12);
     ASSERT_MSG(aa && nt, "both models must build");
 
-    /* Identical order, max_length and depth_cap -- everything the shape check
-     * compared before the alphabet joined it. */
+    /* Identical order and max_length -- everything the shape check compares
+     * besides the alphabet. */
     ASSERT_MSG(beam_model_config(aa)->order == beam_model_config(nt)->order
                && beam_model_config(aa)->max_length
                   == beam_model_config(nt)->max_length,
@@ -848,7 +859,7 @@ static void test_model_algebra_refuses_across_alphabets(void) {
  * acid would not merely score differently -- it would read the table at the
  * wrong stride. */
 static void test_a_nucleotide_model_round_trips_through_a_file(void) {
-    BeamModel *m = nt_model(3, 12, 6);
+    BeamModel *m = nt_model(3, 12);
     ASSERT_MSG(m != NULL, "new");
     const char *seqs[] = { "TGTGCCAGCAGT", "TGTGCCAGCAGC", "TGTGCCAGTTCA" };
     const double ab[] = { 4.0, 2.0, 1.0 };
@@ -916,7 +927,7 @@ static bool relabel_alphabet(const char *path, uint32_t alphabet) {
  * the wrong size for the dimensions the header now claims.
  */
 static void test_a_nucleotide_file_relabelled_as_amino_acid_is_rejected(void) {
-    BeamModel *m = nt_model(3, 12, 6);
+    BeamModel *m = nt_model(3, 12);
     ASSERT_MSG(m != NULL, "new");
     const char *seqs[] = { "TGTGCCAGCAGT", "TGTGCCAGCAGC" };
     const double ab[] = { 2.0, 1.0 };
@@ -974,7 +985,7 @@ static void test_the_two_alphabets_do_not_interfere(void) {
                && beam_model_finalize(aa1) == BEAM_OK, "aa before");
     const double before = beam_model_log_pseq(aa1, "CASSLGQAYEQY");
 
-    BeamModel *nt = nt_model(3, 12, 6);
+    BeamModel *nt = nt_model(3, 12);
     const char *nt_seqs[] = { "TGTGCCAGCAGT", "TGTGCCAGCAGC" };
     ASSERT_MSG(nt && beam_model_observe(nt, nt_seqs, ab, 2) == BEAM_OK
                && beam_model_finalize(nt) == BEAM_OK, "nt in between");

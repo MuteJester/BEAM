@@ -153,13 +153,18 @@ static void test_defaults_are_the_measured_ones(void) {
     PASS();
 }
 
-static void test_rejects_uncalibrated_coefficients(void) {
-    /* The coefficient sum is a cross-length calibration knob, not a free
-     * parameter, so an off-1 sum must be refused rather than silently
-     * mis-calibrating global ranking. */
+static void test_single_anchor_weights_are_accepted(void) {
+    /* The anchor weights SHOULD sum to 1 and are deliberately not refused
+     * when they do not. Scoring one anchor's chain alone is the only way to
+     * separate a partition function below 1 into its two causes: the two
+     * chains disagreeing, and the closed world leaking mass at rows it never
+     * observed. A refusal here would make that unmeasurable. */
     BeamModelConfig c;
     beam_model_config_default(&c);
-    ASSERT_MSG(beam_model_new(&c) == NULL, "sum 1.1 should be rejected");
+    c.weight_forward = 1.0; c.weight_backward = 0.0;
+    BeamModel *m = beam_model_new(&c);
+    ASSERT_MSG(m != NULL, "a single-anchor configuration must build");
+    beam_model_destroy(m);
     beam_model_config_default(&c);
     c.order = 5;
     ASSERT_MSG(beam_model_new(&c) == NULL, "order 5 should be rejected");
@@ -175,16 +180,19 @@ static void test_depth_cap_is_clamped(void) {
     PASS();
 }
 
-static void test_sparse_requires_strict_zero_backoff(void) {
+static void test_sparse_requires_strict(void) {
+    /* An omitted count row is a dead probability row only in the closed
+     * world. The open world's add-one gives every row mass, including rows
+     * nothing was ever observed at, so a sparse table would have nowhere to
+     * put them and the scores would silently change. */
     BeamModelConfig c;
     beam_model_config_default(&c);
-    c.strict = true;
+    c.strict = false;
     c.sparse = true;
-    /* Backoff has to be asked for explicitly now: the default is the closed
-     * world, which is exactly the regime sparse storage is valid in, so the
-     * defaults alone no longer produce the combination being rejected. */
     ASSERT_MSG(beam_model_new(&c) == NULL,
-               "positive backoff cannot omit zero-count rows");
+               "the open world cannot omit zero-count rows");
+
+    c.strict = true;
 
     BeamModel *m = beam_model_new(&c);
     ASSERT_MSG(m != NULL, "strict zero-backoff sparse storage must be valid");
@@ -318,8 +326,15 @@ static void test_sparse_strict_matches_dense_bit_for_bit(void) {
     ASSERT_MSG(beam_model_log_pseq(sparse, "CASSW") == -INFINITY,
                "an omitted transition remains exactly impossible");
 
-    ASSERT_MSG(beam_model_n_cells(dense) == 3069360u,
-               "n_cells is the logical dense capacity");
+    /* One table per direction: max_length depth slots, A^order contexts,
+     * twenty residues. Was three tables of three different shapes. */
+    {
+        const BeamModelConfig *dc = beam_model_config(dense);
+        uint64_t want = 2ull * dc->max_length * 20ull;
+        for (uint32_t j = 0; j < dc->order; ++j) want *= A;
+        ASSERT_MSG(beam_model_n_cells(dense) == want,
+                   "n_cells is the logical dense capacity");
+    }
     ASSERT_MSG(beam_model_n_cells(sparse) == beam_model_n_cells(dense),
                "storage must not change logical capacity");
     ASSERT_MSG(beam_model_n_nonzero_cells(sparse)
@@ -375,15 +390,19 @@ static void test_sparse_strict_matches_dense_bit_for_bit(void) {
 
 /* ── The DAG state is wider than the wide expert ─────────────── */
 
-static void test_state_covers_the_mid_expert(void) {
-    /* The mid expert is order 3, so the state can never hold fewer than 3
-     * residues however narrow the wide expert is. A state of 21^2 would make
-     * the order-3 context index read a neighbouring cell. */
+static void test_the_state_is_exactly_one_context_wide(void) {
+    /* The state holds exactly the residues one context needs, no more.
+     *
+     * It used to be max(order, 3), because a second expert of fixed order 3
+     * had a context the state had to cover whatever the wide expert's order
+     * was; a narrower state would have made the order-3 index read a
+     * neighbouring cell. With one table per direction there is nothing to be
+     * wider than, and an order-2 model now carries a 2-residue state. */
     BeamModel *m2 = build(2, 27);
     BeamModel *m4 = build(4, 27);
     ASSERT_MSG(m2 && m4, "models should build");
-    ASSERT_MSG(beam_model_n_states(m2) == A * A * A,
-               "order 2 must still carry a 3-residue state");
+    ASSERT_MSG(beam_model_n_states(m2) == A * A,
+               "order 2 carries a 2-residue state");
     ASSERT_MSG(beam_model_n_states(m4) == A * A * A * A,
                "order 4 carries a 4-residue state");
     beam_model_destroy(m2);
@@ -571,20 +590,27 @@ static void test_backward_wide_context_matches_the_sequence(void) {
     ASSERT_MSG(beam_ctx_backward_finalized_from_state(state, x, SK, K, 4u, A)
                == (state % SK) * A + x,
                "a full-width backward wide context is (state % shift) * A + x");
-    /* A narrower context drops the MOST DISTANT residue, which here is x. */
-    ASSERT_MSG(beam_ctx_backward_finalized_from_state(state, x, SK, K, 3u, A)
-               == (0u * A + 15u) * A + 15u,
-               "order-3 nearest-first backward context out of a state");
-    ASSERT_MSG(beam_ctx_backward_finalized_from_state(state, x, SK, K, 3u, A)
-               == beam_ctx_backward_finalized_from_state(state, 0u, SK, K, 3u, A),
-               "below full width the emitted residue is outside the context");
+    /* There is no narrower context to ask for: the state holds exactly the
+     * residues one context needs, so `order` and `state_order` are equal and
+     * the full-width form above is the only one reachable. The narrowing
+     * branch existed for a second expert of fixed order 3 and is gone with
+     * it. */
+    ASSERT_MSG(beam_ctx_backward_finalized_from_state(state, x, SK, K, K, A)
+               != beam_ctx_backward_finalized_from_state(state, 0u, SK, K, K, A),
+               "the emitted residue IS the last digit, so it must move the "
+               "context; equality here would mean x is being dropped");
 
-    /* The state is "CASS" and x is "L", so this is CASSL scored at position 0. */
+    /* The state is "CASS" and x is "L", so this is CASSL scored at position 0.
+     *
+     * Only at the full width, because that is the only width reachable: the
+     * state holds exactly the residues one context needs. The sequence form
+     * still takes a `k`, so the reversal identity below is checked across
+     * widths even though the state form is not. */
+    ASSERT_MSG(beam_ctx_backward_finalized_from_state(state, x, SK, K, K, A)
+               == beam_ctx_backward_finalized(CASSL, 0, 5u, K, A),
+               "the state form and the sequence form must agree");
     for (uint32_t k = 2u; k <= 4u; ++k) {
-        ASSERT_MSG(beam_ctx_backward_finalized_from_state(state, x, SK, K, k, A)
-                   == beam_ctx_backward_finalized(CASSL, 0, 5u, k, A),
-                   "the state form and the sequence form must agree");
-        /* And the packing is exactly the common one with its digits reversed,
+        /* The packing is exactly the common one with its digits reversed,
          * which is the relabelling finalize applies to the table. */
         ASSERT_MSG(beam_ctx_backward_finalized(CASSL, 0, 5u, k, A)
                    == beam_ctx_reverse(beam_ctx_backward_counts(CASSL, 0, 5u, k, A), k, A),
@@ -2038,7 +2064,7 @@ static bool rewrite_as_legacy_format(const char *path, uint32_t format) {
 
 /* Both formats that predate the alphabet field must still load, and must load
  * as amino acid -- which is what they are, and what a zeroed field says. */
-static void test_legacy_format_files_still_load(void) {
+static void test_legacy_format_files_are_refused_by_name(void) {
     BeamModel *m = build(2, 12);
     ASSERT_MSG(m != NULL, "build");
 
@@ -2049,8 +2075,21 @@ static void test_legacy_format_files_still_load(void) {
         ASSERT_MSG(rewrite_as_legacy_format(path, legacy[k]),
                    "rewrite as a legacy format");
 
+        /* Refused, and the message must say which format and why. A file
+         * written before this change carries a CLAMPED depth index, so which
+         * depth an observation came from was discarded at training time and
+         * no transformation recovers it. Reading it anyway would produce
+         * wrong payload extents and then a checksum failure, which blames an
+         * intact file for the reader's mistake. */
+        beam_clear_error();
         BeamModel *back = beam_model_load(path);
-        ASSERT_MSG(back != NULL, "a legacy file must still load");
+        ASSERT_MSG(back == NULL, "a legacy file must be refused");
+        ASSERT_MSG(strstr(beam_error_message(), "three experts") != NULL,
+                   "the refusal must say what the file was written by");
+        ASSERT_MSG(strstr(beam_error_message(), "checksum") == NULL
+                   && strstr(beam_error_message(), "corrupt") == NULL,
+                   "an intact legacy file must not be called corrupt");
+        continue;
         ASSERT_MSG(beam_model_alphabet(back) == BEAM_ALPHABET_AA,
                    "a file written before the alphabet field is amino acid");
         ASSERT_MSG(!beam_model_config(back)->sparse,
@@ -2635,12 +2674,12 @@ int main(void) {
     printf("\n=== BEAM (Ensemble of Dual Graph Experts) ===\n");
 
     RUN_TEST(test_defaults_are_the_measured_ones);
-    RUN_TEST(test_rejects_uncalibrated_coefficients);
-    RUN_TEST(test_sparse_requires_strict_zero_backoff);
+    RUN_TEST(test_single_anchor_weights_are_accepted);
+    RUN_TEST(test_sparse_requires_strict);
     RUN_TEST(test_sparse_rows_boundaries_and_erase);
     RUN_TEST(test_sparse_growth_failure_is_atomic);
     RUN_TEST(test_sparse_strict_matches_dense_bit_for_bit);
-    RUN_TEST(test_state_covers_the_mid_expert);
+    RUN_TEST(test_the_state_is_exactly_one_context_wide);
     RUN_TEST(test_observe_counts_and_rejects);
 
     RUN_TEST(test_forward_context_packing);
@@ -2683,7 +2722,7 @@ int main(void) {
     RUN_TEST(test_subtract_refuses_to_empty_the_model);
     RUN_TEST(test_failures_carry_a_message);
     RUN_TEST(test_save_load_round_trip);
-    RUN_TEST(test_legacy_format_files_still_load);
+    RUN_TEST(test_legacy_format_files_are_refused_by_name);
     RUN_TEST(test_corrupt_file_is_rejected);
     RUN_TEST(test_compact_keeps_scores);
 
