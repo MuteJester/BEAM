@@ -45,8 +45,7 @@ SEQS = ["CASSLF", "CASSQF", "CASRLF", "CTTGWF", "CASSLG", "CASSQG"]
 
 #: Arguments to the raw `_cbeam.new`, which yields an UNFINALIZED model --
 #: the only way to reach the not-built guards from Python.
-NEW_ARGS = (2, 7, 8, (0.6, 0.25, 0.15), (0.0, 0.0, 0.0),
-            0.0, 0.0, (0.5, 0.5), True, True, "aa")
+NEW_ARGS = (2, 8, (0.5, 0.5), True, True, "aa")
 
 
 @pytest.fixture(scope="module")

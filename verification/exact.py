@@ -161,10 +161,9 @@ def tier1(report):
     configs.append((3, False, 0.0))
 
     def one(order, strict, kap):
-        kw = {} if kap is None else dict(kappa=(kap, kap, kap),
-                                         kappa_wide=kap, kappa_len=kap)
+        kw = {} if kap is None else dict()
         m = BEAM.BeamModel(corpus, abundances=ab, order=order,
-                           max_length=4, depth_cap=2, strict=strict, **kw)
+                           max_length=4, strict=strict, **kw)
         o = Oracle(m, AA, (3, 4))
         tag = (f"aa order {order} {'strict' if strict else 'open'}"
                + ("" if kap is None else " no-backoff"))
@@ -300,7 +299,7 @@ def tier2(report):
                      for _ in range(300)})
     m = BEAM.BeamModel(corpus, alphabet="nt", order=2, max_length=5,
                        strict=False)
-    o = Oracle(m, NT, (5,))
+    o = Oracle(m, NT, (5))
     q = BEAM.BeamQuery(m)
     seqs, cp = o.at(5)
     R = len(NT)

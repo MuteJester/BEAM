@@ -85,10 +85,12 @@ def test_one_length_carries_a_single_sequence():
 
 
 def test_max_length_two_is_the_smallest_model():
-    """`depth_cap` must be at least 1 and strictly below `max_length`, so 2 is
-    the floor. It has to work, not merely be accepted."""
+    """Two is the floor `max_length` accepts. It has to work, not merely be
+    accepted: the depth axis is one slot per position, so a two-residue model
+    exercises both an anchored and a settled position with nothing in
+    between."""
     m = BeamModel(["CA", "CF", "SA"], order=2, max_length=2, strict=False)
-    assert m.config["depth_cap"] == 1
+    assert m.config["max_length"] == 2
     assert _sum_conditional(m, 2) == pytest.approx(1.0, abs=1e-12)
     assert m.path_count(2) == pytest.approx(400.0)
 

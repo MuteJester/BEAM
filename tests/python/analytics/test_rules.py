@@ -18,7 +18,7 @@ from BEAM import BeamModel
 from BEAM.analytics.rules import (CanonicalRule, Rule, canonicalise, extract,
                                   reproducible)
 
-CFG = dict(order=4, depth_cap=15, max_length=27, strict=True, sparse=True)
+CFG = dict(order=4, max_length=27, strict=True, sparse=True)
 #: Marginals and clamped conditionals are both exact, so agreement between a
 #: rule's stored probability and a fresh clamp is a machine-precision matter.
 EXACT = 1e-10
@@ -201,7 +201,7 @@ def test_canonicalise_infers_start_anchor():
 
 def test_single_length_rule_is_not_assigned_an_anchor():
     """Start and end are indistinguishable from one length, so do not guess."""
-    can = canonicalise({15: [Rule(15, (4,), ("L",), 0.2, 1.0, 1.0),
+    can = canonicalise({15: [Rule(15, (4), ("L"), 0.2, 1.0, 1.0),
                              Rule(15, (4, 9), ("L", "Y"), 0.1, 3.0, 5.0)]})
     assert {r.anchor for r in can} == {"length-specific"}
     assert all(r.breadth == 1 for r in can)

@@ -65,7 +65,7 @@ def uneven_model():
 def test_matches_bruteforce_dp_convolution(uneven_model, p):
     np.testing.assert_allclose(
         uneven_model.pmf(p), reference_pmf(p, UNEVEN_DEPTHS),
-        rtol=0, atol=1e-14,
+        rtol=0, atol=1e-14
     )
 
 
@@ -260,13 +260,13 @@ def test_grouped_counts_match_independent_calls_including_tiny_atoms(uneven_mode
             grouped["expected_counts"][group],
             reference["expected_counts"],
             rtol=2e-14,
-            atol=2e-14,
+            atol=2e-14
         )
     assert grouped["expected_total"] == pytest.approx(weights.sum(), rel=1e-12)
     np.testing.assert_allclose(
         grouped["group_totals"],
         [weights[groups == group].sum() for group in range(4)],
-        rtol=1e-12,
+        rtol=1e-12
     )
 
 
@@ -298,7 +298,7 @@ def test_explicit_and_integer_bin_edges(uneven_model):
             per_level["expected_counts"][1:4].sum(),
             per_level["expected_counts"][4:13].sum(),
         ],
-        rtol=1e-12,
+        rtol=1e-12
     )
 
     binned = uneven_model.expected_counts(probabilities, weights, levels=4)
@@ -344,7 +344,7 @@ def test_rejects_a_transform_too_short_to_hold_the_cohort():
         ([], "at least one repertoire"),
         ([100, -1], "non-negative"),
         ([100, np.inf], "finite"),
-    ],
+    ]
 )
 def test_rejects_bad_depths(depths, message):
     with pytest.raises(ValueError, match=message):
@@ -420,7 +420,7 @@ def atoms():
          "CASSDTSGGTDTQYF", "CASSFGQGSYEQYF", "CASSQETQYF"],
         abundances=[7, 5, 3, 2, 2, 1],
         order=2,
-        max_length=16,
+        max_length=16
     )
     return model.pseq_analysis().atoms(512).as_arrays()
 

@@ -147,8 +147,7 @@ def test_a_budget_refusal_reports_a_figure_in_a_readable_unit(restore_budget):
 
 def _unfinalized():
     """A model with no sequences observed and no finalize called."""
-    return _c.new(2, 7, 8, (0.6, 0.25, 0.15), (0.0, 0.0, 0.0),
-                  0.0, 0.0, (0.5, 0.5), True, True, "aa")
+    return _c.new(2, 8, (0.5, 0.5), True, True, "aa")
 
 
 def test_path_count_total_refuses_an_unfinalized_model(model):
@@ -195,9 +194,8 @@ def test_a_build_parameter_too_large_is_refused_not_wrapped(model):
     a plausible one, validation passes, and every score afterwards is wrong
     with nothing to indicate it.
     """
-    def build(order=2, depth=7, maxlen=8):
-        return _c.build(SEQS, None, order, depth, maxlen,
-                        (0.6, 0.25, 0.15), (0.0, 0.0, 0.0), 0.0, 0.0,
+    def build(order=2, maxlen=8):
+        return _c.build(SEQS, None, order, maxlen,
                         (0.5, 0.5), True, True, "aa")
 
     assert _c.config(build())["order"] == 2               # the sane case still works

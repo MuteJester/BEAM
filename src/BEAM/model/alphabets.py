@@ -32,7 +32,7 @@ def info(alphabet: str) -> dict[str, Any]:
     """The C descriptor for `alphabet`.
 
     Keys: ``name``, ``id``, ``residues``, ``radix``, ``default_order``,
-    ``max_order``, ``default_max_length``, ``default_depth_cap``, ``symbols``.
+    ``max_order``, ``default_max_length``, ``symbols``.
     """
     if not isinstance(alphabet, str):
         raise TypeError(

@@ -30,7 +30,6 @@ from _tiny import tiny_model
 @pytest.mark.parametrize("differs", [
     {"order": 3},
     {"max_length": 8},
-    {"depth_cap": 2},
     {"alphabet": "nt"},
 ])
 def test_incompatible_members_are_refused_at_construction(tiny_a, differs):
@@ -152,7 +151,7 @@ def test_a_list_containing_q_equals_one_raises_rather_than_dropping_it(
     with pytest.raises(UnsupportedOrder):
         mix.hill_numbers([2.0, 3.0, 1.0])
     # and the exact-only list still works
-    assert mix.hill_numbers([0.0, 2.0, 3.0]).shape == (3,)
+    assert mix.hill_numbers([0.0, 2.0, 3.0]).shape == (3)
 
 
 def test_there_is_no_flag_that_softens_the_refusal(tiny_a, tiny_b):

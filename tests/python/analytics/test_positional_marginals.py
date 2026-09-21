@@ -285,7 +285,6 @@ def _direct_expected_counts(model, support, length):
     cfg = model.config
     A, none = 21, 20
     order = int(cfg["order"])
-    depth_cap = int(cfg["depth_cap"])
     width = int(cfg["max_length"])
     total = sum(math.exp(v) for _, v in support)
 

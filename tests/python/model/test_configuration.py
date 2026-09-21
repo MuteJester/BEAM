@@ -21,7 +21,7 @@ def test_coefficients_must_sum_to_one(corpus):
     """The sum is a cross-length calibration knob, not a free parameter."""
     seqs, abund = corpus
     with pytest.raises(ValueError, match="sum to 1"):
-        BeamModel(seqs, abundances=abund, coefficients=(0.7, 0.3, 0.15))
+        BeamModel(seqs, abundances=abund)
 
 
 def test_rejects_bad_order(corpus):
@@ -64,10 +64,8 @@ def test_compact_frees_counts(corpus):
     (dict(order=260), "order"),          # (uint8_t)260 == 4, the default
     (dict(order=0), "order"),
     (dict(max_length=283), "max_length"),   # (uint8_t)283 == 27
-    (dict(max_length=1), "max_length"),     # depth_cap has nowhere to go
+    (dict(max_length=1), "max_length"),
     (dict(max_length=0), "max_length"),
-    (dict(depth_cap=271), "depth_cap"),     # (uint8_t)271 == 15
-    (dict(depth_cap=0), "depth_cap"),
 ])
 def test_out_of_range_configuration_is_refused(kwargs, field):
     """Truncation to uint8 must not silently build a different model."""
@@ -217,8 +215,8 @@ def test_scalar_arguments_return_scalars(small):
         assert isinstance(cal.pvalue(live, value), np.ndarray)
         assert isinstance(small.saddlepoint(value)["cdf"], np.ndarray)
 
-    assert small.surprisal_pdf(np.array([mu, mu + 1.0])).shape == (2,)
-    assert small.saddlepoint(np.array([mu, mu + 1.0]))["cdf"].shape == (2,)
+    assert small.surprisal_pdf(np.array([mu, mu + 1.0])).shape == (2)
+    assert small.saddlepoint(np.array([mu, mu + 1.0]))["cdf"].shape == (2)
 
 
 def test_pvalue_never_exceeds_one(small):
@@ -340,5 +338,5 @@ def test_c_and_python_defaults_describe_the_same_model():
     assert cfg["kappa"] == (0.0, 0.0, 0.0)
     assert cfg["kappa_wide"] == 0.0 and cfg["kappa_len"] == 0.0
     for field in ("strict", "kappa", "kappa_wide", "kappa_len",
-                  "order", "depth_cap", "coefficients", "weights"):
+                  "order", "weights"):
         assert c_defaults[field] == cfg[field], field

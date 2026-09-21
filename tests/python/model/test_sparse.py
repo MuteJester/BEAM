@@ -16,15 +16,15 @@ from _helpers import (AA, J_MOTIFS, make_corpus, STRICT_SEQS)
 # ── Sparse strict storage ──────────────────────────────────────────
 
 
-@pytest.mark.parametrize(("order", "depth_cap", "abundances"), [
-    (2, 5, None),
-    (3, 5, [2.0, 5.0, 7.0]),
-    (4, 1, [3.0, 1.0, 4.0]),
+@pytest.mark.parametrize(("order", "abundances"), [
+    (2, None),
+    (3, [2.0, 5.0, 7.0]),
+    (4, [3.0, 1.0, 4.0]),
 ])
 def test_sparse_strict_is_bit_identical_to_dense_strict(
-        order, depth_cap, abundances):
+        order, abundances):
     """Storage changes allocation only; every public result stays identical."""
-    kwargs = dict(order=order, depth_cap=depth_cap, max_length=6, strict=True,
+    kwargs = dict(order=order, max_length=6, strict=True,
                   abundances=abundances)
     dense = BeamModel(STRICT_SEQS, sparse=False, **kwargs)
     sparse = BeamModel(STRICT_SEQS, sparse=True, **kwargs)
@@ -80,7 +80,7 @@ def test_sparse_strict_is_bit_identical_to_dense_strict(
 
     cfg = dense.config
     expected_cells = 2 * (
-        (cfg["depth_cap"] + 1) * 21 ** cfg["order"] * 20
+        (["order"] + 1) * 21 ** cfg["order"] * 20
         + cfg["max_length"] * 21 ** 3 * 20
         + (cfg["max_length"] + 1) * cfg["max_length"] * 21 ** 2 * 20
     )
@@ -96,8 +96,7 @@ def test_sparse_selection_and_positive_backoff_fallback():
     open_world = BeamModel(STRICT_SEQS, order=2, max_length=6, strict=False)
     backed_off = BeamModel(
         STRICT_SEQS, order=2, max_length=6, strict=True,
-        kappa=(1.0, 1.0, 1.0), kappa_wide=1.0, kappa_len=1.0,
-        sparse=None,
+        sparse=None
     )
 
     assert automatic.config["sparse"] is True
@@ -108,7 +107,6 @@ def test_sparse_selection_and_positive_backoff_fallback():
 
     with pytest.raises(ValueError, match="sparse=True"):
         BeamModel(STRICT_SEQS, order=2, max_length=6, strict=True,
-             kappa=(1.0, 1.0, 1.0), kappa_wide=1.0, kappa_len=1.0,
              sparse=True)
     # Sparse storage is exact only in the closed world, which is now the
     # default -- so the rejection needs the open world asked for explicitly.

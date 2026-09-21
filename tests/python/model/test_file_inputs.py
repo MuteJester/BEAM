@@ -102,7 +102,7 @@ def tiny():
     seqs = ["".join(rng.choice(AA) for _ in range(rng.choice([3, 4])))
             for _ in range(500)]
     abund = [rng.randint(1, 9) for _ in seqs]
-    return BeamModel(seqs, abundances=abund, order=2, depth_cap=2,
+    return BeamModel(seqs, abundances=abund, order=2,
                      max_length=4, strict=False)
 
 

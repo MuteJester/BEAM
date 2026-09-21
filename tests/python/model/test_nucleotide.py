@@ -30,7 +30,7 @@ NT_AB = [8.0, 5.0, 3.0, 2.0, 1.0]
 def nt():
     """Small enough to build fast; the defaults are exercised separately."""
     return BEAM.BeamModel(NT_SEQS, abundances=NT_AB, alphabet="nt",
-                          order=3, max_length=42, depth_cap=8)
+                          order=3, max_length=42)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -73,17 +73,13 @@ def test_python_and_c_resolve_the_same_defaults(name):
     assert cfg["alphabet"] == name
     assert cfg["order"] == info["default_order"]
     assert cfg["max_length"] == info["default_max_length"]
-    # A cap at or beyond max_length resolves every depth, which the C layer
-    # clamps; the nucleotide default asks for exactly that.
-    assert cfg["depth_cap"] == min(info["default_depth_cap"],
-                                   info["default_max_length"] - 1)
 
 
 def test_the_amino_acid_defaults_did_not_move():
-    """Making order, depth_cap and max_length alphabet-resolved must not have
+    """Making order and max_length alphabet-resolved must not have
     changed what an amino-acid caller gets."""
     cfg = BEAM.BeamModel(["CASSLGQAYEQYF"]).config
-    assert (cfg["alphabet"], cfg["order"], cfg["depth_cap"],
+    assert (cfg["alphabet"], cfg["order"], ["order"],
             cfg["max_length"]) == ("aa", 4, 15, 27)
 
 
@@ -178,7 +174,7 @@ def test_a_nucleotide_model_round_trips_through_a_file(nt, tmp_path):
 
 def test_the_two_alphabets_cannot_be_combined(nt):
     aa = BEAM.BeamModel(["CASSLGQAYEQYF", "CASSLGQAYEQFF"],
-                        order=3, max_length=42, depth_cap=8)
+                        order=3, max_length=42)
     # Same order, max_length and depth_cap: everything the shape check
     # compared before the alphabet joined it.
     assert aa.config["order"] == nt.config["order"]
@@ -194,14 +190,13 @@ def test_the_two_alphabets_cannot_be_combined(nt):
 def test_the_builder_takes_the_alphabet_too():
     """A streamed build and a one-shot build must produce the same model, and
     that claim is only as good as the config both are handed."""
-    b = BEAM.BeamModel.builder(alphabet="nt", order=3, max_length=42,
-                               depth_cap=8)
+    b = BEAM.BeamModel.builder(alphabet="nt", order=3, max_length=42)
     b.observe(NT_SEQS[:3], NT_AB[:3])
     b.observe(NT_SEQS[3:], NT_AB[3:])
     streamed = b.build()
 
     one_shot = BEAM.BeamModel(NT_SEQS, abundances=NT_AB, alphabet="nt",
-                              order=3, max_length=42, depth_cap=8)
+                              order=3, max_length=42)
     assert streamed.alphabet == "nt"
     for s in NT_SEQS:
         assert streamed.log_pseq(s) == one_shot.log_pseq(s)
@@ -214,8 +209,7 @@ def test_the_sequence_column_defaults_to_the_alphabets_own():
     frame = {"cdr3": NT_SEQS, "cdr3_aa": ["CASSLGQAYEQYF"] * len(NT_SEQS),
              "count": NT_AB}
     m = BEAM.BeamModel.from_dataframe(frame, abundance_column="count",
-                                      alphabet="nt", order=3, max_length=42,
-                                      depth_cap=8)
+                                      alphabet="nt", order=3, max_length=42)
     assert m.alphabet == "nt"
     assert m.n_observed == len(NT_SEQS)
 
@@ -238,7 +232,7 @@ def test_an_amino_acid_model_is_unaffected_by_a_nucleotide_one(corpus):
     scores_before = [before.log_pseq(s) for s in seqs[:20]]
 
     BEAM.BeamModel(NT_SEQS, abundances=NT_AB, alphabet="nt",
-                   order=3, max_length=42, depth_cap=8)
+                   order=3, max_length=42)
 
     after = BEAM.BeamModel(seqs, abundances=ab, order=3, max_length=15)
     assert [after.log_pseq(s) for s in seqs[:20]] == scores_before
@@ -284,7 +278,7 @@ def test_every_order_survives_backoff(order):
     where the closed world makes it affordable.
     """
     m = BEAM.BeamModel(NT_SEQS, abundances=NT_AB, alphabet="nt", order=order,
-                       max_length=42, depth_cap=6, strict=False)
+                       max_length=42, strict=False)
     assert math.isfinite(m.log_pseq(NT_SEQS[0]))
     assert m.path_count() > 0
 
@@ -293,7 +287,7 @@ def test_a_smoothed_nucleotide_model_is_still_a_distribution():
     """Changing which table the wide expert backs off to could leave a model
     that builds and scores but no longer sums to 1."""
     m = BEAM.BeamModel(["TGT", "TGC", "GCC", "TCA"], abundances=[5, 3, 2, 4],
-                       alphabet="nt", order=5, max_length=5, depth_cap=3,
+                       alphabet="nt", order=5, max_length=5,
                        strict=False)
     logpi = m.log_length_prior(3)
     total = 0.0
@@ -316,7 +310,7 @@ def test_the_ceiling_order_builds():
     eleven gigabytes.
     """
     m = BEAM.BeamModel(["ACGTAC", "ACGTAG"], abundances=[2.0, 1.0],
-                       alphabet="nt", order=9, max_length=6, depth_cap=1)
+                       alphabet="nt", order=9, max_length=6)
     assert m.config["order"] == 9
     assert m.n_states == 6 ** 9
     assert math.isfinite(m.log_pseq("ACGTAC"))
@@ -340,13 +334,13 @@ def test_a_configuration_larger_than_the_budget_is_refused():
         BEAM.set_memory_budget(1_000_000)          # 1 MB
         with pytest.raises(MemoryError, match="memory budget"):
             BEAM.BeamModel(NT_SEQS, abundances=NT_AB, alphabet="nt",
-                           order=6, max_length=42, depth_cap=8, strict=False)
+                           order=6, max_length=42, strict=False)
     finally:
         BEAM.set_memory_budget(before)
     assert BEAM.memory_budget() == before
     # and the same model builds once the budget allows it
     m = BEAM.BeamModel(NT_SEQS, abundances=NT_AB, alphabet="nt",
-                       order=6, max_length=42, depth_cap=8, strict=False)
+                       order=6, max_length=42, strict=False)
     assert m.alphabet == "nt"
 
 

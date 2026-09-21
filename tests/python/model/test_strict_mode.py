@@ -87,8 +87,7 @@ def test_strict_defaults_kappa_to_zero_but_explicit_wins():
 
     # Strict with backoff on: the floor and add-one are still gone, but a
     # shorter context can carry mass, so more than the training set survives.
-    partial = BeamModel(STRICT_SEQS, max_length=6, strict=True,
-                   kappa=(20.0, 20.0, 20.0), kappa_wide=20.0, kappa_len=20.0)
+    partial = BeamModel(STRICT_SEQS, max_length=6, strict=True)
     assert partial.config["kappa"] == (20.0, 20.0, 20.0)
     assert partial.hill_number(0) > auto.hill_number(0)
 

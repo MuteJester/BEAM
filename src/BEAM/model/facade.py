@@ -1838,10 +1838,7 @@ class BeamModel:
     # ── Expected cell usage ─────────────────────────────────────
 
     #: Block order of the C result: anchor major, expert minor.
-    _EXPECTED_BLOCKS = (
-        ("forward", "wide"), ("forward", "mid"), ("forward", "len"),
-        ("backward", "wide"), ("backward", "mid"), ("backward", "len"),
-    )
+    _EXPECTED_BLOCKS = ("forward", "backward")
 
     def expected_counts(self, *, length: int | None = None) -> dict[str, Any]:
         """Exact expected usage of every table cell under the model itself.
@@ -1914,8 +1911,7 @@ class BeamModel:
 
         cfg = self.config
         radix = n_res + 1
-        n_ctx = {"wide": radix ** int(cfg["order"]), "mid": radix ** 3,
-                 "len": radix ** 2}
+        n_ctx = radix ** int(cfg["order"])
         out: dict[str, Any] = {
             "expected_length": float(total),
             "n_residues": int(n_res),
@@ -1924,12 +1920,12 @@ class BeamModel:
         }
         # Each block's bytes are dropped as soon as its arrays exist, rather
         # than held until the loop ends. `np.frombuffer` is a view and `.copy()`
-        # is the array the caller keeps, so holding the six buffers to the end
+        # is the array the caller keeps, so holding both buffers to the end
         # means two copies of the whole answer are resident at once -- 112 MB
         # against 112 MB on a 24-length order-3 model, and over a gigabyte on
         # the foundation model. Clearing the list entry is what releases them:
         # `blocks` is the only reference the C layer left behind.
-        for i, (anchor, expert) in enumerate(self._EXPECTED_BLOCKS):
+        for i, anchor in enumerate(self._EXPECTED_BLOCKS):
             rows_b, vals_b = blocks[i]
             blocks[i] = None
             rows = np.frombuffer(rows_b, dtype=np.uint32).astype(np.int64)
@@ -1937,20 +1933,14 @@ class BeamModel:
             counts = np.frombuffer(vals_b, dtype=np.float64).reshape(
                 len(rows), n_res).copy()
             del vals_b
-            nc = n_ctx[expert]
+            # row = depth * A**order + context, exactly as indexing.h has it.
             block: dict[str, np.ndarray] = {
                 "rows": rows,
                 "counts": counts,
-                "context": rows % nc,
+                "context": rows % n_ctx,
+                "depth": rows // n_ctx,
             }
-            if expert == "len":
-                # row = (L * max_length + depth) * A**2 + context
-                stride = rows // nc
-                block["depth"] = stride % int(cfg["max_length"])
-                block["length"] = stride // int(cfg["max_length"])
-            else:
-                block["depth"] = rows // nc
-            out[f"{anchor}_{expert}"] = block
+            out[anchor] = block
         return out
 
     # ── Generation ──────────────────────────────────────────────

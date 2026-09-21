@@ -71,10 +71,10 @@ def nt_corpus():
 def test_nucleotide_scores_match_reference(nt_corpus, order):
     seqs, abund = nt_corpus
     m = BeamModel(seqs, abundances=abund, alphabet="nt", order=order,
-                  max_length=36, depth_cap=8, strict=False)
+                  max_length=36, strict=False)
     probe = [s for s in seqs[:40] if len(s) <= 36]
 
-    ref = reference_build(seqs, abund, order=order, max_len=36, depth_cap=8,
+    ref = reference_build(seqs, abund, order=order, max_len=36,
                           alphabet="nt")
     want = reference_scores(ref, probe)
     got = np.array([m.log_pseq(s) for s in probe])
@@ -87,8 +87,8 @@ def test_nucleotide_scores_match_reference(nt_corpus, order):
 def test_nucleotide_partition_matches_reference(nt_corpus):
     seqs, abund = nt_corpus
     m = BeamModel(seqs, abundances=abund, alphabet="nt", order=3,
-                  max_length=36, depth_cap=8, strict=False)
-    ref = reference_build(seqs, abund, order=3, max_len=36, depth_cap=8,
+                  max_length=36, strict=False)
+    ref = reference_build(seqs, abund, order=3, max_len=36,
                           alphabet="nt")
     for length in range(21, 26):
         assert abs(m.log_partition(length) - float(ref.logZ(length))) < 1e-9
@@ -98,8 +98,8 @@ def test_nucleotide_path_count_matches_reference(nt_corpus):
     """Support size over the radix-6 trellis, against the reference DP."""
     seqs, abund = nt_corpus
     m = BeamModel(seqs, abundances=abund, alphabet="nt", order=2,
-                  max_length=36, depth_cap=8, strict=False)
-    ref = reference_build(seqs, abund, order=2, max_len=36, depth_cap=8,
+                  max_length=36, strict=False)
+    ref = reference_build(seqs, abund, order=2, max_len=36,
                           alphabet="nt")
     import beam_model as R
     want = R.reference_path_counts(ref, range(21, 26))
