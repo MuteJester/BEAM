@@ -112,13 +112,13 @@ static uint64_t accumulators_at_rest(const BeamModel *m) {
     const uint64_t rows = (uint64_t)512u
                         * ((uint64_t)m->n_residues * sizeof(double)
                            + sizeof(uint32_t));
-    return 6u * (dir + rows);
+    return 2u * (dir + rows);
 }
 
 /** Every block sums to the same expected length, to floating-point slack. */
 static bool blocks_sum_to_expectation(const BeamExpectedCounts *ec) {
     for (uint32_t d = 0; d < 2u; ++d)
-        for (uint32_t e = 0; e < 3u; ++e) {
+        {
             const BeamCountBlock *b = &ec->block[d];
             double s = 0.0;
             for (uint64_t i = 0;
@@ -189,8 +189,21 @@ static void test_the_sweep_and_the_accumulators_share_one_budget(void) {
     ASSERT_MSG(m, "model did not build");
     const uint64_t field = backward_field_bytes(m);
     const uint64_t rest  = accumulators_at_rest(m);
-    ASSERT_MSG(rest > 65536u, "the margin below is not inside the maps' size");
-    const uint64_t budget = field + 65536u;     /* fits the field, not both */
+    /*
+     * The margin has to land INSIDE the maps' own size, and far enough in
+     * that the accumulators have charged something to the account before the
+     * refusal fires -- otherwise the refusal comes from the field allocation
+     * alone and the message has no accumulators to name, which is the thing
+     * being tested.
+     *
+     * It was 65536 against six accumulators. Two of them come to 184,320
+     * bytes at rest, and measured on this model a margin of 65536 or below
+     * refuses too early to mention them while 131072 refuses in the right
+     * place.
+     */
+    const uint64_t margin = 131072u;
+    ASSERT_MSG(rest > margin, "the margin is not inside the maps' size");
+    const uint64_t budget = field + margin;     /* fits the field, not both */
 
     ASSERT_MSG(field <= budget,
                "the budget does not admit the backward field on its own, so "
@@ -226,13 +239,15 @@ static void test_one_block_can_be_released_before_the_rest(void) {
     BeamExpectedCounts ec;
     ASSERT_MSG(beam_model_expected_counts(m, 0u, &ec) == BEAM_OK,
                beam_error_message());
-    ASSERT_MSG(ec.block[0].n_rows > 0 && ec.block[0].n_rows > 0,
+    ASSERT_MSG(ec.block[0].n_rows > 0 && ec.block[1].n_rows > 0,
                "the model produced an empty block, so this proves nothing");
 
-    const uint32_t kept_rows = ec.block[0].n_rows;
+    /* Release the FORWARD block and require the BACKWARD one untouched. Two
+     * blocks now rather than six, so the neighbour is the other anchor. */
+    const uint32_t kept_rows = ec.block[1].n_rows;
     double kept_sum = 0.0;
     for (uint64_t i = 0; i < (uint64_t)kept_rows * ec.n_residues; ++i)
-        kept_sum += ec.block[0].counts[i];
+        kept_sum += ec.block[1].counts[i];
 
     beam_count_block_free(&ec.block[0]);
     ASSERT_MSG(ec.block[0].n_rows == 0 && !ec.block[0].rows
@@ -241,8 +256,8 @@ static void test_one_block_can_be_released_before_the_rest(void) {
 
     double still = 0.0;
     for (uint64_t i = 0; i < (uint64_t)kept_rows * ec.n_residues; ++i)
-        still += ec.block[0].counts[i];
-    ASSERT_MSG(ec.block[0].n_rows == kept_rows && still == kept_sum,
+        still += ec.block[1].counts[i];
+    ASSERT_MSG(ec.block[1].n_rows == kept_rows && still == kept_sum,
                "releasing one block disturbed another");
 
     beam_model_expected_counts_free(&ec);       /* must not double-free */
@@ -329,7 +344,13 @@ static void test_the_doubling_paths_refuse_too(void) {
     ASSERT_MSG(m, "wide model did not build");
     const uint64_t field = backward_field_bytes(m);
     const uint64_t rest  = accumulators_at_rest(m);
-    const uint64_t budget = field + rest + 262144u;
+    /* Headroom above the field and the maps at rest, sized so that the
+     * GROWTH is what exceeds it and not the initial allocation. It was
+     * 262144 for six accumulators; two of them grow proportionally less, and
+     * measured on this model 131072 is no longer exceeded at all while 32768
+     * still is. Too large and the test passes vacuously, which is the failure
+     * mode it exists to avoid. */
+    const uint64_t budget = field + rest + 32768u;
 
     ASSERT_MSG(field <= budget && field + rest <= budget,
                "the budget does not admit the field and the maps at rest, so "
