@@ -40,14 +40,36 @@ def test_calibration_pvalues_are_uniform_under_its_own_null(small):
 
 def test_calibration_flags_an_implausible_sequence(open_small):
     """A sequence ending in a residue the corpus never terminates on must score
-    as an outlier against its own length's null."""
+    as an outlier against its own length's null.
+
+    The comparative claim is the one that matters and it is exact: the
+    corrupted sequence sits further into the tail than the drawn one. The
+    absolute level is stated as what it measures rather than as a round
+    number, because it moved and the reason is worth recording.
+
+    Under the previous open world a single wrong terminal residue reached
+    p < 0.05. The open world is now a Laplace add-one at one table rather
+    than a backoff hierarchy running orders 3, 2 and 1 with strengths of 20
+    and a length-conditioned 200, and add-one hands an unseen residue MORE
+    mass than that hierarchy did. So one wrong terminus is a weaker outlier:
+    measured p = 0.073, converged against the grid (0.07306 at 1024 bins,
+    0.07312 at 65536), so this is the model's answer and not a resolution
+    artefact.
+
+    The tail itself is unaffected, which is what the third case checks. A
+    wholly implausible sequence still reaches p = 0.0002, so the threshold
+    below is a statement about how much ONE residue is worth, not evidence
+    that the calibration has gone flat.
+    """
     cal = open_small.calibrate(bins=1024)
     good = next(s for s in make_corpus(n=20, seed=31, lo=8, hi=8)[0])
     bad = good[:-1] + "W"
     pg = cal.pvalue(len(good), -open_small.log_pseq(good))
     pb = cal.pvalue(len(bad), -open_small.log_pseq(bad))
     assert pb < pg
-    assert pb < 0.05
+    assert pb < 0.08
+    hopeless = "W" * len(good)
+    assert cal.pvalue(len(hopeless), -open_small.log_pseq(hopeless)) < 1e-3
 
 
 
@@ -137,7 +159,13 @@ def test_scale_methods_rank_identically_within_a_length(small, calibration):
     """Within one length the two forms are monotone transforms of each other,
     so they cannot disagree on ordering. All of the difference is BETWEEN
     lengths."""
-    cal = calibration
+    # Its own grid, finer than the shared fixture's. The claim is exact --
+    # the two forms are monotone transforms within a length -- so every
+    # departure from 1 is a TIE in the p-value grid, and the grid has to be
+    # fine enough to resolve the sample. Measured convergence on this model:
+    # 0.9947 at 256 bins, 0.99927 at 1024, 0.99970 at 4096, 0.99973 at 16384.
+    # At 256 the instrument is coarser than the effect it is measuring.
+    cal = small.calibrate(bins=4096)
     L = max(small.observed_lengths)
     drawn = [s for s in small.sample(3000, length=L, seed=11)]
     u = -small.log_pseq_batch(drawn)
@@ -145,7 +173,6 @@ def test_scale_methods_rank_identically_within_a_length(small, calibration):
     b = np.array([cal.scale(L, float(v), method="robust") for v in u])
     ok = np.isfinite(a) & np.isfinite(b)
     assert ok.sum() > 100
-    # Ranks must agree up to ties introduced by the p-value grid.
     from scipy.stats import spearmanr  # noqa: PLC0415
     assert spearmanr(a[ok], b[ok]).statistic > 0.999
 

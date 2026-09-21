@@ -26,6 +26,28 @@ from _tiny import support, tiny_model
 FOUNDATION = Path(".dev/runtime_profile/cache/foundation.beam")
 
 
+def _foundation_or_skip():
+    """The cached foundation model, or a skip that says which of the two
+    reasons applies.
+
+    Presence is no longer sufficient. The cache is a file this build may
+    decline to read: every model written before the single-expert change is a
+    format this one refuses, on the grounds that its depth index was clamped
+    and the exact depths cannot be recovered. That is a stale cache, not a
+    kernel defect, and saying so is the difference between a skip somebody
+    acts on and one they ignore.
+    """
+    if not FOUNDATION.exists():
+        pytest.skip("the cached foundation model is not present")
+    try:
+        return BeamModel.from_file(str(FOUNDATION))
+    except Exception as exc:                       # noqa: BLE001
+        if "retrain" not in str(exc).lower():
+            raise
+        pytest.skip(f"the cached foundation model predates this build and "
+                    f"must be rebuilt: {exc}")
+
+
 def _self_inner_product_matches_d2(model, rel=1e-12):
     mix = Mixture([model, model])
     got = 1.0 / mix.inner_product(0, 0)
@@ -60,8 +82,6 @@ def test_self_inner_product_is_one_over_d2_open_world(open_small):
     _self_inner_product_matches_d2(open_small)
 
 
-@pytest.mark.skipif(not FOUNDATION.exists(),
-                    reason="the cached foundation model is not present")
 def test_self_inner_product_is_one_over_d2_on_the_foundation():
     """The same identity on the 927M-sequence, order-4, 194k-state model.
 
@@ -70,7 +90,7 @@ def test_self_inner_product_is_one_over_d2_on_the_foundation():
     where a rescaling defect would actually show. Measured agreement when this
     was written: exact, to the last bit.
     """
-    m = BeamModel.from_file(str(FOUNDATION))
+    m = _foundation_or_skip()
     err = _self_inner_product_matches_d2(m, rel=1e-12)
     assert err < 1e-12
 
