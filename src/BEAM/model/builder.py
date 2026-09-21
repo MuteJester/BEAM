@@ -11,7 +11,7 @@ from collections.abc import Iterable, Sequence
 from typing import Any
 
 
-from .config import _config_args, _smoothing_defaults
+from .config import _config_args
 from .validation import _check_int
 
 from .. import _cbeam as _c
@@ -68,24 +68,14 @@ class Builder:
         *,
         alphabet: str = "aa",
         order: int | None = None,
-        depth_cap: int | None = None,
-        coefficients: tuple[float, float, float] = (0.60, 0.25, 0.15),
-        kappa: tuple[float, float, float] | None = None,
-        kappa_wide: float | None = None,
-        kappa_len: float | None = None,
         weights: tuple[float, float] = (0.5, 0.5),
         max_length: int | None = None,
         strict: bool = True,
         sparse: bool | None = None,
     ) -> None:
-        kappa, kappa_wide, kappa_len = _smoothing_defaults(
-            strict, kappa, kappa_wide, kappa_len)
         self._cargs = _config_args(
-            alphabet=alphabet, order=order, depth_cap=depth_cap,
-            max_length=max_length,
-            coefficients=coefficients, kappa=kappa, kappa_wide=kappa_wide,
-            kappa_len=kappa_len, weights=weights, strict=strict,
-            sparse=sparse)
+            alphabet=alphabet, order=order, max_length=max_length,
+            weights=weights, strict=strict, sparse=sparse)
         self._g = _c.new(*self._cargs)
         self._spent = False
 

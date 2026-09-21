@@ -161,15 +161,10 @@ PyObject *py_config(PyObject *self, PyObject *arg) {
     if (!m) return NULL;
     const BeamModelConfig *c = beam_model_config(m);
     return Py_BuildValue(
-        "{s:s,s:i,s:i,s:i,s:(ddd),s:(ddd),s:d,s:d,s:(dd),s:O,s:O}",
+        "{s:s,s:i,s:i,s:(dd),s:O,s:O}",
         "alphabet", beam_alphabet_info(c->alphabet)->name,
         "order", (int)c->order,
-        "depth_cap", (int)c->depth_cap,
         "max_length", (int)c->max_length,
-        "coefficients", c->coef_wide, c->coef_mid, c->coef_len,
-        "kappa", c->kappa[0], c->kappa[1], c->kappa[2],
-        "kappa_wide", c->kappa_wide,
-        "kappa_len", c->kappa_len,
         "weights", c->weight_forward, c->weight_backward,
         "strict", c->strict ? Py_True : Py_False,
         "sparse", c->sparse ? Py_True : Py_False);
@@ -193,7 +188,7 @@ PyObject *py_alphabet_info(PyObject *self, PyObject *arg) {
         return NULL;
     }
     return Py_BuildValue(
-        "{s:s,s:i,s:i,s:i,s:i,s:i,s:i,s:i,s:s#}",
+        "{s:s,s:i,s:i,s:i,s:i,s:i,s:i,s:s#}",
         "name", a->name,
         "id", (int)a->id,
         "residues", (int)a->residues,
@@ -201,7 +196,6 @@ PyObject *py_alphabet_info(PyObject *self, PyObject *arg) {
         "default_order", (int)a->default_order,
         "max_order", (int)a->max_order,
         "default_max_length", (int)a->default_max_length,
-        "default_depth_cap", (int)a->default_depth_cap,
         "symbols", a->idx_to_char, (Py_ssize_t)a->residues);
 }
 

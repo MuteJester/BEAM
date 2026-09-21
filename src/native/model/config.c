@@ -26,11 +26,7 @@ void beam_model_config_default_for(BeamAlphabet alphabet,
      * measured on amino acids and is carried across unchanged, because
      * re-tuning it for another alphabet needs a measurement of its own. */
     cfg->order           = a->default_order;
-    cfg->depth_cap       = a->default_depth_cap;
     cfg->max_length      = a->default_max_length;
-    cfg->coef_wide       = 0.60;
-    cfg->coef_mid        = 0.25;
-    cfg->coef_len        = 0.15;
     /* The closed-world default, and it has to be expressed in full here.
      *
      * `strict` alone does not give it: strict removes the order-0 add-one and
@@ -51,11 +47,6 @@ void beam_model_config_default_for(BeamAlphabet alphabet,
      * are set by strict plus the backoff strengths, not by the layout. */
     cfg->strict          = true;
     cfg->sparse          = false;
-    cfg->kappa[0]        = 0.0;
-    cfg->kappa[1]        = 0.0;
-    cfg->kappa[2]        = 0.0;
-    cfg->kappa_wide      = 0.0;
-    cfg->kappa_len       = 0.0;
     cfg->weight_forward  = 0.5;
     cfg->weight_backward = 0.5;
 }
@@ -102,47 +93,17 @@ const char *beam_config_invalid_reason(const BeamModelConfig *c,
      * indexed by a length is sized by that ceiling for the same reason. */
     if (c->max_length < 1)
         BEAM_CFG_WHY("max_length=0, and a model of no length is not a model");
-    if (c->depth_cap < 1 || c->depth_cap >= c->max_length)
-        BEAM_CFG_WHY("depth_cap=%u, and it must be at least 1 and below "
-                     "max_length=%u", (unsigned)c->depth_cap,
-                     (unsigned)c->max_length);
-    for (uint32_t i = 0; i < 3u; ++i)
-        if (!(c->kappa[i] >= 0.0))
-            BEAM_CFG_WHY("kappa[%u]=%.17g, and a backoff strength cannot be "
-                         "negative", (unsigned)i, c->kappa[i]);
-    if (!(c->kappa_wide >= 0.0))
-        BEAM_CFG_WHY("kappa_wide=%.17g, and a backoff strength cannot be "
-                     "negative", c->kappa_wide);
-    if (!(c->kappa_len >= 0.0))
-        BEAM_CFG_WHY("kappa_len=%.17g, and a backoff strength cannot be "
-                     "negative", c->kappa_len);
-    /* The coefficient SUM is a cross-length calibration knob, not a free
-     * parameter: moving it off 1 leaves within-length ranking untouched while
-     * wrecking global ranking. Reject rather than silently mis-calibrate. */
-    const double sum = c->coef_wide + c->coef_mid + c->coef_len;
-    if (!(fabs(sum - 1.0) < 1e-9))
-        BEAM_CFG_WHY("the expert coefficients sum to %.17g and must sum to 1; "
-                     "wide=%.17g mid=%.17g len=%.17g", sum,
-                     c->coef_wide, c->coef_mid, c->coef_len);
     if (!(c->weight_forward >= 0.0) || !(c->weight_backward >= 0.0))
         BEAM_CFG_WHY("anchor weights are %.17g/%.17g and neither may be "
                      "negative", c->weight_forward, c->weight_backward);
     /* An omitted count row is a dead probability row only in the fully
-     * closed-world regime. Positive backoff can populate an unobserved child
-     * row, so accepting sparse storage there would silently change scores. */
+     * closed-world regime. The open world's add-one gives every row mass,
+     * including rows nothing was ever observed at, so accepting sparse
+     * storage there would silently change scores. */
     if (c->sparse && !c->strict)
         BEAM_CFG_WHY("sparse storage needs strict=true: an omitted count row "
                      "is a dead probability row only in the closed world, and "
                      "in the open world it would silently change scores");
-    if (c->sparse && (c->kappa[0] != 0.0 || c->kappa[1] != 0.0
-                      || c->kappa[2] != 0.0 || c->kappa_wide != 0.0
-                      || c->kappa_len != 0.0))
-        BEAM_CFG_WHY("sparse storage needs every backoff strength at zero, and "
-                     "they are %.17g/%.17g/%.17g wide=%.17g len=%.17g: positive "
-                     "backoff can populate an unobserved child row, which a "
-                     "sparse table has nowhere to put",
-                     c->kappa[0], c->kappa[1], c->kappa[2],
-                     c->kappa_wide, c->kappa_len);
     return NULL;
 #undef BEAM_CFG_WHY
 }

@@ -565,19 +565,19 @@ PyObject *py_expected_counts(PyObject *self, PyObject *args) {
     Py_END_ALLOW_THREADS
     if (err != BEAM_OK) return set_beam_error(err);
 
-    PyObject *list = PyList_New(6);
+    PyObject *list = PyList_New(2);
     if (!list) { beam_model_expected_counts_free(&ec); return NULL; }
     /*
      * Release each C block as soon as its bytes objects exist, rather than
-     * freeing all six at the end. A `bytes` is a full copy, so holding the C
+     * freeing both at the end. A `bytes` is a full copy, so holding the C
      * side until the loop finishes means both copies of the whole answer are
      * resident at once -- 1,338 MB on the foundation model where 669 MB is
      * what the answer actually costs. Only the block being converted is ever
      * duplicated this way.
      */
-    for (unsigned int d = 0, k = 0; d < 2u; ++d) {
-        for (unsigned int e = 0; e < 3u; ++e, ++k) {
-            BeamCountBlock *blk = &ec.block[d][e];
+    for (unsigned int d = 0; d < 2u; ++d) {
+        {
+            BeamCountBlock *blk = &ec.block[d];
             PyObject *rows = PyBytes_FromStringAndSize(
                 (const char *)blk->rows,
                 (Py_ssize_t)((size_t)blk->n_rows * sizeof(uint32_t)));
@@ -595,7 +595,7 @@ PyObject *py_expected_counts(PyObject *self, PyObject *args) {
                 beam_model_expected_counts_free(&ec);
                 return NULL;
             }
-            PyList_SET_ITEM(list, k, pair);
+            PyList_SET_ITEM(list, d, pair);
         }
     }
     const unsigned int R = ec.n_residues;

@@ -55,7 +55,6 @@ typedef struct {
      * depth exactly. The cap exists to keep the amino-acid wide table
      * affordable at radix 21, and that cost does not arise at radix 6.
      */
-    uint8_t default_depth_cap;
 
     /**
      * Byte → residue index, `BEAM_RESIDUE_INVALID` for anything else.

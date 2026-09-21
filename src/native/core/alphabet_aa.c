@@ -69,7 +69,6 @@ const BeamAlphabetInfo beam_alphabet_aa = {
     .default_order      = 4,
     .max_order          = 4,
     .default_max_length = 27,
-    .default_depth_cap  = 15,
     .char_to_idx        = beam_aa_char_to_idx,
     .idx_to_char        = aa_idx_to_char,
 };

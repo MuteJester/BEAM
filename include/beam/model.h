@@ -196,15 +196,6 @@ typedef struct {
     uint8_t order;
 
     /**
-     * Depth cap of the wide expert. Depths at or beyond this share one bucket,
-     * which is what keeps the wide table affordable. Default 15.
-     *
-     * Clamped to `max_length - 1` at construction: a cap beyond the longest
-     * sequence resolves every depth exactly, so clamping changes nothing.
-     */
-    uint8_t depth_cap;
-
-    /**
      * Longest sequence the model will accept, from 1 up to
      * BEAM_MAX_LENGTH_CEILING. Defaults to the alphabet's own typical
      * length: 27 for amino acids, 81 for the nucleotides encoding them.
@@ -216,39 +207,17 @@ typedef struct {
     uint8_t max_length;
 
     /**
-     * Log-linear mixing coefficients for the three experts per direction:
-     * wide (order `order`, fine depth), mid (order 3, full depth), and
-     * length-conditioned (order 2, indexed by depth and total length).
+     * Weight on the N-anchored and C-anchored readings. Defaults 0.5, 0.5.
      *
-     * These MUST sum to 1. The sum is not a free parameter: it is a pure
-     * cross-length calibration knob, and moving it wrecks global ranking while
-     * leaving within-length ranking untouched. At sum 1.15 average precision
-     * falls from 0.847 to 0.830; at 1.45 it falls to 0.739.
-     * Defaults 0.60 / 0.25 / 0.15.
+     * These SHOULD sum to 1, and the sum is not a free parameter: it is a
+     * pure cross-length calibration knob. Off 1, `log W` scales with the
+     * length, which leaves within-length ranking untouched and wrecks
+     * cross-length comparison. It is not refused, because `(1, 0)` and
+     * `(0, 1)` are the only way to measure each anchor's chain on its own,
+     * which is what separates a partition function below 1 into the two
+     * causes that can put it there: the two chains disagreeing, and the
+     * closed world leaking mass at rows it never observed.
      */
-    double coef_wide, coef_mid, coef_len;
-
-    /**
-     * Hierarchical backoff strengths (pseudo-counts) for orders 1, 2 and 3 of
-     * the mid expert, the wide expert, and the length-conditioned expert.
-     *
-     * All five default to ZERO, because the closed world is the default and
-     * backoff from a shorter context is exactly what would give an unobserved
-     * transition mass. The measured open-world values are 20 / 20 / 20, 20
-     * and 200; the Python layer resolves those whenever `strict` is cleared
-     * and the caller named none. See `strict` below, and `_smoothing_defaults`
-     * in src/BEAM/model/config.py, which must agree with this.
-     *
-     * The hierarchy `kappa` parameterises stops at order 3, which is what
-     * bounds the wide expert's backoff base: it steps onto the order below
-     * capped at 3, since there is no measured strength for a fourth level and
-     * no count table holding that much context.
-     */
-    double kappa[3];
-    double kappa_wide;
-    double kappa_len;
-
-    /** Weight on the N-anchored and C-anchored readings. Defaults 0.5, 0.5. */
     double weight_forward, weight_backward;
 
     /**

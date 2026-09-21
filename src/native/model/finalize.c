@@ -7,13 +7,6 @@
 #include "beam/internal.h"
 #include "beam/model_build.h"
 
-/* All five backoff coefficients zero, so no expert consults another table. */
-static inline bool beam_no_backoff(const BeamModel *m) {
-    return m->cfg.kappa[0] == 0.0 && m->cfg.kappa[1] == 0.0
-        && m->cfg.kappa[2] == 0.0 && m->cfg.kappa_wide == 0.0
-        && m->cfg.kappa_len == 0.0;
-}
-
 
 
 /* ── Finalize ────────────────────────────────────────────────── */
@@ -425,7 +418,7 @@ BeamError beam_model_finalize(BeamModel *m) {
         /* Left frozen when `finalize_sparse_direction` will expand one table
          * at a time; expanding all six here is what made the peak 2.4x the
          * finished model. */
-        if (!(m->cfg.sparse && beam_no_backoff(m))) {
+        if (!m->cfg.sparse) {
             const BeamError thaw = beam_model_thaw_counts(m);
             if (thaw != BEAM_OK) return thaw;
         }

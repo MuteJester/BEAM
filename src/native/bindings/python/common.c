@@ -248,21 +248,19 @@ double *edge_borrow_abundances(PyObject *abund, Py_ssize_t n, bool *out_ok) {
 }
 int edge_parse_config(PyObject *args, BeamModelConfig *cfg,
                              PyObject **seqs, PyObject **abund) {
-    int order, depth_cap, max_length, strict, sparse;
-    double cw, cm, cl, k0, k1, k2, kw, kl, wf, wb;
+    int order, max_length, strict, sparse;
+    double wf, wb;
     /* The alphabet is appended rather than placed first, where it belongs,
      * so every existing position in the tuple keeps its meaning. */
     const char *alphabet = NULL;
-    const char *fmt = seqs ? "OOiii(ddd)(ddd)dd(dd)pps" :
-                             "iii(ddd)(ddd)dd(dd)pps";
+    const char *fmt = seqs ? "OOii(dd)pps" : "ii(dd)pps";
     int ok;
     if (seqs)
-        ok = PyArg_ParseTuple(args, fmt, seqs, abund, &order, &depth_cap,
-                              &max_length, &cw, &cm, &cl, &k0, &k1, &k2,
-                              &kw, &kl, &wf, &wb, &strict, &sparse, &alphabet);
+        ok = PyArg_ParseTuple(args, fmt, seqs, abund, &order,
+                              &max_length, &wf, &wb, &strict, &sparse,
+                              &alphabet);
     else
-        ok = PyArg_ParseTuple(args, fmt, &order, &depth_cap, &max_length,
-                              &cw, &cm, &cl, &k0, &k1, &k2, &kw, &kl, &wf, &wb,
+        ok = PyArg_ParseTuple(args, fmt, &order, &max_length, &wf, &wb,
                               &strict, &sparse, &alphabet);
     if (!ok) return 0;
     const BeamAlphabetInfo *a = beam_alphabet_by_name(alphabet);
@@ -272,7 +270,7 @@ int edge_parse_config(PyObject *args, BeamModelConfig *cfg,
     }
     beam_model_config_default_for(a->id, cfg);
     /*
-     * Range-checked BEFORE the cast. These three were cast straight to
+     * Range-checked BEFORE the cast. These were cast straight to
      * uint8_t, so `order = 258` wrapped to 2 -- a LEGAL order, which then
      * passed `beam_config_valid` and produced a fully working model at an
      * order the caller never asked for, scoring wrongly and saying nothing.
@@ -281,21 +279,16 @@ int edge_parse_config(PyObject *args, BeamModelConfig *cfg,
      * must not be the one place where a nonsense argument silently becomes a
      * plausible one.
      */
-    if (order < 0 || order > 255 || depth_cap < 0 || depth_cap > 255
-        || max_length < 0 || max_length > 255) {
+    if (order < 0 || order > 255 || max_length < 0 || max_length > 255) {
         PyErr_Format(PyExc_ValueError,
-                     "order, depth_cap and max_length must each be in 0..255 "
-                     "(got %d, %d, %d); a larger value would wrap to an "
+                     "order and max_length must each be in 0..255 "
+                     "(got %d, %d); a larger value would wrap to an "
                      "unrelated but legal setting",
-                     order, depth_cap, max_length);
+                     order, max_length);
         return 0;
     }
     cfg->order = (uint8_t)order;
-    cfg->depth_cap = (uint8_t)depth_cap;
     cfg->max_length = (uint8_t)max_length;
-    cfg->coef_wide = cw; cfg->coef_mid = cm; cfg->coef_len = cl;
-    cfg->kappa[0] = k0; cfg->kappa[1] = k1; cfg->kappa[2] = k2;
-    cfg->kappa_wide = kw; cfg->kappa_len = kl;
     cfg->weight_forward = wf; cfg->weight_backward = wb;
     cfg->strict = (bool)strict;
     cfg->sparse = (bool)sparse;

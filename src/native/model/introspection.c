@@ -58,8 +58,7 @@ uint64_t beam_model_n_nonzero_cells(const BeamModel *m) {
                             & ((1u << BEAM_FROZEN_MASK_BITS) - 1u));
                     continue;
                 }
-                const BeamSparseRows *t = beam_sparse_count_table_const(
-                    m, d);
+                const BeamSparseRows *t = &m->sp_cnt[d];
                 /*
                  * Through the accessor rather than over `values[p]` directly.
                  * This walked the payload as doubles, which is right for a

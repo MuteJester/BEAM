@@ -22,7 +22,7 @@ from ..constants import (BEAM_ALPHABET, BEAM_MAX_LENGTH,
                          BEAM_MAX_MOMENT, BEAM_MAX_ORDER, BEAM_RESIDUES)
 from . import alphabets
 from .validation import _check_int, _is_scalar_arg
-from .config import _config_args, _config_args_from_dict, _smoothing_defaults
+from .config import _config_args, _config_args_from_dict
 from ..io.readers import _column, _iter_delimited, _iter_parquet
 from ..math.saddlepoint import _normal_pdf, _normal_cdf
 from ..runtime import effective_threads, memory_budget, set_threads, threads
@@ -119,11 +119,6 @@ class BeamModel:
         abundances: Iterable[float] | None = None,
         alphabet: str = "aa",
         order: int | None = None,
-        depth_cap: int | None = None,
-        coefficients: tuple[float, float, float] = (0.60, 0.25, 0.15),
-        kappa: tuple[float, float, float] | None = None,
-        kappa_wide: float | None = None,
-        kappa_len: float | None = None,
         weights: tuple[float, float] = (0.5, 0.5),
         max_length: int | None = None,
         strict: bool = True,
@@ -139,15 +134,10 @@ class BeamModel:
                 raise ValueError(
                     f"abundances has {len(abund)} entries but sequences has "
                     f"{len(seqs)}")
-        kappa, kappa_wide, kappa_len = _smoothing_defaults(
-            strict, kappa, kappa_wide, kappa_len)
         cargs = _config_args(alphabet=alphabet, order=order,
-                             depth_cap=depth_cap,
-                             max_length=max_length, coefficients=coefficients,
-                             kappa=kappa, kappa_wide=kappa_wide,
-                             kappa_len=kappa_len, weights=weights,
+                             max_length=max_length, weights=weights,
                              strict=strict, sparse=sparse)
-        max_length = cargs[2]
+        max_length = cargs[1]
 
         try:
             self._g = _c.build(seqs, abund, *cargs)

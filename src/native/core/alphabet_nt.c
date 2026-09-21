@@ -84,7 +84,6 @@ const BeamAlphabetInfo beam_alphabet_nt = {
     .default_max_length = 81,
     /* Resolve every depth. The cap is a concession to the amino-acid wide
      * table's size at radix 21, and radix 6 does not need it. */
-    .default_depth_cap  = 255,
     .char_to_idx        = beam_nt_char_to_idx,
     .idx_to_char        = nt_idx_to_char,
 };

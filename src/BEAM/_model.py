@@ -18,7 +18,7 @@ from .io.readers import _column, _iter_delimited, _iter_parquet
 from .math.saddlepoint import _normal_cdf, _normal_pdf
 from .model.validation import _check_int, _is_scalar_arg
 from .model.config import (
-    _config_args, _config_args_from_dict, _smoothing_defaults,
+    _config_args, _config_args_from_dict,
 )
 from .model.facade import BeamModel
 from .model.builder import Builder
