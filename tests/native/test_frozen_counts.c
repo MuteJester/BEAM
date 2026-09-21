@@ -82,8 +82,7 @@ static BeamSparseRows *count_table(BeamModel *m, uint32_t i) {
     return &m->sp_cnt[i];
 }
 static const char *name_of(uint32_t i) {
-    static const char *n[6] = { "fwd wide","fwd mid","fwd len",
-                                "bwd wide","bwd mid","bwd len" };
+    static const char *n[2] = { "forward", "backward" };
     return n[i];
 }
 
@@ -100,7 +99,7 @@ static bool round_trips(BeamModel *m, const char *what, uint64_t *saved,
         printf("FAIL: %s could not thaw the model's counts\n", what);
         fail_count++; return false;
     }
-    for (uint32_t t = 0; t < 6u; ++t) {
+    for (uint32_t t = 0; t < 2u; ++t) {
         uint32_t kind_unused;
         BeamSparseRows *src = count_table(m, t);
         const uint32_t nr = beam_count_n_rows(m);
@@ -157,7 +156,7 @@ static void test_integer_counts_round_trip(void) {
     const bool ok = round_trips(m, "integer", &tables, &before, &after);
     beam_model_destroy(m);
     if (!ok) return;
-    ASSERT_MSG(tables == 6u, "not every table was checked");
+    ASSERT_MSG(tables == 2u, "not every table was checked");
     ASSERT_MSG(after < before, "freezing made the counts no smaller");
     printf("[%.1f MB -> %.1f MB] ", before / 1e6, after / 1e6);
     PASS();
@@ -177,7 +176,7 @@ static void test_fractional_counts_round_trip(void) {
     const bool ok = round_trips(m, "fractional", &tables, &before, &after);
     beam_model_destroy(m);
     if (!ok) return;
-    ASSERT_MSG(tables == 6u, "not every table was checked");
+    ASSERT_MSG(tables == 2u, "not every table was checked");
     printf("[%.1f MB -> %.1f MB] ", before / 1e6, after / 1e6);
     PASS();
 }
@@ -197,7 +196,7 @@ static void test_posterior_counts_round_trip(void) {
     const bool ok = round_trips(m, "posterior", &tables, &before, &after);
     beam_model_destroy(m); beam_model_destroy(prior);
     if (!ok) return;
-    ASSERT_MSG(tables == 6u, "not every table was checked");
+    ASSERT_MSG(tables == 2u, "not every table was checked");
     printf("[%.1f MB -> %.1f MB] ", before / 1e6, after / 1e6);
     PASS();
 }
@@ -371,7 +370,7 @@ static void test_every_lifecycle_operation_survives_frozen_counts(void) {
             printf("FAIL: %s: re-finalize failed\n", step);
             fail_count++; goto cleanup;
         }
-        for (uint32_t k = 0; k < 6u; ++k) {
+        for (uint32_t k = 0; k < 2u; ++k) {
             const double a = beam_model_log_pseq(frozen, PROBE[k]);
             const double b = beam_model_log_pseq(thawed, PROBE[k]);
             if (memcmp(&a, &b, sizeof a) != 0) {
@@ -463,7 +462,7 @@ static void test_rows_are_identified_the_cheaper_way(void) {
             printf("FAIL: %s did not thaw\n", cases[c].label);
             fail_count++; goto out;
         }
-        for (uint32_t t = 0; t < 6u; ++t) {
+        for (uint32_t t = 0; t < 2u; ++t) {
             uint32_t kind_unused;
             BeamSparseRows *src = count_table(m, t);
             BeamFrozenCounts f;

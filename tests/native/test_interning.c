@@ -66,14 +66,10 @@ static BeamModel *build(uint32_t n_seqs, uint8_t order, uint32_t max_length) {
 }
 
 static BeamSparseRows *table_of(BeamModel *m, uint32_t i) {
-    const uint32_t d = i / 3u, k = i % 3u;
-    if (k == 0u) return &m->sp_lp[d];
-    if (k == 1u) return &m->sp_lp[d];
-    return &m->sp_lp[d];
+    return &m->sp_lp[i];
 }
 static const char *name_of(uint32_t i) {
-    static const char *n[6] = { "fwd wide","fwd mid","fwd len",
-                                "bwd wide","bwd mid","bwd len" };
+    static const char *n[2] = { "forward", "backward" };
     return n[i];
 }
 
