@@ -26,6 +26,13 @@ venv/
 # Models are large binaries; keep them out of git
 *.beam
 *.model
+# Except the format fixtures, which are not artifacts but EVIDENCE. Each was
+# written by the last build that emitted its format and cannot be regenerated
+# -- reproducing one means checking out that commit and building it. They were
+# being carried by this working tree alone, untracked, with no skip guard, so
+# a fresh clone failed the compatibility tests and a `git clean -X` would have
+# destroyed the only copies. 1.9 MB total.
+!tests/fixtures/*.beam
 
 # Verification evidence IS tracked; only the rebuildable fixture is not.
 !verification/
