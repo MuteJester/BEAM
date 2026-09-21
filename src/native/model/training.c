@@ -5,6 +5,7 @@
 #include <stdio.h>
 
 #include "beam/internal.h"
+#include "beam/provenance.h"
 
 
 /* ── Count accumulation ──────────────────────────────────────── */
@@ -100,7 +101,7 @@ static bool observe_chunk(BeamModel *m, const uint8_t *enc,
     return failed == 0;
 }
 
-BeamError beam_model_observe(BeamModel *m,
+static BeamError observe_body(BeamModel *m,
                                 const char *const *seqs,
                                 const double *abundances,
                                 uint32_t n) {
@@ -164,4 +165,22 @@ BeamError beam_model_observe(BeamModel *m,
     free(enc); free(len_of); free(wt);
     m->finalized = false;
     return BEAM_OK;
+}
+
+/*
+ * The public entry, which exists only to time the body.
+ *
+ * Wrapped rather than stamped at each exit: the body has seven returns and a
+ * build that is counted at six of them is worse than one counted at none,
+ * because it looks right. See internal/beam/provenance.h for why the clock
+ * is monotonic.
+ */
+BeamError beam_model_observe(BeamModel *m,
+                                const char *const *seqs,
+                                const double *abundances,
+                                uint32_t n) {
+    const int64_t t0 = beam_now_nanos();
+    const BeamError e = observe_body(m, seqs, abundances, n);
+    if (m) m->observe_nanos += beam_now_nanos() - t0;
+    return e;
 }

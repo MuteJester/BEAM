@@ -315,3 +315,48 @@ Pass `sparse=False` to build the bit-identical dense form for a comparison.
 `compact()` makes `subtract`, `add`, `save`, `n_nonzero_cells` and re-finalize
 unavailable, and each of those raises rather than returning a plausible wrong
 answer.
+
+
+## What a model reports about itself
+
+```python
+meta = model.metadata()                      # lengths included
+meta = model.metadata(lengths=False)         # the summary alone
+meta = model.metadata(support=True)          # add the per-length path count
+```
+
+`metadata()` answers the questions a finished model cannot be asked any other way: when it was built, what building it cost, how large it is, and how much of what it could have learned it did learn. It is a plain dictionary, so it serialises.
+
+Three facts are **stored in the file**, because they are not recoverable from the tables: `created_unix`, and the two build durations. Everything else is **computed on demand** from the tables, so it cannot fall out of step with them.
+
+| key | what it is |
+|---|---|
+| `created`, `created_unix` | when the model was first built — an ISO-8601 string and the raw epoch seconds. A loaded model reports when it was **built**, not when it was loaded. |
+| `beam_version`, `variant`, `finalized` | which code wrote it, and whether it is scoreable yet |
+| `config` | the build configuration as given, including `order`, `max_length`, `strict` and the alphabet |
+| `build` | `observe_seconds`, `finalize_seconds`, `total_seconds`, and the corpus as ingested: `n_observed`, `n_skipped`, `n_sequences`, `total_weight` |
+| `size` | `n_states`, `n_cells`, `n_nonzero_cells`, `occupancy`, `memory_bytes` |
+| `lengths` | one entry per observed length; see below |
+
+The two durations **aggregate**. A model built by streaming a hundred chunks reports what the whole build cost, not what the last chunk cost, and one that has been re-finalized reports every finalize it has had. They are wall time rather than CPU time, because the counting pass is parallel and a CPU figure would depend on the thread count.
+
+### Per length: how much of the dictionary was found
+
+For each length `L` the model observed:
+
+| key | what it is |
+|---|---|
+| `share` | `pi(L)`, this length's share of the length prior. These sum to 1. |
+| `rows_possible` | `2 * L * n_ctx` — every (direction, depth, context) a length-`L` sequence could address, with `n_ctx = radix**order` |
+| `rows_observed`, `row_coverage` | how many of those the corpus actually reached, and the fraction |
+| `cells_possible`, `cells_observed`, `cell_coverage` | the same at the level of individual (context, residue) cells |
+| `log_partition` | `log Z(L)`, the Bhattacharyya coefficient between the two chains at this length |
+| `path_count`, `log10_spellable_fraction` | only with `support=True`: how many length-`L` sequences the model can spell at all, and that as a fraction of `n_residues**L` on a log scale |
+
+`row_coverage` is the direct answer to "how much of the spelling dictionary does this model hold for this length". It is small and that is expected: the denominator is every context the alphabet permits, most of which no immune repertoire ever produces. Because depths accumulate, `rows_observed` can only rise with `L` while `row_coverage` need not — the denominator rises too.
+
+`path_count` is a dynamic program per length rather than a lookup, which is why it is opt-in rather than always present.
+
+### Saved files are reproducible, apart from the clock
+
+Every other byte of a `.beam` file is a function of the sequences, the weights and the config, so building the same model twice writes the same file. The provenance fields are the one exception by construction, and the trailing CRC covers them and so moves with them. `BEAM.file_provenance_span()` returns `(offset, bytes)` for that window, so a byte-for-byte comparison of two saved models can skip exactly it — and nothing else — without hardcoding an offset that a later field would move.

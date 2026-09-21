@@ -818,6 +818,63 @@ BeamError beam_model_length_marginals(const BeamModel *m,
  *         probability zero -- which is a real question with no answer rather
  *         than a division by zero to be papered over.
  */
+/**
+ * When the model was first built, and what building it cost.
+ *
+ * `created_unix` is seconds since the epoch. The two durations are
+ * nanoseconds of WALL time, aggregated across every call: a model built by
+ * streaming a hundred chunks reports what the whole build cost, and one
+ * re-finalized reports every finalize it has had. They survive save and load,
+ * because a loaded model was built when it was built and not when it was
+ * loaded.
+ *
+ * Wall rather than CPU, because the counting pass is parallel and CPU time
+ * would report a figure that depends on the thread count. Any argument may be
+ * NULL.
+ */
+BeamError beam_model_provenance(const BeamModel *m, int64_t *created_unix,
+                                int64_t *observe_nanos,
+                                int64_t *finalize_nanos);
+
+/**
+ * Where a saved model keeps the bytes that are not a function of its corpus.
+ *
+ * Everything else in a `.beam` file is determined by the sequences, the
+ * weights and the config: build the same model twice and the two files agree
+ * byte for byte, which is what the saved-bytes baseline and
+ * `test_saving_a_frozen_model_writes_the_same_bytes` check. Provenance is the
+ * one exception by construction -- it reads a clock -- so two builds of
+ * identical data now differ in this window, and in the trailing CRC that
+ * covers it.
+ *
+ * Rather than let that quietly retire a byte-level check, the format says
+ * where the window is and the checks skip exactly it. `*offset` and `*bytes`
+ * describe a contiguous run inside the fixed header; the checksum is the last
+ * four bytes of the file and is the only other place a build time can reach.
+ * Comparing a file outside those two regions is still comparing every byte
+ * the corpus decides.
+ *
+ * Either argument may be NULL.
+ */
+void beam_model_file_provenance_span(size_t *offset, size_t *bytes);
+
+/**
+ * Occupied rows and cells per (direction, depth), for provenance.
+ *
+ * `rows` and `cells` each receive `2 * max_length` entries, indexed
+ * `direction * max_length + depth`, with direction 0 N-anchored.
+ *
+ * A sequence of length `L` reads forward depths `0..L-1` and backward depths
+ * `0..L-1`, so what it can be scored through is exactly the rows below `L`,
+ * out of `L * radix^order` per direction. That is the sense in which a model
+ * has discovered part of the dictionary a length admits, and this is the one
+ * sweep every length's answer comes from.
+ *
+ * @return BEAM_ERR_NOT_BUILT before finalize.
+ */
+BeamError beam_model_depth_occupancy(const BeamModel *m,
+                                     uint64_t *rows, uint64_t *cells);
+
 BeamError beam_model_positional_marginals(const BeamModel *m, uint32_t length,
                                           const uint8_t *clamp,
                                           double *out, double *out_log_z);

@@ -153,6 +153,87 @@ static void test_defaults_are_the_measured_ones(void) {
     PASS();
 }
 
+static void test_provenance_is_recorded_and_aggregated(void) {
+    /* Three facts a finished model cannot recompute about itself. The build
+     * time has to AGGREGATE: a model observed in chunks must report what the
+     * whole build cost, not what the last chunk did. */
+    const char *s[] = {"CASSLGEQYF", "CASSQDTQYF", "CASSLGTEAFF"};
+    double w[] = {3.0, 1.0, 2.0};
+    BeamModelConfig c;
+    beam_model_config_default(&c);
+    c.max_length = 12u; c.order = 3u;
+    BeamModel *m = beam_model_new(&c);
+    ASSERT_MSG(m != NULL, "model did not build");
+
+    int64_t created = 0, obs0 = 0, fin0 = 0;
+    ASSERT_MSG(beam_model_provenance(m, &created, &obs0, &fin0) == BEAM_OK,
+               "provenance");
+    ASSERT_MSG(created > 1600000000, "a creation stamp from this century");
+    ASSERT_MSG(fin0 == 0, "nothing has been finalized yet");
+
+    ASSERT_MSG(beam_model_observe(m, s, w, 3u) == BEAM_OK, "observe");
+    int64_t obs1 = 0;
+    beam_model_provenance(m, NULL, &obs1, NULL);
+    ASSERT_MSG(beam_model_observe(m, s, w, 3u) == BEAM_OK, "observe again");
+    int64_t obs2 = 0;
+    beam_model_provenance(m, NULL, &obs2, NULL);
+    ASSERT_MSG(obs2 >= obs1, "a second observe cannot shrink the total");
+
+    ASSERT_MSG(beam_model_finalize(m) == BEAM_OK, "finalize");
+    int64_t created2 = 0, fin1 = 0;
+    beam_model_provenance(m, &created2, NULL, &fin1);
+    ASSERT_MSG(created2 == created, "the creation stamp does not move");
+    ASSERT_MSG(fin1 > 0, "finalizing was timed");
+
+    /* NULL means "do not want it", not "no answer". */
+    ASSERT_MSG(beam_model_provenance(m, NULL, NULL, NULL) == BEAM_OK,
+               "every output is optional");
+    beam_model_destroy(m);
+    PASS();
+}
+
+static void test_depth_occupancy_sums_to_the_nonzero_cells(void) {
+    /* The per-depth breakdown and the scalar count are two readings of the
+     * same tables, so they must agree exactly. That is what makes the
+     * breakdown usable as a denominator: it is not an estimate. */
+    const char *s[] = {"CASSLGEQYF", "CASSQDTQYF", "CASSLGTEAFF"};
+    double w[] = {3.0, 1.0, 2.0};
+    BeamModelConfig c;
+    beam_model_config_default(&c);
+    c.max_length = 12u; c.order = 3u;
+    BeamModel *m = beam_model_new(&c);
+    ASSERT_MSG(m != NULL, "model did not build");
+
+    uint64_t rows[2u * 12u], cells[2u * 12u];
+    ASSERT_MSG(beam_model_depth_occupancy(m, rows, cells) == BEAM_ERR_NOT_BUILT,
+               "an unfinalized model has no tables to count");
+
+    ASSERT_MSG(beam_model_observe(m, s, w, 3u) == BEAM_OK, "observe");
+    ASSERT_MSG(beam_model_finalize(m) == BEAM_OK, "finalize");
+    ASSERT_MSG(beam_model_depth_occupancy(m, rows, cells) == BEAM_OK,
+               "depth occupancy");
+
+    uint64_t tr = 0, tc = 0;
+    for (uint32_t i = 0; i < 2u * 12u; ++i) {
+        tr += rows[i];
+        tc += cells[i];
+        ASSERT_MSG(cells[i] >= rows[i],
+                   "an occupied row holds at least one live cell");
+        ASSERT_MSG(cells[i] <= rows[i] * 20u,
+                   "and at most one per residue");
+    }
+    ASSERT_MSG(tc == beam_model_n_nonzero_cells(m),
+               "the per-depth cells must sum to n_nonzero_cells exactly");
+    ASSERT_MSG(tr > 0, "the model observed something");
+
+    /* No sequence is longer than max_length, so the deepest depth a
+     * length-12 model can reach is 11 and slot 11 of each direction is the
+     * last that may be occupied. */
+    ASSERT_MSG(rows[11u] <= tr && rows[12u + 11u] <= tr, "in range");
+    beam_model_destroy(m);
+    PASS();
+}
+
 static void test_single_anchor_weights_are_accepted(void) {
     /* The anchor weights SHOULD sum to 1 and are deliberately not refused
      * when they do not. Scoring one anchor's chain alone is the only way to
@@ -2680,6 +2761,8 @@ int main(void) {
     printf("\n=== BEAM (Ensemble of Dual Graph Experts) ===\n");
 
     RUN_TEST(test_defaults_are_the_measured_ones);
+    RUN_TEST(test_provenance_is_recorded_and_aggregated);
+    RUN_TEST(test_depth_occupancy_sums_to_the_nonzero_cells);
     RUN_TEST(test_single_anchor_weights_are_accepted);
     RUN_TEST(test_sparse_requires_strict);
     RUN_TEST(test_sparse_rows_boundaries_and_erase);

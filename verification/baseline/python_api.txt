@@ -1,4 +1,4 @@
-__all__: ['Atoms', 'Attribution', 'BeamError', 'BeamModel', 'BeamQuery', 'BeamTypeError', 'BeamValueError', 'BetaDiversity', 'BudgetExceeded', 'Builder', 'Calibration', 'Condition', 'EntropyBounds', 'EntropyEstimate', 'Histogram', 'ImpossibleCondition', 'IncompatibleMembers', 'InternalError', 'InvalidSequence', 'Mixture', 'MixtureError', 'MixtureTooLarge', 'ModelFileError', 'ModelMismatch', 'NoLivePaths', 'NotFinalized', 'OutOfMemory', 'PseqAnalysis', 'PublicnessModel', 'QueryError', 'QueryTooLarge', 'ScaleIndex', 'SupportSize', 'UnsupportedOrder', 'UnsupportedQuery', 'attribute', 'effective_threads', 'memory_budget', 'set_memory_budget', 'set_threads', 'threads']
+__all__: ['Atoms', 'Attribution', 'BeamError', 'BeamModel', 'BeamQuery', 'BeamTypeError', 'BeamValueError', 'BetaDiversity', 'BudgetExceeded', 'Builder', 'Calibration', 'Condition', 'EntropyBounds', 'EntropyEstimate', 'Histogram', 'ImpossibleCondition', 'IncompatibleMembers', 'InternalError', 'InvalidSequence', 'Mixture', 'MixtureError', 'MixtureTooLarge', 'ModelFileError', 'ModelMismatch', 'NoLivePaths', 'NotFinalized', 'OutOfMemory', 'PseqAnalysis', 'PublicnessModel', 'QueryError', 'QueryTooLarge', 'ScaleIndex', 'SupportSize', 'UnsupportedOrder', 'UnsupportedQuery', 'attribute', 'effective_threads', 'file_provenance_span', 'memory_budget', 'set_memory_budget', 'set_threads', 'threads']
 __version__: 0.1.0
 class Atoms:
   def __delattr__(self, name, /)
@@ -144,6 +144,7 @@ class BeamModel:
   def log_pseq_parquet(self, path: 'str | os.PathLike', *, column: 'str | None' = None, batch_size: 'int' = 1000000, out: 'Any' = None, dtype: 'Any' = <class 'numpy.float64'>) -> 'np.ndarray'
   property memory_bytes
   def merged(self, other: 'BeamModel') -> 'BeamModel'
+  def metadata(self, *, lengths: 'bool' = True, support: 'bool' = False) -> 'dict[str, Any]'
   property n_cells
   property n_nonzero_cells
   property n_observed
@@ -1071,6 +1072,7 @@ class UnsupportedQuery:
   def with_traceback(?)
 def attribute(model, sequence) -> 'Attribution'
 def effective_threads() -> 'int'
+def file_provenance_span() -> 'tuple[int, int]'
 def memory_budget() -> 'int'
 def set_memory_budget(nbytes: 'int') -> 'None'
 def set_threads(n: 'int') -> 'None'

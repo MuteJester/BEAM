@@ -362,9 +362,20 @@ m = BEAM.BeamModel(seqs, abundances=ab, order=4, max_length=15, strict=True)
 tmp = B / "_check_fixture.beam"
 m.save(str(tmp.with_suffix("")))
 _fixture_bytes = tmp.read_bytes()
-digest = hashlib.sha256(_fixture_bytes).hexdigest()
 fixture_size = len(_fixture_bytes)
-del _fixture_bytes
+
+# Two regions of a saved model are not a function of the corpus, so hashing
+# them would recompare a clock against its own recording and fail every run.
+# The provenance window is three build timestamps; the trailing CRC covers
+# that window and moves with it. The format says where the first one is --
+# nothing here hardcodes an offset -- and the check keeps its reach over
+# every other byte, which is all of the payload and the rest of the header.
+_prov_off, _prov_len = BEAM.file_provenance_span()
+_hashed = (_fixture_bytes[:_prov_off]
+           + _fixture_bytes[_prov_off + _prov_len:-4])
+assert len(_hashed) == fixture_size - _prov_len - 4
+digest = hashlib.sha256(_hashed).hexdigest()
+del _fixture_bytes, _hashed
 check("saved-model bytes", digest, want["fixture_sha256"])
 tmp.unlink(missing_ok=True)
 

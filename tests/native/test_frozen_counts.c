@@ -399,6 +399,14 @@ static void test_every_lifecycle_operation_survives_frozen_counts(void) {
  * Saving reads the frozen counts directly, so the bytes it writes must be the
  * ones it would have written from the mutable form -- byte for byte, because
  * the saved-model baseline is compared as bytes.
+ *
+ * Two regions are skipped, and only these two. The provenance window holds
+ * three clock readings, so two builds of identical data differ there by
+ * construction; the trailing CRC covers that window and so differs with it.
+ * `beam_model_file_provenance_span` is what says where the first one is, so
+ * this test and `check.py` skip the same bytes for the same stated reason
+ * rather than each hardcoding an offset. Everything between them is decided
+ * by the corpus and is still compared.
  */
 static void test_saving_a_frozen_model_writes_the_same_bytes(void) {
     BeamModel *frozen = build(2500u, 4u, 12u, false);
@@ -411,21 +419,39 @@ static void test_saving_a_frozen_model_writes_the_same_bytes(void) {
     ASSERT_MSG(beam_model_save(frozen, pa) == BEAM_OK, "frozen save failed");
     ASSERT_MSG(beam_model_save(thawed, pb) == BEAM_OK, "thawed save failed");
 
+    size_t prov_off = 0, prov_len = 0;
+    beam_model_file_provenance_span(&prov_off, &prov_len);
+
     FILE *fa = fopen(pa, "rb"), *fb = fopen(pb, "rb");
     ASSERT_MSG(fa && fb, "saved files did not open");
-    int same = 1; long n = 0;
-    for (;;) {
+    /* The CRC is the last four bytes and is not otherwise delimited, so the
+     * length has to be known before the walk to know where to stop. */
+    fseek(fa, 0, SEEK_END); const long na = ftell(fa); fseek(fa, 0, SEEK_SET);
+    fseek(fb, 0, SEEK_END); const long nb = ftell(fb); fseek(fb, 0, SEEK_SET);
+    int same = na == nb; long n = 0, compared = 0;
+    const long tail = na - (long)sizeof(uint32_t);
+    for (; same; ++n) {
         const int ca = fgetc(fa), cb = fgetc(fb);
+        if (ca == EOF || cb == EOF) { same = ca == cb; break; }
+        if (n >= (long)prov_off && n < (long)(prov_off + prov_len)) continue;
+        if (n >= tail) continue;
         if (ca != cb) { same = 0; break; }
-        if (ca == EOF) break;
-        n++;
+        compared++;
     }
     fclose(fa); fclose(fb);
     remove(pa); remove(pb);
     beam_model_destroy(frozen); beam_model_destroy(thawed);
+    if (na != nb) { printf("FAIL: saved files differ in length: %ld vs %ld\n",
+                           na, nb); fail_count++; return; }
     if (!same) { printf("FAIL: saved bytes differ at offset %ld\n", n);
                  fail_count++; return; }
-    ASSERT_MSG(n > 1000, "the saved files were suspiciously small");
+    ASSERT_MSG(compared > 1000, "the saved files were suspiciously small");
+    /* A skip list that swallowed the payload would pass the comparison
+     * above. The window is three 64-bit fields and the CRC is one 32-bit
+     * word, and nothing else may be exempt. */
+    ASSERT_MSG(prov_len == 24u, "the provenance window is not three int64s");
+    ASSERT_MSG(compared == na - (long)prov_len - (long)sizeof(uint32_t),
+               "more bytes were skipped than provenance and the checksum");
     PASS();
 }
 

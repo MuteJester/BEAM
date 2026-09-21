@@ -5,11 +5,13 @@ alphabets
 build
 compact
 config
+depth_occupancy
 drop_caches
 effective_threads
 entropy
 expected_counts
 explain
+file_provenance_span
 finalize
 hill_number
 insights_logo_cost
@@ -42,6 +44,7 @@ path_count_total
 positional_banded
 positional_marginals
 posterior
+provenance
 publicness_accumulate
 publicness_accumulate_grouped
 publicness_moments

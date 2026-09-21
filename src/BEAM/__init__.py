@@ -27,6 +27,7 @@ from ._model import (
     Histogram,
     PseqAnalysis,
     effective_threads,
+    file_provenance_span,
     memory_budget,
     threads,
     set_memory_budget,
@@ -52,7 +53,8 @@ __all__ = [
     "MixtureTooLarge",
 
     "BeamModel", "Atoms", "Builder", "Calibration", "Histogram",
-    "PseqAnalysis", "effective_threads", "memory_budget",
+    "PseqAnalysis", "effective_threads", "file_provenance_span",
+    "memory_budget",
     "threads", "set_memory_budget", "set_threads",
     "PublicnessModel",
     "Attribution", "ScaleIndex", "attribute",

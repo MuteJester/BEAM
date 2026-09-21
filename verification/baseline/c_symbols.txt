@@ -33,8 +33,8 @@ beam_frozen_row
 beam_frozen_row_id
 beam_frozen_thaw
 beam_insights_logo_cost
-beam_insights_logos
 beam_insights_logo_set_free
+beam_insights_logos
 beam_last_error
 beam_layer_max
 beam_layer_weights
@@ -66,6 +66,7 @@ beam_model_compact
 beam_model_config
 beam_model_config_default
 beam_model_config_default_for
+beam_model_depth_occupancy
 beam_model_destroy
 beam_model_drop_caches
 beam_model_effective_threads
@@ -73,6 +74,7 @@ beam_model_entropy
 beam_model_expected_counts
 beam_model_expected_counts_free
 beam_model_explain
+beam_model_file_provenance_span
 beam_model_finalize
 beam_model_freeze_counts
 beam_model_frozen_bytes
@@ -92,18 +94,19 @@ beam_model_log_pseq_batch
 beam_model_memory_budget
 beam_model_memory_bytes
 beam_model_n_cells
-beam_model_new
 beam_model_n_nonzero_cells
 beam_model_n_observed
 beam_model_n_residues
 beam_model_n_skipped
 beam_model_n_states
+beam_model_new
 beam_model_observe
 beam_model_path_count
 beam_model_path_count_total
 beam_model_positional_banded
 beam_model_positional_marginals
 beam_model_posterior
+beam_model_provenance
 beam_model_radix
 beam_model_release_frozen
 beam_model_sample
@@ -119,8 +122,8 @@ beam_model_surprisal_cumulants
 beam_model_surprisal_moments
 beam_model_surprisal_range
 beam_model_surprisal_tilt
-beam_model_thaw_counts
 beam_model_thaw_count_table
+beam_model_thaw_counts
 beam_model_threads
 beam_model_top_k
 beam_model_topology
@@ -178,8 +181,8 @@ beam_query_resolve
 beam_query_work_alloc
 beam_query_work_free
 beam_raw_log_weight
-beam_rescale_flushes
 beam_rescale_flush_reset
+beam_rescale_flushes
 beam_rescale_note_flush
 beam_rng_seed
 beam_set_error

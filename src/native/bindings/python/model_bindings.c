@@ -309,6 +309,65 @@ BEAM_SCALAR(n_cells,         beam_model_n_cells(m),         PyLong_FromUnsignedL
 BEAM_SCALAR(n_nonzero_cells, beam_model_n_nonzero_cells(m), PyLong_FromUnsignedLongLong)
 BEAM_SCALAR(memory_bytes,    beam_model_memory_bytes(m),    PyLong_FromUnsignedLongLong)
 BEAM_SCALAR(live_cache_bytes, beam_model_live_cache_bytes(m), PyLong_FromUnsignedLongLong)
+
+/*
+ * Provenance, as one tuple rather than three accessors, because the three are
+ * always wanted together and three round trips through a capsule to answer
+ * one question is three chances to answer it inconsistently.
+ */
+PyObject *py_provenance(PyObject *self, PyObject *arg) {
+    (void)self;
+    BeamModel *m = edge_from_capsule(arg);
+    if (!m) return NULL;
+    int64_t created = 0, obs = 0, fin = 0;
+    const BeamError e = beam_model_provenance(m, &created, &obs, &fin);
+    if (e != BEAM_OK) return set_beam_error(e);
+    return Py_BuildValue("(LLL)", (long long)created, (long long)obs,
+                         (long long)fin);
+}
+
+/* Where a saved model keeps its build timestamps, as (offset, bytes).
+ * A property of the FORMAT, not of any model, so it takes no argument: the
+ * byte-level baseline needs it before it has a model to ask. */
+PyObject *py_file_provenance_span(PyObject *self, PyObject *args) {
+    (void)self; (void)args;
+    size_t off = 0, len = 0;
+    beam_model_file_provenance_span(&off, &len);
+    return Py_BuildValue("(KK)", (unsigned long long)off,
+                         (unsigned long long)len);
+}
+
+/* Occupied rows and cells per (direction, depth), as two flat lists. */
+PyObject *py_depth_occupancy(PyObject *self, PyObject *arg) {
+    (void)self;
+    BeamModel *m = edge_from_capsule(arg);
+    if (!m) return NULL;
+    const uint32_t W = beam_model_config(m)->max_length;
+    const size_t n = (size_t)2u * W;
+    uint64_t *rows = (uint64_t *)malloc(n * sizeof(uint64_t));
+    uint64_t *cells = (uint64_t *)malloc(n * sizeof(uint64_t));
+    if (!rows || !cells) {
+        free(rows); free(cells);
+        return beam_py_nomem("the depth occupancy buffers",
+                             (uint64_t)2u * n * sizeof(uint64_t));
+    }
+    BeamError err;
+    Py_BEGIN_ALLOW_THREADS
+    err = beam_model_depth_occupancy(m, rows, cells);
+    Py_END_ALLOW_THREADS
+    if (err != BEAM_OK) { free(rows); free(cells); return set_beam_error(err); }
+    PyObject *lr = PyList_New((Py_ssize_t)n), *lc = PyList_New((Py_ssize_t)n);
+    if (!lr || !lc) { Py_XDECREF(lr); Py_XDECREF(lc); free(rows); free(cells);
+                      return NULL; }
+    for (size_t i = 0; i < n; ++i) {
+        PyList_SET_ITEM(lr, (Py_ssize_t)i,
+                        PyLong_FromUnsignedLongLong(rows[i]));
+        PyList_SET_ITEM(lc, (Py_ssize_t)i,
+                        PyLong_FromUnsignedLongLong(cells[i]));
+    }
+    free(rows); free(cells);
+    return Py_BuildValue("(NN)", lr, lc);
+}
 /*
  * Not BEAM_SCALAR, which is for accessors that cannot fail. This one reports
  * failure as 0.0 with the error set, and 0.0 is also a legitimate total, so

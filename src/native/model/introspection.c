@@ -117,3 +117,65 @@ double beam_model_log_partition(const BeamModel *m, uint32_t length) {
     beam_clear_error();
     return m->log_z[length];
 }
+
+/*
+ * Occupied rows and cells per (direction, depth).
+ *
+ * This is what "how much of the dictionary did we discover" is built from.
+ * A sequence of length L reads forward depths 0..L-1 and backward depths
+ * 0..L-1, so the rows available to it are exactly those below L, and the
+ * rows that COULD exist are `L * n_ctx` per direction. Bucketing occupancy
+ * by depth here lets a caller answer that for every length from one sweep.
+ *
+ * Counted through `beam_lp_row` rather than by walking the payload, for the
+ * same reason `n_nonzero_cells` does: a packed table's payload holds
+ * dictionary indices, not values, and reading it as doubles gives a number
+ * that looks right. The accessor is the only thing that knows which form the
+ * table is in.
+ *
+ * The C-anchored table is packed nearest-first, which relabels the CONTEXT
+ * within a row index and leaves the depth part alone. Counting per depth is
+ * therefore unaffected by the packing, which is why this does not need the
+ * reversal helpers.
+ */
+BeamError beam_model_depth_occupancy(const BeamModel *m,
+                                     uint64_t *rows, uint64_t *cells) {
+    if (!m || !rows || !cells)
+        return BEAM_ENULL(!m ? "model" : (!rows ? "rows" : "cells"));
+    if (!m->finalized) return BEAM_ENOTBUILT();
+    const uint32_t W = m->max_len, R = m->n_residues, nc = m->n_ctx;
+    for (uint32_t i = 0; i < (uint32_t)BEAM_DIRS * W; ++i) rows[i] = cells[i] = 0;
+    for (uint32_t d = 0; d < BEAM_DIRS; ++d) {
+        for (uint32_t depth = 0; depth < W; ++depth) {
+            uint64_t nr = 0, ncell = 0;
+            for (uint32_t c = 0; c < nc; ++c) {
+                const BeamLogRow r = beam_lp_row(m, d, depth, c);
+                if (!r.present) continue;
+                uint32_t live = 0;
+                for (uint32_t x = 0; x < R; ++x)
+                    if (beam_log_cell(&r, x) != -INFINITY) live++;
+                if (live) { nr++; ncell += live; }
+            }
+            rows[d * W + depth] = nr;
+            cells[d * W + depth] = ncell;
+        }
+    }
+    return BEAM_OK;
+}
+
+/*
+ * When the model was first built, and what observing and finalizing cost.
+ *
+ * One call for three because they are always wanted together, and because a
+ * caller assembling them from three accessors could assemble them from three
+ * different models without noticing.
+ */
+BeamError beam_model_provenance(const BeamModel *m, int64_t *created_unix,
+                                int64_t *observe_nanos,
+                                int64_t *finalize_nanos) {
+    if (!m) return BEAM_ENULL("model");
+    if (created_unix)   *created_unix   = m->created_unix;
+    if (observe_nanos)  *observe_nanos  = m->observe_nanos;
+    if (finalize_nanos) *finalize_nanos = m->finalize_nanos;
+    return BEAM_OK;
+}

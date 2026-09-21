@@ -478,6 +478,17 @@ tests/python/model/test_generation.py::test_sample_is_reproducible
 tests/python/model/test_generation.py::test_sample_respects_the_model
 tests/python/model/test_generation.py::test_simulate_is_reproducible
 tests/python/model/test_generation.py::test_simulate_returns_a_simulation_result
+tests/python/model/test_metadata.py::test_build_time_aggregates_across_observe_calls
+tests/python/model/test_metadata.py::test_coverage_grows_with_length_while_the_data_does
+tests/python/model/test_metadata.py::test_coverage_is_a_fraction_and_rows_bound_cells
+tests/python/model/test_metadata.py::test_lengths_can_be_skipped
+tests/python/model/test_metadata.py::test_metadata_reports_a_real_creation_time
+tests/python/model/test_metadata.py::test_provenance_is_the_only_thing_two_identical_builds_disagree_on
+tests/python/model/test_metadata.py::test_provenance_survives_a_round_trip
+tests/python/model/test_metadata.py::test_shares_sum_to_one
+tests/python/model/test_metadata.py::test_size_agrees_with_the_accessors
+tests/python/model/test_metadata.py::test_support_is_off_by_default_and_exact_when_asked
+tests/python/model/test_metadata.py::test_the_possible_row_count_is_the_length_times_the_vocabulary
 tests/python/model/test_nucleotide.py::test_N_is_a_residue_and_other_iupac_codes_are_not
 tests/python/model/test_nucleotide.py::test_a_configuration_larger_than_the_budget_is_refused
 tests/python/model/test_nucleotide.py::test_a_nucleotide_model_round_trips_through_a_file

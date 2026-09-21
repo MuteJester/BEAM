@@ -34,7 +34,8 @@
  * rebuilt. */
 #define BEAM_MAGIC        0x4245414Du   /* "BEAM" */
 #define BEAM_MAGIC_LEGACY 0x45444745u   /* "EDGE", pre-split; rejected */
-#define BEAM_FORMAT   6u
+#define BEAM_FORMAT   7u
+#define BEAM_FORMAT_V6       6u
 #define BEAM_FORMAT_V5       5u
 #define BEAM_FORMAT_V4       4u
 #define BEAM_FORMAT_V3       3u
@@ -62,8 +63,21 @@ typedef struct {
      * from ~230 to ~17,500 nats.
      */
     uint32_t strict;
-    double   dead_coef[3];     /* format 5 and older; zero since 6 */
-    double   kappa0, kappa1, kappa2;
+    /*
+     * Format 7: provenance. Three facts a finished model cannot recompute
+     * about itself, in the bytes formats 1 to 5 spent on the expert mixing
+     * coefficients. Same size, same alignment, so the header stays 144 bytes
+     * and its static assertion keeps working as a tripwire.
+     *
+     * Persisted because they are not derivable. Everything else a caller
+     * might want -- size, occupancy, what the model can spell -- is computed
+     * from the tables on demand, and storing it would be a second copy to
+     * keep in step.
+     */
+    int64_t  created_unix;
+    int64_t  observe_nanos;
+    int64_t  finalize_nanos;
+    double   dead_kappa3[3];   /* format 5 and older; zero since 6 */
     double   dead_kappa[2];    /* format 5 and older; zero since 6 */
     double   weight_forward, weight_backward;
     /* Format 2: 0.0 for dense count blocks, 1.0 for sparse row records.
@@ -104,6 +118,25 @@ typedef struct {
  * the tail is two explicit words rather than one word and a hole. */
 _Static_assert(sizeof(BeamHeader) == 144, "the format-3 header is 144 bytes");
 _Static_assert(BEAM_HEADER_V2_BYTES == 136, "formats 1 and 2 wrote 136 bytes");
+
+/*
+ * The three provenance fields are contiguous and stay that way: the span is
+ * taken from the first and the last rather than written as a number, so
+ * reordering the struct moves the window instead of silently mis-aiming it.
+ */
+void beam_model_file_provenance_span(size_t *offset, size_t *bytes) {
+    const size_t first = offsetof(BeamHeader, created_unix);
+    const size_t last_end = offsetof(BeamHeader, finalize_nanos)
+                          + sizeof(((BeamHeader *)0)->finalize_nanos);
+    if (offset) *offset = first;
+    if (bytes) *bytes = last_end - first;
+}
+_Static_assert(offsetof(BeamHeader, observe_nanos)
+                   == offsetof(BeamHeader, created_unix) + 8,
+               "the provenance fields must stay contiguous");
+_Static_assert(offsetof(BeamHeader, finalize_nanos)
+                   == offsetof(BeamHeader, created_unix) + 16,
+               "the provenance fields must stay contiguous");
 
 static bool write_all(FILE *f, const void *p, size_t n, uint32_t *crc) {
     if (n && fwrite(p, 1, n, f) != n) return false;
@@ -376,7 +409,9 @@ BeamError beam_model_save(const BeamModel *m, const char *path) {
     h.dead_depth_cap  = 0u;
     h.max_length      = m->cfg.max_length;
     h.strict          = m->cfg.strict ? 1u : 0u;
-    h.dead_coef[0] = h.dead_coef[1] = h.dead_coef[2] = 0.0;
+    h.created_unix    = m->created_unix;
+    h.observe_nanos   = m->observe_nanos;
+    h.finalize_nanos  = m->finalize_nanos;
 
 
 
@@ -480,7 +515,7 @@ BeamModel *beam_model_load(const char *path) {
             return (void)BEAM_FAIL(BEAM_ERR_IO_CORRUPT,
                                   "beam_model_load: '%s' is not a BEAM model "
                                   "file (wrong magic number)", path), NULL;
-        if (got >= BEAM_FORMAT_DENSE_V1 && got <= BEAM_FORMAT_V5)
+        if (got >= BEAM_FORMAT_DENSE_V1 && got <= BEAM_FORMAT_V6)
             return (void)BEAM_FAIL(BEAM_ERR_IO_CORRUPT,
                                   "beam_model_load: '%s' is a format %u BEAM "
                                   "model, written by a build with three "
@@ -593,6 +628,16 @@ BeamModel *beam_model_load(const char *path) {
     m->total_weight = h.total_weight;
     m->n_observed   = h.n_observed;
     m->n_skipped    = h.n_skipped;
+    /*
+     * Provenance survives the round trip, and that is the point of storing
+     * it. A model loaded from disk reports when it was FIRST built and what
+     * the whole build cost, not when it was loaded and what loading cost.
+     * Re-finalizing on load adds to `finalize_nanos`, which is honest: that
+     * is work this model has had done to it.
+     */
+    m->created_unix   = h.created_unix;
+    m->observe_nanos  = h.observe_nanos;
+    m->finalize_nanos = h.finalize_nanos;
 
     /* Same as `beam_model_new`: finalize's own error is the useful one. */
     if (beam_model_finalize(m) != BEAM_OK) {

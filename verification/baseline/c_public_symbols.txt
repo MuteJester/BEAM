@@ -22,6 +22,7 @@ beam_model_compact
 beam_model_config
 beam_model_config_default
 beam_model_config_default_for
+beam_model_depth_occupancy
 beam_model_destroy
 beam_model_drop_caches
 beam_model_effective_threads
@@ -29,6 +30,7 @@ beam_model_entropy
 beam_model_expected_counts
 beam_model_expected_counts_free
 beam_model_explain
+beam_model_file_provenance_span
 beam_model_finalize
 beam_model_hill_number
 beam_model_is_finalized
@@ -57,6 +59,7 @@ beam_model_path_count_total
 beam_model_positional_banded
 beam_model_positional_marginals
 beam_model_posterior
+beam_model_provenance
 beam_model_radix
 beam_model_sample
 beam_model_save

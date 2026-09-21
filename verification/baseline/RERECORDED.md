@@ -1262,3 +1262,89 @@ re-measured. The constant still selects the right representation, which is
 what the occupancy figures above establish; whether the crossover point moved
 is a benchmark, and it would change only how much memory is returned, not
 which answers come out.
+
+# Why six baselines were re-recorded for model metadata
+
+Re-recorded 2026-09-21, tag `premeta`, for `BeamModel.metadata()` and the
+format-7 provenance it reads. The previous files are kept as `*.premeta.*`.
+
+## What moved, from a diff of the files rather than from the gate's output
+
+    python_api.txt       1 line changed, 2 added, 0 gone
+    pytest_cases.txt     11 added, 0 gone
+    c_cases.txt          2 added, 0 gone
+    cbeam_methods.txt    3 added, 0 gone
+    c_symbols.txt        3 added, 0 gone
+    c_public_symbols.txt 3 added, 0 gone
+    numeric.json         1 key changed: fixture_sha256
+    threads.json         byte-identical
+
+The gate prints six added pytest cases and the file gained eleven. Both are
+right and the file is the one to quote: the gate compares deduplicated test
+NAMES, and five of the eleven are names that already existed elsewhere in the
+suite. This section is written from `diff`, which is why it disagrees.
+
+Added, and none of them replaces anything:
+
+  - `metadata(self, *, lengths=True, support=False)` on BeamModel, and the
+    module-level `file_provenance_span()`.
+  - Eleven cases in `tests/python/model/test_metadata.py`.
+  - Two C cases: `test_provenance_is_recorded_and_aggregated` and
+    `test_depth_occupancy_sums_to_the_nonzero_cells`.
+  - Three public C symbols, and the three `_cbeam` callables over them:
+    `beam_model_provenance`, `beam_model_depth_occupancy`,
+    `beam_model_file_provenance_span`.
+
+`c_symbols.txt`, `c_public_symbols.txt` and `cbeam_methods.txt` are not
+written by `--record`, by design: adding a public symbol should be a
+deliberate edit rather than a side effect of a recording run. They were edited
+by hand to add exactly the three names above.
+
+## The digest moved, the file did not
+
+    fixture_bytes   233050 -> 233050   (unchanged)
+    fixture_sha256  9661451a... -> cba4c711...
+
+The saved file is the same SIZE because provenance was written into bytes the
+header already had: three `int64` fields in the space formats 1 to 5 spent on
+the expert mixing coefficients, which the single-expert model left dead. The
+static assertion that the header is 144 bytes is unchanged and still fires.
+
+The digest moved because what is hashed moved, not because the bytes did. A
+`.beam` file used to be a pure function of the corpus, and `fixture_sha256`
+hashed the whole of it. Three of those bytes now read a clock, so hashing the
+whole file would compare a timestamp against a recording of itself and fail
+every run from here on. That is a genuine loss and it is stated rather than
+absorbed: the check now hashes everything EXCEPT the provenance window and the
+trailing CRC that covers it.
+
+Two things keep that from being a quiet weakening:
+
+  - The window is not hardcoded anywhere. `beam_model_file_provenance_span`
+    derives it with `offsetof` from the first and last provenance field, with
+    static assertions that the three stay contiguous, and both callers --
+    `check.py` and `test_saving_a_frozen_model_writes_the_same_bytes` -- ask
+    for it. A field added between them moves the window instead of leaving a
+    stale offset aimed at payload.
+  - The C test asserts the arithmetic of its own skip list: the window is 24
+    bytes, and the number of bytes it compared is exactly the file size minus
+    that window minus the four-byte CRC. A skip list that grew to swallow
+    payload fails there rather than passing quietly.
+    `test_provenance_is_the_only_thing_two_identical_builds_disagree_on`
+    checks the same property from Python and decodes the window to confirm it
+    is aimed at the timestamps and not at dead bytes.
+
+So the reach that was lost is 28 bytes of a 233,050-byte file, all three
+fields of it unreadable as anything but a clock.
+
+## What did NOT move, which is the argument that nothing broke
+
+`numeric.json` holds 80 lines. The 78 the gate compares -- every count,
+probability, entropy, Hill number and partition function in it -- are
+bit-identical across this change, and `fixture_bytes` is unchanged too, so
+`fixture_sha256` is the only line that moved;
+`threads.json` is byte-identical; `exact` still passes 336 quantities against
+brute-force enumeration at 8.8% of its worst tolerance. Metadata only reads
+the model -- it computes occupancy from the tables and returns stored
+timestamps -- so no count, no probability and no table could move, and these
+three are what say so rather than the claim.

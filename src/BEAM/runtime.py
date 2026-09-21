@@ -69,3 +69,21 @@ def set_memory_budget(nbytes: int) -> None:
 def memory_budget() -> int:
     """The scratch budget in force, in bytes."""
     return int(_c.memory_budget())
+
+
+def file_provenance_span() -> tuple[int, int]:
+    """Where a saved model keeps its build timestamps: ``(offset, bytes)``.
+
+    Every other byte of a ``.beam`` file is decided by the sequences, the
+    weights and the config, so building the same model twice writes the same
+    file. The three provenance fields are the exception by construction, since
+    they read a clock, and the trailing four-byte checksum covers them and so
+    moves with them.
+
+    This exists so a byte-for-byte comparison of two saved models can skip
+    exactly those and nothing else, taking the window from the format rather
+    than hardcoding an offset that a later field would move. It is a property
+    of the file format, not of any particular model.
+    """
+    off, nbytes = _c.file_provenance_span()
+    return int(off), int(nbytes)

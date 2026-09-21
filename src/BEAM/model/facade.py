@@ -9,6 +9,8 @@ if TYPE_CHECKING:  # annotations only
     from ..analytics.pseq import PseqAnalysis
     from ..analytics.calibration import Calibration
 
+import datetime as _datetime
+from importlib.metadata import version as _dist_version, PackageNotFoundError
 import math
 import operator
 import os
@@ -455,6 +457,126 @@ class BeamModel:
         """
         return {L: math.exp(self.log_length_prior(L))
                 for L in self.observed_lengths}
+
+    @staticmethod
+    def _pkg_version() -> str:
+        try:
+            return _dist_version("beam-model")
+        except PackageNotFoundError:            # an uninstalled source tree
+            return "unknown"
+
+    def metadata(self, *, lengths: bool = True,
+                 support: bool = False) -> dict[str, Any]:
+        """Everything the model knows about itself.
+
+        Three of these are STORED, because a finished model cannot recompute
+        them: when it was first built, and how much wall time went into
+        observing and into finalizing. They survive :meth:`save` and
+        :meth:`from_file`, so a model loaded from disk reports when it was
+        built rather than when it was loaded. Re-finalizing adds to the
+        finalize total, which is the honest reading: that is work this model
+        has had done to it.
+
+        Everything else is derived on demand. Storing it would be a second
+        copy to keep in step with the tables, and the tables are the truth.
+
+        Args:
+            lengths: include the per-length breakdown. One sweep over the
+                tables, so it costs something on a large model.
+            support: include ``path_count`` per length, which is how many
+                distinct sequences of that length the model can spell. A
+                separate dynamic program PER LENGTH, so it is off by default
+                and is the expensive part of this call by a wide margin.
+
+        The per-length entries answer "how much of what this length admits
+        has this model actually seen". A sequence of length ``L`` is scored
+        through forward depths ``0..L-1`` and backward depths ``0..L-1``, so
+        the rows it can possibly use number ``2 * L * radix ** order``, and
+        ``row_coverage`` is the fraction of those the model holds. ``cells``
+        is the same question one level down, counting residues within rows
+        rather than rows.
+
+        ``share`` is that length's mass under the length prior, so the
+        coverage figures can be weighted by how much of the model actually
+        lives at each length.
+
+        >>> m = BeamModel(["CASSLGEQYF", "CASSQDTQYF"], order=2, max_length=12)
+        >>> meta = m.metadata()
+        >>> meta["config"]["order"]
+        2
+        >>> meta["lengths"][10]["rows_possible"]
+        8820
+        """
+        cfg = self.config
+        created_unix, obs_ns, fin_ns = _c.provenance(self._g)
+        radix = alphabets.info(self.alphabet)["radix"]
+        n_res = self.n_residues
+        width = int(cfg["max_length"])
+        order = int(cfg["order"])
+        n_ctx = radix ** order
+        cells = self.n_cells
+
+        out: dict[str, Any] = {
+            "created": _datetime.datetime.fromtimestamp(
+                created_unix, _datetime.timezone.utc).isoformat(),
+            "created_unix": int(created_unix),
+            "beam_version": self._pkg_version(),
+            "variant": self.variant,
+            "finalized": True,
+            "config": cfg,
+            "build": {
+                "observe_seconds": obs_ns / 1e9,
+                "finalize_seconds": fin_ns / 1e9,
+                "total_seconds": (obs_ns + fin_ns) / 1e9,
+                "n_observed": self.n_observed,
+                "n_skipped": self.n_skipped,
+                "n_sequences": self.n_sequences,
+                "total_weight": self.total_weight,
+            },
+            "size": {
+                "n_states": self.n_states,
+                "n_cells": cells,
+                "n_nonzero_cells": self.n_nonzero_cells,
+                "occupancy": (self.n_nonzero_cells / cells) if cells else 0.0,
+                "memory_bytes": self.memory_bytes,
+            },
+        }
+        if not lengths:
+            return out
+
+        rows, cell_counts = _c.depth_occupancy(self._g)
+        prior = self.length_distribution
+        per: dict[int, dict[str, Any]] = {}
+        for L in self.observed_lengths:
+            # Depths 0..L-1 in each direction are what a length-L sequence
+            # reads, so those are the rows it could possibly be scored through.
+            seen_rows = sum(rows[d * width + k] for d in (0, 1)
+                            for k in range(L))
+            seen_cells = sum(cell_counts[d * width + k] for d in (0, 1)
+                             for k in range(L))
+            poss_rows = 2 * L * n_ctx
+            poss_cells = poss_rows * n_res
+            entry: dict[str, Any] = {
+                "share": float(prior.get(L, 0.0)),
+                "rows_possible": poss_rows,
+                "rows_observed": int(seen_rows),
+                "row_coverage": seen_rows / poss_rows if poss_rows else 0.0,
+                "cells_possible": poss_cells,
+                "cells_observed": int(seen_cells),
+                "cell_coverage": seen_cells / poss_cells if poss_cells else 0.0,
+                "log_partition": self.log_partition(L),
+            }
+            if support:
+                pc = self.path_count(L)
+                entry["path_count"] = pc
+                # Of every string of this length, not every string the model
+                # was shown. log10 because the denominator reaches 1e35.
+                entry["log10_spellable_fraction"] = (
+                    math.log10(pc) - L * math.log10(n_res)
+                    if pc > 0.0 else float("-inf"))
+            per[int(L)] = entry
+        out["lengths"] = per
+        return out
 
     def pgen_diagnostics(self) -> dict[str, Any]:
         """Measure, rather than assert, that this is a proper distribution.

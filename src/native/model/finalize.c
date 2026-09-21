@@ -6,6 +6,7 @@
 
 #include "beam/internal.h"
 #include "beam/model_build.h"
+#include "beam/provenance.h"
 
 
 
@@ -399,7 +400,7 @@ static BeamError finalize_tables(BeamModel *st) {
  * that has just been released. Callers that release the GIL must serialise
  * this against every reader.
  */
-BeamError beam_model_finalize(BeamModel *m) {
+static BeamError finalize_body(BeamModel *m) {
     if (!m) return BEAM_FAIL(BEAM_ERR_NULL_ARG, "finalize: model must not be NULL");
     /* The live cache is a projection of the finalized tables; anything
      * that changes the counts or rebuilds the tables makes it a record of
@@ -489,4 +490,15 @@ BeamError beam_model_finalize(BeamModel *m) {
         }
     }
     return BEAM_OK;
+}
+
+/*
+ * The public entry, which exists only to time the body. Aggregated across
+ * re-finalizes, because re-finalizing is work the model has had done to it.
+ */
+BeamError beam_model_finalize(BeamModel *m) {
+    const int64_t t0 = beam_now_nanos();
+    const BeamError e = finalize_body(m);
+    if (m) m->finalize_nanos += beam_now_nanos() - t0;
+    return e;
 }

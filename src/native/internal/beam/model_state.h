@@ -92,6 +92,20 @@ struct BeamModel_ {
     uint32_t max_len;        /* W, and the depth axis: depth is in [0, W)     */
     uint32_t n_len_slots;    /* W + 1, so index [L] is valid for L = max_len  */
 
+    /*
+     * Provenance: the three facts a finished model cannot recompute about
+     * itself. See internal/beam/provenance.h for why the clocks differ.
+     *
+     * `observe_nanos` aggregates across every call, so a model built by
+     * streaming a hundred chunks reports what the whole build cost rather
+     * than what the last chunk did. `finalize_nanos` does the same across
+     * re-finalizes, which is the honest reading: re-finalizing is work the
+     * model has had done to it.
+     */
+    int64_t  created_unix;
+    int64_t  observe_nanos;
+    int64_t  finalize_nanos;
+
     /* Raw abundance counts. NULL after beam_model_compact(). */
     double *cnt[BEAM_DIRS];
     double *cnt_length;      /* [n_len_slots] observed length distribution    */

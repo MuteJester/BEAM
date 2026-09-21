@@ -5,6 +5,7 @@
 #include <stdio.h>
 
 #include "beam/internal.h"
+#include "beam/provenance.h"
 #include "beam/memory.h"
 #include "beam/model_build.h"
 
@@ -83,6 +84,7 @@ BeamModel *beam_model_new(const BeamModelConfig *cfg) {
     }
     m->cfg          = c;
     m->alpha        = a;
+    m->created_unix = beam_now_unix();
     m->n_residues   = a->residues;
     m->n_alphabet   = a->radix;
     m->none_idx     = a->none;
