@@ -98,6 +98,21 @@ What replaces it, in increasing order of authority:
 3. Rebuild the 927M foundation on ig05 and compare the file sha256 against
    `3aa59ba3dd7b6f95cdb1f2ad4d43b5bc30f7260ebbc9d03fd2d70a628c553dae`.
 
+   **This recipe no longer works, and the digest above is from format 5.**
+   A `.beam` header now carries three build timestamps, so a whole-file
+   sha256 differs on every rebuild however identical the model. Hash the
+   file with that window and the trailing CRC removed instead -- the format
+   says where the window is, so nothing here hardcodes an offset:
+
+       import hashlib, BEAM
+       raw = open(path, "rb").read()
+       off, n = BEAM.file_provenance_span()          # (24, 24) today
+       print(hashlib.sha256(raw[:off] + raw[off + n:-4]).hexdigest())
+
+   That covers the entire payload and every other header field; the reach
+   given up is 28 bytes, three of them a clock and four a checksum over it.
+   `verification/check.py` does exactly this for its own fixture.
+
 Step 3 is the one that matters and it costs 6.3 minutes. It exercises every
 table, both directions, all 25 lengths and the full sparse finalize path at a
 scale no fixture reaches. Run it for phases 5, 6 and 7.

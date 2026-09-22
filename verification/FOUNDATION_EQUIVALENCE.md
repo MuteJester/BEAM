@@ -23,7 +23,15 @@ order 4, depth_cap 15, max_length 27, strict, sparse, coefficients
 ## Result
 
 Bytes 5 through size-4, which is everything except the four magic bytes and
-the trailing CRC that covers them:
+the trailing CRC that covers them.
+
+**That span is no longer sufficient.** It skips the magic and the checksum
+but not the provenance window at bytes 24-47, which holds three build
+timestamps and therefore differs between any two builds. To repeat this
+comparison, remove that window too -- see the recipe in
+`REORGANIZATION.md`. The digests below stand as a record of what was compared
+in August 2026, on format-5 files that had no such window.
+
 
     a9831c12a6e56792a59a39a64a823f31e5595c0a3141652b026ac13e1f261003   EDGE
     a9831c12a6e56792a59a39a64a823f31e5595c0a3141652b026ac13e1f261003   BEAM
