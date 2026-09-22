@@ -134,11 +134,25 @@ sixteen**: 3.6× the work for 4.4× the wall clock. `log_gram_matrix()` instead
 hands one pair to each thread:
 
 ```
-16 donors, order 4, 136 pairs
-  threads=1    19.87s   146.1 ms/pair   speedup 1.00x   efficiency 100%
-  threads=4     4.64s    34.1 ms/pair   speedup 4.28x   efficiency 107%
-  threads=16    2.65s    19.5 ms/pair   speedup 7.50x   efficiency  47%
+16 models of 30,000 sequences, order 4, max_length 27, 136 pairs
+  threads=1    19.80s   145.6 ms/pair   speedup 1.00x   efficiency 100%
+  threads=4     6.48s    47.6 ms/pair   speedup 3.06x   efficiency  77%
+  threads=16    3.53s    26.0 ms/pair   speedup 5.61x   efficiency  35%
 ```
+
+Re-measured, and the efficiencies moved: this table previously read 4.28x at
+four threads (107%, superlinear) and 7.50x at sixteen (47%). Neither
+reproduces. Measured against a build of the three-expert model on the same
+corpus and the same machine, the efficiencies are **the same on both** --
+77.5% and 34.7% there against 76.5% and 35.0% here -- so nothing regressed
+with the model change; the old figures were a machine state that does not
+come back.
+
+What the model change did do is make every pair cheaper: 187.1 -> 145.6
+ms/pair at one thread and 33.7 -> 26.0 at sixteen, about 1.3x throughout.
+
+Absolute times depend on the corpus, and this one is synthetic. Treat the
+efficiencies and the old/new ratio as the transferable numbers.
 
 Better than the length axis at every thread count, but **not linear**: the
 sweep is memory-bandwidth bound, so one host saturates around 7–8× whichever
@@ -149,6 +163,12 @@ own memory system — so a cohort-scale Gram matrix is a cluster job sized in
 Worked, for a 38,538-repertoire cohort: 742,607,991 pairs at 0.146 core-seconds
 is **3.4 core-years**, which is ~170 days on one 16-core node and ~5 days on 32
 of them. The single-core figure is real, but it is not the wall clock.
+
+Read that as an **upper bound**. The 0.146 predates the single-expert model,
+which costs 1.3x less per pair on the same corpus and the same machine
+(187.1 -> 145.6 ms), so the cohort figure should fall by about that much once
+it is re-measured on real repertoires. It has not been: the cohort is not on
+this machine.
 
 There is no shortcut. `sum_i w_i P_i(s)` does not factor over edges, and
 carrying an `M × M` accumulator per trellis state would fuse the pairs into one
