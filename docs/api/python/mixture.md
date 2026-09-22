@@ -181,21 +181,42 @@ Mixture(models_256).support_size(exact=False)   # bounds, free, any M
 
 Within 64 members, what binds the union is the number of distinct
 `(state, member-set)` pairs alive per layer — the quantity that could in
-principle reach `2^M`. Measured on donors of 6,000 sequences at order 2,
-`max_length` 12, varying how much the members disagree:
+principle reach `2^M`. `support_size()` reports the peak it reached in
+`peak_states`.
 
-| members drawn from | peak at `M = 8` | at `M = 32` | at `M = 64` | growth per doubling |
-|---|---|---|---|---|
-| 18 of 20 residues (near-identical) | 8,860 | 34,957 | 69,628 | ×1.99 — linear |
-| 12 of 20 (moderate) | 7,024 | 28,549 | 58,733 | ×2.00 → ×2.06 |
-| 7 of 20 (strongly disjoint) | 3,105 | 25,716 | 104,037 | ×2.20 → ×4.05 |
+!!! warning "The table that stood here has been withdrawn"
+    It read 8,860 / 34,957 / 69,628 pairs at `M` = 8 / 32 / 64 and concluded
+    that the `2^M` blow-up is "real but slow", peaking near 100,000 pairs and
+    about 5 MB. Two things make it unusable now.
 
-So the `2^M` blow-up is real but slow, and `M = 64` peaks near 100,000 pairs —
-about 5 MB against a default budget of 4.29 GB. `support_size()` reports the
-peak it reached in `peak_states`.
+    It was measured when an order-2 state held `max(order, 3)` = 3 residues,
+    so 9,261 states. A state now holds `order` residues: **441**, a state axis
+    21x smaller, and these are counts of `(state, member-set)` pairs.
 
-**What runs out before any of this** is holding the models: an order-4,
-`max_length` 27 donor model is ~218 MB, so 32 of them is 7 GB.
+    And its corpus is not recorded anywhere — no script in the tree
+    reproduces it, so "18 of 20 residues (near-identical)" cannot be rebuilt
+    faithfully. A substitute built from uniformly random strings over the same
+    alphabet subsets reached 26,957,765 pairs at `M` = 64 and exceeded the
+    exact-union ceiling outright at `M` = 32 for the moderate case, which says
+    the numbers are extremely sensitive to the axis the table varies rather
+    than that the old ones were merely stale.
+
+    Treat the blow-up as unquantified until it is re-measured with a stated
+    generator. `support_size(exact=False)` returns bounds for any `M` and is
+    the safe call meanwhile.
+
+**What runs out before any of this** is holding the models, though by far
+less than it used to. Measured on real 10x donors at order 4, `max_length` 27:
+a 33,146-sequence donor is 4.71 MiB and a 63,819-sequence one 6.40 MiB, with
+counts; compacted, 3.13 and 3.98 MiB. What drives the size is how many
+distinct contexts the corpus reaches rather than how many sequences it has, so
+a synthetic corpus of 200,000 uniformly random fills comes to 82 MiB where a
+real donor of similar size does not.
+
+This page previously said ~218 MB for a donor model, and 7 GB for 32 of them.
+That was measured when a model carried three tables per direction; it now
+carries one. The figure for an Emerson-scale donor has not been re-measured
+here, because that corpus is not on this machine.
 
 ## Refusals
 

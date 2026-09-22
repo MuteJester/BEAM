@@ -287,13 +287,17 @@ reports the conceptual dense shape, while `n_nonzero_cells` reports actual
 occupancy and `memory_bytes` reports the representation's resident storage.
 
 Row addressing is the one part that is not proportional to what was observed,
-and the two generations resolve it differently. **Counts** stay on a uint32
-directory over every dense row -- about 28.2 MiB per table set at the default
-dimensions -- because they are mutable and a row can still appear. **Finalized
-probabilities** are built once, so when at most one row in eight is occupied
-they are sealed into a bitmap-and-rank directory of about 1.1 MiB instead, a
-25x reduction that returns the same rows and the same doubles. Everything
-beyond the addressing layer is proportional to occupied 20-value rows.
+and each generation resolves it differently. While a model is still being
+observed, **counts** sit on a uint32 directory over every dense row -- four
+bytes each, so 40.06 MiB for both directions at the default dimensions,
+whatever the corpus -- because a row can still appear. When observation stops
+they are **frozen**, and the frozen form keeps no directory at all.
+
+**Finalized probabilities** are built once, so when at most one row in eight
+is occupied they are sealed into a bitmap-and-rank directory spending 1.25
+bits per row: 1.56 MiB for the same directory, a 25.6x reduction that returns
+the same rows and the same doubles. Everything beyond the addressing layer is
+proportional to occupied 20-value rows.
 
 Finalized rows are then de-duplicated. A context seen once normalises to one
 residue at exactly `0.0` and nineteen at `-inf`, and only twenty such rows can
@@ -310,8 +314,9 @@ occupancy and its own repetition, and `memory_bytes` reflects the choice. Per-re
 well under the threshold and are sealed; a corpus large enough to fill most of
 the row space -- 57.90% for the 927-million-sequence foundation -- keeps the
 direct directory, where it is faster. A one-sequence strict model therefore
-uses about 30 MB, and 1.2 MB after `compact()`, rather than allocating the
-2.4 GB dense count-plus-probability payload. On a 197,000-sequence repertoire
+uses 1.57 MiB, and the same after `compact()` -- at that size the sealed
+directory is nearly all of it and there are no counts worth releasing --
+rather than allocating the 3.13 GiB dense count-plus-probability payload. On a 197,000-sequence repertoire
 the two together take a compacted model from 125 MB to 34 MB, at a measured
 cost of about 12% on scoring and 10% on a mixture inner product.
 Pass `sparse=False` to build the bit-identical dense form for a comparison.
@@ -367,6 +372,8 @@ The denominator is the **reachable** ceiling, not every context the alphabet can
 This is checked rather than argued: enumerate every sequence of a length over the whole alphabet and the cells the model holds *are* the reachable set, so `cells_possible` must equal `n_nonzero_cells` and coverage must be exactly 1. `test_the_possible_cell_count_is_what_brute_force_occupies` asserts that at lengths 2, 3 and 4, and fails if the cell addressing in `indexing.h` ever changes.
 
 These count **observations**, read from the model's counts, so `strict=True` and `strict=False` report the same coverage for the same corpus and `cells_observed` summed over the lengths equals `n_nonzero_cells`. Reading them off the finalized tables instead would agree in the closed world and saturate in the open one, where the Laplace add-one leaves every cell finite — a two-sequence model would report that it had discovered the entire dictionary.
+
+**Do not sum `cells_observed` or `cells_possible` over lengths.** A cell is addressed by `(direction, depth, context)` with no length in the address, so a depth-3 cell is read by every length from 4 up and a sum counts it once per length. On a five-length model the sum is 1,907,884 where the model holds 429,248. The union is the **longest** length's figure, which equals `n_nonzero_cells`.
 
 The one model that cannot answer is a **compacted open-world** one: `compact()` releases the counts, and the add-one has already overwritten the evidence in the tables, so the four coverage keys are `None`. A compacted **strict** model is unaffected, because an unobserved cell is `-inf` in its finalized tables and stays that way.
 

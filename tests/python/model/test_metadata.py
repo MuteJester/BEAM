@@ -373,3 +373,36 @@ def test_coverage_is_unavailable_on_a_compacted_open_model():
     # The rest of the entry is still exact and still reported.
     assert e["rows_possible"] == 2 * sum(20 ** min(d, 2) for d in range(L))
     assert e["share"] > 0.0
+
+
+def test_cells_observed_may_not_be_summed_over_lengths():
+    """The union over lengths is the LONGEST length, not the sum.
+
+    A cell is addressed by (direction, depth, context) with no length in the
+    address, so a depth-3 cell is read by every length from 4 up and the same
+    cell is counted once per length. Summing gives 1,907,884 where the model
+    holds 429,248 -- more than four times too many -- and the per-length
+    ceilings nest the same way, which is why `parameter_discovery` takes the
+    union as a max rather than a sum.
+
+    This also cross-checks the frozen-counts branch of
+    `beam_model_depth_occupancy`: a sparse model freezes its counts at
+    finalize and a dense one does not, so the two reach the figure by
+    different code and must still agree exactly. The foundation model is
+    sparse, so the frozen branch is the one that runs at scale.
+    """
+    seqs, abund = make_corpus(n=3000, seed=17, lo=8, hi=12)
+    got = {}
+    for sparse in (True, False):
+        m = BeamModel(seqs, abundances=abund, order=4, max_length=14,
+                      strict=True, sparse=sparse)
+        meta = m.metadata()
+        per = {L: e["cells_observed"] for L, e in meta["lengths"].items()}
+        assert len(per) > 1, "a single length would make this vacuous"
+        assert max(per.values()) == meta["size"]["n_nonzero_cells"]
+        assert sum(per.values()) > meta["size"]["n_nonzero_cells"]
+        # Longer lengths read every depth a shorter one does, and then some.
+        seen = [per[L] for L in sorted(per)]
+        assert seen == sorted(seen)
+        got[sparse] = per
+    assert got[True] == got[False], "frozen and mutable counts must agree"
