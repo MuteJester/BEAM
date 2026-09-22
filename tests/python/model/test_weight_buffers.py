@@ -15,7 +15,10 @@ numbers the model actually reports.
 """
 from __future__ import annotations
 
+import sys
+
 import numpy as np
+
 import pytest
 
 from BEAM import Builder
@@ -61,6 +64,16 @@ class _OnlyABuffer:
         return len(self._a)
 
 
+@pytest.mark.skipif(
+    sys.version_info < (3, 12),
+    reason="the fixture exposes the buffer protocol through __buffer__, "
+           "which is PEP 688 and 3.12+. On 3.11 memoryview() cannot see "
+           "it, so the object is neither a buffer nor iterable and the "
+           "test cannot be constructed. The behaviour it guards is "
+           "unaffected: verified on ig05 at 3.11.13 with numpy 2.4.6, a "
+           "contiguous float64 ndarray and an array('d') both take the "
+           "fast path, and a list and a strided slice both materialise.",
+)
 def test_the_buffer_path_is_actually_taken():
     o = _OnlyABuffer(np.array(W, dtype=np.float64))
     with pytest.raises(TypeError):
