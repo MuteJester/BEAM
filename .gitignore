@@ -36,3 +36,12 @@ venv/
 
 # Verification evidence IS tracked; only the rebuildable fixture is not.
 !verification/
+
+# The runtime profile: the tool is tracked, its output is not. A measurement
+# belongs to the machine that took it -- runs/ is tens of MB of timings,
+# cache/ holds built models, and TIMINGS.md is regenerated from runs/ on every
+# invocation, so tracking it would churn a table nobody reads in a diff.
+tools/runtime_profile/runs/
+tools/runtime_profile/cache/
+tools/runtime_profile/TIMINGS.md
+tools/runtime_profile/*.log
