@@ -520,6 +520,23 @@ BeamError beam_model_explain(const BeamModel *m,
 /** Natural log of the partition function `Z(L)`. */
 double beam_model_log_partition(const BeamModel *m, uint32_t length);
 
+/**
+ * `log Z(L)` split across the positions it is a product over.
+ *
+ * `out` receives `length` entries: `log M_i`, the log of the trellis mass
+ * once residue `i` has been emitted. Differencing them gives the per-layer
+ * factors `Z(L)` is a product of, so a caller that must place `-log Z(L)` on
+ * individual positions takes the trellis's own split rather than choosing
+ * one. The last entry is `log Z(L)` itself and the differences telescope to
+ * it exactly.
+ *
+ * The sink is attributed to the last layer, as `beam_model_explain` does.
+ * Costs one forward sweep, where `beam_model_log_partition` reads a cached
+ * value.
+ */
+BeamError beam_model_log_partition_by_layer(BeamModel *m, uint32_t length,
+                                            double *out);
+
 /** Natural log of the length prior `pi(L)`, the observed length distribution. */
 double beam_model_log_length_prior(const BeamModel *m, uint32_t length);
 

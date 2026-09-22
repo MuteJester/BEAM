@@ -300,6 +300,68 @@ static void check_depth_occupancy(bool strict) {
     PASS();
 }
 
+static void test_log_z_splits_across_its_layers(void) {
+    /*
+     * `log Z(L)` is a forward sum over the trellis, and a forward sum
+     * factorises by layer. What this pins is that the factorisation is EXACT
+     * rather than approximate: the last running mass IS `log Z(L)` to the
+     * bit, so a caller distributing `-log Z(L)` over positions takes the
+     * trellis's own split instead of choosing one.
+     *
+     * The even split it replaces is not a small correction. On the fixture
+     * below one layer carries more than half of `-log Z` and four carry
+     * essentially none, where `1/L` would have put the same share on each.
+     */
+    const char *s[] = {"CASSLGEQYF", "CASSQDTQYF", "CASSLGTEAFF",
+                       "CASSPGTGFF", "CASRDTQYF", "CASSLGEQYW"};
+    double w[] = {40.0, 25.0, 18.0, 15.0, 12.0, 10.0};
+    BeamModelConfig c;
+    beam_model_config_default(&c);
+    c.order = 3u; c.max_length = 12u;
+    BeamModel *m = beam_model_new(&c);
+    ASSERT_MSG(m != NULL, "model did not allocate");
+    ASSERT_MSG(beam_model_observe(m, s, w, 6u) == BEAM_OK, "observe");
+    ASSERT_MSG(beam_model_finalize(m) == BEAM_OK, "finalize");
+
+    double lm[12];
+    ASSERT_MSG(beam_model_log_partition_by_layer(m, 0u, lm) != BEAM_OK,
+               "length 0 has no layers and must be refused");
+    ASSERT_MSG(beam_model_log_partition_by_layer(m, 99u, lm) != BEAM_OK,
+               "a length past the model must be refused");
+    ASSERT_MSG(beam_model_log_partition_by_layer(m, 10u, NULL) != BEAM_OK,
+               "a NULL destination must be refused");
+
+    uint32_t checked = 0, uneven = 0;
+    for (uint32_t L = 8; L <= 11; ++L) {
+        ASSERT_MSG(beam_model_log_partition_by_layer(m, L, lm) == BEAM_OK,
+                   "per-layer partition");
+        const double z = beam_model_log_partition(m, L);
+        if (z == -INFINITY) continue;
+        /* The telescoping end point, bit for bit. */
+        ASSERT_MSG(lm[L - 1u] == z,
+                   "the last running mass must BE log Z, not approximate it");
+        /* Differencing recovers it to rounding over L terms. */
+        double sum = 0.0, prev = 0.0, biggest = 0.0;
+        for (uint32_t i = 0; i < L; ++i) {
+            const double d = lm[i] - prev;
+            prev = lm[i];
+            sum += d;
+            if (fabs(d) > biggest) biggest = fabs(d);
+        }
+        ASSERT_MSG(fabs(sum - z) < 1e-12,
+                   "the per-layer shares must sum back to log Z");
+        /* And the split is NOT the even one it replaces. */
+        if (biggest > 4.0 * fabs(z) / (double)L) uneven++;
+        checked++;
+    }
+    ASSERT_MSG(checked > 0u, "no length was checked");
+    ASSERT_MSG(uneven > 0u,
+               "every layer carried an even share, so the split this exists "
+               "to replace would have done just as well");
+    beam_model_destroy(m);
+    PASS();
+}
+
 static void test_depth_occupancy_sums_to_the_nonzero_cells(void) {
     check_depth_occupancy(true);
 }
@@ -2827,6 +2889,7 @@ int main(void) {
 
     RUN_TEST(test_defaults_are_the_measured_ones);
     RUN_TEST(test_provenance_is_recorded_and_aggregated);
+    RUN_TEST(test_log_z_splits_across_its_layers);
     RUN_TEST(test_depth_occupancy_sums_to_the_nonzero_cells);
     RUN_TEST(test_depth_occupancy_is_not_saturated_by_the_open_world);
     RUN_TEST(test_single_anchor_weights_are_accepted);

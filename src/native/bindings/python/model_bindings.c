@@ -429,4 +429,32 @@ PyObject *py_accumulator_max(PyObject *self, PyObject *arg) {
     }
 
 BEAM_LEN_FN(log_partition,    beam_model_log_partition(m, L))
+
+/* `log Z(L)` split across its layers, as a list of `length` running masses.
+ * The caller differences them; the last entry is `log_partition(L)` exactly. */
+PyObject *py_log_partition_by_layer(PyObject *self, PyObject *args) {
+    (void)self;
+    PyObject *cap; unsigned int L;
+    if (!PyArg_ParseTuple(args, "OI", &cap, &L)) return NULL;
+    BeamModel *m = edge_from_capsule(cap);
+    if (!m) return NULL;
+    if (L == 0u) {
+        PyErr_SetString(PyExc_ValueError, "length must be at least 1");
+        return NULL;
+    }
+    double *buf = (double *)PyMem_Malloc((size_t)L * sizeof(double));
+    if (!buf) return beam_py_nomem("the per-layer partition buffer",
+                                   (uint64_t)L * sizeof(double));
+    BeamError err;
+    Py_BEGIN_ALLOW_THREADS
+    err = beam_model_log_partition_by_layer(m, L, buf);
+    Py_END_ALLOW_THREADS
+    if (err != BEAM_OK) { PyMem_Free(buf); return set_beam_error(err); }
+    PyObject *out = PyList_New((Py_ssize_t)L);
+    if (!out) { PyMem_Free(buf); return NULL; }
+    for (unsigned int i = 0; i < L; ++i)
+        PyList_SET_ITEM(out, (Py_ssize_t)i, PyFloat_FromDouble(buf[i]));
+    PyMem_Free(buf);
+    return out;
+}
 BEAM_LEN_FN(log_length_prior, beam_model_log_length_prior(m, L))

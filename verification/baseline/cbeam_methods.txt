@@ -25,6 +25,7 @@ log_length_prior
 log_mellin
 log_mellin_many
 log_partition
+log_partition_by_layer
 log_pseq
 log_pseq_batch
 memory_budget

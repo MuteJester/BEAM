@@ -43,7 +43,8 @@ static inline double logz_accumulate_rest(
  * is harmless: a path 700 nats below the layer's best contributes less than
  * 1e-300 of the total.
  */
-BeamError beam_compute_log_z(BeamModel *m, uint32_t len, double *out) {
+BeamError beam_compute_log_z(BeamModel *m, uint32_t len, double *out,
+                             double *layer_logmass) {
     const uint32_t A  = m->n_alphabet;
     const uint32_t R  = m->n_residues;
     const uint32_t S  = m->n_states;
@@ -87,6 +88,13 @@ BeamError beam_compute_log_z(BeamModel *m, uint32_t len, double *out) {
         BEAM_LOGZ_FREE();
         return BEAM_EALLOC("the partition-function trellis buffers");
     }
+
+    /* `layer_logmass[i]` is the running log of the trellis mass once residue
+     * i has been emitted, so the caller differences it to get the per-layer
+     * factor that `log Z` is a product of. It telescopes: the last entry IS
+     * `*out`, and the differences sum to it exactly. NULL to skip. */
+    if (layer_logmass)
+        for (uint32_t i = 0; i < len; ++i) layer_logmass[i] = -INFINITY;
 
     /* The walk starts in the all-sentinel state. */
     for (uint32_t s = 0; s < S; ++s) cur[s] = 0.0;
@@ -222,16 +230,22 @@ BeamError beam_compute_log_z(BeamModel *m, uint32_t len, double *out) {
          * never read again: the next layer's accumulation reaches `cur` only
          * through `by_rest`, and the tail sweep only through `src`. */
         uint32_t nnew = 0;
+        double layer_sum = 0.0;
         for (uint32_t q = 0; q < nrest; ++q) {
             const size_t base = (size_t)rests[q] * A;
             for (uint32_t x = 0; x < R; ++x) {
                 const size_t t = base + x;
                 if (next[t] == 0.0) continue;
                 next[t] = beam_rescale(next[t], nmax);
+                layer_sum += next[t];
                 nxt[nnew++] = (uint32_t)t;
             }
         }
         log_scale += log(nmax);
+        /* `layer_sum` is rescaled mass and `log_scale` is what it was divided
+         * by, so their combination is the true running mass. One add inside a
+         * pass that already rescales and collects every surviving state. */
+        if (layer_logmass) layer_logmass[i] = log(layer_sum) + log_scale;
 
         double *tmp = cur; cur = next; next = tmp;
         uint32_t *tmpi = src; src = nxt; nxt = tmpi;
@@ -261,6 +275,12 @@ BeamError beam_compute_log_z(BeamModel *m, uint32_t len, double *out) {
     }
 
     *out = log_scale + tmax + log(acc);
+    /* The sink settles the backward scores of the final min(order, len)
+     * residues, which never got a full right-hand context during the walk.
+     * It is attributed to the LAST layer, the same convention
+     * `beam_model_explain` uses for `by_depth[-1]`, which is what makes the
+     * last entry equal `*out` and the differences telescope to it. */
+    if (layer_logmass && len > 0u) layer_logmass[len - 1u] = *out;
     BEAM_LOGZ_FREE();
     return BEAM_OK;
 }

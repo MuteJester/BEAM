@@ -1649,3 +1649,49 @@ that the frozen and mutable count paths agree, which is what the sparse
 foundation model will exercise.
 
 `numeric`, `threads`, `python_api` and `c_cases` are all unchanged.
+
+## Addendum, tag `prelayer`: log Z(L) split across its layers
+
+    python_api.txt   2 added      c_cases.txt      1 added
+    pytest_cases.txt 10 added     c_symbols/public/cbeam  1 each
+    numeric.json     byte-identical    threads.json  byte-identical
+
+`numeric` and `threads` not moving is the claim: this adds a reading of the
+trellis and changes no answer.
+
+`log P(s) = log W(s) + log pi(L) - log Z(L)`, and both trailing terms belong to
+the sequence's LENGTH rather than to any position in it. Anything reading a
+per-position cell -- a K x L matrix over a panel of per-donor models -- has to
+place them, and spreading them evenly over L is arithmetically valid and
+analytically arbitrary: any weights summing to one give the same row total and
+a different matrix.
+
+The two terms are NOT equally placeable, and separating them is the point.
+
+`log Z(L)` has positional structure. It is a forward sum over the trellis, a
+forward sum factorises by layer, and `partition.c` was already accumulating
+the per-layer factors into a scalar and discarding the breakdown. Writing `M_i`
+for the mass once residue i has been emitted, `Z(L) = prod_i (M_i / M_{i-1})`.
+`beam_model_log_partition_by_layer` returns `log M_i`, so the caller differences
+it and the split is the model's own.
+
+It TELESCOPES, which is the property worth having here: the last entry is
+`log Z(L)` bit for bit, so the identity holds by construction rather than to
+within a tolerance. Re-summing the differences costs about one ULP over L
+terms, which is why the API says to read the end point rather than re-add.
+
+It is also far from even. On the test fixture one layer carries more than half
+of `-log Z` while four carry essentially none; the uniform split would have put
+the same share on each. `test_the_split_is_not_the_uniform_one` fails if that
+ever stops being true, so the construction cannot silently degenerate into the
+arbitrary split it replaces.
+
+`log pi(L)` has no positional structure at all -- one number off the observed
+length histogram, with no decomposition to find. `log_pseq_by_position` places
+it on the FINAL position, for the same reason the sink goes there: the length
+is settled once the sequence ends. That is a convention and is documented as
+the one arbitrary choice in the vector.
+
+COST is one add inside a loop that already rescales and collects every
+surviving state, plus one forward sweep per call where `log_partition` reads a
+value cached at finalize.

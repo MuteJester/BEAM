@@ -154,7 +154,12 @@ static inline double beam_tilted_layer_max(const double *w, const double *cur,
 }
 
 /** Compute `log_z[len]`. Returns BEAM_OK or an allocation error. */
-BeamError beam_compute_log_z(BeamModel *m, uint32_t len, double *out);
+/* `layer_logmass`, when non-NULL, receives `len` entries: the running log of
+ * the trellis mass once residue i has been emitted, with the sink folded into
+ * the last. Differencing it gives the per-layer factors log Z is a product of,
+ * and the differences telescope to `*out` exactly. */
+BeamError beam_compute_log_z(BeamModel *m, uint32_t len, double *out,
+                             double *layer_logmass);
 
 /**
  * Backward values of the trellis: `beta[i][state]`, the log of the total

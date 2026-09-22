@@ -340,7 +340,7 @@ static BeamError finalize_tables(BeamModel *st) {
 #endif
         for (int64_t k = 0; k < (int64_t)nw; ++k) {
             double z = 0.0;
-            const BeamError e = beam_compute_log_z(st, work[k], &z);
+            const BeamError e = beam_compute_log_z(st, work[k], &z, NULL);
             if (e != BEAM_OK) { if ((int)e > failed) failed = (int)e; }
             else st->log_z[work[k]] = z;
         }

@@ -119,6 +119,48 @@ double beam_model_log_partition(const BeamModel *m, uint32_t length) {
 }
 
 /*
+ * `log Z(L)` split across the positions it is a product over.
+ *
+ * WHY THIS EXISTS. `log P(s) = log W(s) + log pi(L) - log Z(L)`, and the last
+ * two terms are constants of the ROW: they belong to the sequence's length,
+ * not to any position in it. Anything that reads a per-position cell -- a
+ * K x L matrix over a panel of per-donor models, say -- therefore has to put
+ * `-log Z(L)` somewhere, and splitting it evenly across L is arithmetically
+ * valid and analytically arbitrary. Any weights summing to one give the same
+ * row total and a different matrix.
+ *
+ * There is nothing arbitrary about it. `Z(L)` is a forward sum over the
+ * trellis and a forward sum factorises by layer: writing `M_i` for the mass
+ * once residue i has been emitted, `Z(L) = prod_i (M_i / M_{i-1})` with
+ * `M_{-1} = 1`. This returns `log M_i`, so the caller differences it and the
+ * per-position share of `-log Z(L)` is the trellis's own, not a choice.
+ *
+ * The split TELESCOPES, which is the property worth having: the last entry is
+ * `log Z(L)` itself and the differences sum to it by construction rather than
+ * to within a tolerance.
+ *
+ * `out` receives `length` entries. The sink -- the backward scores of the
+ * final `min(order, length)` residues, which never get a full right-hand
+ * context during the walk -- is attributed to the LAST layer, the convention
+ * `beam_model_explain` already uses for `by_depth[-1]`.
+ *
+ * COST is one forward sweep per call, where `beam_model_log_partition` reads
+ * a value cached at finalize. The per-layer masses are not cached: they are
+ * `length` doubles per length and only this construction wants them.
+ */
+BeamError beam_model_log_partition_by_layer(BeamModel *m, uint32_t length,
+                                            double *out) {
+    if (!m) return BEAM_ENULL("model");
+    if (!out) return BEAM_ENULL("out");
+    if (!m->finalized) return BEAM_ENOTBUILT();
+    if (length == 0u || length >= m->n_len_slots)
+        return BEAM_ERANGE("%s: length %u is outside 1..%u", __func__,
+                           (unsigned)length, (unsigned)m->n_len_slots - 1u);
+    double z = 0.0;
+    return beam_compute_log_z(m, length, &z, out);
+}
+
+/*
  * Occupied rows and cells per (direction, depth).
  *
  * This is what "how much of the dictionary did we discover" is built from.

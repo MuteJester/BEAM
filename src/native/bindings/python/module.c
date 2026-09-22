@@ -63,6 +63,7 @@ static PyMethodDef module_methods[] = {
     {"log_pseq_batch",     py_log_pseq_batch,                METH_VARARGS, NULL},
     {"explain",            py_explain,                       METH_VARARGS, NULL},
     {"log_partition",      py_log_partition,                 METH_VARARGS, NULL},
+    {"log_partition_by_layer", py_log_partition_by_layer,  METH_VARARGS, NULL},
     {"log_length_prior",   py_log_length_prior,              METH_VARARGS, NULL},
     {"path_count",         py_path_count,                    METH_VARARGS, NULL},
     {"path_count_total",   py_path_count_total,              METH_O, NULL},

@@ -575,6 +575,16 @@ tests/python/model/test_nucleotide.py::test_the_registry_is_served_from_the_c_de
 tests/python/model/test_nucleotide.py::test_the_sequence_column_defaults_to_the_alphabets_own
 tests/python/model/test_nucleotide.py::test_the_two_alphabets_cannot_be_combined
 tests/python/model/test_nucleotide.py::test_top_k_returns_scoreable_sequences
+tests/python/model/test_partition_by_layer.py::test_a_length_the_model_never_saw
+tests/python/model/test_partition_by_layer.py::test_an_empty_sequence_is_refused
+tests/python/model/test_partition_by_layer.py::test_an_unspellable_position_is_minus_inf_and_kills_the_row
+tests/python/model/test_partition_by_layer.py::test_it_agrees_with_a_second_model_of_the_same_corpus
+tests/python/model/test_partition_by_layer.py::test_it_refuses_what_it_cannot_answer
+tests/python/model/test_partition_by_layer.py::test_stacking_k_models_gives_the_matrix
+tests/python/model/test_partition_by_layer.py::test_the_last_entry_is_log_partition_bit_for_bit
+tests/python/model/test_partition_by_layer.py::test_the_shares_sum_back_to_log_z
+tests/python/model/test_partition_by_layer.py::test_the_split_is_not_the_uniform_one
+tests/python/model/test_partition_by_layer.py::test_the_vector_sums_to_log_pseq
 tests/python/model/test_persistence.py::test_corrupt_file_is_rejected
 tests/python/model/test_persistence.py::test_round_trip
 tests/python/model/test_posterior.py::test_posterior_at_kappa_zero_is_a_no_op

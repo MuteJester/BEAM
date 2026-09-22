@@ -1090,6 +1090,107 @@ class BeamModel:
         """
         return float(_c.log_partition(self._g, self._check_length(length)))
 
+    def log_pseq_by_position(self, sequence: str) -> np.ndarray:
+        """``ln Pseq(s)`` broken down per position. **The sum IS the score.**
+
+        Returns ``len(sequence)`` values whose total is :meth:`log_pseq` of the
+        same sequence. Stack the vectors from ``K`` per-donor models and the
+        result is a ``K x L`` matrix whose row sums are those models' scores,
+        with a per-position account of how each one arrived there.
+
+        Entry ``i`` is::
+
+            w_f * ln q_f(s_i | i, ctx) + w_b * ln q_b(s_i | L-1-i, ctx)
+              - (that position's share of ln Z(L))
+              + (ln pi(L), on the final position only)
+
+        and it is ``-inf`` exactly where the model cannot spell the transition
+        at ``i`` -- a context it never observed, or a residue that never
+        followed one it did. One such position makes the whole row ``-inf``,
+        which is what :meth:`log_pseq` returns for that sequence.
+
+        WHERE THE TWO CONSTANTS GO, and why they are not alike.
+
+        ``ln P(s) = ln W(s) + ln pi(L) - ln Z(L)``. Both trailing terms belong
+        to the sequence's LENGTH rather than to any position, so a per-position
+        vector has to place them. They are not equally placeable.
+
+        ``ln Z(L)`` **has** positional structure: it is a forward sum over the
+        trellis and a forward sum factorises by layer, so each position takes
+        the model's own share of it -- see :meth:`log_partition_by_layer`. It
+        is far from even; on a small fixture one layer carries more than half.
+
+        ``ln pi(L)`` **has none**. It is one number read off the observed
+        length histogram, and no decomposition of it exists to find. It is
+        placed on the FINAL position, for the same reason the sink is: the
+        length is only settled once the sequence ends. That is a convention,
+        not a derivation, and it is the one arbitrary choice in this vector.
+        A caller wanting it elsewhere has :meth:`log_partition_by_layer` and
+        :meth:`log_length_prior` and can rebuild the vector to taste.
+
+        Costs one forward sweep for ``ln Z(L)``'s layers, plus the explain
+        pass. Per MODEL and per LENGTH, not per sequence -- score many
+        sequences of one length against one model and the sweep is amortised.
+        """
+        L = len(sequence)
+        if L == 0:
+            raise BeamValueError("log_pseq_by_position: the sequence is empty")
+        ex = self.explain(sequence)
+        w_f, w_b = (float(x) for x in self.config["weights"])
+        psi = (w_f * np.asarray(ex["forward"], dtype=np.float64)
+               + w_b * np.asarray(ex["backward"], dtype=np.float64))
+
+        out = psi.copy()
+        if not ex["length_is_producible"]:
+            # No length prior and no partition function to share out. The
+            # score is -inf and the breakdown says so at the position the
+            # prior would have occupied.
+            out[-1] = -np.inf
+            return out
+
+        running = self.log_partition_by_layer(L)
+        shares = np.diff(np.concatenate(([0.0], running)))
+        # -inf - finite stays -inf; only subtract where psi is finite, so a
+        # dead position is never turned into a nan.
+        live = np.isfinite(out)
+        out[live] -= shares[live]
+        out[-1] += self.log_length_prior(L)
+        return out
+
+    def log_partition_by_layer(self, length: int) -> np.ndarray:
+        """``ln Z(L)`` split across the positions it is a product over.
+
+        Returns ``length`` running log-masses: entry ``i`` is the log of the
+        trellis mass once residue ``i`` has been emitted. **Difference them**
+        to get each position's share of ``ln Z(L)``.
+
+        WHY THIS IS NOT A UNIFORM SPLIT. ``ln P(s) = ln W(s) + ln pi(L) -
+        ln Z(L)``, and the last two terms belong to the sequence's LENGTH, not
+        to any position in it. Anything reading a per-position cell has to put
+        ``-ln Z(L)`` somewhere, and spreading it evenly over ``L`` is
+        arithmetically valid and analytically arbitrary -- any weights summing
+        to one give the same row total and a different matrix. But ``Z(L)`` is
+        a forward sum over the trellis and a forward sum factorises by layer,
+        so the split is the model's own rather than a choice.
+
+        It is uneven enough to matter: on a small fixture one layer carries
+        more than half of ``-ln Z`` while four carry essentially none.
+
+        The last entry is :meth:`log_partition` exactly, bit for bit, so read
+        ``ln Z(L)`` off it rather than re-summing the differences, which
+        accumulate about one ULP over ``L`` terms.
+
+        The sink -- the backward scores of the final ``min(order, length)``
+        residues, which never get a full right-hand context -- is attributed
+        to the last layer, as :meth:`explain` attributes ``by_depth[-1]``.
+
+        Costs one forward sweep, where :meth:`log_partition` reads a value
+        cached at finalize.
+        """
+        return np.asarray(
+            _c.log_partition_by_layer(self._g, self._check_length(length)),
+            dtype=np.float64)
+
     def log_length_prior(self, length: int) -> float:
         """``ln pi(L)``, from the observed length distribution."""
         return float(_c.log_length_prior(self._g,
