@@ -145,19 +145,79 @@ BeamError beam_model_depth_occupancy(const BeamModel *m,
     if (!m->finalized) return BEAM_ENOTBUILT();
     const uint32_t W = m->max_len, R = m->n_residues, nc = m->n_ctx;
     for (uint32_t i = 0; i < (uint32_t)BEAM_DIRS * W; ++i) rows[i] = cells[i] = 0;
-    for (uint32_t d = 0; d < BEAM_DIRS; ++d) {
-        for (uint32_t depth = 0; depth < W; ++depth) {
-            uint64_t nr = 0, ncell = 0;
-            for (uint32_t c = 0; c < nc; ++c) {
-                const BeamLogRow r = beam_lp_row(m, d, depth, c);
-                if (!r.present) continue;
-                uint32_t live = 0;
-                for (uint32_t x = 0; x < R; ++x)
-                    if (beam_log_cell(&r, x) != -INFINITY) live++;
-                if (live) { nr++; ncell += live; }
+
+    /*
+     * The COUNTS are what this question is about.
+     *
+     * It reads "how much of what this length admits did the corpus reach",
+     * and that is a fact about observations. This used to read the finalized
+     * tables and call a cell reached when its log probability was not -inf,
+     * which is a different question with the same answer in the closed world
+     * and a useless one in the open world: the Laplace add-one leaves every
+     * cell finite, so a model built from two sequences reported that it had
+     * discovered 100% of the dictionary, and the same report carried
+     * `n_nonzero_cells = 30` beside `cells_observed = 176400`.
+     *
+     * A compacted model has no counts. For a STRICT one the finalized tables
+     * still answer exactly -- an unobserved cell is -inf and stays -inf -- so
+     * that case is served from them and the figure survives `compact()`. For
+     * an open-world one the smoothing has overwritten the evidence and the
+     * counts that held it are gone, so there is no answer to give and this
+     * says so rather than returning the saturated one.
+     */
+    if (m->compacted) {
+        if (!m->cfg.strict)
+            return BEAM_ECOMPACTED(
+                "an open-world model's add-one leaves every finalized cell "
+                "finite, so which cells the corpus actually reached is known "
+                "only to the counts, and compact() released them");
+        for (uint32_t d = 0; d < BEAM_DIRS; ++d) {
+            for (uint32_t depth = 0; depth < W; ++depth) {
+                uint64_t nr = 0, ncell = 0;
+                for (uint32_t c = 0; c < nc; ++c) {
+                    const BeamLogRow r = beam_lp_row(m, d, depth, c);
+                    if (!r.present) continue;
+                    uint32_t live = 0;
+                    for (uint32_t x = 0; x < R; ++x)
+                        if (beam_log_cell(&r, x) != -INFINITY) live++;
+                    if (live) { nr++; ncell += live; }
+                }
+                rows[d * W + depth] = nr;
+                cells[d * W + depth] = ncell;
             }
-            rows[d * W + depth] = nr;
-            cells[d * W + depth] = ncell;
+        }
+        return BEAM_OK;
+    }
+
+    const uint32_t n_rows = beam_count_n_rows(m);
+    for (uint32_t d = 0; d < BEAM_DIRS; ++d) {
+        /*
+         * Frozen counts already carry the answer: a cell is stored only when
+         * it is present, so the residue mask IS the set of reached cells and
+         * the row id gives the depth. Thawing to look would cost 95 MB, and
+         * `beam_model_n_nonzero_cells` declines it for the same reason.
+         */
+        if (m->counts_frozen) {
+            const BeamFrozenCounts *f = beam_model_frozen_table(m, d);
+            for (uint32_t k = 0; k < f->n_rows; ++k) {
+                const uint32_t row = beam_frozen_row_id(f, k);
+                const uint32_t depth = row / nc;
+                if (depth >= W) continue;
+                const uint32_t live = (uint32_t)__builtin_popcount(
+                    f->mask_width[k] & ((1u << BEAM_FROZEN_MASK_BITS) - 1u));
+                if (live) { rows[d * W + depth]++; cells[d * W + depth] += live; }
+            }
+            continue;
+        }
+        for (uint32_t row = 0; row < n_rows; ++row) {
+            const double *cr = beam_cnt_row(m, d, row);
+            if (!cr) continue;                    /* absent sparse row */
+            uint32_t live = 0;
+            for (uint32_t x = 0; x < R; ++x) if (cr[x] > 0.0) live++;
+            if (!live) continue;
+            const uint32_t depth = row / nc;
+            rows[d * W + depth]++;
+            cells[d * W + depth] += live;
         }
     }
     return BEAM_OK;

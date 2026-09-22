@@ -561,26 +561,37 @@ class BeamModel:
         if not lengths:
             return out
 
-        rows, cell_counts = _c.depth_occupancy(self._g)
+        # A compacted OPEN-WORLD model cannot answer this: the add-one made
+        # every finalized cell finite and compact() released the counts that
+        # knew which were reached. Every other model can, including a
+        # compacted strict one. Reported as absent rather than as a refusal,
+        # because the rest of the per-length entry is still exact.
+        try:
+            rows, cell_counts = _c.depth_occupancy(self._g)
+        except Exception:
+            rows = cell_counts = None
         prior = self.length_distribution
         per: dict[int, dict[str, Any]] = {}
         for L in self.observed_lengths:
             # Depths 0..L-1 in each direction are what a length-L sequence
             # reads, so those are the rows it could possibly be scored through.
-            seen_rows = sum(rows[d * width + k] for d in (0, 1)
-                            for k in range(L))
-            seen_cells = sum(cell_counts[d * width + k] for d in (0, 1)
-                             for k in range(L))
+            known = rows is not None
+            seen_rows = (sum(rows[d * width + k] for d in (0, 1)
+                             for k in range(L)) if known else None)
+            seen_cells = (sum(cell_counts[d * width + k] for d in (0, 1)
+                              for k in range(L)) if known else None)
             poss_rows = 2 * L * n_ctx
             poss_cells = poss_rows * n_res
             entry: dict[str, Any] = {
                 "share": float(prior.get(L, 0.0)),
                 "rows_possible": poss_rows,
-                "rows_observed": int(seen_rows),
-                "row_coverage": seen_rows / poss_rows if poss_rows else 0.0,
+                "rows_observed": int(seen_rows) if known else None,
+                "row_coverage": (seen_rows / poss_rows
+                                 if poss_rows else 0.0) if known else None,
                 "cells_possible": poss_cells,
-                "cells_observed": int(seen_cells),
-                "cell_coverage": seen_cells / poss_cells if poss_cells else 0.0,
+                "cells_observed": int(seen_cells) if known else None,
+                "cell_coverage": (seen_cells / poss_cells
+                                  if poss_cells else 0.0) if known else None,
                 "log_partition": self.log_partition(L),
             }
             if support:

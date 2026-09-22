@@ -228,7 +228,11 @@ def test_metadata_describes_a_compacted_model(small, tmp_path):
     assert after["size"]["occupancy"] is None
     assert before["size"]["n_nonzero_cells"] is not None
 
-    # Everything derived from the finalized tables is untouched.
+    # Coverage survives compaction for a STRICT model, which this is: an
+    # unobserved cell is -inf in the finalized tables and stays that way, so
+    # the counts are not the only record of it. An open-world model is the
+    # case that cannot, and `test_coverage_is_unavailable_on_a_compacted_open
+    # _model` is where that is pinned.
     assert after["lengths"] == before["lengths"]
     assert after["created_unix"] == before["created_unix"]
     assert after["build"] == before["build"]
@@ -269,3 +273,62 @@ def test_a_streaming_snapshot_reports_the_time_it_spent():
     meta = b.snapshot().metadata(lengths=False)["build"]
     assert meta["n_observed"] == 3
     assert meta["observe_seconds"] > 0.0
+
+
+def test_coverage_measures_observation_not_finiteness():
+    """The two worlds must agree, because the question is about the corpus.
+
+    This read the finalized tables and called a cell reached when its log
+    probability was not -inf. In the closed world that is the same set; in the
+    open world the Laplace add-one makes every cell finite, so a model built
+    from two sequences reported that it had discovered the WHOLE dictionary --
+    `row_coverage` 1.0000 -- while `n_nonzero_cells` in the same dict said 30.
+
+    Both models see the same sequences, so every coverage figure must match,
+    and `cells_observed` must equal `n_nonzero_cells` in both.
+    """
+    seqs, ab = ["CASSLGEQYF", "CASSQDTQYF"], [3.0, 1.0]
+    got = {}
+    for strict in (True, False):
+        m = BeamModel(seqs, abundances=ab, order=2, max_length=12,
+                      strict=strict)
+        meta = m.metadata()
+        got[strict] = meta
+        total = sum(e["cells_observed"] for e in meta["lengths"].values())
+        # One length here, so the per-length total is the whole model.
+        assert total == meta["size"]["n_nonzero_cells"]
+
+    # The coverage keys only. `log_partition` is Z(L) and SHOULD differ: the
+    # two worlds put different mass on the same corpus.
+    COVERAGE = ("rows_possible", "rows_observed", "row_coverage",
+                "cells_possible", "cells_observed", "cell_coverage")
+    for L, e in got[True]["lengths"].items():
+        o = got[False]["lengths"][L]
+        assert {k: e[k] for k in COVERAGE} == {k: o[k] for k in COVERAGE}, L
+    assert got[True]["lengths"].keys() == got[False]["lengths"].keys()
+
+    for e in got[False]["lengths"].values():
+        assert 0.0 < e["row_coverage"] < 0.01, e["row_coverage"]
+
+
+def test_coverage_is_unavailable_on_a_compacted_open_model():
+    """Absent, not saturated. The one case that genuinely cannot be answered.
+
+    `compact()` releases the counts, and in the open world they were the only
+    record of which cells the corpus reached. A strict model is unaffected --
+    its finalized tables still carry it -- which is why the foundation model,
+    being strict, keeps the figure after compaction.
+    """
+    seqs, ab = ["CASSLGEQYF", "CASSQDTQYF"], [3.0, 1.0]
+    m = BeamModel(seqs, abundances=ab, order=2, max_length=12, strict=False)
+    L = sorted(m.metadata()["lengths"])[0]
+    assert m.metadata()["lengths"][L]["rows_observed"] is not None
+    m.compact()
+    e = m.metadata()["lengths"][L]
+    assert e["rows_observed"] is None
+    assert e["row_coverage"] is None
+    assert e["cells_observed"] is None
+    assert e["cell_coverage"] is None
+    # The rest of the entry is still exact and still reported.
+    assert e["rows_possible"] == 2 * L * 21 ** 2
+    assert e["share"] > 0.0

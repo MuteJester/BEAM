@@ -222,15 +222,25 @@ static void test_provenance_is_recorded_and_aggregated(void) {
     PASS();
 }
 
-static void test_depth_occupancy_sums_to_the_nonzero_cells(void) {
-    /* The per-depth breakdown and the scalar count are two readings of the
-     * same tables, so they must agree exactly. That is what makes the
-     * breakdown usable as a denominator: it is not an estimate. */
+/**
+ * Both worlds, because one of them used to be wrong and this test missed it.
+ *
+ * `beam_model_config_default` is STRICT, so running only the default let the
+ * breakdown be read off the finalized tables -- where an unobserved cell is
+ * -inf -- and agree. In the OPEN world the add-one makes every cell finite,
+ * so that reading saturated: a three-sequence model reported every row and
+ * every cell of the table as reached, while `n_nonzero_cells` beside it said
+ * thirty. The identity asserted below is exactly what catches that, and it
+ * only catches it if the open world is one of the models it is asserted on.
+ */
+static void check_depth_occupancy(bool strict) {
     const char *s[] = {"CASSLGEQYF", "CASSQDTQYF", "CASSLGTEAFF"};
     double w[] = {3.0, 1.0, 2.0};
     BeamModelConfig c;
     beam_model_config_default(&c);
     c.max_length = 12u; c.order = 3u;
+    c.strict = strict;
+    if (!strict) c.sparse = false;        /* sparse requires strict */
     BeamModel *m = beam_model_new(&c);
     ASSERT_MSG(m != NULL, "model did not build");
 
@@ -255,13 +265,47 @@ static void test_depth_occupancy_sums_to_the_nonzero_cells(void) {
     ASSERT_MSG(tc == beam_model_n_nonzero_cells(m),
                "the per-depth cells must sum to n_nonzero_cells exactly");
     ASSERT_MSG(tr > 0, "the model observed something");
+    /* Three short sequences cannot reach a meaningful share of a 21^3 table,
+     * so a reading that saturated would be caught here even if the identity
+     * above were somehow satisfied. */
+    ASSERT_MSG(tc < (uint64_t)beam_count_n_rows(m) * 20u / 100u,
+               "a three-sequence model cannot have reached the table");
 
     /* No sequence is longer than max_length, so the deepest depth a
      * length-12 model can reach is 11 and slot 11 of each direction is the
      * last that may be occupied. */
     ASSERT_MSG(rows[11u] <= tr && rows[12u + 11u] <= tr, "in range");
+
+    /*
+     * Compaction. A strict model keeps the answer, because an unobserved
+     * cell is -inf in the finalized tables and stays that way; an open-world
+     * one cannot, because the add-one overwrote the evidence and compact()
+     * released the counts that held it. Refused there rather than answered
+     * with the saturated reading.
+     */
+    const uint64_t want_rows = tr, want_cells = tc;
+    ASSERT_MSG(beam_model_compact(m) == BEAM_OK, "compact");
+    const BeamError e = beam_model_depth_occupancy(m, rows, cells);
+    if (strict) {
+        ASSERT_MSG(e == BEAM_OK, "a compacted strict model still knows");
+        uint64_t cr = 0, cc = 0;
+        for (uint32_t i = 0; i < 2u * 12u; ++i) { cr += rows[i]; cc += cells[i]; }
+        ASSERT_MSG(cr == want_rows && cc == want_cells,
+                   "and compaction did not move the figure");
+    } else {
+        ASSERT_MSG(e != BEAM_OK,
+                   "a compacted open-world model must refuse, not saturate");
+    }
     beam_model_destroy(m);
     PASS();
+}
+
+static void test_depth_occupancy_sums_to_the_nonzero_cells(void) {
+    check_depth_occupancy(true);
+}
+
+static void test_depth_occupancy_is_not_saturated_by_the_open_world(void) {
+    check_depth_occupancy(false);
 }
 
 static void test_single_anchor_weights_are_accepted(void) {
@@ -2784,6 +2828,7 @@ int main(void) {
     RUN_TEST(test_defaults_are_the_measured_ones);
     RUN_TEST(test_provenance_is_recorded_and_aggregated);
     RUN_TEST(test_depth_occupancy_sums_to_the_nonzero_cells);
+    RUN_TEST(test_depth_occupancy_is_not_saturated_by_the_open_world);
     RUN_TEST(test_single_anchor_weights_are_accepted);
     RUN_TEST(test_sparse_requires_strict);
     RUN_TEST(test_sparse_rows_boundaries_and_erase);
