@@ -56,9 +56,16 @@ static inline bool beam_count_erase(BeamModel *m, uint32_t dir,
  * One row of the finalized log table. `present` is false only in the sparse
  * form, where an unobserved row is absent rather than twenty cells of -inf.
  * A caller must test it before reading: that test is the closed world.
+ *
+ * BEAM_INLINE, not plain `static inline`. At -O2 GCC declined to inline the
+ * three-expert ancestors of this function and emitted real calls, measured at
+ * 3.75% of cycles inside the edge-weight kernel. There is one row accessor
+ * now rather than three, but the reason is unchanged: it is three loads and a
+ * branch, and the kernel reaches it tens of millions of times per analytic,
+ * so a call would dominate the body.
  */
-static inline BeamLogRow beam_lp_row(const BeamModel *m, uint32_t dir,
-                                     uint32_t depth, uint32_t ctx) {
+BEAM_INLINE BeamLogRow beam_lp_row(const BeamModel *m, uint32_t dir,
+                                   uint32_t depth, uint32_t ctx) {
     const uint32_t row = beam_row(m, depth, ctx);
     if (m->cfg.sparse) return beam_sparse_log_row(&m->sp_lp[dir], row);
     BeamLogRow r = { .dense = m->lp[dir] + (size_t)row * m->n_residues,

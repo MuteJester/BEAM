@@ -41,6 +41,7 @@ beam_model_live_cache_bytes
 beam_model_load
 beam_model_log_length_prior
 beam_model_log_mellin
+beam_model_log_mellin_many
 beam_model_log_partition
 beam_model_log_pseq
 beam_model_log_pseq_batch

@@ -213,3 +213,266 @@ BeamError jet_sweep(const BeamModel *m, uint32_t len, double q,
     sweep_free(&sw);
     return BEAM_OK;
 }
+
+
+/* ── Many tilts in one pass ──────────────────────────────────── */
+
+/**
+ * `jet_sweep` at `order = 0`, for `nq` tilts in one traversal of the
+ * length-`len` trellis where there used to be `nq` traversals.
+ *
+ * `out_log_z[j * out_stride]` receives exactly what
+ * `jet_sweep(m, len, qs[j], 0u, ..., &lz)` puts in `lz`: the same bits, not
+ * the same number to rounding. That is the contract, and the Mellin
+ * transform's many-order form is tested against it with `==`.
+ *
+ * WHAT IS SHARED is everything that does not depend on the tilt: the
+ * frontier, the layer of edge weights, the reached mask and the sink weights.
+ * Building the layer is the part of a single-q sweep that is not an `exp`, and
+ * a 31-order Hill profile used to build every layer of every length 31 times
+ * over one unchanging graph.
+ *
+ * WHAT IS NOT SHARED is anything the rescaling touches. Each tilt has its own
+ * dynamic range -- at q = 3 a layer's mass spans three times the nats it does
+ * at q = 1 -- so each carries its own mass plane, its own layer maximum, its
+ * own `nmax` and its own running log-scale. One shared rescale would be
+ * cheaper, and it would move the last bits of every q but one.
+ *
+ * WHY THE BITS SURVIVE. At order 0 the single-q jet's inner sum is
+ * `acc = 0.0 + (1.0 * 1.0) * cur[src]`, which is `cur[src]` exactly, so its
+ * update is `next[t] += exp(q * w - qmax) * cur[src]` over sources in
+ * ascending `a`. Every tilt here performs that same sequence of operations on
+ * its own plane, in the same order. The mass test (`cur == 0.0`), the layer
+ * maximum over the states carrying THIS tilt's mass, the negative-q minimum
+ * `beam_tilted_layer_max` takes, and the order in which the log-scale receives
+ * `qmax` and then `log(nmax)` are all taken per tilt. Maxima and minima are
+ * exact in whatever order they are reduced; sums are the one thing that is
+ * not, and every sum here is taken by one thread in index order.
+ *
+ * A tilt that dies -- no mass left, which `jet_sweep` reports by returning
+ * `-inf` at that layer -- is dropped from the active list there and reported
+ * `-inf`, and the others carry on. Dropping it is not only a saving: a tilt
+ * whose `qmax` overflowed to `-inf` would otherwise feed `exp(-inf - -inf)`,
+ * a NaN, into its own plane.
+ *
+ * LAYOUT is state-major, `cur[state * nq + j]`. The tilts of one state share
+ * a cache line, so the loop over tilts reads and writes contiguously where a
+ * tilt-major layout would take one miss per tilt per edge.
+ *
+ * `next` is cleared by the states the previous layer reached, as
+ * `tilted_log_z` in math/diversity.c does, rather than by `jet_sweep`'s
+ * memset of the whole plane. That memset would be `nq * S * 8` bytes per
+ * layer -- 48 MB at 31 tilts on an order-4 amino-acid model -- and on a
+ * per-repertoire model nearly all of it is already zero. Both leave the same
+ * contents: only reached targets are ever written.
+ */
+BeamError jet_sweep_fan(const BeamModel *m, uint32_t len, const double *qs,
+                        uint32_t nq, double *out_log_z, size_t out_stride) {
+    const uint32_t A = m->n_alphabet;
+    const uint32_t R = m->n_residues;
+    const uint32_t S = m->n_states;
+    const uint32_t SK = m->state_shift;
+    const uint32_t W = nq;
+
+    for (uint32_t j = 0; j < W; ++j) out_log_z[(size_t)j * out_stride] = -INFINITY;
+    if (W == 0u) return BEAM_OK;
+
+    /* Refused before allocating, from the sizing function beside the
+     * allocation so the two cannot drift apart. */
+    BEAM_BUDGET_OR_REFUSE("a fused tilted sweep", len,
+                          beam_jet_fan_bytes(S, R, W));
+
+    double  *w     = (double *)malloc((size_t)S * R * sizeof(double));
+    double  *tail  = (double *)malloc((size_t)S * sizeof(double));
+    double  *cur   = (double *)calloc((size_t)S * W, sizeof(double));
+    double  *next  = (double *)calloc((size_t)S * W, sizeof(double));
+    uint8_t *alive = (uint8_t *)malloc(S);
+    /* Seven scalars per tilt, and the list of tilts still alive. */
+    double   *pt  = (double *)malloc((size_t)W * 7u * sizeof(double));
+    uint32_t *act = (uint32_t *)malloc((size_t)W * sizeof(uint32_t));
+    LiveHandle h;
+    if (!w || !tail || !cur || !next || !alive || !pt || !act
+        || beam_live_acquire(m, len, &h) != BEAM_OK) {
+        free(w); free(tail); free(cur); free(next); free(alive);
+        free(pt); free(act);
+        return BEAM_EALLOC("the fused tilted-sweep buffers");
+    }
+    const BeamLive *L = h.L;
+    double *scale = pt;             /* running log-scale, jet_sweep's log_scale */
+    double *qmax  = pt + 1u * W;
+    double *hi    = pt + 2u * W;    /* layer max over this tilt's mass          */
+    double *lo    = pt + 3u * W;    /* layer min, which only q < 0 reads        */
+    double *nmax  = pt + 4u * W;
+    double *tmax  = pt + 5u * W;
+    double *fin   = pt + 6u * W;
+
+    uint32_t nact = W;
+    for (uint32_t j = 0; j < W; ++j) {
+        act[j] = j;
+        scale[j] = 0.0;
+        cur[(size_t)(S - 1) * W + j] = 1.0;     /* the start state, every tilt */
+    }
+
+    for (uint32_t i = 0; i < len; ++i) {
+        beam_reached_mask(L, i, S, alive);
+        beam_layer_weights_live(m, i, len, w, NULL, alive);
+
+        /* Each tilt's layer extremes over the states carrying ITS mass. A
+         * row's own max and min do not depend on the tilt, so they are found
+         * once and offered to every tilt with mass there; the max of maxima
+         * is the max, bit for bit. `lo` is `beam_tilted_layer_max`'s scan for
+         * q < 0 -- finite entries only -- restricted to reached states, which
+         * are the only ones whose mass is nonzero. */
+        for (uint32_t b = 0; b < nact; ++b) {
+            hi[act[b]] = -INFINITY;
+            lo[act[b]] = INFINITY;
+        }
+        const uint32_t  nr = L->n_reached[i];
+        const uint32_t *rv = L->reached[i];
+#ifdef _OPENMP
+        #pragma omp parallel for schedule(static) reduction(max:hi[:W]) \
+                reduction(min:lo[:W]) num_threads(beam_threads())
+#endif
+        for (int64_t k = 0; k < (int64_t)nr; ++k) {
+            const uint32_t s = rv[k];
+            const double *row = w + (size_t)s * R;
+            const double *c = cur + (size_t)s * W;
+            double rmax = -INFINITY, rmin = INFINITY;
+            for (uint32_t x = 0; x < R; ++x) {
+                if (row[x] > rmax) rmax = row[x];
+                if (row[x] != -INFINITY && row[x] < rmin) rmin = row[x];
+            }
+            for (uint32_t b = 0; b < nact; ++b) {
+                const uint32_t j = act[b];
+                if (c[j] == 0.0) continue;
+                if (rmax > hi[j]) hi[j] = rmax;
+                if (rmin < lo[j]) lo[j] = rmin;
+            }
+        }
+        /* `jet_sweep` returns -inf at exactly these two points: no edge that
+         * carries mass, and a tilted maximum that is -inf. */
+        uint32_t keep = 0;
+        for (uint32_t b = 0; b < nact; ++b) {
+            const uint32_t j = act[b];
+            if (hi[j] == -INFINITY) continue;
+            const double qm = qs[j] >= 0.0 ? qs[j] * hi[j]
+                            : (lo[j] == INFINITY ? -INFINITY : qs[j] * lo[j]);
+            if (qm == -INFINITY) continue;
+            qmax[j] = qm;
+            act[keep++] = j;
+        }
+        nact = keep;
+        if (nact == 0u) goto done;
+
+        /* By TARGET, as in `jet_sweep`: each target row is the private
+         * property of one thread, and receives its sources in ascending `a`.
+         * `alive` is the reached set of this layer, which is exactly where
+         * `cur` can be nonzero, so it skips a source for every tilt at once
+         * without reading a row the live builder did not build. */
+        const uint32_t  nt  = L->n_reached[i + 1];
+        const uint32_t *tgt = L->reached[i + 1];
+        for (uint32_t b = 0; b < nact; ++b) nmax[act[b]] = 0.0;
+#ifdef _OPENMP
+        #pragma omp parallel for schedule(static) reduction(max:nmax[:W]) \
+                num_threads(beam_threads())
+#endif
+        for (int64_t k = 0; k < (int64_t)nt; ++k) {
+            const uint32_t t = tgt[k];
+            const uint32_t x = t % A;
+            if (x >= R) continue;                  /* its row stays zero */
+            const uint32_t rest = t / A;
+            double *nx = next + (size_t)t * W;
+            for (uint32_t a = 0; a < A; ++a) {
+                const uint32_t src = a * SK + rest;
+                if (!alive[src]) continue;         /* no mass, any tilt */
+                const double wv = w[(size_t)src * R + x];
+                if (wv == -INFINITY) continue;
+                const double *c = cur + (size_t)src * W;
+                for (uint32_t b = 0; b < nact; ++b) {
+                    const uint32_t j = act[b];
+                    if (c[j] == 0.0) continue;     /* no mass, this tilt */
+                    nx[j] += exp(qs[j] * wv - qmax[j]) * c[j];
+                }
+            }
+            for (uint32_t b = 0; b < nact; ++b) {
+                const uint32_t j = act[b];
+                if (nx[j] > nmax[j]) nmax[j] = nx[j];
+            }
+        }
+        /* `qmax` enters the log-scale before the empty-layer test, as in
+         * `jet_sweep`; for a tilt that dies here it no longer matters. */
+        keep = 0;
+        for (uint32_t b = 0; b < nact; ++b) {
+            const uint32_t j = act[b];
+            scale[j] += qmax[j];
+            if (!(nmax[j] > 0.0)) continue;
+            act[keep++] = j;
+        }
+        nact = keep;
+        if (nact == 0u) goto done;
+#ifdef _OPENMP
+        #pragma omp parallel for schedule(static) num_threads(beam_threads())
+#endif
+        for (int64_t k = 0; k < (int64_t)nt; ++k) {
+            double *nx = next + (size_t)tgt[k] * W;
+            for (uint32_t b = 0; b < nact; ++b) {
+                const uint32_t j = act[b];
+                nx[j] = beam_rescale(nx[j], nmax[j]);
+            }
+        }
+        for (uint32_t b = 0; b < nact; ++b)
+            scale[act[b]] += log(nmax[act[b]]);
+
+        /* `next` becomes `cur`, and the old `cur` is reused as the next
+         * layer's `next`. Its only nonzero rows are this layer's reached
+         * states -- every tilt's, dead ones included -- so clearing those
+         * restores an all-zero plane. */
+        for (uint32_t k = 0; k < nr; ++k)
+            memset(cur + (size_t)rv[k] * W, 0, (size_t)W * sizeof(double));
+        double *tmp = cur; cur = next; next = tmp;
+    }
+
+    /* Sink: one more edge whose weight is the tail, per tilt exactly as
+     * `jet_sweep` takes it. */
+    beam_tail_weights(m, len, tail);
+    {
+        const uint32_t  ns = L->n_reached[len];
+        const uint32_t *sv = L->reached[len];
+        for (uint32_t b = 0; b < nact; ++b) {
+            tmax[act[b]] = -INFINITY;
+            fin[act[b]] = 0.0;
+        }
+        for (uint32_t k = 0; k < ns; ++k) {
+            const uint32_t s = sv[k];
+            const double tv = tail[s];
+            if (tv == -INFINITY) continue;
+            const double *c = cur + (size_t)s * W;
+            for (uint32_t b = 0; b < nact; ++b) {
+                const uint32_t j = act[b];
+                if (c[j] > 0.0 && qs[j] * tv > tmax[j]) tmax[j] = qs[j] * tv;
+            }
+        }
+        for (uint32_t k = 0; k < ns; ++k) {
+            const uint32_t s = sv[k];
+            const double tv = tail[s];
+            if (tv == -INFINITY) continue;
+            const double *c = cur + (size_t)s * W;
+            for (uint32_t b = 0; b < nact; ++b) {
+                const uint32_t j = act[b];
+                if (c[j] == 0.0 || tmax[j] == -INFINITY) continue;
+                fin[j] += exp(qs[j] * tv - tmax[j]) * c[j];
+            }
+        }
+        for (uint32_t b = 0; b < nact; ++b) {
+            const uint32_t j = act[b];
+            if (tmax[j] == -INFINITY || !(fin[j] > 0.0)) continue;
+            out_log_z[(size_t)j * out_stride] = scale[j] + tmax[j] + log(fin[j]);
+        }
+    }
+
+done:
+    free(w); free(tail); free(cur); free(next); free(alive);
+    free(pt); free(act);
+    beam_live_release(&h);
+    return BEAM_OK;
+}

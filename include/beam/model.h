@@ -664,6 +664,27 @@ BeamError beam_model_hill_number(const BeamModel *m,
 BeamError beam_model_log_mellin(const BeamModel *m, double q, double *out);
 
 /**
+ * `beam_model_log_mellin` at every order in `qs`, from one traversal of each
+ * length's trellis where calling it per order makes `nq`.
+ *
+ * `out[i]` is bit-identical to `beam_model_log_mellin(m, qs[i], ...)` for
+ * every `i` -- the same bits, whatever the thread count, the memory budget,
+ * or which other orders share the call. The layer of edge weights and the
+ * frontier are built once per layer; each order keeps its own per-layer
+ * rescaling, because each has its own dynamic range.
+ *
+ * A concurrent sweep holds one mass vector per order where the single-order
+ * form holds one in all, and the memory budget is divided accordingly: orders
+ * are fused as widely as leaves room for one sweep per thread, and split into
+ * blocks when they are not. Refuses with BEAM_ERR_BUDGET only when a sweep
+ * carrying a single order does not fit.
+ *
+ * `nq = 0` succeeds and writes nothing; `qs` and `out` may then be NULL.
+ */
+BeamError beam_model_log_mellin_many(const BeamModel *m, const double *qs,
+                                     size_t nq, double *out);
+
+/**
  * Raw moments of the surprisal `-ln P(s)` under the `q`-tilted distribution
  * `P_q(s) proportional to P(s)^q`.
  *

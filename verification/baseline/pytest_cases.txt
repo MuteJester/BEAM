@@ -169,6 +169,29 @@ tests/python/analytics/test_spectrum.py::test_spectrum_pair_auto_spacing_matches
 tests/python/analytics/test_spectrum.py::test_spectrum_pair_is_bit_identical_to_two_calls
 tests/python/analytics/test_topology.py::test_topology_counts_live_structure
 tests/python/analytics/test_topology.py::test_topology_edges_bound_the_paths
+tests/python/diversity/test_depth_matched.py::test_an_unseeded_run_records_the_seed_that_reproduces_it
+tests/python/diversity/test_depth_matched.py::test_bad_abundances_are_refused[abundances0-non-integer]
+tests/python/diversity/test_depth_matched.py::test_bad_abundances_are_refused[abundances1-not positive]
+tests/python/diversity/test_depth_matched.py::test_bad_abundances_are_refused[abundances2-non-finite]
+tests/python/diversity/test_depth_matched.py::test_bad_abundances_are_refused[abundances3-shape]
+tests/python/diversity/test_depth_matched.py::test_bad_abundances_are_refused[abundances4-2 repertoires]
+tests/python/diversity/test_depth_matched.py::test_bad_arguments_are_refused
+tests/python/diversity/test_depth_matched.py::test_gate1_the_draws_are_the_reference_draws
+tests/python/diversity/test_depth_matched.py::test_gate2_profiles_are_a_serial_refit_bit_for_bit[abundance]
+tests/python/diversity/test_depth_matched.py::test_gate2_profiles_are_a_serial_refit_bit_for_bit[presence]
+tests/python/diversity/test_depth_matched.py::test_gate3_profiles_match_hill_numbers_to_machine_precision
+tests/python/diversity/test_depth_matched.py::test_no_abundances_means_one_template_per_sequence
+tests/python/diversity/test_depth_matched.py::test_nucleotide_repertoires_work
+tests/python/diversity/test_depth_matched.py::test_one_repertoire_is_a_resample_at_its_own_depth
+tests/python/diversity/test_depth_matched.py::test_sequences_a_fit_would_skip_are_refused[seqs0-more than once]
+tests/python/diversity/test_depth_matched.py::test_sequences_a_fit_would_skip_are_refused[seqs1-longer than max_length]
+tests/python/diversity/test_depth_matched.py::test_sequences_a_fit_would_skip_are_refused[seqs2-does not accept]
+tests/python/diversity/test_depth_matched.py::test_sequences_a_fit_would_skip_are_refused[seqs3-empty]
+tests/python/diversity/test_depth_matched.py::test_the_band_is_named_and_described_as_what_it_is
+tests/python/diversity/test_depth_matched.py::test_the_depth_is_templates_not_distinct_sequences
+tests/python/diversity/test_depth_matched.py::test_the_result_is_frozen_and_is_not_a_number
+tests/python/diversity/test_depth_matched.py::test_the_thread_cap_is_restored_even_when_a_fit_fails
+tests/python/diversity/test_depth_matched.py::test_workers_times_threads_stays_within_the_budget
 tests/python/insights/test_logo.py::test_a_band_differs_from_the_pooled_logo
 tests/python/insights/test_logo.py::test_a_length_the_model_cannot_produce_is_refused
 tests/python/insights/test_logo.py::test_a_malformed_request_is_refused_by_name[kw0-between 0 and 1]
@@ -205,6 +228,30 @@ tests/python/io/test_parquet_streaming.py::test_the_memory_a_read_holds_does_not
 tests/python/io/test_parquet_streaming.py::test_the_opener_asks_for_no_pre_buffering_when_it_can
 tests/python/io/test_parquet_streaming.py::test_the_opener_falls_back_when_pre_buffer_is_unknown
 tests/python/io/test_parquet_streaming.py::test_the_streaming_reader_holds_less_than_the_eager_one
+tests/python/math/test_hill_profile.py::test_hill_profile_agrees_with_hill_numbers_to_machine_precision[aa-open]
+tests/python/math/test_hill_profile.py::test_hill_profile_agrees_with_hill_numbers_to_machine_precision[aa-strict]
+tests/python/math/test_hill_profile.py::test_hill_profile_agrees_with_hill_numbers_to_machine_precision[nt-strict]
+tests/python/math/test_hill_profile.py::test_log_mellin_many_is_log_mellin_bit_for_bit[aa-open]
+tests/python/math/test_hill_profile.py::test_log_mellin_many_is_log_mellin_bit_for_bit[aa-strict]
+tests/python/math/test_hill_profile.py::test_log_mellin_many_is_log_mellin_bit_for_bit[nt-strict]
+tests/python/math/test_hill_profile.py::test_near_one_the_difference_is_conditioning_not_disagreement[aa-open]
+tests/python/math/test_hill_profile.py::test_near_one_the_difference_is_conditioning_not_disagreement[aa-strict]
+tests/python/math/test_hill_profile.py::test_near_one_the_difference_is_conditioning_not_disagreement[nt-strict]
+tests/python/math/test_hill_profile.py::test_no_schedule_and_no_company_moves_a_bit[aa-open]
+tests/python/math/test_hill_profile.py::test_no_schedule_and_no_company_moves_a_bit[aa-strict]
+tests/python/math/test_hill_profile.py::test_no_schedule_and_no_company_moves_a_bit[nt-strict]
+tests/python/math/test_hill_profile.py::test_orders_are_checked_before_anything_runs[aa-open]
+tests/python/math/test_hill_profile.py::test_orders_are_checked_before_anything_runs[aa-strict]
+tests/python/math/test_hill_profile.py::test_orders_are_checked_before_anything_runs[nt-strict]
+tests/python/math/test_hill_profile.py::test_the_callers_array_is_not_what_the_c_reads[aa-open]
+tests/python/math/test_hill_profile.py::test_the_callers_array_is_not_what_the_c_reads[aa-strict]
+tests/python/math/test_hill_profile.py::test_the_callers_array_is_not_what_the_c_reads[nt-strict]
+tests/python/math/test_hill_profile.py::test_the_corners_are_hill_number_bit_for_bit[aa-open]
+tests/python/math/test_hill_profile.py::test_the_corners_are_hill_number_bit_for_bit[aa-strict]
+tests/python/math/test_hill_profile.py::test_the_corners_are_hill_number_bit_for_bit[nt-strict]
+tests/python/math/test_hill_profile.py::test_the_profile_is_non_increasing[aa-open]
+tests/python/math/test_hill_profile.py::test_the_profile_is_non_increasing[aa-strict]
+tests/python/math/test_hill_profile.py::test_the_profile_is_non_increasing[nt-strict]
 tests/python/math/test_length_marginals.py::test_length_marginals_decompose_the_totals
 tests/python/math/test_length_marginals.py::test_length_marginals_generated_is_the_length_prior
 tests/python/math/test_length_marginals.py::test_length_mean_surprisal_matches_sampling
@@ -486,6 +533,8 @@ tests/python/model/test_metadata.py::test_adding_sequences_through_add_carries_t
 tests/python/model/test_metadata.py::test_build_time_aggregates_across_observe_calls
 tests/python/model/test_metadata.py::test_coverage_grows_with_length_while_the_data_does
 tests/python/model/test_metadata.py::test_coverage_is_a_fraction_and_rows_bound_cells
+tests/python/model/test_metadata.py::test_coverage_is_unavailable_on_a_compacted_open_model
+tests/python/model/test_metadata.py::test_coverage_measures_observation_not_finiteness
 tests/python/model/test_metadata.py::test_lengths_can_be_skipped
 tests/python/model/test_metadata.py::test_metadata_describes_a_compacted_model
 tests/python/model/test_metadata.py::test_metadata_reports_a_real_creation_time

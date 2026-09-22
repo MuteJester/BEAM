@@ -81,7 +81,7 @@ setup(
         sources=manifest("python_binding_sources.txt") + manifest("native_sources.txt"),
         depends=headers(),
         include_dirs=["include", "src/native/internal"],
-        extra_compile_args=["-O2", "-std=c11", "-fopenmp"],
+        extra_compile_args=["-O2", "-std=c11", "-fopenmp", "-mpopcnt"],
         extra_link_args=["-fopenmp"],
         libraries=["m"],
     )],

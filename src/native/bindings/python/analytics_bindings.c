@@ -201,6 +201,41 @@ PyObject *py_log_mellin(PyObject *self, PyObject *args) {
     if (err != BEAM_OK) return set_beam_error(err);
     return PyFloat_FromDouble(v);
 }
+/* The orders arrive as a float64 buffer and the values leave as bytes, the
+ * facade's to wrap. The buffer is held across the GIL-free call, so the
+ * facade hands over a private copy: an array the caller still holds could be
+ * written by another thread while the C reads it. */
+PyObject *py_log_mellin_many(PyObject *self, PyObject *args) {
+    (void)self;
+    PyObject *cap, *qobj;
+    if (!PyArg_ParseTuple(args, "OO", &cap, &qobj)) return NULL;
+    BeamModel *m = edge_from_capsule(cap);
+    if (!m) return NULL;
+    Py_buffer qv;
+    if (!get_f64_buffer(qobj, &qv, 0, "orders")) return NULL;
+    const Py_ssize_t nq = f64_buffer_count(&qv);
+    if ((uint64_t)nq > UINT32_MAX) {
+        PyBuffer_Release(&qv);
+        PyErr_Format(PyExc_ValueError,
+                     "%zd orders in one call; the limit is %u",
+                     nq, (unsigned)UINT32_MAX);
+        return NULL;
+    }
+    double *out = (double *)beam_py_alloc((uint64_t)nq * sizeof(double),
+                                          "the Mellin values", (uint32_t)nq,
+                                          "orders");
+    if (!out) { PyBuffer_Release(&qv); return NULL; }
+    BeamError err;
+    Py_BEGIN_ALLOW_THREADS
+    err = beam_model_log_mellin_many(m, (const double *)qv.buf, (size_t)nq,
+                                     out);
+    Py_END_ALLOW_THREADS
+    PyBuffer_Release(&qv);
+    if (err != BEAM_OK) { PyMem_Free(out); return set_beam_error(err); }
+    PyObject *res = edge_doubles_to_bytes(out, (size_t)nq);
+    PyMem_Free(out);
+    return res;
+}
 PyObject *py_surprisal_moments(PyObject *self, PyObject *args) {
     (void)self;
     PyObject *cap; double q; unsigned int order;

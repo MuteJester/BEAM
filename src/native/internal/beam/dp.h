@@ -83,11 +83,10 @@ void beam_layer_weights(const BeamModel *m, uint32_t i, uint32_t len,
                             double *out, double *out_max);
 
 /**
- * As above, but skipping states `alive` marks dead and filling their rows with
- * -inf. See the definition in `dp/edge_weights.c` for when this is safe: only
- * where the
- * caller provably never reads a dead row, which excludes every caller that
- * asks for `out_max`.
+ * As above, but skipping states `alive` marks dead. When `out_max == NULL`,
+ * this is safe only where the caller provably never reads a dead row. When
+ * `out_max != NULL`, sparse tables still take the exact global maximum while
+ * materialising only marked rows; dense tables build the complete layer.
  */
 void beam_layer_weights_live(const BeamModel *m, uint32_t i, uint32_t len,
                                  double *out, double *out_max,
@@ -270,6 +269,7 @@ static inline uint64_t beam_logz_sweep_bytes(uint32_t n_states,
     return (uint64_t)n_states * n_residues * sizeof(double)
          + 3ull * n_states * sizeof(double)
          + 3ull * n_states * sizeof(uint32_t)
+         + (uint64_t)n_states * sizeof(uint8_t)       /* needed-row mask */
          + 2ull * state_shift * sizeof(uint32_t)
          + ((uint64_t)state_shift + 1u) * sizeof(uint32_t);
 }
@@ -330,6 +330,43 @@ static inline uint64_t beam_jet_sweep_bytes(uint32_t n_states,
          + S * sizeof(double)                            /* the sink    */
          + 2ull * n_moments * S * sizeof(double)         /* cur, next   */
          + S;                                            /* alive       */
+}
+
+/**
+ * `jet_sweep` at `order = 0` for `nq` tilts in ONE traversal of the
+ * length-`len` trellis: `out_log_z[j * out_stride]` is bit-identical to the
+ * `out_log_z` of `jet_sweep(m, len, qs[j], 0u, ...)`. The layer of edge
+ * weights and the frontier are shared; every tilt keeps its own rescaling.
+ * See the definition in dp/jet.c for why that is enough to keep the bits.
+ */
+BeamError jet_sweep_fan(const BeamModel *m, uint32_t len, const double *qs,
+                        uint32_t nq, double *out_log_z, size_t out_stride);
+
+/**
+ * Peak bytes one `jet_sweep_fan` over `n_tilts` tilts holds, from the same
+ * expressions it allocates from.
+ *
+ * `beam_jet_sweep_bytes` with one mass plane per TILT where that has one per
+ * moment, plus seven scalars per tilt and the list of tilts still alive. The
+ * mass planes are what grow: at 31 tilts on an order-4 amino-acid model they
+ * are 97 MB of a 128 MB sweep, against 3 MB for one tilt.
+ *
+ * Two callers must agree on it -- the sweep's own guard and the driver in
+ * math/mellin.c, which sizes both the fusion width and the concurrency from
+ * it -- so it lives here and not beside either. OpenMP's private copies of the
+ * per-tilt reductions are not counted: `n_tilts` doubles per thread, a few
+ * hundred bytes against a sweep measured in megabytes.
+ */
+static inline uint64_t beam_jet_fan_bytes(uint32_t n_states,
+                                          uint32_t n_residues,
+                                          uint32_t n_tilts) {
+    const uint64_t S = n_states;
+    const uint64_t T = n_tilts;
+    return S * (uint64_t)n_residues * sizeof(double)     /* one layer   */
+         + S * sizeof(double)                            /* the sink    */
+         + 2ull * T * S * sizeof(double)                 /* cur, next   */
+         + S                                             /* alive       */
+         + T * (7u * sizeof(double) + sizeof(uint32_t)); /* per tilt    */
 }
 
 #endif /* BEAM_INTERNAL_DP_H */

@@ -1,4 +1,4 @@
-__all__: ['Atoms', 'Attribution', 'BeamError', 'BeamModel', 'BeamQuery', 'BeamTypeError', 'BeamValueError', 'BetaDiversity', 'BudgetExceeded', 'Builder', 'Calibration', 'Condition', 'EntropyBounds', 'EntropyEstimate', 'Histogram', 'ImpossibleCondition', 'IncompatibleMembers', 'InternalError', 'InvalidSequence', 'Mixture', 'MixtureError', 'MixtureTooLarge', 'ModelFileError', 'ModelMismatch', 'NoLivePaths', 'NotFinalized', 'OutOfMemory', 'PseqAnalysis', 'PublicnessModel', 'QueryError', 'QueryTooLarge', 'ScaleIndex', 'SupportSize', 'UnsupportedOrder', 'UnsupportedQuery', 'attribute', 'effective_threads', 'file_provenance_span', 'memory_budget', 'set_memory_budget', 'set_threads', 'threads']
+__all__: ['Atoms', 'Attribution', 'BeamError', 'BeamModel', 'BeamQuery', 'BeamTypeError', 'BeamValueError', 'BetaDiversity', 'BudgetExceeded', 'Builder', 'Calibration', 'Condition', 'DepthMatchedProfiles', 'EntropyBounds', 'EntropyEstimate', 'Histogram', 'ImpossibleCondition', 'IncompatibleMembers', 'InternalError', 'InvalidSequence', 'Mixture', 'MixtureError', 'MixtureTooLarge', 'ModelFileError', 'ModelMismatch', 'NoLivePaths', 'NotFinalized', 'OutOfMemory', 'PseqAnalysis', 'PublicnessModel', 'QueryError', 'QueryTooLarge', 'ResamplingBand', 'ScaleIndex', 'SupportSize', 'UnsupportedOrder', 'UnsupportedQuery', 'attribute', 'depth_matched_hill_profiles', 'effective_threads', 'file_provenance_span', 'memory_budget', 'set_memory_budget', 'set_threads', 'threads']
 __version__: 0.1.0
 class Atoms:
   def __delattr__(self, name, /)
@@ -126,6 +126,7 @@ class BeamModel:
   def hill_curve(self, orders: 'Iterable[float] | None' = None) -> 'dict[str, np.ndarray]'
   def hill_number(self, alpha: 'float') -> 'float'
   def hill_numbers(self, orders: 'Iterable[float]') -> 'np.ndarray'
+  def hill_profile(self, orders: 'Iterable[float]') -> 'np.ndarray'
   property insights
   property is_dag
   property length_distribution
@@ -136,6 +137,7 @@ class BeamModel:
   def log_clamp_probability(self, length: 'int', clamp: 'dict') -> 'float'
   def log_length_prior(self, length: 'int') -> 'float'
   def log_mellin(self, q: 'float') -> 'float'
+  def log_mellin_many(self, orders: 'Iterable[float]') -> 'np.ndarray'
   def log_partition(self, length: 'int') -> 'float'
   def log_pseq(self, sequence: 'str') -> 'float'
   def log_pseq_batch(self, sequences: 'Sequence[str]') -> 'np.ndarray'
@@ -428,6 +430,33 @@ class Condition:
   def oneof(self, position: 'int', residues: 'Iterable[str]') -> "'Condition'"
   def pattern(self) -> 'str'
   def run(self, start: 'int', residues: 'str') -> "'Condition'"
+class DepthMatchedProfiles:
+  def __delattr__(self, name)
+  def __dir__(self, /)
+  def __eq__(self, value, /)
+  def __format__(self, format_spec, /)
+  def __ge__(self, value, /)
+  def __getattribute__(self, name, /)
+  def __getstate__(self, /)
+  def __gt__(self, value, /)
+  def __hash__(self, /)
+  def __init__(self, orders: 'np.ndarray', depth: 'int', weighting: 'str', n_bootstraps: 'int', seed: 'int', profiles: 'np.ndarray', n_distinct_drawn: 'np.ndarray', n_templates: 'np.ndarray', n_distinct: 'np.ndarray', config: 'Mapping[str, Any]') -> None
+  def __init_subclass__(?)
+  def __le__(self, value, /)
+  def __lt__(self, value, /)
+  def __ne__(self, value, /)
+  def __new__(*args, **kwargs)
+  def __post_init__(self) -> 'None'
+  def __reduce__(self, /)
+  def __reduce_ex__(self, protocol, /)
+  def __repr__(self) -> 'str'
+  def __setattr__(self, name, value)
+  def __sizeof__(self, /)
+  def __str__(self, /)
+  def __subclasshook__(?)
+  property n_orders
+  property n_repertoires
+  def resampling_band(self, lo: 'float' = 5.0, hi: 'float' = 95.0) -> 'ResamplingBand'
 class EntropyBounds:
   def __delattr__(self, name)
   def __dir__(self, /)
@@ -969,6 +998,29 @@ class QueryTooLarge:
   def __subclasshook__(?)
   def add_note(?)
   def with_traceback(?)
+class ResamplingBand:
+  def __delattr__(self, name)
+  def __dir__(self, /)
+  def __eq__(self, value, /)
+  def __format__(self, format_spec, /)
+  def __ge__(self, value, /)
+  def __getattribute__(self, name, /)
+  def __getstate__(self, /)
+  def __gt__(self, value, /)
+  def __hash__(self, /)
+  def __init__(self, orders: 'np.ndarray', lo: 'float', hi: 'float', lower: 'np.ndarray', median: 'np.ndarray', upper: 'np.ndarray', n_bootstraps: 'int', depth: 'int') -> None
+  def __init_subclass__(?)
+  def __le__(self, value, /)
+  def __lt__(self, value, /)
+  def __ne__(self, value, /)
+  def __new__(*args, **kwargs)
+  def __reduce__(self, /)
+  def __reduce_ex__(self, protocol, /)
+  def __repr__(self) -> 'str'
+  def __setattr__(self, name, value)
+  def __sizeof__(self, /)
+  def __str__(self, /)
+  def __subclasshook__(?)
 class ScaleIndex:
   def __delattr__(self, name, /)
   def __dir__(self, /)
@@ -1071,6 +1123,7 @@ class UnsupportedQuery:
   def add_note(?)
   def with_traceback(?)
 def attribute(model, sequence) -> 'Attribution'
+def depth_matched_hill_profiles(repertoires: 'Sequence[Sequence[str]]', abundances: 'Sequence[Sequence[float]] | None' = None, *, n_bootstraps: 'int' = 20, orders: 'Iterable[float] | None' = None, seed: 'int | None' = None, weighting: 'str' = 'abundance', n_workers: 'int | None' = None, **config: 'Any') -> 'DepthMatchedProfiles'
 def effective_threads() -> 'int'
 def file_provenance_span() -> 'tuple[int, int]'
 def memory_budget() -> 'int'

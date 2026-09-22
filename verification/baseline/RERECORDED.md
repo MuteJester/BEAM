@@ -1069,6 +1069,66 @@ quantity against a recording of itself, so a logo wrong from the day it was
 written would pass it forever; `exact.py` is the only check with an
 independent reference.
 
+
+# Why six baselines were re-recorded for depth-matched Hill profiles
+
+Re-recorded 2026-09-15 for `beam_model_log_mellin_many`,
+`BeamModel.log_mellin_many` and `BeamModel.hill_profile`, and the `diversity`
+subpackage. Previous copies kept as `*.predepth.txt`.
+
+Compared as SETS, which is how `check.py` compares them, except
+`python_api.txt`, which it compares line for line. **Nothing was removed from
+any of the six** -- the one line that left `python_api.txt` is the old
+`__all__`, replaced by one naming three more.
+
+- `cbeam_methods.txt`    +1: `log_mellin_many`
+- `c_public_symbols.txt` +1: `beam_model_log_mellin_many`
+- `c_symbols.txt`        +2: the public one above, and `jet_sweep_fan`, which
+  is internal: declared only in `src/native/internal/beam/dp.h`, beside the
+  `jet_sweep` whose bits it is held to.
+- `python_api.txt`      +53 lines: the two `BeamModel` methods,
+  `DepthMatchedProfiles`, `ResamplingBand`, `depth_matched_hill_profiles`,
+  and three names in `__all__`.
+- `pytest_cases.txt`    +47: `tests/python/math/test_hill_profile.py` (24) and
+  `tests/python/diversity/test_depth_matched.py` (23)
+- `c_cases.txt`          +5: `tests/native/test_mellin_many.c`
+
+`numeric`, `saved-model bytes` and `thread independence` stayed green across
+the change, which is the half of the argument a re-record cannot supply: the
+change adds entry points and alters no existing one. Separately, `hill_number`,
+`log_mellin`, `entropy` and `path_count` were compared hex for hex before and
+after on nine further models, both alphabets and both worlds included -- 684
+values, none moved.
+
+`exact.py` grew from 336 quantities to 406: `log_mellin_many` at five orders,
+two of them negative, and `hill_profile` at five orders including both
+corners, on each of the seven amino-acid configurations. Against the
+enumeration rather than against the single-order forms, which the C and Python
+suites already pin them to with `==`: a fused sweep wrong the same way at every
+order would pass that comparison and cannot pass this one.
+
+# Why the C test inventory was re-recorded (log-Z combined kernel)
+
+Re-recorded 2026-09-16. One test added, nothing removed; the prior file is
+kept beside it as `c_cases.prelogz.txt` so the change is auditable.
+
+    + test_sparse_combined_max_and_marked_rows
+
+It pins the contract of the combined thin-frontier path in
+`beam_compute_log_z`, which now asks one traversal for two things: the exact
+maximum over every occupied state, and complete rows for a marked subset. The
+test checks both halves against the old state-at-a-time definition -- the
+maximum against `reference_layer_max`, and every marked row byte-for-byte
+against `beam_state_weights`, including marked states whose forward-wide row
+is absent and whose defined output is therefore an all--inf row.
+
+The addition was not taken on trust. Across the same change `numeric` (78
+pinned hex floats), `exact against enumeration` (406 quantities), `thread
+independence` and `saved-model bytes` were all green, the Python suite held at
+735 passed, and every one of 18 foundation-model quantities -- including
+`n_nonzero_cells` 63,136,647, `path_count`, `entropy`, the 16384-bin counting
+spectrum and the positional marginals -- was bit-identical to the pre-change
+binary.
 ---
 
 # The single-expert model, 2026-09-21
@@ -1473,3 +1533,44 @@ quantities twice under a name for a regime nothing was testing. Removing it
 costs nothing: 336 = 7 x 45 + 21 and 291 = 6 x 45 + 21, so exactly one
 configuration's worth left and the six that remain are unchanged, which the
 unmoved `numeric` and `saved-model bytes` confirm.
+
+## Addendum, tag `prehill`: the bootstrap Hill profile ported onto one expert
+
+`feature/bootstrap-hill-profile` (94799e6) was written against the THREE-EXPERT
+model and never merged, so two live figure scripts --
+`donor_hill_separability/_remote/pair_separability.py` and
+`structure_profiles.py` -- called `BEAM.depth_matched_hill_profiles` and
+`BeamModel.hill_profile`, neither of which existed on this branch. They would
+have failed on ig05 after the foundation rebuild.
+
+    python_api.txt    53 signatures added, __all__ modified
+    c_cases.txt       1 added        pytest_cases.txt   2 added
+    numeric.json      byte-identical        threads.json  byte-identical
+
+`numeric` and `threads` not moving is the claim worth making: the port added
+an API and changed no answer.
+
+### What was taken, and what was deliberately left
+
+The branch had three strands. The API came across whole -- `BEAM.diversity`,
+`DepthMatchedProfiles`, `ResamplingBand`, `hill_profile`, `log_mellin_many` --
+and so did `jet.c` and `mellin.c`, which carry the `log_mellin_many` fusion
+measured at 11.7x on ig05. All 47 of the branch's own tests pass unmodified
+against the single-expert model.
+
+Two conflicts were real. In `table_access.h` the branch side was the
+three-expert `beam_lp_wide_row` / `_mid_` / `_len_`; its contribution was not
+those functions but `BEAM_INLINE` over plain `static inline`, because at -O2
+GCC declined to inline them and that was measured at 3.75% of cycles inside
+the edge-weight kernel. The single accessor now carries it, since the reason
+survives the model change.
+
+In `edge_weights_kernels.h` the branch's work was specific to three experts --
+hoisting invariant backward mid and length rows out of the per-residue loop --
+and there are no such rows now, so HEAD was taken whole. No caller anywhere
+still references `_with_fw`, `beam_lp_mid_row` or `n_ctx_mid`; the
+optimisation was self-contained in that header.
+
+The `beam_compute_log_z` fusion (69.36s -> 55.97s) was NOT ported. It was
+measured against a kernel that no longer exists, and re-deriving it for the
+single-expert shape is a separate piece of work with its own measurement.

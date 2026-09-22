@@ -74,6 +74,7 @@ static PyMethodDef module_methods[] = {
     {"subtract",           py_subtract,                      METH_VARARGS, NULL},
     {"add",                py_add,                           METH_VARARGS, NULL},
     {"log_mellin",         py_log_mellin,                    METH_VARARGS, NULL},
+    {"log_mellin_many",    py_log_mellin_many,               METH_VARARGS, NULL},
     {"mixture_check_shape", py_mixture_check_shape,            METH_O, NULL},
     {"mixture_inner_product", py_mixture_inner_product,        METH_VARARGS, NULL},
     {"mixture_gram",        py_mixture_gram,                  METH_VARARGS, NULL},
