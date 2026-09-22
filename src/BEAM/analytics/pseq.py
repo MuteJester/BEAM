@@ -320,8 +320,8 @@ class PseqAnalysis:
     def diversity_under_edge_thresholds(self, thresholds: Any) -> dict:
         """Not applicable: BeamModel has no prunable edges.
 
-        In the open-world model, hierarchical backoff leaves every table cell
-        strictly positive, so an edge sweep would invent a model the smoother
+        In the open-world model, the Laplace add-one leaves every table cell
+        strictly positive, so an edge sweep would invent a model the smoothing
         does not describe. A strict model already retains its exact
         zero-probability boundary rather than an arbitrary threshold.
         :meth:`BeamModel.spectrum` and :meth:`atoms` answer where the mass and

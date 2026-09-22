@@ -30,7 +30,11 @@ memory_budget()              # bytes; the default is 4 GB, 0 restores it
 
 Only [`spectra_by_length`](#spectra_by_length) is large enough to care: one length's histogram grids run to 1.6 GB at order 4 with 512 bins, so running one length per core would ask for twenty-five gigabytes. It divides this budget by what one length needs and runs that many at a time.
 
-This caps **concurrency only**. A single length always runs whatever its size, so lowering the budget can never turn a working call into a failing one, only a slower one. It is a resource knob and nothing else: **results do not depend on it**, pinned by a C unit test at a budget of one byte and by a Python test that a full by-length spectrum is bit-identical at a budget of 1.
+**Results do not depend on it.** When a call runs, the budget changes how much of it runs at once and never the answer it gives.
+
+It **can** refuse, and that is deliberate. Below the size of a single sweep the budget declines rather than running: at `set_memory_budget(1)`, `spectra_by_length`, `entropy`, `path_count` and `top_k_sequences` all raise `BudgetExceeded`. One sweep is 6.6 GB on a nucleotide model at its ceiling order, and a limit that cannot say no to that protects nothing.
+
+This page previously promised the opposite — "a cap on concurrency, never on what a single length may allocate" — which was never true of the positional and query paths and is no longer true of any of them. `tests/python/analytics/test_spectrum.py` and `tests/native/test_model.c` both record the reversal.
 
 ### Measured effect of the parallel implementation
 

@@ -30,11 +30,22 @@ model = BeamModel(sequences, order=3)
 
 A single left-to-right chain learns the V-germline start well and has forgotten it by the time it reaches the J motif, so it emits terminations that no J gene produces. Anchoring one expert at each terminus recovers germline structure without ever being told which genes exist, because the V germline **is** the front-anchored statistic and the J motif **is** the back-anchored statistic.
 
-The effect is easy to see. Swapping the terminal residue of a plausible CDR3 for one no J gene produces costs millions of fold:
+The effect is easy to see. Take a sequence the corpus contains and swap its terminal residue for one no J motif here ends in:
 
 ```python
-model.pseq("CASSLGQGAEQYF")   # 2.824e-09
-model.pseq("CASSLGQGAEQYW")   # 1.143e-15
+real = "CASSALNIWEQYF"      # in the corpus
+bad  = "CASSALNIWEQYW"      # same, terminal F -> W
+
+model.pseq(real)            # 0.0004047
+model.pseq(bad)             # 0.0        <- the closed world refuses it
+```
+
+Zero is the honest answer under the default `strict=True`: the model never saw a length-13 sequence ending in `W`, so it declines to spell one. That is the strongest form of the point but it does not put a number on it. The open world does, because its add-one leaves every cell finite:
+
+```python
+model = BeamModel(sequences, order=3, strict=False)
+model.pseq(real)            # 5.913e-09
+model.pseq(bad)             # 6.109e-13   <- 9,679x less likely
 ```
 
 A left-to-right model has no strong opinion at that position. The C-anchored expert has a very strong one.
@@ -72,9 +83,12 @@ The dimensions are read from the model at run time, not from the
 preprocessor, in every file but one. `src/native/dp/edge_weights.c` is
 compiled once per alphabet through `edge_weights_kernels.h`, because it is
 the file every dynamic program reaches its inner loop through and a runtime
-radix there cost 31–51%. That file's header comment records the four ways of
-avoiding the duplication that were measured and did not work, and why OpenMP
-is the reason.
+radix there was the one measurable regression of the alphabet migration:
+pinning it back to a literal recovers `path_count` 1.00x, `entropy` 1.01x and
+`spectrum` 1.01x against the amino-acid-only build, and everywhere else a
+runtime radix costs nothing. That file's header comment records the four ways
+of avoiding the duplication that were measured and did not work, and why
+OpenMP is the reason.
 
 ## How a probability is assembled
 

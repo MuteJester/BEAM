@@ -54,7 +54,7 @@
  *
  * ## The state space is shared, and that is what makes this cheap
  *
- * A state is a position and the last `max(order, 3)` residues, so the state
+ * A state is a position and the last `order` residues, so the state
  * INDEX is a function of the alphabet and the order and not of the data. Two
  * models that agree on alphabet, order and max_length therefore
  * index the same trellis, cell for cell, and a sweep can read both models'

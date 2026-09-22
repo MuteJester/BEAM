@@ -121,11 +121,13 @@ path_count(length=None) -> float
 Distinct sequences the model can produce; `None` pools over every length.
 
 !!! danger "Read this before quoting a support size"
-    In the default open-world model this is exactly `20 ** length`, because hierarchical backoff leaves every cell strictly positive and so nothing is dead. **That number describes the smoother, not the grammar.** For the corpus above the support is `2.76e23`.
+    Under `strict=False` this is exactly `sum_L 20 ** L`, because the Laplace add-one leaves every cell strictly positive and so nothing is dead. **That number describes the smoothing, not the grammar.** For the corpus above it is `2.759e23`, which is exactly the sum of `20 ** L` over the observed lengths and therefore says nothing about the repertoire.
 
-    Under `strict=True` with zero backoff, dead transitions remain dead and
-    `path_count` instead reports the exact support of the observed-transition
-    DAG. Sparse and dense strict storage return the same value.
+    `strict=True` is the **default**, and there dead transitions stay dead:
+    `path_count` reports the exact support of the observed-transition DAG. For
+    the same corpus that is `2168` — twenty orders of magnitude smaller, and
+    the number that is about the data. Sparse and dense strict storage return
+    the same value.
 
     It is kept because it is the exact `q=0` corner of the Hill family and because it is what the counting spectrum integrates to, so the two have to agree. `effective_diversity()` (`D1`) is the number to quote if you are quoting one — here `1.04e09` against that `2.76e23`.
 
@@ -227,7 +229,7 @@ surprisal_by_depth(*, q=1.0) -> dict
 ```
 The expected contribution of each trellis layer, plus the per-length normalisation `E[ln Z(L) - ln pi(L)]` reported separately as `length_constant` because it belongs to the choice of length rather than to any position. `total` is their sum and equals the mean surprisal exactly.
 
-The sink term — the backward scores of the final `max(order, 3)` residues, which never get a full right-hand context during the walk — is attributed to the **last** layer, so `by_depth[-1]` carries more than one position's worth of cost.
+The sink term — the backward scores of the final `min(order, length)` residues, which never get a full right-hand context during the walk — is attributed to the **last** layer, so `by_depth[-1]` carries more than one position's worth of cost.
 
 ### Topology
 
@@ -263,7 +265,7 @@ The exact surprisal spectrum by forward grid transport.
     With `spacing=None` the transport reserves `max_length + 9` bins of headroom for that linear splitting, so `bins` must be at least `max_length + 10` — 37 for a default model. Pass an explicit `spacing` to use a smaller grid.
 
 !!! note "Cost"
-    Cost scales with the number of live states per layer, and without pruning every state is live at every layer: for amino acids 194,481 of them at order 4 and 9,261 at order 2 or 3, and for nucleotides 46,656 at order 6. A pooled spectrum over a full-range order-4 model needs several GB and minutes. Ask for one length at a time, or build at a lower `order`, when that matters.
+    Cost scales with the number of live states per layer, and without pruning every state is live at every layer: for amino acids 194,481 of them at order 4, 9,261 at order 3 and 441 at order 2, and for nucleotides 46,656 at order 6. A pooled spectrum over a full-range order-4 model needs several GB and minutes. Ask for one length at a time, or build at a lower `order`, when that matters.
 
 ### spectrum_pair
 
@@ -383,7 +385,9 @@ For length `L`, element `r` is `sum_{len(s)=L} P(s)**q * ln(P(s))**r` — the un
 
 ### There is no edge thresholding
 
-`diversity_under_edge_thresholds` exists on the graph models and raises `NotImplementedError` here. Open-world BeamModel has no low-likelihood wiring to threshold away: hierarchical backoff leaves every table cell strictly positive, so such a sweep would either be a no-op or describe a model the smoother does not define. Strict BeamModel already has an exact zero-probability boundary rather than an arbitrary threshold. `spectrum` and `atoms` answer where the mass and sequences sit under either regime.
+The graph models in this library carry a `diversity_under_edge_thresholds` sweep. BeamModel does **not** have it at all — not even as a method that raises, which is what this page used to claim.
+
+There is nothing for it to do. In the open world the Laplace add-one leaves every table cell strictly positive, so a threshold sweep would either be a no-op or describe a model the smoothing does not define. In the closed world there is already an exact zero-probability boundary, which is a property of the corpus rather than an arbitrary cut. `spectrum` and `atoms` answer where the mass and the sequences sit under either regime.
 
 ## The distribution of the surprisal
 
@@ -432,19 +436,25 @@ cal.surprisal, cal.spacing, cal.survival   # the grid and the per-length tails
 ```python
 cal.median(length=None); cal.iqr(length=None)
 cal.quantile(length, probability)
-cal.scale(length, surprisal)
-model.scale_score(sequence, calibration) -> float | np.ndarray
+cal.scale(length, surprisal, *, method="pvalue")
+model.scale_score(sequence, calibration, *, method="pvalue") -> float | np.ndarray
 ```
 
-`scale_score(s)` is `(-ln P(s) - median_L) / IQR_L`: the same length-normalised anomaly score `FlashBackGraph.scale_score` computes, with the reference taken from the **exact** per-length law rather than measured off a few hundred thousand simulated draws. There is no `n_sim`, no seed and no minimum-count rule, so there is nothing to tune and no sampling noise in the reference.
+By default `scale_score(s)` is `-log10 P(U >= -ln P(s))` under the exact per-length null. Because the reference is the exact law rather than a few hundred thousand simulated draws, **a threshold here is a false positive rate**: 2 means 1% at every length. There is no `n_sim`, no seed and no minimum-count rule.
+
+`method="robust"` returns the historical `(-ln P(s) - median_L) / IQR_L` instead — the same score `FlashBackGraph.scale_score` computes. It is the one this page used to document as the default, and its cutoffs are a different rate at every length, which is precisely why it is no longer the default.
 
 ```python
 cal = model.calibrate(bins=512)
-model.scale_score("CASSLGQGAEQYF", cal)   #  1.17
-model.scale_score("CASSLGQGAEQYW", cal)   #  6.31 — no J gene ends in W
+model.scale_score("CASSALNIWEQYF", cal)                   # 0.6881
+model.scale_score("CASSALNIWEQYF", cal, method="robust")  # 0.7017
+model.scale_score("CASSALNIWEQYW", cal)                   # inf — the closed
+                                                          # world cannot spell it
 ```
 
-Sequences drawn from the model are its null by definition, so their scores have median 0 and interquartile range 1; the tests assert both, and assert that the median of the score is flat across lengths where the median of the raw surprisal spans more than a nat.
+`inf` is what a sequence outside the support scores under the default `strict=True`: its surprisal is infinite, so no tail probability covers it. That is the honest answer rather than a large finite number, and it is why the corrupted sequence above is not quoted as a ratio here.
+
+Under `method="robust"`, sequences drawn from the model are its null by definition, so their scores have median 0 and interquartile range 1; the tests assert both, and assert that the median of the score is flat across lengths where the median of the raw surprisal spans more than a nat. The default `pvalue` method is normalised differently — a threshold on it is a false positive rate, not a z-like deviation.
 
 Quantiles use the **mid-distribution** convention: `1 - survival` is `P(U < u)`, strictly below the atom, and inverting it puts every quantile half a bin too high — a systematic bias on the median and so on every score. Splitting each atom's mass across its own step removes it, and a test asserts the remaining error shrinks as the grid is refined.
 

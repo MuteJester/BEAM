@@ -137,8 +137,8 @@ def logos(model, length, *, pseq_above=None, pseq_below=None,
             end and is resolved against the grid.
         counting: weight every producible sequence 1 rather than by its own
             probability. On an OPEN-WORLD model this gives a flat logo at
-            every position, because backoff makes every sequence producible
-            and the counting marginal uniform.
+            every position, because the add-one makes every sequence
+            producible and the counting marginal uniform.
         bins, spacing: the surprisal grid, used only when a band is asked
             for. Both default to a choice made from the model.
         reference_residues: the alphabet size information is measured

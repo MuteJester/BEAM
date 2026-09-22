@@ -101,8 +101,8 @@ def _hill_from_mellin(q: float, log_mellin: float) -> float:
 class BeamModel:
     """Bidirectional anchored DAG over CDR3 sequences.
 
-    The model is the same whichever alphabet it is built over -- two anchored
-    experts, log-linear mixing, hierarchical backoff, exact dynamic programs.
+    The model is the same whichever alphabet it is built over -- one
+    anchored table per direction, geometric mixing, exact dynamic programs.
     Only the symbols change, and with them the size of every table.
 
     Args:
@@ -135,16 +135,17 @@ class BeamModel:
             ``path_count()`` is then the number of sequences the data can
             spell, not the size of the whole lattice.
 
-            Pass ``strict=False`` for the open world: hierarchical backoff
+            Pass ``strict=False`` for the open world: a Laplace add-one
             leaves every cell of the table positive, so every sequence over
             the alphabet gets a finite probability and the support becomes all
             of sequence space. That is a different model, useful for
             comparison and for scoring sequences the corpus never saw, but it
             is no longer what you get without asking.
-        sparse: Store only occupied rows. ``None`` selects sparse storage when
-            ``strict`` is true and all five backoff strengths are zero;
-            ``False`` forces the equivalent dense representation. ``True``
-            outside that exact closed-world regime is rejected.
+        sparse: Store only occupied rows. ``None`` selects sparse storage
+            exactly when ``strict`` is true; ``False`` forces the equivalent
+            dense representation. ``True`` in the open world is rejected,
+            because the add-one gives every row mass and a sparse table would
+            have nowhere to put the rows nothing was observed at.
 
     Example:
         >>> model = BeamModel(sequences, abundances=counts)
@@ -1105,10 +1106,10 @@ class BeamModel:
         """Distinct sequences the model can produce, by exact path counting.
 
         .. warning::
-           In the default open-world model this will be ``20 ** length``, and
-           that is not a bug. Hierarchical backoff leaves every table cell
-           strictly positive, so the number describes the smoother rather
-           than the grammar. With ``strict=True`` and zero backoff, dead
+           Under ``strict=False`` this will be ``20 ** length``, and that is
+           not a bug: the Laplace add-one leaves every table cell strictly
+           positive, so the number describes the smoothing rather than the
+           grammar. Under ``strict=True``, which is the DEFAULT, dead
            transitions stay dead and this is instead the exact support of the
            observed-transition DAG. Sparse and dense storage agree.
 
@@ -1190,7 +1191,9 @@ class BeamModel:
         .. note::
            Cost scales with the number of *live* states per layer, and there
            is no pruning: every state is live at every layer, 194,481 of them
-           at order 4 and 9,261 at order 2 or 3. A pooled spectrum over a
+           at order 4, 9,261 at order 3 and 441 at order 2 -- it is
+           ``radix ** order`` now, not ``radix ** max(order, 3)``. A pooled
+           spectrum over a
            full-range order-4 model needs several GB and minutes. Ask for one
            length at a time, or build at a lower ``order``, when that matters.
         """
@@ -2466,7 +2469,7 @@ class BeamModel:
 
             p_post = (c_own + kappa * p_prior) / (n_own + kappa)
 
-        before BeamModel's own hierarchical backoff, which is the convention
+        before BeamModel's own smoothing, which is the convention
         :meth:`FlashBackGraph.posterior` uses for graph edges.
 
         This is the personalisation primitive: a foundation model as the

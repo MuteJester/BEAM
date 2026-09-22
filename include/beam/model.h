@@ -14,8 +14,8 @@
  *
  * ## Alphabets
  *
- * The model is the same over either alphabet -- two anchored experts,
- * log-linear mixing, hierarchical backoff, exact dynamic programs. Only the
+ * The model is the same over either alphabet -- one anchored table per
+ * direction, combined geometrically, exact dynamic programs. Only the
  * symbols change, and with them the size of every table: twenty amino acids
  * at radix 21, or the five nucleotide residues ACGTN at radix 6. See
  * `BeamAlphabet` below, and `src/native/core/alphabet_*.c` for the
@@ -90,8 +90,8 @@ extern "C" {
 /**
  * Which symbol alphabet a model is built over.
  *
- * The model is the same either way: two anchored experts, log-linear mixing,
- * hierarchical backoff, exact dynamic programs. Only the symbols change.
+ * The model is the same either way: one anchored table per direction,
+ * combined geometrically, exact dynamic programs. Only the symbols change.
  *
  * `BEAM_ALPHABET_AA` is zero deliberately. `beam_model_config_default()` opens
  * with a `memset`, and a caller who zero-initialises a config has always meant
@@ -158,7 +158,10 @@ typedef enum {
 /**
  * Largest order any alphabet permits, and therefore the size of the
  * order-indexed scratch arrays: `slot[]` in the context packers, and
- * `level_counts[]` in the backoff hierarchy.
+ * `slot[]` in the context packers.
+ *
+ * It sized `level_counts[]` in the backoff hierarchy too, until that went with
+ * the three-expert mixture.
  *
  * It is a sizing bound, not the validation limit. What a given config may ask
  * for comes from its alphabet's own ceiling, because the real constraint is
@@ -249,12 +252,15 @@ typedef struct {
      * count over the transitions the corpus actually produced, so support and
      * diversity say something about the data instead of about the smoother.
      *
-     * Orthogonal to `kappa` by design. `strict` alone kills only the add-one
-     * and the floor, so backoff still carries mass from shorter contexts and
-     * a sequence is live if SOME level supports every step. Setting `strict`
-     * together with all-zero kappa is the full closed-world graph: only the
-     * exact observed transitions carry mass. Callers that want FlashBack
-     * semantics want both.
+     * `strict` alone IS the closed world: only the exact observed
+     * transitions carry mass. It used to be half of it -- the backoff
+     * hierarchy still carried mass from shorter contexts, so the closed world
+     * was strict AND every backoff strength at zero -- and that hierarchy
+     * went with the three-expert mixture. There is nothing left to set
+     * beside it.
+     *
+     * Unrelated to the `kappa` of `beam_model_posterior`, which is a
+     * Dirichlet concentration and still very much alive.
      */
     bool strict;
 
@@ -280,7 +286,7 @@ void beam_model_config_default(BeamModelConfig *cfg);
 /**
  * Fill `cfg` with the measured defaults for `alphabet`.
  *
- * The mixing coefficients, backoff strengths and anchor weights are the same
+ * The anchor weights are the same
  * whichever alphabet is asked for: they were measured on amino acids, and
  * re-tuning them for nucleotides needs its own measurement rather than a
  * guess. What the alphabet decides is `order` and `max_length`, which follow
@@ -362,14 +368,14 @@ BeamError beam_model_add(BeamModel *m, const BeamModel *other);
  * this model's counts as `kappa` pseudo-observations.
  *
  * Every row of every count table is one categorical distribution — over the
- * 20 residues for the three expert tables, over lengths for the length
+ * 20 residues for the two anchored tables, over lengths for the length
  * histogram. This adds `kappa * p_prior[row]` to each of this model's rows,
  * where `p_prior` is that row of the prior NORMALISED. After the finalize the
  * caller must then perform, a row reads
  *
  *     p_post = (c_individual + kappa * p_prior) / (n_individual + kappa)
  *
- * before BEAM's own hierarchical backoff, which is the same convention
+ * before BEAM's own smoothing, which is the same convention
  * `beam_flashback_graph_posterior` uses for graph edges.
  *
  * `kappa = 0` is a no-op on the counts. A row the prior never observed is
@@ -472,13 +478,14 @@ void beam_model_drop_caches(BeamModel *m);
 /**
  * Natural log of the sequence probability, `ln P(s)`.
  *
- * In the default open-world configuration, returns `-INFINITY` only for a
- * sequence the model cannot read: one longer than `max_length`, one containing
- * a character outside the 20 amino acids, or one whose length was never
- * observed and so has no length prior. Hierarchical backoff keeps every
- * readable sequence of an observed length finite in that regime. With
- * `strict` enabled, a path containing an unsupported transition also returns
- * `-INFINITY`.
+ * Under `strict=false`, returns `-INFINITY` only for a sequence the model
+ * cannot read: one longer than `max_length`, one containing a character
+ * outside the 20 amino acids, or one whose length was never observed and so
+ * has no length prior. The Laplace add-one keeps every readable sequence of
+ * an observed length finite in that regime.
+ *
+ * `strict` is the DEFAULT, and there a path containing an unsupported
+ * transition also returns `-INFINITY`.
  */
 double beam_model_log_pseq(const BeamModel *m, const char *seq);
 
@@ -522,12 +529,12 @@ double beam_model_log_length_prior(const BeamModel *m, uint32_t length);
  * Number of distinct sequences of length `L` the model can produce, by exact
  * path counting over the trellis.
  *
- * In the default open-world configuration it will be
- * `R^L` for R residues, and that is not a bug. Hierarchical backoff leaves
- * every table cell strictly positive, so the number describes the smoother,
- * not the grammar. With `strict` and zero backoff, dead transitions remain
- * dead and this instead reports the exact support of the observed-transition
- * trellis. Dense and sparse storage return the same count.
+ * Under `strict=false` it will be `R^L` for R residues, and that is not a
+ * bug: the Laplace add-one leaves every table cell strictly positive, so the
+ * number describes the smoothing and not the grammar. Under `strict`, which
+ * is the DEFAULT, dead transitions remain dead and this reports the exact
+ * support of the observed-transition trellis. Dense and sparse storage return
+ * the same count.
  *
  * The function is kept because it is the exact q=0 corner of the Hill family
  * and because it is what the counting spectrum integrates to, so the two have
@@ -738,10 +745,10 @@ BeamError beam_model_surprisal_by_depth(const BeamModel *m, double q,
  * `out_nodes` and `out_edges` receive totals; `out_layer_nodes`, if non-NULL,
  * receives `length + 1` per-layer live-state counts.
  *
- * Expect these to come back saturated in the default open-world model:
- * hierarchical backoff leaves every cell positive, so every reachable state
- * is live. Under strict zero-backoff scoring, the same trimming pass reports
- * only the structure supported by non-zero transitions.
+ * Expect these to come back saturated under `strict=false`: the Laplace
+ * add-one leaves every cell positive, so every reachable state is live. Under
+ * `strict`, which is the DEFAULT, the same trimming pass reports only the
+ * structure supported by non-zero transitions.
  */
 BeamError beam_model_topology(const BeamModel *m, uint32_t length,
                                  double *out_nodes, double *out_edges,
@@ -947,12 +954,12 @@ BeamError beam_model_positional_marginals(const BeamModel *m, uint32_t length,
  * membership is accurate to O(spacing), so a band only a few bins wide
  * measures the grid rather than the model.
  *
- * Choosing the spacing automatically is right for a STRICT model and poor
- * for one with backoff. The automatic bound comes from
- * `beam_model_accumulator_max`, which on a smoothed model is set by the
- * floor near `ln(1e-300)` -- hundreds of nats past anything the model
- * actually generates -- so a 512-bin grid there has bins many nats wide and
- * every useful band is narrower than one. `out_position_mass` is how that is
+ * Choosing the spacing automatically is right for a STRICT model and less
+ * so for a smoothed one, whose accumulator maximum is set by its least likely
+ * cell rather than by anything it generates often. This used to be far worse:
+ * the open world had a probability floor near `1e-300`, putting the bound
+ * hundreds of nats past anything real, and that floor no longer fires at all
+ * -- the smallest cell is now `1/(n + R)` from the add-one. `out_position_mass` is how that is
  * detected: its positions agree to the last bits when the grid resolves the
  * bands and visibly disagree when it does not.
  *

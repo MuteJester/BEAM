@@ -108,7 +108,7 @@ model = BeamModel(seqs, abundances=ab)          # observed support only
 model.log_pseq("CWWWWWWWF")                     # -inf, if nothing spells it
 ```
 
-Pass `strict=False` for the open world instead. Hierarchical backoff then
+Pass `strict=False` for the open world instead. A Laplace add-one then
 leaves every table cell positive, so every sequence over the alphabet receives
 a graded probability and the support becomes all of sequence space:
 

@@ -26,17 +26,17 @@ BeamModel(
 | `order` | `int \| None` | Context order, from 2 up to the alphabet's ceiling: **4** for `aa`, **9** for `nt`. `None` takes the alphabet's default, 4 and 6 respectively. |
 | `weights` | `tuple` | Weight on the N-anchored and C-anchored readings. Both must be non-negative. |
 | `max_length` | `int \| None` | Longest sequence the model represents, **2 to 255**. `None` takes the alphabet's default: 27 for `aa`, 81 for `nt`, three bases to the residue. The floor is 2, not 1: a model of one residue has no settled position and no anchored one. |
-| `strict` | `bool` | Closed-world scoring, and the **default**. Removes the order-0 add-one and probability floor, and defaults all backoff strengths to zero, so the model holds only what the training sequences spell. `strict=False` selects the open world. |
-| `sparse` | `bool \| None` | Storage selection. `None` automatically uses sparse storage exactly when `strict` is true and all five backoff strengths are zero, which is the default; `False` forces dense storage. |
+| `strict` | `bool` | Closed-world scoring, and the **default**. Removes the order-0 add-one, so the model holds only what the training sequences spell. `strict=False` selects the open world, where a Laplace add-one leaves every cell positive. |
+| `sparse` | `bool \| None` | Storage selection. `None` automatically uses sparse storage exactly when `strict` is true, which is the default; `False` forces dense storage. `True` in the open world is rejected. |
 
 ### Alphabets
 
-The model is the same whichever alphabet it is built over — two anchored experts, log-linear mixing, hierarchical backoff, exact dynamic programs. Only the symbols change, and with them the size of every table.
+The model is the same whichever alphabet it is built over — one anchored table per direction, geometric mixing, exact dynamic programs. Only the symbols change, and with them the size of every table.
 
 | | symbols | residues `R` | radix `A` | default `order` | max `order` | default `max_length` |
-|---|---|---|---|---|---|---|---|
-| `aa` | `ACDEFGHIKLMNPQRSTVWY` | 20 | 21 | 4 | 4 | 27 | 15 |
-| `nt` | `ACGTN` | 5 | 6 | 6 | 9 | 81 | every depth |
+|---|---|---|---|---|---|---|
+| `aa` | `ACDEFGHIKLMNPQRSTVWY` | 20 | 21 | 4 | 4 | 27 |
+| `nt` | `ACGTN` | 5 | 6 | 6 | 9 | 81 |
 
 The radix is the residues plus one sentinel that pads contexts at the termini and is never emitted, and it is the base every context index is packed in. The order ceiling is per-alphabet because the real bound is on `A**order`: `21**9` does not fit the 32 bits a context count lives in, while `6**9` fits comfortably.
 
@@ -91,10 +91,11 @@ Neither table is indexed by length and neither needs to be. The two depths at a 
 
 `strict=True` makes an unobserved transition genuinely impossible rather than
 merely improbable: the order-0 base is a raw MLE and zero probabilities are
-not replaced by a floor. Its smoothing defaults are all zero, so the usual
-strict model has exact observed-transition support. Supplying a positive
-backoff strength explicitly is supported, but can carry mass into an
-otherwise unobserved row.
+not replaced by a floor, so a strict model has exact observed-transition
+support. There is nothing to supply beside it: the backoff strengths that
+could once carry mass into an otherwise unobserved row went with the
+three-expert mixture, and `k`, `w_f` and `w_b` are the only free parameters
+the model has.
 
 Sparse storage is a representation of that exact closed-world model, not a
 different estimator. It stores occupied 20-residue rows and preserves the
@@ -202,13 +203,13 @@ posterior(prior, kappa=100.0) -> None      # in place
 with_prior(prior, kappa=100.0) -> BeamModel     # a new model
 ```
 
-A Dirichlet-multinomial update. Every row of every count table is one categorical distribution — over the alphabet's residues for the three expert tables, over lengths for the length histogram — and this adds `kappa * p_prior[row]` to each of this model's rows, where `p_prior` is that row of the prior **normalised**. A row then reads
+A Dirichlet-multinomial update. Every row of every count table is one categorical distribution — over the alphabet's residues for the two anchored tables, over lengths for the length histogram — and this adds `kappa * p_prior[row]` to each of this model's rows, where `p_prior` is that row of the prior **normalised**. A row then reads
 
 ```
 p_post = (c_own + kappa * p_prior) / (n_own + kappa)
 ```
 
-before BeamModel's own hierarchical backoff, which is the convention `FlashBackGraph.posterior` uses for graph edges. This is the personalisation primitive: a foundation model as the prior, one donor's own sequences as the counts, and `kappa` as how many pseudo-observations of the foundation that donor's data has to argue against.
+before BeamModel's own smoothing, which is the convention `FlashBackGraph.posterior` uses for graph edges. This is the personalisation primitive: a foundation model as the prior, one donor's own sequences as the counts, and `kappa` as how many pseudo-observations of the foundation that donor's data has to argue against.
 
 ```python
 foundation = BeamModel(sequences[:1200], order=3)
@@ -222,7 +223,7 @@ personal   = donor.with_prior(foundation, kappa=200.0)
     `total_weight` and `n_observed` report what was **observed**, and a pseudo-count is not an observation, so a leave-one-out corpus size does not shift when the smoothing strength does.
 
 !!! warning "A large kappa does not make this the prior"
-    Raising `kappa` pulls the individual toward the prior and then stops. Three things survive any `kappa`: rows the prior never observed, this model's own backoff reapplied to the blended counts, and its own `Z(L)` and `pi(L)`. On the worked corpus the gap to the prior falls by more than 10x by `kappa = 100` and then floors; the tests assert both the closing and the floor.
+    Raising `kappa` pulls the individual toward the prior and then stops. Three things survive any `kappa`: rows the prior never observed, this model's own smoothing reapplied to the blended counts, and its own `Z(L)` and `pi(L)`. On the worked corpus the gap to the prior falls by more than 10x by `kappa = 100` and then floors; the tests assert both the closing and the floor.
 
 ### The non-destructive forms
 
@@ -272,7 +273,9 @@ n_observed, n_skipped, total_weight
 n_states, n_cells, n_nonzero_cells
 ```
 
-`save` writes **counts**, not the derived tables, so a loaded model can still be subtracted from and re-finalized under different smoothing. Sparse models are written as sorted occupied-row records; dense files retain their flat count blocks, and the reader remains compatible with the previous dense format. Files carry a CRC-32C over row metadata as well as values, and a corrupt one is refused.
+`save` writes **counts**, not the derived tables, so a loaded model can still be subtracted from and re-finalized under different smoothing. Sparse models are written as sorted occupied-row records; dense files retain their flat count blocks. Files carry a CRC-32C over row metadata as well as values, and a corrupt one is refused.
+
+The current format is **7**, and **formats 1 to 5 are refused, not read**. They were written with three experts per direction and a depth index clamped at 15, which merged every depth at or past the cap — so which depth an observation came from was discarded at training time and no transformation recovers it. The refusal names the format and says why, rather than reading the payload at the wrong extents and blaming the file for a checksum failure. Format **6** *is* read: it is this model, written before provenance existed, so the only thing missing is a build time and `metadata()` reports that as `None`.
 
 An order-4 dense model over the full 27-residue range holds 210.0 million conceptual table cells per copy, so about 3.4 GB with counts and 1.7 GB after `compact()`. Each step down in order divides that by the radix: order 3 is 10.0 million cells (160 MB and 80 MB) and order 2 is 476 thousand (8 MB and 4 MB). Order 2 is no longer the same size as order 3 — it used to be, because the DAG state could not hold fewer than three residues while a second expert of fixed order 3 existed. A state now holds exactly the `order` residues one context needs.
 

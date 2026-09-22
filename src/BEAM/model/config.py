@@ -1,4 +1,4 @@
-"""Configuration assembly and the smoothing defaults.
+"""Configuration assembly: what a caller may set and what it defaults to.
 """
 from __future__ import annotations
 

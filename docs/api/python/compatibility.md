@@ -18,6 +18,6 @@ A handful of accessors carry the spelling the graph models in this library use, 
 
 ## Relationship to FlashBack
 
-BeamModel is a **separate model**, not a FlashBack variant. It keeps the geometric fact the FlashBack peel exposed on amino acids — that distance from each terminus is the informative coordinate — and drops the token fusion, which measurement showed costs about 900x the parameters for about 1% of the information. Nothing in the [FlashBackGraph](flashback-graph.md) or [FlashBackGrammar](flashback-grammar.md) implementation is shared or changed.
+BeamModel is a **separate model**, not a FlashBack variant. It keeps the geometric fact the FlashBack peel exposed on amino acids — that distance from each terminus is the informative coordinate — and drops the token fusion, which measurement showed costs about 900x the parameters for about 1% of the information. Nothing in the FlashBackGraph or FlashBackGrammar implementation is shared or changed.
 
 The C symbols are `BeamModel` / `beam_model_*` rather than `beam_*`, because `beam_v_prob` and friends already refer to *graph* edges.
