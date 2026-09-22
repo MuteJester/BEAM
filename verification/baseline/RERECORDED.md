@@ -1634,3 +1634,18 @@ carried the length; none does now.
 
 `numeric`, `threads`, `python_api` and `c_cases` are unchanged: this moves a
 reported denominator, not an answer, a signature or a test binary.
+
+## Addendum, tag `presum`: one test recorded late
+
+    pytest_cases.txt   1 added, 0 gone
+    everything else    unchanged
+
+`test_cells_observed_may_not_be_summed_over_lengths` was committed with the
+storage re-measurements and its inventory line was not recorded with it, so
+the gate failed on the next run. It pins that per-length `cells_observed` must
+not be summed -- a cell carries no length in its address, so a depth-3 cell is
+read by every length from 4 up and the sum counts it once per length -- and
+that the frozen and mutable count paths agree, which is what the sparse
+foundation model will exercise.
+
+`numeric`, `threads`, `python_api` and `c_cases` are all unchanged.

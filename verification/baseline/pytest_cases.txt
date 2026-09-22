@@ -531,6 +531,7 @@ tests/python/model/test_metadata.py::test_a_caller_s_own_refinalize_still_counts
 tests/python/model/test_metadata.py::test_a_streaming_snapshot_reports_the_time_it_spent
 tests/python/model/test_metadata.py::test_adding_sequences_through_add_carries_their_build_time
 tests/python/model/test_metadata.py::test_build_time_aggregates_across_observe_calls
+tests/python/model/test_metadata.py::test_cells_observed_may_not_be_summed_over_lengths
 tests/python/model/test_metadata.py::test_coverage_grows_with_length_while_the_data_does
 tests/python/model/test_metadata.py::test_coverage_is_a_fraction_and_rows_bound_cells
 tests/python/model/test_metadata.py::test_coverage_is_unavailable_on_a_compacted_open_model
