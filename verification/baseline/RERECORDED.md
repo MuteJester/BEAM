@@ -1574,3 +1574,63 @@ optimisation was self-contained in that header.
 The `beam_compute_log_z` fusion (69.36s -> 55.97s) was NOT ported. It was
 measured against a kernel that no longer exists, and re-deriving it for the
 single-expert shape is a separate piece of work with its own measurement.
+
+## Addendum, tag `preceiling`: the coverage denominator was counting the unreachable
+
+    pytest_cases.txt   4 added, 1 gone (a rename plus a parametrisation)
+    everything else    unchanged
+
+`metadata()` reported `rows_possible` as `2 * L * radix ** order` -- every
+context the alphabet can spell, at every depth. Most of those rows cannot be
+addressed by any sequence. At depth `d` only `min(d, order)` context slots are
+free; the rest are the sentinel that pads that direction's anchor, so
+`R ** min(d, order)` rows exist there and the remainder are structurally
+unreachable rather than merely unobserved.
+
+Measured on 60,000 distinct 6-mers, which saturate the shallow depths:
+
+    depth   rows observed   old denominator   reachable
+      0           1             194,481            1
+      1          20             194,481           20
+      2         400             194,481          400
+      3       7,994             194,481        8,000
+
+So a model that had found everything reachable at depth 0 was reported at
+1/194,481 of it. The denominator is now `2 * sum_d R ** min(d, order)`.
+
+### Checked against brute force, not argued
+
+Enumerate EVERY sequence of a length over the whole alphabet and the cells the
+model then holds ARE the reachable set, with nothing sampled and nothing
+assumed:
+
+    L   sequences   n_nonzero_cells   cells_possible   coverage
+    2         400             840              840       1.0000
+    3       8,000          16,840           16,840       1.0000
+    4     160,000         336,840          336,840       1.0000
+
+A model built from every sequence of a length now reads as 100%. Under the old
+denominator length 4 read as 1.08%, claiming 1,555,848 possible rows where
+16,842 exist.
+
+`test_the_possible_cell_count_is_what_brute_force_occupies` is that table, and
+it fails if the addressing in `indexing.h` moves.
+
+### Where the check came from
+
+`.private/manuscript/figures/.../parameter_discovery` already had this
+reasoning and its own brute-force verifier, written when the figure was built.
+It was the only place that knew, and it ran only when the figure ran. The
+check now lives in the test suite; the figure asserts agreement with
+`metadata()` instead of keeping a second, separately-verified opinion.
+
+That figure was also reworked for the single expert. Its ceiling lost the
+wide/mid/len split and the `depth_cap` clamp, and its union over lengths
+collapsed: a cell is addressed by (direction, depth, context) with no length
+in the address, so a shorter length's depth set is a strict subset of a longer
+one's and the union is simply the longest length's ceiling. The old
+`max(wide) + max(mid) + sum(len)` existed because one of the three tables
+carried the length; none does now.
+
+`numeric`, `threads`, `python_api` and `c_cases` are unchanged: this moves a
+reported denominator, not an answer, a signature or a test binary.

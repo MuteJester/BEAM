@@ -539,11 +539,18 @@ class BeamModel:
 
         The per-length entries answer "how much of what this length admits
         has this model actually seen". A sequence of length ``L`` is scored
-        through forward depths ``0..L-1`` and backward depths ``0..L-1``, so
-        the rows it can possibly use number ``2 * L * radix ** order``, and
+        through forward depths ``0..L-1`` and backward depths ``0..L-1``, and
+        at depth ``d`` only ``min(d, order)`` context slots are free -- the
+        rest are the sentinel padding that direction's anchor. So the rows it
+        can REACH number ``2 * sum_d R ** min(d, order)``, and
         ``row_coverage`` is the fraction of those the model holds. ``cells``
         is the same question one level down, counting residues within rows
         rather than rows.
+
+        The denominator counts what is reachable rather than what the
+        alphabet can spell, and the difference is not small: at length 4 the
+        looser count is 1,555,848 rows where 16,842 exist, so a model built
+        from every sequence of that length reads as 1.08% rather than 100%.
 
         ``share`` is that length's mass under the length prior, so the
         coverage figures can be weighted by how much of the model actually
@@ -562,7 +569,6 @@ class BeamModel:
         n_res = self.n_residues
         width = int(cfg["max_length"])
         order = int(cfg["order"])
-        n_ctx = radix ** order
         cells = self.n_cells
         # `n_nonzero_cells` inspects the raw counts, which `compact()`
         # releases. A compacted model is a normal thing to be handed -- it is
@@ -624,7 +630,22 @@ class BeamModel:
                              for k in range(L)) if known else None)
             seen_cells = (sum(cell_counts[d * width + k] for d in (0, 1)
                               for k in range(L)) if known else None)
-            poss_rows = 2 * L * n_ctx
+            # The REACHABLE ceiling, not every context the alphabet can
+            # spell. At depth `d` a context has only `min(d, order)` free
+            # slots -- the rest are the sentinel padding that direction's
+            # anchor -- so `R ** min(d, order)` rows exist there and the
+            # others are unaddressable rather than merely unobserved.
+            #
+            # This was `2 * L * radix ** order`, which counts rows no
+            # sequence can reach. At depth 0 exactly ONE row exists, the
+            # all-sentinel context, and a model that had found it was
+            # reported at 1/194481 of that depth rather than at all of it.
+            #
+            # Checked against brute force rather than argued: enumerate every
+            # sequence over a small alphabet and `n_nonzero_cells` IS the
+            # reachable set. See
+            # `test_the_possible_cell_count_is_what_brute_force_occupies`.
+            poss_rows = 2 * sum(n_res ** min(d, order) for d in range(L))
             poss_cells = poss_rows * n_res
             entry: dict[str, Any] = {
                 "share": float(prior.get(L, 0.0)),

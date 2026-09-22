@@ -100,15 +100,56 @@ def test_size_agrees_with_the_accessors(small):
         small.n_nonzero_cells / small.n_cells)
 
 
-def test_the_possible_row_count_is_the_length_times_the_vocabulary(small):
-    """`2 * L * radix ** order`, because a length-L sequence reads forward
-    depths 0..L-1 and backward depths 0..L-1, and each depth admits every
-    context."""
+def test_the_possible_row_count_is_what_a_sequence_can_reach(small):
+    """`2 * sum_d R ** min(d, order)`, not `2 * L * radix ** order`.
+
+    A length-L sequence reads forward depths 0..L-1 and backward depths
+    0..L-1, but a depth does NOT admit every context: at depth `d` only
+    `min(d, order)` slots are free, the rest being the sentinel that pads
+    that direction's anchor. So `R ** min(d, order)` rows exist there and the
+    others cannot be addressed by any sequence at all.
+
+    This was `2 * L * radix ** order`, which counts rows nothing can reach.
+    Depth 0 has exactly ONE row, the all-sentinel context, and a model that
+    had found it was reported as having found 1/194481 of that depth.
+    """
     meta = small.metadata()
     order = int(meta["config"]["order"])
+    R = small.n_residues
     for L, e in meta["lengths"].items():
-        assert e["rows_possible"] == 2 * L * 21 ** order
-        assert e["cells_possible"] == e["rows_possible"] * small.n_residues
+        assert e["rows_possible"] == 2 * sum(R ** min(d, order)
+                                             for d in range(L))
+        assert e["cells_possible"] == e["rows_possible"] * R
+        # And the old formula is strictly looser, which is why it understated.
+        assert e["rows_possible"] < 2 * L * 21 ** order
+
+
+@pytest.mark.parametrize("length", [2, 3, 4])
+def test_the_possible_cell_count_is_what_brute_force_occupies(length):
+    """Exact against exact, with nothing sampled and nothing assumed.
+
+    Enumerate EVERY sequence of this length over the whole alphabet and the
+    cells the model then holds ARE the reachable set. So `cells_possible` must
+    equal `n_nonzero_cells`, and coverage must be exactly 1.
+
+    That is the property the old denominator failed: at length 4 it claimed
+    1,555,848 possible rows where 16,842 exist, so a model that had seen
+    every sequence there is reported at 1.08% instead of at 100%.
+
+    If the cell addressing in `indexing.h` ever changes, this fails rather
+    than `metadata()` quietly reporting against a wrong denominator.
+    """
+    import itertools
+    from BEAM.constants import BEAM_ALPHABET as AA
+    seqs = ["".join(p) for p in itertools.product(AA, repeat=length)]
+    m = BeamModel(seqs, max_length=max(length, 2))
+    e = m.metadata()["lengths"][length]
+
+    assert e["cells_possible"] == m.n_nonzero_cells
+    assert e["rows_observed"] == e["rows_possible"]
+    assert e["cells_observed"] == e["cells_possible"]
+    assert e["row_coverage"] == 1.0
+    assert e["cell_coverage"] == 1.0
 
 
 def test_coverage_is_a_fraction_and_rows_bound_cells(small):
@@ -330,5 +371,5 @@ def test_coverage_is_unavailable_on_a_compacted_open_model():
     assert e["cells_observed"] is None
     assert e["cell_coverage"] is None
     # The rest of the entry is still exact and still reported.
-    assert e["rows_possible"] == 2 * L * 21 ** 2
+    assert e["rows_possible"] == 2 * sum(20 ** min(d, 2) for d in range(L))
     assert e["share"] > 0.0

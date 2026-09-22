@@ -351,13 +351,17 @@ For each length `L` the model observed:
 | key | what it is |
 |---|---|
 | `share` | `pi(L)`, this length's share of the length prior. These sum to 1. |
-| `rows_possible` | `2 * L * n_ctx` — every (direction, depth, context) a length-`L` sequence could address, with `n_ctx = radix**order` |
+| `rows_possible` | `2 * Σ_{d<L} R**min(d, order)` — every (direction, depth, context) a length-`L` sequence can actually reach |
 | `rows_observed`, `row_coverage` | how many of those the corpus actually reached, and the fraction. `None` on a compacted open-world model — see below |
 | `cells_possible`, `cells_observed`, `cell_coverage` | the same at the level of individual (context, residue) cells |
 | `log_partition` | `log Z(L)`, the Bhattacharyya coefficient between the two chains at this length |
 | `path_count`, `log10_spellable_fraction` | only with `support=True`: how many length-`L` sequences the model can spell at all, and that as a fraction of `n_residues**L` on a log scale |
 
-`row_coverage` is the direct answer to "how much of the spelling dictionary does this model hold for this length". It is small and that is expected: the denominator is every context the alphabet permits, most of which no immune repertoire ever produces. Because depths accumulate, `rows_observed` can only rise with `L` while `row_coverage` need not — the denominator rises too.
+`row_coverage` is the direct answer to "how much of the spelling dictionary does this model hold for this length". Because depths accumulate, `rows_observed` can only rise with `L` while `row_coverage` need not — the denominator rises too.
+
+The denominator is the **reachable** ceiling, not every context the alphabet can spell. At depth `d` a context has only `min(d, order)` free slots; the rest are the sentinel that pads that direction's anchor, so `R**min(d, order)` rows exist at that depth and the others cannot be addressed by any sequence. Depth 0 has exactly one row, the all-sentinel context.
+
+This is checked rather than argued: enumerate every sequence of a length over the whole alphabet and the cells the model holds *are* the reachable set, so `cells_possible` must equal `n_nonzero_cells` and coverage must be exactly 1. `test_the_possible_cell_count_is_what_brute_force_occupies` asserts that at lengths 2, 3 and 4, and fails if the cell addressing in `indexing.h` ever changes.
 
 These count **observations**, read from the model's counts, so `strict=True` and `strict=False` report the same coverage for the same corpus and `cells_observed` summed over the lengths equals `n_nonzero_cells`. Reading them off the finalized tables instead would agree in the closed world and saturate in the open one, where the Laplace add-one leaves every cell finite — a two-sequence model would report that it had discovered the entire dictionary.
 
