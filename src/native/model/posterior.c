@@ -127,18 +127,20 @@ BeamError beam_model_posterior(BeamModel *m, const BeamModel *prior,
 
 BeamError beam_model_set_prior(BeamModel *m, const double *alpha,
                                uint32_t n_alpha, double alpha_length) {
-    if (!m || !alpha) return BEAM_ENULL(!m ? "model" : "alpha");
+    if (!m) return BEAM_ENULL("model");
     if (m->compacted)
         return BEAM_FAIL(BEAM_ERR_NOT_BUILT,
                          "set_prior: the model is compacted, so the counts the "
                          "prior would be re-applied to are gone");
-    if (n_alpha != (uint32_t)m->order + 1u)
+    if (alpha && n_alpha != (uint32_t)m->order + 1u)
         return BEAM_ERANGE("set_prior: %u strengths given, and an order-%u "
                            "model has %u levels (0..order)", (unsigned)n_alpha,
                            (unsigned)m->order, (unsigned)m->order + 1u);
     BeamModelConfig c = m->cfg;
-    for (uint32_t k = 0; k < n_alpha; ++k) c.alpha[k] = alpha[k];
-    c.alpha_length = alpha_length;
+    c.alpha_auto = (alpha == NULL);
+    if (alpha) for (uint32_t k = 0; k < n_alpha; ++k) c.alpha[k] = alpha[k];
+    c.alpha_length_auto = isnan(alpha_length);
+    if (!c.alpha_length_auto) c.alpha_length = alpha_length;
     char why[BEAM_CONFIG_REASON_MAX];
     const char *reason = beam_config_invalid_reason(&c, why, sizeof why);
     if (reason)

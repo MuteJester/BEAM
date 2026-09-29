@@ -27,7 +27,7 @@
 
 /* 0x4245414D is 'B','E','A','M' as ASCII, most significant byte first. */
 #define BEAM_MAGIC   0x4245414Du
-#define BEAM_FORMAT  8u
+#define BEAM_FORMAT  9u
 
 typedef struct {
     uint32_t magic;
@@ -38,6 +38,11 @@ typedef struct {
     uint32_t order;
     uint32_t max_length;
     uint32_t storage_sparse;   /* 0: dense flat blocks, 1: frozen sparse */
+    /* Bit 0: the level strengths are estimated from the counts; bit 1: the
+     * length strength is. The values below are then the estimates the build
+     * made, and a load re-derives them from the same counts. */
+    uint32_t prior_auto;
+    uint32_t reserved;         /* written zero */
     /*
      * Provenance: three facts a finished model cannot recompute about itself.
      * Contiguous, and pinned so below, because
@@ -58,7 +63,7 @@ typedef struct {
 } BeamHeader;
 
 /* Pinned because these numbers are the file format. */
-_Static_assert(sizeof(BeamHeader) == 176, "the format-8 header is 176 bytes");
+_Static_assert(sizeof(BeamHeader) == 184, "the format-9 header is 184 bytes");
 
 void beam_model_file_provenance_span(size_t *offset, size_t *bytes) {
     const size_t first = offsetof(BeamHeader, created_unix);
@@ -282,6 +287,8 @@ BeamError beam_model_save(const BeamModel *m, const char *path) {
     h.order           = m->cfg.order;
     h.max_length      = m->cfg.max_length;
     h.storage_sparse  = m->cfg.sparse ? 1u : 0u;
+    h.prior_auto      = (m->cfg.alpha_auto ? 1u : 0u)
+                      | (m->cfg.alpha_length_auto ? 2u : 0u);
     h.created_unix    = m->created_unix;
     h.observe_nanos   = m->observe_nanos;
     h.finalize_nanos  = m->finalize_nanos;
@@ -374,7 +381,8 @@ BeamModel *beam_model_load(const char *path) {
                               "alphabet id %u, which this build does not know",
                               path, a), NULL;
     }
-    if (h.storage_sparse > 1u || h.order > 255u || h.max_length > 255u) {
+    if (h.storage_sparse > 1u || h.prior_auto > 3u || h.order > 255u
+        || h.max_length > 255u) {
         fclose(f);
         return (void)BEAM_FAIL(BEAM_ERR_IO_CORRUPT,
                               "beam_model_load: '%s' has a header field out of "
@@ -390,6 +398,8 @@ BeamModel *beam_model_load(const char *path) {
     cfg.weight_backward = h.weight_backward;
     for (uint32_t k = 0; k <= BEAM_MAX_ORDER; ++k) cfg.alpha[k] = h.alpha[k];
     cfg.alpha_length    = h.alpha_length;
+    cfg.alpha_auto        = (h.prior_auto & 1u) != 0u;
+    cfg.alpha_length_auto = (h.prior_auto & 2u) != 0u;
 
     /* `beam_model_new` validates the configuration -- the prior's strengths
      * included -- and sets a precise error, passed through untouched. */

@@ -46,8 +46,13 @@ def _enumerable(order=3, n=40, seed=7):
     rng = np.random.default_rng(seed)
     seqs = ["TG" + "".join(rng.choice(list("AG"), int(k))) + "C"
             for k in rng.integers(2, 4, n)]
+    # Fixed strengths: the band edges below are placed in gaps of THIS
+    # spectrum, and strengths estimated from the counts would move its atoms
+    # onto them. With them estimated the library says so itself --
+    # resolution_error 9e-9 against an observed 7e-9 -- which is the honest
+    # answer for a grid that no longer resolves the bands.
     return BeamModel(list(dict.fromkeys(seqs)), alphabet="nt", order=order,
-                     max_length=L_ENUM)
+                     max_length=L_ENUM, alpha=10.0, alpha_length=10.0)
 
 
 @pytest.fixture(scope="module")

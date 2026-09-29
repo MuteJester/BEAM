@@ -2417,8 +2417,10 @@ static void test_failures_carry_a_message(void) {
                "the config refusal must name the field it refused");
 
     /* A zero strength would let an unobserved residue reach probability
-     * zero at that level, so it is refused, and by name. */
+     * zero at that level, so it is refused, and by name -- when the caller
+     * fixes the strengths, which is the only time the value is theirs. */
     beam_model_config_default(&cfg);
+    cfg.alpha_auto = false;
     cfg.alpha[1] = 0.0;
     beam_clear_error();
     ASSERT_MSG(beam_model_new(&cfg) == NULL, "a zero prior strength");
@@ -2581,7 +2583,7 @@ static void test_legacy_format_files_are_refused_by_name(void) {
     const char *path = "build/test_legacy_format.tmp";
 
     ASSERT_MSG(beam_model_save(m, path) == BEAM_OK, "save current format");
-    ASSERT_MSG(rewrite_format_word(path, 8u), "rewrite as format 8");
+    ASSERT_MSG(rewrite_format_word(path, 9u), "rewrite as format 9");
     BeamModel *same = beam_model_load(path);
     ASSERT_MSG(same != NULL, "the control rewrite must still load");
     ASSERT_MSG(beam_model_log_pseq(same, TRAIN[0])
@@ -2589,7 +2591,7 @@ static void test_legacy_format_files_are_refused_by_name(void) {
                "and must be the same model");
     beam_model_destroy(same);
 
-    const uint32_t legacy[] = { 1u, 2u, 3u, 4u, 5u, 6u, 7u };
+    const uint32_t legacy[] = { 1u, 2u, 3u, 4u, 5u, 6u, 7u, 8u };
     for (unsigned k = 0; k < sizeof legacy / sizeof legacy[0]; ++k) {
         ASSERT_MSG(beam_model_save(m, path) == BEAM_OK, "save current format");
         ASSERT_MSG(rewrite_format_word(path, legacy[k]),

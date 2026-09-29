@@ -100,6 +100,11 @@ static BeamModel *build_nt(void) {
     beam_model_config_default(&c);
     c.alphabet = BEAM_ALPHABET_NT;
     c.order = 2u; c.max_length = 6u;
+    /* Fixed strengths: the band edges the brute-force test uses are placed
+     * in gaps of THIS spectrum, and strengths re-estimated from the counts
+     * would move its atoms onto them. */
+    c.alpha_auto = false;
+    c.alpha_length_auto = false;
     BeamModel *m = beam_model_new(&c);
     if (!m) return NULL;
     if (beam_model_observe(m, TRAIN_NT, W_NT, N_NT) != BEAM_OK

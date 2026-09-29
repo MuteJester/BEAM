@@ -89,8 +89,12 @@ static BeamModel *build_full(BeamAlphabet alphabet, const char **seqs,
     beam_model_config_default_for(alphabet, &cfg);
     cfg.order = order;
     cfg.max_length = max_length;
-    if (alpha > 0.0)
+    if (alpha > 0.0) {
+        /* A named strength is a fixed one: left to the counts, the evidence
+         * would replace the vanishing prior these known answers need. */
+        cfg.alpha_auto = false;
         for (uint32_t k = 0; k <= order; ++k) cfg.alpha[k] = alpha;
+    }
     if (anchor_weight > 0.0)
         cfg.weight_forward = cfg.weight_backward = anchor_weight;
     BeamModel *m = beam_model_new(&cfg);

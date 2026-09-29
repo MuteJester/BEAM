@@ -24,7 +24,7 @@ def test_an_older_development_file_is_refused_with_the_remedy():
     with pytest.raises(ModelFileError) as info:
         BeamModel.from_file(FIXTURES / "format6_sparse.beam")
     msg = str(info.value)
-    assert "format 6" in msg and "format 8" in msg, msg
+    assert "format 6" in msg and "format 9" in msg, msg
     assert "Rebuild the model from its sequences" in msg, msg
     assert "checksum" not in msg
 

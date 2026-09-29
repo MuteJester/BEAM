@@ -106,10 +106,11 @@ static inline double prior_cell_log(double n_x, double a, double log_a,
                      : log_a + log_parent - log_z;
 }
 
-/* log P_k for every observed lower row of this depth, bottom-up. */
-static void hier_solve(HierScratch *h, const BeamModel *m) {
+/* log P_k for every observed lower row of this depth, bottom-up, for the
+ * levels below `upto`. */
+static void hier_solve(HierScratch *h, const BeamModel *m, uint32_t upto) {
     const uint32_t R = m->n_residues;
-    for (uint32_t k = 0; k < m->order; ++k) {
+    for (uint32_t k = 0; k < upto; ++k) {
         const double a = m->cfg.alpha[k], log_a = log(a);
         for (uint32_t ck = 0; ck < m->lo_ctx[k]; ++ck) {
             const double n = h->tot[k][ck];
@@ -272,7 +273,7 @@ static BeamError finalize_sparse_hier(BeamModel *st, uint32_t dir,
             if (counts && row_total(counts, R) > 0.0)
                 hier_accumulate(&h, st, c, counts);
         }
-        hier_solve(&h, st);
+        hier_solve(&h, st, st->order);
         err = hier_emit_lower(&h, st, dir, d);
         for (uint32_t i = a; i < b && err == BEAM_OK; ++i) {
             uint32_t c;
@@ -347,7 +348,7 @@ static BeamError finalize_dense_direction(BeamModel *st, uint32_t dir) {
             const double *counts = beam_cnt_row(st, dir, d * nc + c);
             if (row_total(counts, R) > 0.0) hier_accumulate(&h, st, c, counts);
         }
-        hier_solve(&h, st);
+        hier_solve(&h, st, st->order);
         err = hier_emit_lower(&h, st, dir, d);
         for (uint32_t j = 0; j < nc && err == BEAM_OK; ++j) {
             uint32_t c;
@@ -369,6 +370,299 @@ static BeamError finalize_dense_direction(BeamModel *st, uint32_t dir) {
                                             false, NULL);
     }
     return err;
+}
+
+/* ── Empirical Bayes: the strengths from the counts ───────────── */
+
+/*
+ * When the caller names no strengths, each level's is the one that makes the
+ * model's own counts most probable with the Dirichlet integrated out -- the
+ * EVIDENCE, exact and in closed form -- under a weak hyperprior (below):
+ *
+ *     log p(counts | a) = sum_rows [ lnG(a) - lnG(n + a)
+ *                          + sum_{x: n_x > 0} ( lnG(n_x + a m_x) - lnG(a m_x) ) ]
+ *
+ * with `m` the row's parent prediction. A row whose counts its parent already
+ * predicts wants a large `a`; one its parent gets wrong wants a small one. The
+ * levels are fitted bottom-up, level k against parents built with the
+ * strengths already fitted below it, pooling both directions and every depth,
+ * since the configuration holds one strength per level. Cells with no count
+ * contribute exactly zero, which is what keeps this proportional to the
+ * observed cells rather than to the table.
+ *
+ * The reads of one clone are not independent draws, and the evidence treats
+ * them as if they were; `fit_alpha` against held-out reads is there for a
+ * caller who wants the strengths chosen for a specific prediction instead.
+ */
+
+/*
+ * lnG(x + n) - lnG(x) for x > 0, n >= 0: every term of the evidence is one.
+ *
+ * Taken as a difference, not as two log-gammas subtracted. At a strength of
+ * 1e10 each log-gamma is near 2e11 and their difference is a few units, so the
+ * subtraction keeps five significant digits, and summed over a million cells
+ * that is enough rounding to invent a second maximum -- which is what it did,
+ * a spurious rise of 460 nats at 1e12. Stirling's form puts the difference
+ * where it can be taken exactly:
+ *
+ *     (x - 1/2) log1p(n/x) + n log(x + n) - n + S(x + n) - S(x)
+ *
+ * with S the tail of the series. Below x = 10 both arguments are shifted up
+ * and the shift's product divided back out. `lgamma` is not used at all: it
+ * writes `signgam`, a data race under OpenMP.
+ */
+static double stirling_tail(double y) {
+    const double z = 1.0 / (y * y);
+    return (1.0 / 12.0 - z * (1.0 / 360.0 - z * (1.0 / 1260.0
+            - z * (1.0 / 1680.0 - z * (1.0 / 1188.0))))) / y;
+}
+
+static double ln_gamma_diff(double x, double n) {
+    if (!(n > 0.0)) return 0.0;
+    double shift = 0.0;
+    if (x < 10.0) {
+        double px = 1.0, pn = 1.0;
+        while (x < 10.0) { px *= x; pn *= x + n; x += 1.0; }
+        shift = log(px) - log(pn);
+    }
+    const double y = x + n;
+    return (x - 0.5) * log1p(n / x) + n * log(y) - n
+         + stirling_tail(y) - stirling_tail(x) + shift;
+}
+
+typedef struct {
+    double   *row_n;          /* [n_rows]  row totals                   */
+    double   *cell_n;         /* [n_cells] a positive count             */
+    double   *cell_m;         /* [n_cells] its parent's probability     */
+    uint64_t  n_rows, n_cells, cap_rows, cap_cells;
+} Evidence;
+
+static void evidence_free(Evidence *e) {
+    free(e->row_n); free(e->cell_n); free(e->cell_m);
+    memset(e, 0, sizeof *e);
+}
+
+/* One observed row: its counts and, as logs, its parent's prediction. */
+static bool evidence_add(Evidence *e, const double *counts, double tot,
+                         const double *parent_log, uint32_t R) {
+    if (e->n_rows == e->cap_rows) {
+        const uint64_t cap = e->cap_rows ? 2u * e->cap_rows : 1024u;
+        double *p = (double *)realloc(e->row_n, cap * sizeof(double));
+        if (!p) return false;
+        e->row_n = p; e->cap_rows = cap;
+    }
+    e->row_n[e->n_rows++] = tot;
+    for (uint32_t x = 0; x < R; ++x) {
+        if (!(counts[x] > 0.0)) continue;
+        if (e->n_cells == e->cap_cells) {
+            const uint64_t cap = e->cap_cells ? 2u * e->cap_cells : 4096u;
+            double *a = (double *)realloc(e->cell_n, cap * sizeof(double));
+            if (!a) return false;
+            e->cell_n = a;
+            double *b = (double *)realloc(e->cell_m, cap * sizeof(double));
+            if (!b) return false;
+            e->cell_m = b; e->cap_cells = cap;
+        }
+        e->cell_n[e->n_cells] = counts[x];
+        e->cell_m[e->n_cells] = exp(parent_log[x]);
+        e->n_cells++;
+    }
+    return true;
+}
+
+/*
+ * The log evidence at strength `a`. Summed in fixed chunks, each chunk in
+ * order and the chunk totals in order, so the value -- and with it the fitted
+ * strength and every table after it -- does not depend on the thread count.
+ */
+#define EVIDENCE_CHUNK 65536u
+static double evidence_at(const Evidence *e, double a) {
+    const uint64_t n_rc = (e->n_rows + EVIDENCE_CHUNK - 1) / EVIDENCE_CHUNK;
+    const uint64_t n_cc = (e->n_cells + EVIDENCE_CHUNK - 1) / EVIDENCE_CHUNK;
+    const uint64_t n_chunks = n_rc + n_cc;
+    double *part = (double *)calloc(n_chunks ? n_chunks : 1u, sizeof(double));
+    if (!part) return NAN;
+#ifdef _OPENMP
+    #pragma omp parallel for schedule(dynamic, 1) num_threads(beam_threads())
+#endif
+    for (int64_t c = 0; c < (int64_t)n_chunks; ++c) {
+        double s = 0.0;
+        if ((uint64_t)c < n_rc) {
+            const uint64_t lo = (uint64_t)c * EVIDENCE_CHUNK;
+            const uint64_t hi = lo + EVIDENCE_CHUNK < e->n_rows ? lo + EVIDENCE_CHUNK
+                                                                : e->n_rows;
+            for (uint64_t i = lo; i < hi; ++i)
+                s -= ln_gamma_diff(a, e->row_n[i]);
+        } else {
+            const uint64_t lo = ((uint64_t)c - n_rc) * EVIDENCE_CHUNK;
+            const uint64_t hi = lo + EVIDENCE_CHUNK < e->n_cells ? lo + EVIDENCE_CHUNK
+                                                                 : e->n_cells;
+            for (uint64_t i = lo; i < hi; ++i)
+                s += ln_gamma_diff(a * e->cell_m[i], e->cell_n[i]);
+        }
+        part[c] = s;
+    }
+    double total = 0.0;
+    for (uint64_t c = 0; c < n_chunks; ++c) total += part[c];
+    free(part);
+    return total;
+}
+
+/*
+ * The strength the evidence prefers, over [1e-3, 1e12], under a weak
+ * hyperprior: log a ~ Normal(log 10, (ln 100)^2), two decades either way at
+ * one standard deviation. What is maximised is the evidence plus that log
+ * density -- the strength's own posterior mode, one level of Bayes further up.
+ *
+ * The hyperprior is there for the corpora the evidence says nothing about. A
+ * row holding one observation has the same evidence at every strength, so a
+ * single training sequence leaves the evidence flat and its maximum anywhere
+ * (it landed on 3.9e11, a model that ignores its data); five copies of one
+ * sequence drive it to the floor, the closed world again. Under the hyperprior
+ * both fall back towards 10. Against real data it is invisible: on a donor
+ * model the evidence moves by hundreds of nats across a decade, and the
+ * hyperprior by a fraction of one.
+ *
+ * A grid first, a quarter of a decade apart, and golden section only inside
+ * the best cell. The evidence is not unimodal: at the top level of a donor
+ * model it peaks at 135, falls by 1,200 nats by 1e4 and then climbs back to a
+ * plateau 1,054 below the peak as the counts stop mattering, and a golden
+ * section started across all of that converged on the plateau. The grid finds
+ * the right basin; the refinement is exact within it.
+ */
+#define ALPHA_FIT_LO    -6.907755278982137   /* ln 1e-3  */
+#define ALPHA_FIT_HI    27.631021115928547   /* ln 1e12  */
+#define ALPHA_FIT_STEP   0.5756462732485115  /* ln 10 / 4 */
+#define ALPHA_FIT_TOL    1e-6
+#define ALPHA_HYPER_MU   2.302585092994046   /* ln 10    */
+#define ALPHA_HYPER_SD   4.605170185988092   /* ln 100   */
+
+static double evidence_posterior(const Evidence *e, double log_a) {
+    const double z = (log_a - ALPHA_HYPER_MU) / ALPHA_HYPER_SD;
+    return evidence_at(e, exp(log_a)) - 0.5 * z * z;
+}
+
+static double evidence_argmax(const Evidence *e) {
+    const int n_grid = (int)((ALPHA_FIT_HI - ALPHA_FIT_LO) / ALPHA_FIT_STEP + 0.5) + 1;
+    int best = 0;
+    double best_f = -INFINITY;
+    for (int i = 0; i < n_grid; ++i) {
+        const double f = evidence_posterior(e, ALPHA_FIT_LO + i * ALPHA_FIT_STEP);
+        if (f > best_f) { best_f = f; best = i; }
+    }
+    double lo = ALPHA_FIT_LO + (best > 0 ? best - 1 : 0) * ALPHA_FIT_STEP;
+    double hi = ALPHA_FIT_LO + (best < n_grid - 1 ? best + 1 : n_grid - 1) * ALPHA_FIT_STEP;
+    const double g = 0.61803398874989484820;
+    double c = hi - g * (hi - lo), d = lo + g * (hi - lo);
+    double fc = evidence_posterior(e, c), fd = evidence_posterior(e, d);
+    while (hi - lo > ALPHA_FIT_TOL) {
+        if (fc > fd) { hi = d; d = c; fd = fc; c = hi - g * (hi - lo); fc = evidence_posterior(e, c); }
+        else         { lo = c; c = d; fc = fd; d = lo + g * (hi - lo); fd = evidence_posterior(e, d); }
+    }
+    return exp(0.5 * (lo + hi));
+}
+
+/* Level k's observed rows of one direction, against parents built with the
+ * strengths already fitted for the levels below it. */
+static BeamError evidence_collect(BeamModel *st, uint32_t dir, uint32_t k,
+                                  Evidence *e) {
+    const uint32_t R = st->n_residues, nc = st->n_ctx;
+    BeamSparseRows local;
+    const BeamSparseRows *cnt = NULL;
+    bool thawed = false;
+    if (st->cfg.sparse && st->counts_frozen) {
+        BeamError err = beam_model_thaw_count_table(st, dir, &local);
+        if (err != BEAM_OK) return err;
+        cnt = &local; thawed = true;
+    }
+    uint32_t *rows = NULL, n_rows = 0;
+    BeamError err = BEAM_OK;
+    if (st->cfg.sparse) err = list_top_rows(st, dir, cnt, &rows, &n_rows);
+    HierScratch h;
+    if (err == BEAM_OK) err = hier_scratch_alloc(&h, st);
+    if (err != BEAM_OK) { free(rows); if (thawed) beam_sparse_destroy(&local); return err; }
+
+    const uint32_t n_depth_rows = st->cfg.sparse ? n_rows : st->max_len * nc;
+    for (uint32_t a = 0; a < n_depth_rows && err == BEAM_OK; ) {
+        const uint32_t d = st->cfg.sparse ? rows[a] / nc : a / nc;
+        uint32_t b = a;
+        if (st->cfg.sparse) { while (b < n_rows && rows[b] / nc == d) ++b; }
+        else b = a + nc;
+        hier_scratch_clear(&h, st);
+        for (uint32_t i = a; i < b; ++i) {
+            uint32_t c;
+            const double *counts = top_counts(st, dir, cnt,
+                                              st->cfg.sparse ? rows[i] : i, &c);
+            if (counts && row_total(counts, R) > 0.0)
+                hier_accumulate(&h, st, c, counts);
+        }
+        hier_solve(&h, st, k);
+        if (k < st->order) {
+            for (uint32_t ck = 0; ck < st->lo_ctx[k] && err == BEAM_OK; ++ck) {
+                const double tot = h.tot[k][ck];
+                if (!(tot > 0.0)) continue;
+                const double *par = k ? h.prob[k - 1]
+                                        + (size_t)(ck % st->lo_ctx[k - 1]) * R
+                                      : st->base_row;
+                if (!evidence_add(e, h.cnt[k] + (size_t)ck * R, tot, par, R))
+                    err = BEAM_EALLOC("the evidence of a prior level");
+            }
+        } else {
+            for (uint32_t i = a; i < b && err == BEAM_OK; ++i) {
+                uint32_t c;
+                const double *counts = top_counts(st, dir, cnt,
+                                                  st->cfg.sparse ? rows[i] : i, &c);
+                if (!counts) continue;
+                const double tot = row_total(counts, R);
+                if (!(tot > 0.0)) continue;
+                const double *par = h.prob[k - 1]
+                                  + (size_t)(c % st->lo_ctx[k - 1]) * R;
+                if (!evidence_add(e, counts, tot, par, R))
+                    err = BEAM_EALLOC("the evidence of the top level");
+            }
+        }
+        a = b;
+    }
+    hier_scratch_free(&h, st->order);
+    free(rows);
+    if (thawed) beam_sparse_destroy(&local);
+    return err;
+}
+
+/* Fill in whichever strengths the caller left to the data. */
+static BeamError estimate_prior(BeamModel *st) {
+    if (st->cfg.alpha_auto) {
+        for (uint32_t k = 0; k <= st->order; ++k) {
+            Evidence e;
+            memset(&e, 0, sizeof e);
+            BeamError err = BEAM_OK;
+            for (uint32_t d = 0; d < BEAM_DIRS && err == BEAM_OK; ++d)
+                err = evidence_collect(st, d, k, &e);
+            if (err == BEAM_OK && e.n_rows == 0)
+                err = BEAM_FAIL(BEAM_ERR_EMPTY_INPUT, "finalize: level %u of the "
+                                "prior has no observed row to fit a strength "
+                                "to", (unsigned)k);
+            if (err == BEAM_OK) st->cfg.alpha[k] = evidence_argmax(&e);
+            evidence_free(&e);
+            if (err != BEAM_OK) return err;
+        }
+    }
+    if (st->cfg.alpha_length_auto) {
+        /* One row: the length histogram against the even distribution. */
+        Evidence e;
+        memset(&e, 0, sizeof e);
+        double *lm = (double *)malloc(st->max_len * sizeof(double));
+        if (!lm) return BEAM_EALLOC("the length prior's evidence");
+        double tot = 0.0;
+        for (uint32_t L = 1; L < st->n_len_slots; ++L) tot += st->cnt_length[L];
+        for (uint32_t L = 0; L < st->max_len; ++L) lm[L] = -log((double)st->max_len);
+        const bool ok = evidence_add(&e, st->cnt_length + 1, tot, lm, st->max_len);
+        free(lm);
+        if (!ok) { evidence_free(&e); return BEAM_EALLOC("the length prior's evidence"); }
+        st->cfg.alpha_length = evidence_argmax(&e);
+        evidence_free(&e);
+    }
+    return BEAM_OK;
 }
 
 /**
@@ -395,6 +689,12 @@ static BeamError finalize_tables(BeamModel *st) {
                         "finalize: out of memory allocating the "
                         "log-probability tables (%llu cells)",
                         (unsigned long long)beam_model_n_cells(st));
+
+    /* Strengths the caller left to the data, before anything reads them. */
+    {
+        const BeamError pe = estimate_prior(st);
+        if (pe != BEAM_OK) return pe;
+    }
 
     /*
      * Length prior: the same Dirichlet smoothing as the tables, centred on the
@@ -585,6 +885,7 @@ static BeamError finalize_body(BeamModel *m) {
     }
     m->log_pi = st.log_pi;
     m->log_z  = st.log_z;
+    m->cfg    = st.cfg;              /* the strengths finalize estimated */
     m->tables_all_finite = st.tables_all_finite;
     m->finalized = true;
     beam_free_tables(&prev);

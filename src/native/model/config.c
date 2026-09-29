@@ -27,13 +27,14 @@ void beam_model_config_default_for(BeamAlphabet alphabet,
      * re-tuning it for another alphabet needs a measurement of its own. */
     cfg->order           = a->default_order;
     cfg->max_length      = a->default_max_length;
-    /* Every level of the hierarchical prior starts at the same strength, and
-     * the length prior with it. These are starting values, not measurements:
-     * `beam.fit_alpha` fits them by held-out likelihood, which is the only
-     * thing that should set them for a real corpus. */
+    /* The strengths are estimated from the counts unless a caller fixes
+     * them; the values below are what a caller who turns estimation off
+     * without naming strengths gets, and what an unfinalized model reports. */
     for (uint32_t k = 0; k <= BEAM_MAX_ORDER; ++k)
         cfg->alpha[k]    = BEAM_DEFAULT_ALPHA;
     cfg->alpha_length    = BEAM_DEFAULT_ALPHA_LENGTH;
+    cfg->alpha_auto        = true;
+    cfg->alpha_length_auto = true;
     /* Sparse is the default at every layer now. It used to be dense here and
      * sparse in Python, because a dense and a sparse closed-world model were
      * bit-identical and a C caller might not want the sparse path; a dense
@@ -92,12 +93,13 @@ const char *beam_config_invalid_reason(const BeamModelConfig *c,
     /* A zero strength lets an unobserved residue reach probability zero at
      * that level, which is the closed world returning through one row; a
      * negative one is not a Dirichlet at all. */
-    for (uint32_t k = 0; k <= c->order && k <= BEAM_MAX_ORDER; ++k)
+    for (uint32_t k = 0; !c->alpha_auto && k <= c->order && k <= BEAM_MAX_ORDER; ++k)
         if (!(c->alpha[k] > 0.0) || !isfinite(c->alpha[k]))
             BEAM_CFG_WHY("alpha[%u]=%.17g, and every prior strength up to the "
                          "order must be finite and positive", (unsigned)k,
                          c->alpha[k]);
-    if (!(c->alpha_length > 0.0) || !isfinite(c->alpha_length))
+    if (!c->alpha_length_auto
+        && (!(c->alpha_length > 0.0) || !isfinite(c->alpha_length)))
         BEAM_CFG_WHY("alpha_length=%.17g, and the length prior's strength "
                      "must be finite and positive", c->alpha_length);
     return NULL;

@@ -137,12 +137,16 @@ class BeamModel:
 
             with level 0 the depth alone and the uniform ``1/20`` below it.
             ``alpha[k]`` is how many pseudo-observations the shorter context
-            is worth. Defaults to 10 at every level, a starting point:
-            :func:`BEAM.fit_alpha` fits them by held-out likelihood.
+            is worth. ``None`` (the default) or ``"auto"`` estimates them from
+            the model's own counts at every finalize, as the strengths that
+            maximise the counts' evidence -- the Dirichlet-multinomial
+            marginal likelihood -- level by level from the bottom. The
+            estimates are reported in :attr:`config`. Pass numbers to fix
+            them, or :func:`BEAM.fit_alpha` to fit them to held-out reads.
         alpha_length: Prior strength of the length distribution,
             ``P(L) = (n_L + alpha_length / max_length) / (N + alpha_length)``,
             so a length the corpus never produced is improbable rather than
-            impossible. Defaults to 10.
+            impossible. Estimated the same way unless given.
         sparse: Store only the rows something was observed at, and resolve
             every other row through its parent. ``False`` materialises every
             row -- the same model, bit for bit, at gigabytes for order 4 --
@@ -2605,20 +2609,24 @@ class BeamModel:
 
         Nothing is re-observed: the counts are the only state the prior reads,
         so this is what makes fitting the strengths cheap -- one model, many
-        re-finalizes. ``None`` keeps the current value. See
-        :func:`BEAM.fit_alpha`.
+        re-finalizes. ``None`` keeps the current setting; ``"auto"`` hands the
+        strength back to the data (estimated by the evidence of the counts);
+        numbers fix it. See :func:`BEAM.fit_alpha`.
         """
         if self._compacted:
             raise RuntimeError(
                 "set_alpha() is unavailable after compact(): the counts the "
                 "prior is re-applied to have been released")
-        from .config import _alpha_levels
+        from .config import _alpha_length, _alpha_levels
         cfg = self.config
-        levels = _alpha_levels(cfg["alpha"] if alpha is None else alpha,
-                               cfg["order"])
-        al = cfg["alpha_length"] if alpha_length is None else float(alpha_length)
-        if not (math.isfinite(al) and al > 0.0):
-            raise ValueError(f"alpha_length={al!r} must be finite and positive")
+        if alpha is None:
+            levels = None if cfg["alpha_auto"] else cfg["alpha"]
+        else:
+            levels = _alpha_levels(alpha, cfg["order"])
+        if alpha_length is None:
+            al = None if cfg["alpha_length_auto"] else cfg["alpha_length"]
+        else:
+            al = _alpha_length(alpha_length)
         _c.set_prior(self._g, levels, al)
 
     def with_prior(self, prior: BeamModel, kappa: float = 100.0) -> BeamModel:

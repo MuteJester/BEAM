@@ -274,7 +274,7 @@ def test_the_default_order_builds_and_prices_the_unseen(default_model):
     """
     m = default_model("nt")
     assert m.config["order"] == 6
-    assert m.config["alpha"] == (10.0,) * 7
+    assert len(m.config["alpha"]) == 7 and m.config["alpha_auto"]
     for s in NT_SEQS:
         assert math.isfinite(m.log_pseq(s))
     unseen = "A" * len(NT_SEQS[0])

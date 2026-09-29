@@ -111,12 +111,16 @@ So a context the corpus never saw predicts what its shorter context predicts:
 new CDR3-like sequences get graded probabilities, and junk stays improbable.
 
 ```python
-model = BeamModel(seqs, abundances=ab)          # alpha 10 at every level
+model = BeamModel(seqs, abundances=ab)          # strengths estimated from the counts
+model.config["alpha"]                           # what the evidence chose
 model.log_pseq("CWWWWWWWF")                     # finite, and very low
-fit = BEAM.fit_alpha(seqs, ab)                  # strengths by held-out likelihood
-model = BeamModel(seqs, abundances=ab, alpha=fit.alpha,
-                  alpha_length=fit.alpha_length)
+fit = BEAM.fit_alpha(seqs, ab)                  # or: fit them to held-out reads
 ```
+
+Unless you name them, the strengths are the ones that maximise the evidence of
+the model's own counts (the Dirichlet-multinomial marginal likelihood), level
+by level, under a weak hyperprior centred on 10 for the corpora the counts say
+nothing about.
 
 Storage stays sparse: only observed rows are kept, and an unobserved row is
 resolved through its parent. See

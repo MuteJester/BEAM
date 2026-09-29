@@ -44,7 +44,11 @@ def model():
 def test_a_draw_that_fits_still_works(model):
     out = model.sample(500)
     assert len(out) == 500
-    assert all(s.startswith("C") for s in out)
+    # Not ALL: the first residue is C in 2,000 of 2,000 training strings, and
+    # the posterior after that still leaves about 0.5% elsewhere -- the middle
+    # of this corpus is uniform, so the evidence makes every level above the
+    # first defer to it, and level 0 alone carries the conservation.
+    assert sum(s.startswith("C") for s in out) >= 490
 
 
 def test_a_draw_far_past_the_budget_is_refused(model):

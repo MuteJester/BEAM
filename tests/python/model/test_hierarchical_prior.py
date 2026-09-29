@@ -143,11 +143,90 @@ def test_junk_is_far_less_likely_than_a_cdr3():
     assert m.log_pseq("CASSLGQTEYF") - m.log_pseq("WWWWWWWWWWW") > 30
 
 
-def test_the_strengths_are_reported_and_default_to_ten():
-    m = BeamModel(["CASSLF", "CASSQF"], order=3)
-    assert m.config["alpha"] == (10.0, 10.0, 10.0, 10.0)
-    assert m.config["alpha_length"] == 10.0
-    assert "strict" not in m.config
+def test_without_alpha_the_strengths_come_from_the_counts():
+    m = BeamModel(["CASSLF", "CASSQF", "CASRLF"] * 3, order=3)
+    cfg = m.config
+    assert cfg["alpha_auto"] and cfg["alpha_length_auto"]
+    assert len(cfg["alpha"]) == 4
+    assert all(math.isfinite(a) and a > 0 for a in cfg["alpha"])
+    assert "strict" not in cfg
+
+
+def test_fixed_strengths_are_kept_and_reported_as_fixed():
+    m = BeamModel(["CASSLF", "CASSQF"], order=2, alpha=(1.0, 2.0, 3.0),
+                  alpha_length=4.0)
+    cfg = m.config
+    assert cfg["alpha"] == (1.0, 2.0, 3.0) and cfg["alpha_length"] == 4.0
+    assert not cfg["alpha_auto"] and not cfg["alpha_length_auto"]
+
+
+def _evidence(rows, parents, a):
+    """log prod_rows DirMult(counts | a * parent), straight from lgamma."""
+    tot = 0.0
+    for n, m in zip(rows, parents):
+        tot += math.lgamma(a) - math.lgamma(sum(n.values()) + a)
+        for x, c in n.items():
+            tot += math.lgamma(c + a * m[x]) - math.lgamma(a * m[x])
+    return tot
+
+
+def test_the_estimated_strengths_maximise_the_evidence():
+    """Each level's strength is the one that makes that level's counts most
+    probable with the Dirichlet integrated out, against parents built with the
+    strengths fitted below it. Recomputed here level by level from the
+    training strings, both anchors pooled, and checked against a grid and
+    against its immediate neighbours."""
+    seqs, counts = _corpus(n=400, seed=12)
+    order = 2
+    m = BeamModel(seqs, abundances=counts, order=order, max_length=20)
+    fitted = m.config["alpha"]
+    cnt = [defaultdict(Counter) for _ in range(order + 1)]
+    for s, c in zip(seqs, counts):
+        for direction in ("forward", "backward"):
+            for i in range(len(s)):
+                d, ctx = _depth_and_context(s, i, order, direction)
+                for k in range(order + 1):
+                    cnt[k][(direction, d, tuple(ctx[:k]))][s[i]] += c
+    post = {}
+    for k in range(order + 1):
+        keys = list(cnt[k])
+        rows = [cnt[k][q] for q in keys]
+        parents = [defaultdict(lambda: 0.05) if k == 0
+                   else post[(q[0], q[1], q[2][:k - 1])] for q in keys]
+        best = _evidence(rows, parents, fitted[k])
+        for a in [10 ** e for e in (-2, -1, 0, 1, 2, 3, 4, 5)] + \
+                 [fitted[k] * 1.01, fitted[k] / 1.01]:
+            assert _evidence(rows, parents, a) <= best + 1e-6, (k, a)
+        for q, n in zip(keys, rows):
+            tot = sum(n.values())
+            par = post[(q[0], q[1], q[2][:k - 1])] if k else None
+            post[q] = defaultdict(float, {
+                x: (n[x] + fitted[k] * (par[x] if par else 0.05)) / (tot + fitted[k])
+                for x in AA})
+
+
+def test_the_estimate_does_not_depend_on_the_thread_count():
+    import BEAM
+    seqs, counts = _corpus(n=600, seed=13)
+    got = []
+    for t in (1, 4):
+        BEAM.set_threads(t)
+        try:
+            got.append(BeamModel(seqs, abundances=counts, order=3).config["alpha"])
+        finally:
+            BEAM.set_threads(0)
+    assert got[0] == got[1]
+
+
+def test_auto_hands_a_fixed_model_back_to_the_data():
+    seqs, counts = _corpus()
+    fixed = BeamModel(seqs, abundances=counts, order=3, alpha=10.0,
+                      alpha_length=10.0)
+    fixed.set_alpha("auto", "auto")
+    auto = BeamModel(seqs, abundances=counts, order=3)
+    assert fixed.config == auto.config
+    probe = seqs[:20] + ["CASSWWWF"]
+    assert np.array_equal(fixed.log_pseq_batch(probe), auto.log_pseq_batch(probe))
 
 
 def test_one_number_sets_every_level():
@@ -186,6 +265,15 @@ def test_set_alpha_refuses_without_changing_the_model():
     with pytest.raises(ValueError):
         m.set_alpha((1.0, 1.0, -1.0, 1.0))
     assert m.log_pseq(seqs[0]) == before
+
+
+def test_estimated_strengths_survive_save_and_load(tmp_path):
+    seqs, counts = _corpus()
+    m = BeamModel(seqs, abundances=counts, order=3)
+    p = tmp_path / "auto.beam"
+    m.save(p)
+    back = BeamModel.from_file(p)
+    assert back.config == m.config and back.config["alpha_auto"]
 
 
 def test_the_strengths_survive_save_and_load(tmp_path):

@@ -27,8 +27,8 @@ BeamModel(
 | `order` | `int \| None` | Context order, from 2 up to the alphabet's ceiling: **4** for `aa`, **9** for `nt`. `None` takes the alphabet's default, 4 and 6 respectively. |
 | `weights` | `tuple` | Weight on the N-anchored and C-anchored readings. Both must be non-negative. |
 | `max_length` | `int \| None` | Longest sequence the model represents, **2 to 255**. `None` takes the alphabet's default: 27 for `aa`, 81 for `nt`, three bases to the residue. The floor is 2, not 1: a model of one residue has no settled position and no anchored one. |
-| `alpha` | `float \| sequence \| None` | Strengths of the hierarchical prior, one per context level `0..order`, or one number for all. Each is finite and positive. Default 10 at every level. See [The hierarchical prior](#the-hierarchical-prior). |
-| `alpha_length` | `float \| None` | Strength of the length prior. Finite and positive; default 10. |
+| `alpha` | `float \| sequence \| None` | Strengths of the hierarchical prior, one per context level `0..order`, or one number for all. `None` (the default) or `"auto"` estimates them from the model's own counts; numbers fix them. See [The hierarchical prior](#the-hierarchical-prior). |
+| `alpha_length` | `float \| None` | Strength of the length prior. Estimated the same way unless given. |
 | `sparse` | `bool \| None` | Storage. `None` or `True` stores only the rows something was observed at and resolves the rest through their parents; `False` materialises every row. The same model bit for bit; dense costs gigabytes at order 4. |
 
 ### Alphabets
@@ -116,11 +116,24 @@ The length prior is the same rule over lengths, centred on the even distribution
 P(L) = ( n_L + alpha_length / max_length ) / ( N + alpha_length )
 ```
 
-The strengths are fitted, not chosen: `BEAM.fit_alpha(sequences, abundances, **config)` maximises held-out likelihood and returns them, and `model.set_alpha(alpha, alpha_length)` re-applies new ones to a built model from its counts. Fitting on half of one donor's reads (Emerson Keck0001, order 4) gave strengths from about 14 at the top level to thousands at the lowest, and raised the held-out log-likelihood from -18.75 to -18.25 nats per read.
+**The strengths are estimated from the data unless you name them.** At every finalize each level's strength is the one that maximises the *evidence* of that level's counts -- the probability of the counts with the Dirichlet integrated out, exact and in closed form:
+
+```
+log p(counts | alpha) = sum_rows [ lnG(alpha) - lnG(n + alpha)
+                                   + sum_{x: n_x > 0} ( lnG(n_x + alpha m_x) - lnG(alpha m_x) ) ]
+```
+
+- `m_x`: the row's parent prediction, built with the strengths already fitted for the levels below. The levels are fitted bottom-up, pooling both reading directions and every position.
+- A row its parent already predicts wants a large `alpha`; one its parent gets wrong wants a small one. The more data a model sees, the more its counts decide.
+- A weak hyperprior, `log alpha ~ Normal(log 10, (ln 100)^2)`, is added to the evidence. It matters only when the counts say nothing -- one training sequence gives every row a single observation, whose evidence is the same at every strength -- and then the strengths fall back towards 10.
+
+`model.config["alpha"]` reports the estimates and `alpha_auto` that they are estimates. On half of Emerson donor Keck0001's reads (order 4) the evidence chose `(5.45, 14.6, 25, 61.6, 135)` and a length strength of 4.5, and predicted the other half at -18.41 nats per read and another donor, Keck0002, at -18.76 -- against -18.73 and -19.39 at a fixed 10.
+
+To choose them for a specific prediction instead, `BEAM.fit_alpha(sequences, abundances, **config)` maximises held-out likelihood (the repertoire's own reads by thinning, or another repertoire), and `model.set_alpha(alpha, alpha_length)` re-applies new ones -- numbers, or `"auto"` -- to a built model from its counts.
 
 Sparse storage keeps each level's observed rows; a lookup that misses walks to the nearest observed ancestor. Dense storage writes that ancestor into every unobserved slot. They are the same numbers.
 
-`model.config` returns the configuration actually built: `order`, `max_length`, `weights`, `alpha`, `alpha_length`, `sparse` and the alphabet.
+`model.config` returns the configuration actually built: `order`, `max_length`, `weights`, `alpha`, `alpha_length`, `alpha_auto`, `alpha_length_auto`, `sparse` and the alphabet.
 
 ### There is no pruning
 

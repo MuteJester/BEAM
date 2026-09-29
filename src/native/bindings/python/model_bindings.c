@@ -162,13 +162,15 @@ PyObject *py_config(PyObject *self, PyObject *arg) {
         PyTuple_SET_ITEM(alpha, (Py_ssize_t)k, v);
     }
     PyObject *out = Py_BuildValue(
-        "{s:s,s:i,s:i,s:(dd),s:O,s:d,s:O}",
+        "{s:s,s:i,s:i,s:(dd),s:O,s:d,s:O,s:O,s:O}",
         "alphabet", beam_alphabet_info(c->alphabet)->name,
         "order", (int)c->order,
         "max_length", (int)c->max_length,
         "weights", c->weight_forward, c->weight_backward,
         "alpha", alpha,
         "alpha_length", c->alpha_length,
+        "alpha_auto", c->alpha_auto ? Py_True : Py_False,
+        "alpha_length_auto", c->alpha_length_auto ? Py_True : Py_False,
         "sparse", c->sparse ? Py_True : Py_False);
     Py_DECREF(alpha);
     return out;
@@ -254,28 +256,38 @@ PyObject *py_posterior(PyObject *self, PyObject *args) {
 }
 PyObject *py_set_prior(PyObject *self, PyObject *args) {
     (void)self;
-    PyObject *cap, *alpha_obj; double alpha_length;
-    if (!PyArg_ParseTuple(args, "OOd", &cap, &alpha_obj, &alpha_length))
+    /* None for either strength hands it to the data. */
+    PyObject *cap, *alpha_obj, *alpha_length_obj;
+    if (!PyArg_ParseTuple(args, "OOO", &cap, &alpha_obj, &alpha_length_obj))
         return NULL;
     BeamModel *m = edge_from_capsule(cap);
     if (!m) return NULL;
-    PyObject *fast = PySequence_Fast(alpha_obj, "alpha must be a sequence");
-    if (!fast) return NULL;
-    const Py_ssize_t n = PySequence_Fast_GET_SIZE(fast);
+    double alpha_length = NAN;
+    if (alpha_length_obj != Py_None) {
+        alpha_length = PyFloat_AsDouble(alpha_length_obj);
+        if (PyErr_Occurred()) return NULL;
+    }
     double alpha[BEAM_MAX_ORDER + 1];
-    if (n < 1 || n > (Py_ssize_t)(BEAM_MAX_ORDER + 1)) {
+    Py_ssize_t n = 0;
+    if (alpha_obj != Py_None) {
+        PyObject *fast = PySequence_Fast(alpha_obj, "alpha must be a sequence");
+        if (!fast) return NULL;
+        n = PySequence_Fast_GET_SIZE(fast);
+        if (n < 1 || n > (Py_ssize_t)(BEAM_MAX_ORDER + 1)) {
+            Py_DECREF(fast);
+            PyErr_Format(PyExc_ValueError, "alpha has %zd entries", n);
+            return NULL;
+        }
+        for (Py_ssize_t k = 0; k < n; ++k) {
+            alpha[k] = PyFloat_AsDouble(PySequence_Fast_GET_ITEM(fast, k));
+            if (PyErr_Occurred()) { Py_DECREF(fast); return NULL; }
+        }
         Py_DECREF(fast);
-        PyErr_Format(PyExc_ValueError, "alpha has %zd entries", n);
-        return NULL;
     }
-    for (Py_ssize_t k = 0; k < n; ++k) {
-        alpha[k] = PyFloat_AsDouble(PySequence_Fast_GET_ITEM(fast, k));
-        if (PyErr_Occurred()) { Py_DECREF(fast); return NULL; }
-    }
-    Py_DECREF(fast);
     BeamError err;
     Py_BEGIN_ALLOW_THREADS
-    err = beam_model_set_prior(m, alpha, (uint32_t)n, alpha_length);
+    err = beam_model_set_prior(m, alpha_obj == Py_None ? NULL : alpha,
+                               (uint32_t)n, alpha_length);
     Py_END_ALLOW_THREADS
     if (err != BEAM_OK) return set_beam_error(err);
     Py_RETURN_NONE;

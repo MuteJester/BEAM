@@ -1834,3 +1834,31 @@ The tempering section above left `tests/python/likelihood/` out of
 likelihood package is part of this branch's work and is to be committed with
 it. If it is not, this row fails for exactly that reason, which is the
 honest place for it to fail.
+
+# Why the default-prior baselines were re-recorded for estimated strengths
+
+Re-recorded 2026-09-29, tag `preauto`. A model built without `alpha=` no longer
+uses a fixed strength of 10: finalize estimates each level's strength, and the
+length prior's, as the maximum of the evidence of the model's own counts (the
+Dirichlet-multinomial marginal likelihood, exact) under a weak log-normal
+hyperprior centred on 10. So every quantity of a DEFAULT model moved, and
+nothing else did.
+
+    numeric.json      33 of 78 keys: exactly the o{2,3,4}/default ones, whose
+                      strengths are now estimated. The o{2,3,4}/uneven keys
+                      name their strengths and are bit-identical. The fixture
+                      grows 233,082 -> 233,090 bytes: format 9, whose header
+                      records which strengths were estimated.
+    threads.json      re-recorded; identical at 1, 4 and 16 threads, which is
+                      the property the estimate was written to keep (its sums
+                      run in fixed chunks, whatever the thread count).
+    python_api.txt    +1 -1: fit_alpha's search bound, 1e6 -> 1e12, the same
+                      range the estimate searches.
+    pytest_cases.txt  +6 -1: the evidence, thread-independence, round-trip
+                      and "auto" tests; the default-is-ten test is replaced
+                      by the one saying the default is estimated.
+    c_cases.txt       unchanged.
+
+`exact.py` passed before recording (351 quantities, worst 4.0%). The estimate
+itself is checked in `test_hierarchical_prior.py` against the evidence
+recomputed in plain Python with `math.lgamma`, level by level.

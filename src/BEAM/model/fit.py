@@ -19,6 +19,10 @@ about what the model is for:
     predicting A DIFFERENT REPERTOIRE, which shares far fewer sequences and
     wants a stronger prior.
 
+Without held-out reads the model already chooses its own strengths, by the
+evidence of its counts (see :class:`BeamModel`). This is for a caller who wants
+them chosen for a specific prediction instead, and it starts from those.
+
 The search is coordinate-wise golden-section in ``log alpha``: one strength at
 a time, the others held, two sweeps. Each evaluation is one re-finalize of one
 model -- the counts never change -- plus one scoring pass.
@@ -44,7 +48,9 @@ class AlphaFit:
         alpha: One strength per level 0..order, to pass as ``alpha=``.
         alpha_length: The length prior's, to pass as ``alpha_length=``.
         held_out_log_lik: Mean log-probability per held-out read at the fit.
-        default_log_lik: The same at the starting strengths, for comparison.
+        default_log_lik: The same at the starting strengths -- the ones the
+            model estimated from its own counts unless ``alpha=`` was passed --
+            for comparison.
         split: ``"thinning"`` (the repertoire's own reads) or ``"external"``
             (another repertoire), which decides what the fit is FOR; see the
             module docstring.
@@ -79,7 +85,7 @@ def _merge(sequences: Sequence[str], counts) -> tuple[list, np.ndarray]:
 
 def fit_alpha(sequences: Iterable[str], abundances: Iterable[float] | None = None,
               *, held_out: tuple | None = None, fraction: float = 0.5,
-              seed: int = 0, bounds: tuple[float, float] = (1e-3, 1e6),
+              seed: int = 0, bounds: tuple[float, float] = (1e-3, 1e12),
               sweeps: int = 2, tol: float = 0.05, **config) -> AlphaFit:
     """Fit ``alpha`` and ``alpha_length`` to a corpus by held-out likelihood.
 

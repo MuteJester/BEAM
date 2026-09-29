@@ -12,20 +12,29 @@ from .validation import _check_int
 from .._simulation_result import SimulationResult
 
 
-#: Starting strengths of the hierarchical prior, in pseudo-observations. The
-#: same numbers as BEAM_DEFAULT_ALPHA and BEAM_DEFAULT_ALPHA_LENGTH in
-#: include/beam/model.h, which a test holds them to. Starting points only:
-#: :func:`BEAM.fit_alpha` fits them to a corpus by held-out likelihood.
+#: The strengths a model reports before it has estimated any, in
+#: pseudo-observations. The same numbers as BEAM_DEFAULT_ALPHA and
+#: BEAM_DEFAULT_ALPHA_LENGTH in include/beam/model.h, which a test holds them
+#: to. A model built without ``alpha=`` estimates its own from its counts.
 DEFAULT_ALPHA = 10.0
 DEFAULT_ALPHA_LENGTH = 10.0
 
 
-def _alpha_levels(alpha, order: int) -> tuple:
-    """One positive, finite strength per level 0..order."""
+def _is_auto(value) -> bool:
+    """``None`` or ``"auto"``: leave the strength to the data."""
+    return value is None or (isinstance(value, str) and value == "auto")
+
+
+def _alpha_levels(alpha, order: int):
+    """One positive, finite strength per level 0..order, or None for the
+    strengths the model estimates from its counts."""
     import math
-    if alpha is None:
-        levels = (DEFAULT_ALPHA,) * (order + 1)
-    elif isinstance(alpha, (int, float)) and not isinstance(alpha, bool):
+    if _is_auto(alpha):
+        return None
+    if isinstance(alpha, str):
+        raise ValueError(f"alpha={alpha!r}: pass numbers, or 'auto' to "
+                         f"estimate the strengths from the counts")
+    if isinstance(alpha, (int, float)) and not isinstance(alpha, bool):
         levels = (float(alpha),) * (order + 1)
     else:
         levels = tuple(float(a) for a in alpha)
@@ -41,6 +50,18 @@ def _alpha_levels(alpha, order: int) -> tuple:
                 f"positive, since a zero would make an unobserved residue "
                 f"impossible at that level")
     return levels
+
+
+def _alpha_length(alpha_length):
+    """A positive, finite strength, or None to estimate it."""
+    import math
+    if _is_auto(alpha_length):
+        return None
+    alpha_length = float(alpha_length)
+    if not (math.isfinite(alpha_length) and alpha_length > 0.0):
+        raise ValueError(f"alpha_length={alpha_length!r} must be finite and "
+                         f"positive")
+    return alpha_length
 
 
 def _config_args(*, order, max_length, weights, alpha=None, alpha_length=None,
@@ -69,12 +90,7 @@ def _config_args(*, order, max_length, weights, alpha=None, alpha_length=None,
                             BEAM_MAX_LENGTH_CEILING)
     weights = tuple(float(w) for w in weights)
     alpha = _alpha_levels(alpha, order)
-    alpha_length = (DEFAULT_ALPHA_LENGTH if alpha_length is None
-                    else float(alpha_length))
-    import math
-    if not (math.isfinite(alpha_length) and alpha_length > 0.0):
-        raise ValueError(f"alpha_length={alpha_length!r} must be finite and "
-                         f"positive")
+    alpha_length = _alpha_length(alpha_length)
 
     # The weights SHOULD sum to 1 and are not refused if they do not: (1, 0)
     # and (0, 1) are how each anchor's chain is measured on its own, which is
@@ -97,6 +113,8 @@ def _config_args_from_dict(cfg: dict[str, Any]) -> tuple:
                         order=cfg["order"],
                         max_length=cfg["max_length"],
                         weights=cfg["weights"],
-                        alpha=cfg.get("alpha"),
-                        alpha_length=cfg.get("alpha_length"),
+                        alpha=(None if cfg.get("alpha_auto", True)
+                               else cfg.get("alpha")),
+                        alpha_length=(None if cfg.get("alpha_length_auto", True)
+                                      else cfg.get("alpha_length")),
                         sparse=cfg.get("sparse", True))

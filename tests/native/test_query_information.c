@@ -73,8 +73,12 @@ static BeamModel *build_with_prior(const char **seqs, const double *w,
     beam_model_config_default_for(BEAM_ALPHABET_NT, &cfg);
     cfg.order = order;
     cfg.max_length = 6u;
-    if (alpha > 0.0)
+    if (alpha > 0.0) {
+        /* A named strength is a fixed one: left to the counts, the evidence
+         * would replace the vanishing prior these known answers need. */
+        cfg.alpha_auto = false;
         for (uint32_t k = 0; k <= order; ++k) cfg.alpha[k] = alpha;
+    }
     BeamModel *m = beam_model_new(&cfg);
     if (!m) return NULL;
     if (beam_model_observe(m, seqs, w, n) != BEAM_OK

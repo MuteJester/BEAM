@@ -371,6 +371,8 @@ static void test_the_amino_acid_defaults_are_unchanged(void) {
      * defaulting must not find an unset strength at the new top level. */
     for (unsigned k = 0; k <= BEAM_MAX_ORDER; ++k)
         ASSERT_MSG(c.alpha[k] == 10.0, "every prior level starts at 10");
+    ASSERT_MSG(c.alpha_auto && c.alpha_length_auto,
+               "and by default the counts estimate the strengths");
     ASSERT_MSG(c.alpha_length == 10.0, "the length prior starts at 10");
     /* Sparse, because a dense table under the prior materialises every row
      * there is, which is gigabytes at order 4. */
@@ -512,35 +514,43 @@ static void test_every_config_refusal_names_its_own_rule(void) {
     /* A zero strength would let an unobserved residue reach probability zero
      * at that level, bringing the closed world back through one row; a
      * negative or non-finite one is not a Dirichlet at all. The cases run
-     * from the bottom level to the order itself. */
+     * from the bottom level to the order itself. Each FIXES its strengths:
+     * the default estimates them from the counts, and a value about to be
+     * overwritten by the estimate is not the caller's to get wrong. */
     cases[n].what = "a zero strength at level 0"; cases[n].token = "alpha[0]=";
-    cases[n].c = valid_for(BEAM_ALPHABET_AA); cases[n].c.alpha[0] = 0.0; ++n;
+    cases[n].c = valid_for(BEAM_ALPHABET_AA); cases[n].c.alpha_auto = false;
+    cases[n].c.alpha[0] = 0.0; ++n;
 
     cases[n].what = "an infinite strength at level 1"; cases[n].token = "alpha[1]=";
-    cases[n].c = valid_for(BEAM_ALPHABET_AA);
+    cases[n].c = valid_for(BEAM_ALPHABET_AA); cases[n].c.alpha_auto = false;
     cases[n].c.alpha[1] = INFINITY; ++n;
 
     cases[n].what = "a NaN strength at level 2"; cases[n].token = "alpha[2]=";
-    cases[n].c = valid_for(BEAM_ALPHABET_AA); cases[n].c.alpha[2] = NAN; ++n;
+    cases[n].c = valid_for(BEAM_ALPHABET_AA); cases[n].c.alpha_auto = false;
+    cases[n].c.alpha[2] = NAN; ++n;
 
     cases[n].what = "a negative strength at the order"; cases[n].token = "alpha[4]=";
-    cases[n].c = valid_for(BEAM_ALPHABET_AA); cases[n].c.alpha[4] = -1.0; ++n;
+    cases[n].c = valid_for(BEAM_ALPHABET_AA); cases[n].c.alpha_auto = false;
+    cases[n].c.alpha[4] = -1.0; ++n;
 
     /* The nucleotide default order reaches levels the amino acids never
      * have. */
     cases[n].what = "a zero strength at nucleotide level 6";
     cases[n].token = "alpha[6]=";
-    cases[n].c = valid_for(BEAM_ALPHABET_NT); cases[n].c.alpha[6] = 0.0; ++n;
+    cases[n].c = valid_for(BEAM_ALPHABET_NT); cases[n].c.alpha_auto = false;
+    cases[n].c.alpha[6] = 0.0; ++n;
 
     cases[n].what = "a zero length strength"; cases[n].token = "alpha_length=";
-    cases[n].c = valid_for(BEAM_ALPHABET_AA); cases[n].c.alpha_length = 0.0; ++n;
+    cases[n].c = valid_for(BEAM_ALPHABET_AA); cases[n].c.alpha_length_auto = false;
+    cases[n].c.alpha_length = 0.0; ++n;
 
     cases[n].what = "an infinite length strength"; cases[n].token = "alpha_length=";
-    cases[n].c = valid_for(BEAM_ALPHABET_AA);
+    cases[n].c = valid_for(BEAM_ALPHABET_AA); cases[n].c.alpha_length_auto = false;
     cases[n].c.alpha_length = INFINITY; ++n;
 
     cases[n].what = "a NaN length strength"; cases[n].token = "alpha_length=";
-    cases[n].c = valid_for(BEAM_ALPHABET_AA); cases[n].c.alpha_length = NAN; ++n;
+    cases[n].c = valid_for(BEAM_ALPHABET_AA); cases[n].c.alpha_length_auto = false;
+    cases[n].c.alpha_length = NAN; ++n;
 
     static char msg[512];
     char why[BEAM_CONFIG_REASON_MAX];
@@ -573,6 +583,7 @@ static void test_every_config_refusal_names_its_own_rule(void) {
  */
 static void test_prior_strengths_past_the_order_are_ignored(void) {
     BeamModelConfig c = valid_for(BEAM_ALPHABET_AA);
+    c.alpha_auto = false;
     c.order = 2;
     c.alpha[3] = -1.0;
     c.alpha[BEAM_MAX_ORDER] = NAN;
@@ -582,6 +593,12 @@ static void test_prior_strengths_past_the_order_are_ignored(void) {
     c.alpha[2] = -1.0;
     ASSERT_MSG(!beam_config_valid(&c),
                "and the same value AT the order must be");
+
+    /* Left to the data, the same slot holds nothing the caller chose: the
+     * estimate overwrites it at finalize, so it is not refused. */
+    c.alpha_auto = true;
+    ASSERT_MSG(beam_config_valid(&c),
+               "a strength the counts will estimate is not validated");
     PASS();
 }
 

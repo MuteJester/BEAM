@@ -159,9 +159,13 @@ def test_a_member_that_never_made_a_length_keeps_only_its_prior_share():
     against the prior's closed form, `(n_L + a/M) / (N + a)`, computed here
     from the corpus sizes rather than read back off the model.
     """
-    n, a = 120, 10.0                       # corpus size, default alpha_length
-    short = tiny_model(61, letters="ACG", n=n, lo=4, hi=4)
-    long_ = tiny_model(62, letters="ACG", n=n, lo=5, hi=5)
+    # The length strength is FIXED here: the test is about how a mixture
+    # re-weights its members within a length, and a strength each member
+    # estimated for itself would make the two shares differ for a reason that
+    # has nothing to do with that.
+    n, a = 120, 10.0
+    short = tiny_model(61, letters="ACG", n=n, lo=4, hi=4, alpha_length=a)
+    long_ = tiny_model(62, letters="ACG", n=n, lo=5, hi=5, alpha_length=a)
     lengths = tuple(range(1, MAX_LENGTH + 1))
     assert short.observed_lengths == long_.observed_lengths == lengths
 

@@ -303,11 +303,14 @@ def test_calibration_median_converges_with_the_grid(small):
     medians = {b: small.calibrate(bins=b).median(L)
                for b in (64, 256, 1024, 4096)}
     errors = [abs(m - ref) for m in medians.values()]
-    # The coarse grid is decisively worse and the fine one has converged.
-    # Monotonicity across every step is NOT asserted, because beyond about
-    # 256 bins the remaining differences are where a bin boundary happens to
-    # fall relative to the median, which is not ordered in the grid.
-    assert errors[0] > 10 * errors[-1], errors
+    # The coarse grids are decisively worse and the fine one has converged.
+    # Monotonicity across every step is NOT asserted, because the remaining
+    # differences are where a bin boundary happens to fall relative to the
+    # median, which is not ordered in the grid -- and a single coarse grid can
+    # be lucky: under the estimated prior 64 bins landed an edge near the
+    # median (0.017) while 256 did not (0.069). So the WORST coarse grid is
+    # what must be decisively worse.
+    assert max(errors[:2]) > 10 * errors[-1], errors
     assert errors[-1] < 0.01, errors
 
     # And the estimate is close to the drawn sample, within that sample's own
@@ -352,17 +355,23 @@ def test_c_and_python_defaults_describe_the_same_model():
     assert py_config.DEFAULT_ALPHA == c_alpha
     assert py_config.DEFAULT_ALPHA_LENGTH == c_alpha_length
 
+    # Both layers leave the strengths to the data by default, and an
+    # unfinalized C model reports the starting values the header names.
     cfg = BeamModel(["CASSF", "CASTF", "CAGSF"], abundances=[3, 2, 1],
                     order=2, max_length=6).config
-    assert cfg["alpha"] == (c_alpha,) * 3
-    assert cfg["alpha_length"] == c_alpha_length
+    assert cfg["alpha_auto"] is True and cfg["alpha_length_auto"] is True
     assert cfg["sparse"] is True
     assert cfg["weights"] == (0.5, 0.5)
+    fresh = _c.config(_c.new(*_config_args_from_dict(cfg)))
+    assert fresh["alpha_auto"] and fresh["alpha_length_auto"]
+    assert fresh["alpha"] == (c_alpha,) * 3
+    assert fresh["alpha_length"] == c_alpha_length
 
     # And the C layer keeps what it is handed, field for field: a strength
     # dropped or reordered at the boundary would build a valid other model.
-    handed = {**cfg, "alpha": (1.5, 2.5, 3.5), "alpha_length": 4.5}
+    handed = {**cfg, "alpha": (1.5, 2.5, 3.5), "alpha_length": 4.5,
+              "alpha_auto": False, "alpha_length_auto": False}
     back = _c.config(_c.new(*_config_args_from_dict(handed)))
     for field in ("order", "max_length", "weights", "alphabet", "alpha",
-                  "alpha_length", "sparse"):
+                  "alpha_length", "alpha_auto", "alpha_length_auto", "sparse"):
         assert back[field] == handed[field], field

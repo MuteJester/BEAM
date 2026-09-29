@@ -94,6 +94,11 @@ static BeamModel *build_nt(void) {
     beam_model_config_default(&c);
     c.alphabet = BEAM_ALPHABET_NT;
     c.order = 2u; c.max_length = 6u;
+    /* Fixed strengths. The banded tests need gaps in the spectrum where the
+     * band edges fall, and chose the grid for this spectrum; strengths
+     * re-estimated from the counts would move the atoms under them. */
+    c.alpha_auto = false;
+    c.alpha_length_auto = false;
     BeamModel *m = beam_model_new(&c);
     if (!m) return NULL;
     if (beam_model_observe(m, TRAIN_NT, W_NT, N_NT) != BEAM_OK

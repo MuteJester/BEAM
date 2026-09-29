@@ -249,21 +249,21 @@ double *edge_borrow_abundances(PyObject *abund, Py_ssize_t n, bool *out_ok) {
 int edge_parse_config(PyObject *args, BeamModelConfig *cfg,
                              PyObject **seqs, PyObject **abund) {
     int order, max_length, sparse;
-    double wf, wb, alpha_length;
-    PyObject *alpha_obj = NULL;
+    double wf, wb;
+    PyObject *alpha_obj = NULL, *alpha_length_obj = NULL;
     /* The alphabet is appended rather than placed first, where it belongs,
      * so every existing position in the tuple keeps its meaning. The prior's
      * strengths took the place of the old `strict` flag. */
     const char *alphabet = NULL;
-    const char *fmt = seqs ? "OOii(dd)Odps" : "ii(dd)Odps";
+    const char *fmt = seqs ? "OOii(dd)OOps" : "ii(dd)OOps";
     int ok;
     if (seqs)
         ok = PyArg_ParseTuple(args, fmt, seqs, abund, &order,
                               &max_length, &wf, &wb, &alpha_obj,
-                              &alpha_length, &sparse, &alphabet);
+                              &alpha_length_obj, &sparse, &alphabet);
     else
         ok = PyArg_ParseTuple(args, fmt, &order, &max_length, &wf, &wb,
-                              &alpha_obj, &alpha_length, &sparse, &alphabet);
+                              &alpha_obj, &alpha_length_obj, &sparse, &alphabet);
     if (!ok) return 0;
     const BeamAlphabetInfo *a = beam_alphabet_by_name(alphabet);
     if (!a) {
@@ -293,7 +293,15 @@ int edge_parse_config(PyObject *args, BeamModelConfig *cfg,
     cfg->max_length = (uint8_t)max_length;
     cfg->weight_forward = wf; cfg->weight_backward = wb;
     cfg->sparse = (bool)sparse;
-    cfg->alpha_length = alpha_length;
+    /* None leaves a strength to the data: finalize estimates it from the
+     * counts by their evidence. */
+    cfg->alpha_length_auto = (alpha_length_obj == Py_None);
+    if (!cfg->alpha_length_auto) {
+        cfg->alpha_length = PyFloat_AsDouble(alpha_length_obj);
+        if (PyErr_Occurred()) return 0;
+    }
+    cfg->alpha_auto = (alpha_obj == Py_None);
+    if (cfg->alpha_auto) return 1;
     /* One strength per level, 0..order. A wrong count is refused rather than
      * padded: a missing level would silently take the default and a spare one
      * would be ignored, and neither is what the caller wrote. */

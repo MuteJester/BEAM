@@ -253,8 +253,16 @@ typedef struct {
      * is worth at level k; entries past `order` are ignored. Every one must be
      * finite and positive: a zero would let an unobserved residue reach
      * probability zero and bring the closed world back through one level.
+     *
+     * Read only when `alpha_auto` is false. When it is true -- the default --
+     * finalize estimates each level's strength from the counts by maximising
+     * their evidence (the Dirichlet-multinomial marginal likelihood), and
+     * writes the estimates here.
      */
     double alpha[BEAM_MAX_ORDER + 1];
+
+    /** Estimate `alpha` from the counts at every finalize. Default TRUE. */
+    bool alpha_auto;
 
     /**
      * Prior strength of the length distribution:
@@ -262,9 +270,13 @@ typedef struct {
      *     P(L) = (n_L + alpha_length / max_length) / (N + alpha_length)
      *
      * over every length 1..max_length, so a length the corpus never produced
-     * is improbable rather than impossible. Finite and positive.
+     * is improbable rather than impossible. Finite and positive. Estimated by
+     * the same evidence when `alpha_length_auto` is true, the default.
      */
     double alpha_length;
+
+    /** Estimate `alpha_length` from the length histogram. Default TRUE. */
+    bool alpha_length_auto;
 
     /**
      * Store only the rows something was observed at, and resolve every other
@@ -416,11 +428,12 @@ BeamError beam_model_posterior(BeamModel *m,
 /**
  * Change the hierarchical prior's strengths and re-finalize from the counts.
  *
- * `alpha` holds `n_alpha` = order + 1 strengths, one per level 0..order, and
- * `alpha_length` the length prior's. Validated exactly as a build config is;
- * on any refusal the model is left as it was. Nothing is re-observed: the
- * counts are the only state the prior reads, which is what makes fitting the
- * strengths by held-out likelihood a sequence of re-finalizes of one model.
+ * `alpha` holds `n_alpha` = order + 1 strengths, one per level 0..order, or is
+ * NULL to estimate them from the counts; `alpha_length` is the length prior's,
+ * or NaN to estimate it. Validated exactly as a build config is; on any
+ * refusal the model is left as it was. Nothing is re-observed: the counts are
+ * the only state the prior reads, which is what makes fitting the strengths by
+ * held-out likelihood a sequence of re-finalizes of one model.
  */
 BeamError beam_model_set_prior(BeamModel *m, const double *alpha,
                                uint32_t n_alpha, double alpha_length);

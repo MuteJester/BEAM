@@ -64,7 +64,13 @@ def test_posterior_closes_on_the_prior_but_never_reaches_it(corpus):
     closing = [gap(k) for k in (0.0, 1.0, 10.0, 100.0)]
     assert all(b < a for a, b in zip(closing, closing[1:])), closing
     assert closing[-1] < 0.1 * closing[0]
-    assert gap(1e6) > 0.5, "a huge kappa must not collapse onto the prior"
+    # And then it stops: from kappa 1e4 to 1e6 the gap does not move, and it
+    # stops well above zero (0.13 nats measured, against 39 at kappa 0). The
+    # strengths are re-estimated on the blended counts, so the floor sits
+    # lower than it did under fixed strengths, but it is a floor.
+    floor = gap(1e6)
+    assert floor > 0.05, "a huge kappa must not collapse onto the prior"
+    assert abs(floor - gap(1e4)) < 0.2 * floor
 
 
 def test_posterior_leaves_the_sequence_counters_alone(corpus):

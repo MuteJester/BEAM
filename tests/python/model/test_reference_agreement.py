@@ -42,7 +42,12 @@ def aa(corpus):
                 max_length = 20
             m = BeamModel(seqs, abundances=abund, order=order,
                           max_length=max_length)
-            ref = reference_build(seqs, abund, order=order, max_len=max_length)
+            # The reference is handed the strengths the model ESTIMATED: the
+            # estimate is checked on its own in test_hierarchical_prior, and
+            # this checks everything downstream of it.
+            ref = reference_build(seqs, abund, order=order, max_len=max_length,
+                                  alpha=m.config["alpha"],
+                                  alpha_length=m.config["alpha_length"])
             built[order] = (seqs, m, ref)
         return built[order]
     return get
@@ -111,7 +116,9 @@ def nt():
             m = BeamModel(seqs, abundances=abund, alphabet="nt", order=order,
                           max_length=NT_MAX_LENGTH)
             ref = reference_build(seqs, abund, order=order,
-                                  max_len=NT_MAX_LENGTH, alphabet="nt")
+                                  max_len=NT_MAX_LENGTH, alphabet="nt",
+                                  alpha=m.config["alpha"],
+                                  alpha_length=m.config["alpha_length"])
             built[order] = (seqs, m, ref)
         return built[order]
     return get
