@@ -127,25 +127,26 @@ class BeamModel:
             wrecking global ranking.
         max_length: Longest sequence the model represents. Defaults to 27 for
             amino acids and 81 for nucleotides, three bases to the residue.
-        strict: Closed-world support, and the default. The model holds what
-            the training sequences and their abundances actually spell: the
-            order-0 add-one and the probability floor are removed, the five
-            smoothing strengths default to zero, and a sequence no path
-            supports scores ``-inf`` rather than a small positive number.
-            ``path_count()`` is then the number of sequences the data can
-            spell, not the size of the whole lattice.
+        alpha: Prior strengths of the hierarchical Bayesian smoothing, one
+            per context level 0..order, or one number for all of them.
+            Every sequence up to ``max_length`` has positive probability, and
+            a row nothing was observed at predicts exactly what its shorter
+            context predicts::
 
-            Pass ``strict=False`` for the open world: a Laplace add-one
-            leaves every cell of the table positive, so every sequence over
-            the alphabet gets a finite probability and the support becomes all
-            of sequence space. That is a different model, useful for
-            comparison and for scoring sequences the corpus never saw, but it
-            is no longer what you get without asking.
-        sparse: Store only occupied rows. ``None`` selects sparse storage
-            exactly when ``strict`` is true; ``False`` forces the equivalent
-            dense representation. ``True`` in the open world is rejected,
-            because the add-one gives every row mass and a sparse table would
-            have nowhere to put the rows nothing was observed at.
+                P_k(x) = (n_k(x) + alpha[k] * P_{k-1}(x)) / (n_k + alpha[k])
+
+            with level 0 the depth alone and the uniform ``1/20`` below it.
+            ``alpha[k]`` is how many pseudo-observations the shorter context
+            is worth. Defaults to 10 at every level, a starting point:
+            :func:`BEAM.fit_alpha` fits them by held-out likelihood.
+        alpha_length: Prior strength of the length distribution,
+            ``P(L) = (n_L + alpha_length / max_length) / (N + alpha_length)``,
+            so a length the corpus never produced is improbable rather than
+            impossible. Defaults to 10.
+        sparse: Store only the rows something was observed at, and resolve
+            every other row through its parent. ``False`` materialises every
+            row -- the same model, bit for bit, at gigabytes for order 4 --
+            and exists for equivalence checks.
 
     Example:
         >>> model = BeamModel(sequences, abundances=counts)
@@ -164,7 +165,8 @@ class BeamModel:
         order: int | None = None,
         weights: tuple[float, float] = (0.5, 0.5),
         max_length: int | None = None,
-        strict: bool = True,
+        alpha: float | Iterable[float] | None = None,
+        alpha_length: float | None = None,
         sparse: bool | None = None,
     ) -> None:
         seqs = list(sequences)
@@ -179,7 +181,8 @@ class BeamModel:
                     f"{len(seqs)}")
         cargs = _config_args(alphabet=alphabet, order=order,
                              max_length=max_length, weights=weights,
-                             strict=strict, sparse=sparse)
+                             alpha=alpha, alpha_length=alpha_length,
+                             sparse=sparse)
         max_length = cargs[1]
 
         try:
@@ -612,11 +615,10 @@ class BeamModel:
         if not lengths:
             return out
 
-        # A compacted OPEN-WORLD model cannot answer this: the add-one made
-        # every finalized cell finite and compact() released the counts that
-        # knew which were reached. Every other model can, including a
-        # compacted strict one. Reported as absent rather than as a refusal,
-        # because the rest of the per-length entry is still exact.
+        # A compacted model cannot answer this: the prior made every finalized
+        # cell positive and compact() released the counts that knew which were
+        # reached. Reported as absent rather than as a refusal, because the
+        # rest of the per-length entry is still exact.
         try:
             rows, cell_counts = _c.depth_occupancy(self._g)
         except Exception:
@@ -1207,12 +1209,10 @@ class BeamModel:
         """Distinct sequences the model can produce, by exact path counting.
 
         .. warning::
-           Under ``strict=False`` this will be ``20 ** length``, and that is
-           not a bug: the Laplace add-one leaves every table cell strictly
-           positive, so the number describes the smoothing rather than the
-           grammar. Under ``strict=True``, which is the DEFAULT, dead
-           transitions stay dead and this is instead the exact support of the
-           observed-transition DAG. Sparse and dense storage agree.
+           This is exactly ``R ** length`` for ``R`` residues: under the
+           hierarchical prior every table cell is positive, so every string of
+           the length is possible, and the number describes the alphabet
+           rather than the corpus. Sparse and dense storage agree.
 
            It is kept because it is the exact ``q=0`` corner of the Hill
            family and because it is what the counting spectrum integrates to,
@@ -1515,7 +1515,7 @@ class BeamModel:
         NEAR ``q = 1`` THE RELATIVE DIFFERENCE GROWS as ``1 / |1 - q|``,
         because ``D_q = exp(ln M / (1 - q))`` magnifies any rounding in
         ``ln M`` by that factor on both routes: 1.3e-12 was measured at
-        ``q = 1.001`` on an open-world model. Neither route is the more
+        ``q = 1.001`` on a model with every sequence in its support. Neither route is the more
         accurate one there. Use :meth:`hill_numbers` where a profile has to
         reproduce one already published from it to the last bit.
 
@@ -2034,10 +2034,9 @@ class BeamModel:
         rather than a placeholder: given that position 4 is ``G``, the
         probability that it is ``G`` is 1.
 
-        Zero-probability residues come back as exactly ``0.0``. No floor is
-        applied. In a strict model a residue the corpus never spells at a
-        position is information, and flooring it would replace a fact with a
-        number too small to notice but large enough to rank.
+        No floor is applied. Under the hierarchical prior no residue is
+        impossible, so one the corpus never put at a position comes back
+        small, at the probability its shorter contexts give it.
 
         Raises:
             ValueError: if the model generates no sequences of this length --
@@ -2122,14 +2121,15 @@ class BeamModel:
         model fitted to hundreds of millions of sequences is a continuum and
         every edge cuts through mass.
 
-        Backoff makes the first much worse, because an unobserved transition
-        sits near ``ln(1e-300)`` and drags ``accumulator_max`` hundreds of
-        nats past anything real. But a STRICT model is not therefore safe:
-        the foundation below is strict and still needs eight times the
-        default. ``resolution_error`` is what settles it either way.
+        The prior widens the first: a context the corpus never saw can still
+        be spelled, improbably, and the grid has to reach it. But a model
+        without that tail is not therefore safe: the foundation below, built
+        before the prior, still needed eight times the default.
+        ``resolution_error`` is what settles it either way.
 
         How many bins a band needs, measured on the 927M-sequence foundation
-        (order 4, strict) at its modal length 15, with quartile bands about
+        (order 4, built under the previous closed-world rule) at its modal length 15,
+        with quartile bands about
         2.4 nats wide::
 
             bins   spacing   resolution_error   scratch   time
@@ -2599,6 +2599,28 @@ class BeamModel:
             raise ValueError(f"kappa must be non-negative, got {kappa!r}")
         _c.posterior(self._g, prior._g, float(kappa))
 
+    def set_alpha(self, alpha: float | Iterable[float] | None = None,
+                  alpha_length: float | None = None) -> None:
+        """Change the hierarchical prior's strengths in place, and re-finalize.
+
+        Nothing is re-observed: the counts are the only state the prior reads,
+        so this is what makes fitting the strengths cheap -- one model, many
+        re-finalizes. ``None`` keeps the current value. See
+        :func:`BEAM.fit_alpha`.
+        """
+        if self._compacted:
+            raise RuntimeError(
+                "set_alpha() is unavailable after compact(): the counts the "
+                "prior is re-applied to have been released")
+        from .config import _alpha_levels
+        cfg = self.config
+        levels = _alpha_levels(cfg["alpha"] if alpha is None else alpha,
+                               cfg["order"])
+        al = cfg["alpha_length"] if alpha_length is None else float(alpha_length)
+        if not (math.isfinite(al) and al > 0.0):
+            raise ValueError(f"alpha_length={al!r} must be finite and positive")
+        _c.set_prior(self._g, levels, al)
+
     def with_prior(self, prior: BeamModel, kappa: float = 100.0) -> BeamModel:
         """A NEW model equal to this one updated toward ``prior``.
 
@@ -2628,6 +2650,39 @@ class BeamModel:
         dst = _c.new(*_config_args_from_dict(self.config))
         _c.add(dst, self._g)
         return BeamModel._from_capsule(dst)
+
+    def tempered(self, t: float) -> BeamModel:
+        """A NEW model holding ``P_t(s) proportional to P(s)**t``.
+
+        The tempered law already drives :meth:`surprisal_moments`, the spectrum
+        and :meth:`saddlepoint`, where it is a measure a sweep carries. This
+        makes it a model, so everything the ordinary one answers it answers
+        too. ``t > 1`` concentrates the distribution on its likeliest
+        sequences and ``t < 1`` flattens it toward the rare ones; the SUPPORT
+        is unchanged either way, so :meth:`path_count` does not move.
+
+        Exact. The result satisfies
+        ``log_pseq_t(s) == t * log_pseq(s) - log_mellin(t)`` identically, and
+        its whole Mellin transform follows from this model's:
+        ``log_mellin_t(q) == log_mellin(t*q) - q*log_mellin(t)``.
+
+        ``t`` must be finite and strictly positive. At ``t = 0`` every finite
+        log weight becomes zero and every ``-inf`` becomes NaN, and a negative
+        ``t`` turns an unspellable edge into the likeliest one.
+
+        The result arrives with its COUNTS RELEASED, as after
+        :meth:`compact`, and that is a correctness guard rather than a saving:
+        a tempered model's distribution is not a function of its counts, so
+        :meth:`add`, :meth:`subtract`, :meth:`posterior` and :meth:`copy`
+        would each silently rebuild the untempered tables. They refuse
+        instead. It is also why tempering does not yet compose by chaining --
+        ``tempered`` on a tempered model is refused, not approximated -- and
+        carrying the exponent in the configuration is what would lift that.
+        """
+        out = self.copy()
+        _c.temper(out._g, float(t))
+        out._compacted = True
+        return out
 
     def merged(self, other: BeamModel) -> BeamModel:
         """A NEW model holding this model's counts plus ``other``'s.
@@ -2667,7 +2722,8 @@ class BeamModel:
             other = BeamModel(
                 list(other), abundances=abundances, order=cfg["order"],
                 max_length=cfg["max_length"], weights=cfg["weights"],
-                strict=cfg["strict"], sparse=cfg["sparse"])
+                alpha=cfg["alpha"], alpha_length=cfg["alpha_length"],
+                sparse=cfg["sparse"])
         elif abundances is not None:
             raise TypeError(
                 "abundances applies only when `other` is a list of sequences; "

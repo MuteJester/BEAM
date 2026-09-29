@@ -3,10 +3,11 @@
  * @brief `beam_model_expected_counts` holds its scratch inside the budget.
  *
  * This analytic used to hold, unbudgeted and unreported, more memory than the
- * model it was asked about. Six hash maps accumulate one row per `(depth,
- * context)` the trellis reaches, and on the published foundation model they
+ * model it was asked about. Six hash maps accumulated one row per `(depth,
+ * context)` the trellis reached, and on the published foundation model they
  * measured 896 MB against an 806 MB model, growing to a 1,566 MB peak while
- * the answer was copied out of them. Nothing checked any of it.
+ * the answer was copied out of them. Nothing checked any of it. There are two
+ * maps now, one per direction, and the same reasoning holds for them.
  *
  * The reason it was never bounded up front is worth stating, because it is
  * what shapes the fix. Every other program in `positional.c` multiplies out
@@ -23,21 +24,22 @@
  * a budget refusal rather than as a bare allocation failure -- `rowmap_row`
  * returns a `double *` and has only NULL to fail with, so which failure it was
  * has to be carried out of band or the message naming the figure is lost.
+ * That holds for the maps' first allocation and for every doubling after it.
  *
  * The second is that the sweep and the accumulators SHARE ONE ACCOUNT. They
  * are live at the same moment, and each used to check the whole budget
- * independently, so a call could hold the backward field and six maps that
+ * independently, so a call could hold the backward field and the maps that
  * separately passed at 90% of the figure the user set. Two checks against the
  * same limit are not a limit. The test for this is the sharp one: it picks a
  * budget the backward field fits inside on its own, and requires a refusal.
  *
  * The third is that a block can be released on its own, which is what lets a
- * caller that copies the answer out avoid holding two copies of all six.
+ * caller that copies the answer out avoid holding two copies of both.
  *
- * Two models are used, and the second is not decoration. The small one never
- * fills a map past the capacity `rowmap_init` gives it, so on that model the
- * doubling paths -- which are the ones the foundation model spends 896 MB in
- * -- never run at all. The wide one drives sixteen thousand rows through them.
+ * Every budget below is derived from the sizes the library charges -- the
+ * field from `fb_alloc`'s expression, the maps from `rowmap_init`'s -- and
+ * not from a measured margin, so each sits on the side of a figure the test
+ * can name.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -51,16 +53,23 @@
 
 static int pass_count = 0, fail_count = 0;
 
-/** The wide model, built once for the binary. See `build_wide`. */
-static BeamModel *g_wide = NULL;
-
 #include "test_utils.h"
 
 /*
- * Ten sequences of length 5 and ten of length 8, so the model has more than
- * one live length and the pooled sweep runs more than once. Order 2 puts
- * 9,261 states in the trellis, which makes the backward field the largest
- * single allocation and the interesting one to share a budget with.
+ * Ten sequences of length 5 and ten of length 8, amino acids at order 2: 441
+ * states in the trellis.
+ *
+ * ONE MODEL, where there used to be two. Under the hierarchical prior every
+ * string up to `max_length` has positive probability, so the sweep reaches
+ * every `(depth, context)` the trellis can form, whatever the corpus spelled.
+ * How many rows a map receives is therefore a property of the model's SHAPE
+ * (see `reachable_rows`): 4,021 per map here, against the 512 `rowmap_init`
+ * starts with, so the doubling paths -- where the foundation model spent its
+ * 896 MB -- run on this model three times per map. A second, wide model
+ * used to exist only to make them run; this one now does that on its own.
+ *
+ * Sparse storage, the default, and the form a per-repertoire model is built
+ * in. The accumulators do not depend on how the tables are stored.
  */
 #define N_TRAIN 20
 static const char *TRAIN[N_TRAIN] = {
@@ -78,7 +87,6 @@ static BeamModel *build(void) {
     beam_model_config_default(&cfg);
     cfg.order = 2u;
     cfg.max_length = 12u;
-    cfg.sparse = true;
     BeamModel *m = beam_model_new(&cfg);
     if (!m) return NULL;
     if (beam_model_observe(m, TRAIN, WEIGHT, N_TRAIN) != BEAM_OK
@@ -90,43 +98,70 @@ static BeamModel *build(void) {
 }
 
 /**
- * The backward field for the LONGEST live length, from `fb_alloc`'s own
- * expression.
+ * The backward field for one length, from `fb_alloc`'s own expression.
  *
- * Duplicated here deliberately and only here: the test's whole point is to
- * pick a budget on one particular side of this figure, so it has to know it.
- * The longest length is the largest, so a budget at or above this admits the
- * sweep at every length the pooled call will run.
+ * Duplicated here deliberately and only here: the tests' whole point is to
+ * pick a budget on one particular side of this figure, so they have to know
+ * it.
  */
-static uint64_t backward_field_bytes(const BeamModel *m) {
-    uint32_t longest = 0;
-    for (uint32_t L = 1; L <= m->max_len; ++L)
-        if (beam_length_live(m, L)) longest = L;
-    return ((uint64_t)longest + 1u) * m->n_states * sizeof(double)
+static uint64_t field_bytes(const BeamModel *m, uint32_t len) {
+    return ((uint64_t)len + 1u) * m->n_states * sizeof(double)
          + (uint64_t)m->n_states * (m->n_residues + 3u) * sizeof(double);
 }
 
-/** The six maps at the capacity `rowmap_init` gives them, before any growth. */
+/** The shortest and the longest live length: the first and the largest
+ *  field the pooled call allocates. */
+static uint32_t shortest_live(const BeamModel *m) {
+    for (uint32_t L = 1; L <= m->max_len; ++L)
+        if (beam_length_live(m, L)) return L;
+    return 0;
+}
+static uint32_t longest_live(const BeamModel *m) {
+    uint32_t longest = 0;
+    for (uint32_t L = 1; L <= m->max_len; ++L)
+        if (beam_length_live(m, L)) longest = L;
+    return longest;
+}
+
+/** One accumulator row's bytes, `vals` and `ids` together, as charged. */
+static uint64_t row_bytes(const BeamModel *m) {
+    return (uint64_t)m->n_residues * sizeof(double) + sizeof(uint32_t);
+}
+
+/** The two maps at the capacity `rowmap_init` gives them, before any growth:
+ *  a 1,024-slot key directory of two uint32 arrays and room for 512 rows. */
 static uint64_t accumulators_at_rest(const BeamModel *m) {
     const uint64_t dir  = (uint64_t)1024u * 2u * sizeof(uint32_t);
-    const uint64_t rows = (uint64_t)512u
-                        * ((uint64_t)m->n_residues * sizeof(double)
-                           + sizeof(uint32_t));
+    const uint64_t rows = (uint64_t)512u * row_bytes(m);
     return 2u * (dir + rows);
+}
+
+/**
+ * Rows each map ends with when every path has mass: one per `(depth,
+ * context)` the trellis can form. A context holds the `order` residues nearest
+ * the scored one, padded with the sentinel past either end, so at depth `d`
+ * there are `R^min(d, order)` of them. The same count in both directions.
+ */
+static uint64_t reachable_rows(const BeamModel *m) {
+    uint64_t rows = 0;
+    for (uint32_t d = 0; d < m->max_len; ++d) {
+        uint64_t n = 1;
+        for (uint32_t k = 0; k < d && k < m->order; ++k) n *= m->n_residues;
+        rows += n;
+    }
+    return rows;
 }
 
 /** Every block sums to the same expected length, to floating-point slack. */
 static bool blocks_sum_to_expectation(const BeamExpectedCounts *ec) {
-    for (uint32_t d = 0; d < 2u; ++d)
-        {
-            const BeamCountBlock *b = &ec->block[d];
-            double s = 0.0;
-            for (uint64_t i = 0;
-                 i < (uint64_t)b->n_rows * ec->n_residues; ++i)
-                s += b->counts[i];
-            if (fabs(s - ec->expected_length) > 1e-6 * ec->expected_length)
-                return false;
-        }
+    for (uint32_t d = 0; d < 2u; ++d) {
+        const BeamCountBlock *b = &ec->block[d];
+        double s = 0.0;
+        for (uint64_t i = 0; i < (uint64_t)b->n_rows * ec->n_residues; ++i)
+            s += b->counts[i];
+        if (fabs(s - ec->expected_length) > 1e-6 * ec->expected_length)
+            return false;
+    }
     return true;
 }
 
@@ -134,8 +169,8 @@ static bool blocks_sum_to_expectation(const BeamExpectedCounts *ec) {
  * Under the budget the library ships with, the answer arrives and is whole.
  *
  * The block-sum identity is the cheapest check that emitting and releasing one
- * map at a time -- rather than all six then all six -- still copies every row
- * out of every map.
+ * map at a time -- rather than both then both -- still copies every row out
+ * of every map.
  */
 static void test_the_shipped_budget_answers_and_every_block_is_whole(void) {
     BeamModel *m = build();
@@ -144,18 +179,20 @@ static void test_the_shipped_budget_answers_and_every_block_is_whole(void) {
 
     BeamExpectedCounts ec;
     const BeamError err = beam_model_expected_counts(m, 0u, &ec);
-    ASSERT_MSG(err == BEAM_OK, beam_error_message());
-    ASSERT_MSG(ec.expected_length > 0.0, "expected length is not positive");
-    ASSERT_MSG(blocks_sum_to_expectation(&ec),
-               "a block does not sum to the expected length");
+    if (err != BEAM_OK) { beam_model_destroy(m);
+                          ASSERT_MSG(false, beam_error_message()); }
+    const bool positive = ec.expected_length > 0.0;
+    const bool whole = blocks_sum_to_expectation(&ec);
     beam_model_expected_counts_free(&ec);
-    if (m != g_wide) beam_model_destroy(m);
+    beam_model_destroy(m);
+    ASSERT_MSG(positive, "expected length is not positive");
+    ASSERT_MSG(whole, "a block does not sum to the expected length");
     PASS();
 }
 
 /**
  * Below what the maps need at rest, the refusal is a budget refusal and names
- * the accumulators.
+ * the working set.
  */
 static void test_the_accumulators_refuse_and_say_it_was_the_budget(void) {
     BeamModel *m = build();
@@ -165,71 +202,131 @@ static void test_the_accumulators_refuse_and_say_it_was_the_budget(void) {
     beam_model_set_memory_budget(rest - 1u);
     BeamExpectedCounts ec;
     const BeamError err = beam_model_expected_counts(m, 0u, &ec);
+    char why[512];
+    snprintf(why, sizeof why, "%s", beam_error_message());
     beam_model_set_memory_budget(0);
+    if (err == BEAM_OK) beam_model_expected_counts_free(&ec);
+    beam_model_destroy(m);
 
     ASSERT_MSG(err == BEAM_ERR_BUDGET, "a refusal below the maps' own size "
                                        "was not reported as a budget refusal");
-    ASSERT_MSG(strstr(beam_error_message(), "expected-count working set"),
+    ASSERT_MSG(strstr(why, "expected-count working set"),
                "the refusal does not name what refused");
-    if (m != g_wide) beam_model_destroy(m);
     PASS();
 }
 
 /**
- * THE SHARP ONE. The budget is set above what the backward field needs on its
- * own, and below what the field plus the maps need together. The sweep's own
- * check passes at every length -- it is asserted here that it does -- so a
- * refusal can only come from the two sharing an account.
+ * THE SHARP ONE. The budget admits the backward field of every length on its
+ * own, and admits the maps at rest on their own, but falls ONE BYTE short of
+ * the maps at rest plus the first field the pooled call allocates. Both of
+ * those "on its own" are asserted, so a refusal can only come from the two
+ * sharing an account -- and the message has to say the accumulators were
+ * already holding part of it.
  *
- * Before they shared one, this call succeeded while holding the field and six
+ * Before they shared one, this call succeeded while holding the field and the
  * maps that had each passed a check against the whole figure.
  */
 static void test_the_sweep_and_the_accumulators_share_one_budget(void) {
     BeamModel *m = build();
     ASSERT_MSG(m, "model did not build");
-    const uint64_t field = backward_field_bytes(m);
-    const uint64_t rest  = accumulators_at_rest(m);
-    /*
-     * The margin has to land INSIDE the maps' own size, and far enough in
-     * that the accumulators have charged something to the account before the
-     * refusal fires -- otherwise the refusal comes from the field allocation
-     * alone and the message has no accumulators to name, which is the thing
-     * being tested.
-     *
-     * It was 65536 against six accumulators. Two of them come to 184,320
-     * bytes at rest, and measured on this model a margin of 65536 or below
-     * refuses too early to mention them while 131072 refuses in the right
-     * place.
-     */
-    const uint64_t margin = 131072u;
-    ASSERT_MSG(rest > margin, "the margin is not inside the maps' size");
-    const uint64_t budget = field + margin;     /* fits the field, not both */
+    const uint32_t first = shortest_live(m), last = longest_live(m);
+    const uint64_t rest   = accumulators_at_rest(m);
+    const uint64_t budget = rest + field_bytes(m, first) - 1u;
 
-    ASSERT_MSG(field <= budget,
+    ASSERT_MSG(first > 0u, "the model has no live length");
+    ASSERT_MSG(field_bytes(m, last) <= budget,
                "the budget does not admit the backward field on its own, so "
                "this test would pass without the shared account");
+    ASSERT_MSG(rest <= budget,
+               "the budget does not admit the maps at rest, so the refusal "
+               "would come from them alone");
 
     beam_model_set_memory_budget(budget);
     BeamExpectedCounts ec;
     const BeamError err = beam_model_expected_counts(m, 0u, &ec);
+    char why[512];
+    snprintf(why, sizeof why, "%s", beam_error_message());
     beam_model_set_memory_budget(0);
+    if (err == BEAM_OK) beam_model_expected_counts_free(&ec);
+    beam_model_destroy(m);
 
     ASSERT_MSG(err == BEAM_ERR_BUDGET,
                "the sweep and the accumulators each fit the budget alone and "
                "the call was allowed to hold both");
-    ASSERT_MSG(strstr(beam_error_message(), "already hold"),
+    ASSERT_MSG(strstr(why, "already hold"),
                "the refusal does not say the accumulators were holding part "
                "of the budget");
-    if (m != g_wide) beam_model_destroy(m);
     PASS();
 }
 
 /**
- * A block can be released while the others are still in use.
+ * The DOUBLING paths refuse too, and they are the only thing that can.
  *
- * This is what lets the Python binding copy the six out one at a time instead
- * of holding a second copy of the whole answer. The whole-struct free has to
- * stay correct over the block that is already gone.
+ * The budget is exactly the maps at rest plus the largest backward field, so
+ * every `rowmap_init` and every `fb_alloc` fits and nothing else does. The
+ * first growth is a map's rows doubling from 512 to 1,024, which charges the
+ * new 1,024 rows on top of everything held; that exceeds the budget whenever
+ * it is larger than the whole field, which is asserted. Those paths are
+ * where the check has to be, because nothing in the model's shape bounds
+ * them short of the dense table.
+ */
+static void test_the_doubling_paths_refuse_too(void) {
+    BeamModel *m = build();
+    ASSERT_MSG(m, "model did not build");
+    const uint64_t field  = field_bytes(m, longest_live(m));
+    const uint64_t rest   = accumulators_at_rest(m);
+    const uint64_t grow   = 1024u * row_bytes(m);
+    const uint64_t budget = rest + field;
+
+    ASSERT_MSG(grow > field,
+               "the first doubling fits in the room a shorter field leaves, "
+               "so the budget below might not refuse it");
+
+    beam_model_set_memory_budget(budget);
+    BeamExpectedCounts ec;
+    const BeamError err = beam_model_expected_counts(m, 0u, &ec);
+    char why[512];
+    snprintf(why, sizeof why, "%s", beam_error_message());
+    beam_model_set_memory_budget(0);
+
+    if (err != BEAM_ERR_BUDGET) {
+        if (err == BEAM_OK) beam_model_expected_counts_free(&ec);
+        beam_model_destroy(m);
+        ASSERT_MSG(false, "the maps grew past the budget without anything "
+                          "refusing");
+    }
+    if (!strstr(why, "expected-count working set")) {
+        beam_model_destroy(m);
+        ASSERT_MSG(false, "the refusal does not name what refused");
+    }
+
+    /* And with room, the same model answers -- so the budget above refused
+     * growth rather than something the model could never have done -- and
+     * both maps really did grow past where they started. */
+    if (beam_model_expected_counts(m, 0u, &ec) != BEAM_OK) {
+        beam_model_destroy(m);
+        ASSERT_MSG(false, beam_error_message());
+    }
+    const uint64_t want = reachable_rows(m);
+    const bool grew  = ec.block[0].n_rows > 512u && ec.block[1].n_rows > 512u;
+    const bool every = ec.block[0].n_rows == want && ec.block[1].n_rows == want;
+    const bool whole = blocks_sum_to_expectation(&ec);
+    beam_model_expected_counts_free(&ec);
+    beam_model_destroy(m);
+    ASSERT_MSG(grew, "a map never grew past its starting capacity, so no "
+                     "doubling path ran");
+    ASSERT_MSG(every, "a map did not receive every (depth, context) the "
+                      "trellis can form, though every path has mass");
+    ASSERT_MSG(whole, "a block does not sum to the expected length");
+    PASS();
+}
+
+/**
+ * A block can be released while the other is still in use.
+ *
+ * This is what lets the Python binding copy the blocks out one at a time
+ * instead of holding a second copy of the whole answer. The whole-struct free
+ * has to stay correct over the block that is already gone.
  */
 static void test_one_block_can_be_released_before_the_rest(void) {
     BeamModel *m = build();
@@ -237,13 +334,15 @@ static void test_one_block_can_be_released_before_the_rest(void) {
     beam_model_set_memory_budget(0);
 
     BeamExpectedCounts ec;
-    ASSERT_MSG(beam_model_expected_counts(m, 0u, &ec) == BEAM_OK,
-               beam_error_message());
+    if (beam_model_expected_counts(m, 0u, &ec) != BEAM_OK) {
+        beam_model_destroy(m);
+        ASSERT_MSG(false, beam_error_message());
+    }
+    beam_model_destroy(m);
     ASSERT_MSG(ec.block[0].n_rows > 0 && ec.block[1].n_rows > 0,
                "the model produced an empty block, so this proves nothing");
 
-    /* Release the FORWARD block and require the BACKWARD one untouched. Two
-     * blocks now rather than six, so the neighbour is the other anchor. */
+    /* Release the FORWARD block and require the BACKWARD one untouched. */
     const uint32_t kept_rows = ec.block[1].n_rows;
     double kept_sum = 0.0;
     for (uint64_t i = 0; i < (uint64_t)kept_rows * ec.n_residues; ++i)
@@ -261,126 +360,6 @@ static void test_one_block_can_be_released_before_the_rest(void) {
                "releasing one block disturbed another");
 
     beam_model_expected_counts_free(&ec);       /* must not double-free */
-    if (m != g_wide) beam_model_destroy(m);
-    PASS();
-}
-
-/*
- * A model whose accumulators GROW.
- *
- * The corpus above produces 374 rows across all six maps, which fits the
- * capacity they start at, so it exercises `rowmap_init` and nothing else. The
- * doubling paths need more rows than that, and rows come from distinct
- * `(length, depth, context)` triples: 240 sequences spread over twenty-one
- * lengths reach tens of thousands of them. Pseudo-random residues from a fixed
- * seed, so the figure is the same on every machine and every run.
- *
- * NUCLEOTIDES, and that is a runtime decision rather than a coverage one. What
- * these tests need is many distinct rows, which comes from the spread of
- * lengths; what costs the time is `n_states`, and radix 6 puts 216 of them in
- * the trellis where radix 21 puts 9,261. The amino-acid version of this model
- * ran the pair of test binaries in ninety-five seconds for the same assertions.
- */
-#define N_WIDE 240
-#define WIDE_MAX_LEN 24u
-static char wide_buf[N_WIDE][WIDE_MAX_LEN + 1u];
-static const char *wide_seq[N_WIDE];
-static double wide_wt[N_WIDE];
-
-static BeamModel *build_wide_once(void) {
-    static const char *NT = "ACGT";
-    uint32_t s = 12345u;
-    for (uint32_t i = 0; i < N_WIDE; ++i) {
-        const uint32_t len = 4u + (i % 21u);
-        for (uint32_t j = 0; j < len; ++j) {
-            s = s * 1103515245u + 12345u;
-            wide_buf[i][j] = NT[(s >> 16) % 4u];
-        }
-        wide_buf[i][len] = '\0';
-        wide_seq[i] = wide_buf[i];
-        wide_wt[i] = 1.0 + (double)(i % 7u);
-    }
-    BeamModelConfig cfg;
-    beam_model_config_default(&cfg);
-    cfg.alphabet = BEAM_ALPHABET_NT;
-    cfg.order = 2u;
-    cfg.max_length = WIDE_MAX_LEN;
-    cfg.strict = false;
-    /* No `sparse`: the nt alphabet refuses it, and these tests are about the
-     * accumulators, which do not depend on how the model stores its tables. */
-    BeamModel *m = beam_model_new(&cfg);
-    if (!m) return NULL;
-    if (beam_model_observe(m, wide_seq, wide_wt, N_WIDE) != BEAM_OK
-        || beam_model_finalize(m) != BEAM_OK) {
-        beam_model_destroy(m);
-        return NULL;
-    }
-    return m;
-}
-
-
-/*
- * Built once for the binary. `beam_model_finalize` on this shape costs more
- * than every expected-count call in the file put together, and each test wants
- * the same model, so rebuilding it per test was most of the runtime.
- */
-static BeamModel *build_wide(void) {
-    if (!g_wide) g_wide = build_wide_once();
-    return g_wide;
-}
-
-/**
- * The DOUBLING paths refuse too, and they are the only thing that can.
- *
- * The budget here admits the backward field and the six maps at their starting
- * capacity together -- both asserted -- so `fb_alloc` passes and every
- * `rowmap_init` passes. What does not fit is the growth: this model puts about
- * sixteen thousand rows through `rowmap_row` and `rowmap_rehash`, and those
- * are where the check has to be, because there is no expression that could
- * have predicted sixteen thousand from the model's shape.
- */
-static void test_the_doubling_paths_refuse_too(void) {
-    BeamModel *m = build_wide();
-    ASSERT_MSG(m, "wide model did not build");
-    const uint64_t field = backward_field_bytes(m);
-    const uint64_t rest  = accumulators_at_rest(m);
-    /* Headroom above the field and the maps at rest, sized so that the
-     * GROWTH is what exceeds it and not the initial allocation. It was
-     * 262144 for six accumulators; two of them grow proportionally less, and
-     * measured on this model 131072 is no longer exceeded at all while 32768
-     * still is. Too large and the test passes vacuously, which is the failure
-     * mode it exists to avoid. */
-    const uint64_t budget = field + rest + 32768u;
-
-    ASSERT_MSG(field <= budget && field + rest <= budget,
-               "the budget does not admit the field and the maps at rest, so "
-               "an earlier check could have produced this refusal");
-
-    beam_model_set_memory_budget(budget);
-    BeamExpectedCounts ec;
-    const BeamError err = beam_model_expected_counts(m, 0u, &ec);
-    beam_model_set_memory_budget(0);
-
-    ASSERT_MSG(err == BEAM_ERR_BUDGET,
-               "the maps grew past the budget without anything refusing");
-    ASSERT_MSG(strstr(beam_error_message(), "expected-count working set"),
-               "the refusal does not name what refused");
-
-    /* And with room, the same model answers -- so the budget above refused
-     * growth rather than something the model could never have done. */
-    beam_model_set_memory_budget(0);
-    ASSERT_MSG(beam_model_expected_counts(m, 0u, &ec) == BEAM_OK,
-               beam_error_message());
-    uint64_t rows = 0;
-    for (uint32_t d = 0; d < 2u; ++d)
-        for (uint32_t e = 0; e < 3u; ++e) rows += ec.block[d].n_rows;
-    ASSERT_MSG(rows > 6u * 512u,
-               "the wide model did not fill a single map past its starting "
-               "capacity, so no doubling path ran");
-    ASSERT_MSG(blocks_sum_to_expectation(&ec),
-               "a block of the wide model does not sum to the expected length");
-    beam_model_expected_counts_free(&ec);
-    if (m != g_wide) beam_model_destroy(m);
     PASS();
 }
 
@@ -392,7 +371,6 @@ int main(void) {
     RUN_TEST(test_the_sweep_and_the_accumulators_share_one_budget);
     RUN_TEST(test_the_doubling_paths_refuse_too);
     RUN_TEST(test_one_block_can_be_released_before_the_rest);
-    if (g_wide) beam_model_destroy(g_wide);
     printf("  %d passed, %d failed\n", pass_count, fail_count);
     return fail_count ? 1 : 0;
 }

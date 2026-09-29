@@ -33,6 +33,27 @@ def nt():
                           order=3, max_length=42)
 
 
+@pytest.fixture(scope="module")
+def default_model():
+    """`alphabet -> a model built with order and max_length left unset`.
+
+    Built once per alphabet and shared: finalizing sweeps a partition function
+    for every length up to the default max_length at the default order, which
+    is the slowest thing in this file and would otherwise be paid per test.
+    """
+    built = {}
+
+    def get(name):
+        if name not in built:
+            if name == "aa":
+                built[name] = BEAM.BeamModel(["CASSLGQAYEQYF"])
+            else:
+                built[name] = BEAM.BeamModel(NT_SEQS, abundances=NT_AB,
+                                             alphabet="nt")
+        return built[name]
+    return get
+
+
 # ═══════════════════════════════════════════════════════════════
 # the registry
 # ═══════════════════════════════════════════════════════════════
@@ -59,7 +80,7 @@ def test_an_unknown_alphabet_is_refused_by_name():
 
 
 @pytest.mark.parametrize("name", ["aa", "nt"])
-def test_python_and_c_resolve_the_same_defaults(name):
+def test_python_and_c_resolve_the_same_defaults(name, default_model):
     """The property config.c warns about, checked directly.
 
     A model built with everything left to default must report exactly the
@@ -67,18 +88,16 @@ def test_python_and_c_resolve_the_same_defaults(name):
     Python layer to have resolved something else.
     """
     info = alphabets.info(name)
-    seqs = ["CASSLGQAYEQYF"] if name == "aa" else [NT_SEQS[0]]
-    m = BEAM.BeamModel(seqs, alphabet=name)
-    cfg = m.config
+    cfg = default_model(name).config
     assert cfg["alphabet"] == name
     assert cfg["order"] == info["default_order"]
     assert cfg["max_length"] == info["default_max_length"]
 
 
-def test_the_amino_acid_defaults_did_not_move():
+def test_the_amino_acid_defaults_did_not_move(default_model):
     """Making order and max_length alphabet-resolved must not have
     changed what an amino-acid caller gets."""
-    cfg = BEAM.BeamModel(["CASSLGQAYEQYF"]).config
+    cfg = default_model("aa").config
     assert (cfg["alphabet"], cfg["order"],
             cfg["max_length"]) == ("aa", 4, 27)
 
@@ -110,7 +129,8 @@ def test_N_is_a_residue_and_other_iupac_codes_are_not(nt):
     """N says "this base is unknown", which the model can represent. R says
     "A or G", which it cannot."""
     with_n = NT_SEQS[0][:-1] + "N"
-    assert nt.log_pseq(with_n) <= 0.0        # scoreable, finite or -inf
+    assert math.isfinite(nt.log_pseq(with_n))     # never seen, still priced
+    assert nt.log_pseq(with_n) < nt.log_pseq(NT_SEQS[0])
     with pytest.raises(ValueError, match="alphabet does not accept"):
         nt.explain(NT_SEQS[0][:-1] + "R")
 
@@ -239,65 +259,61 @@ def test_an_amino_acid_model_is_unaffected_by_a_nucleotide_one(corpus):
 
 
 # ═══════════════════════════════════════════════════════════════
-# the open world, at the alphabet's own default order
+# the prior, at the alphabet's own orders
 # ═══════════════════════════════════════════════════════════════
 
-def test_the_open_world_builds_at_the_default_order():
-    """The exact configuration that segfaulted.
+def test_the_default_order_builds_and_prices_the_unseen(default_model):
+    """The nucleotide default order is 6, past every amino-acid order, so
+    the prior's ancestor chain is longest here: seven levels, each one read
+    wherever the level above it was never observed.
 
-    `strict=False` turns on every backoff strength, and the nucleotide default
-    order is 6. The wide expert's backoff base was indexed at `order - 1` into
-    an array holding the mid hierarchy's orders 0 to 3 -- in range for every
-    amino-acid order, two past the end here. Nothing in the suite built a
-    nucleotide model with backoff on, so nothing saw it.
+    Order 6 is also the configuration that once segfaulted, when the
+    smoothing below the top level was indexed past the end of the levels it
+    had built. Nothing in the suite had built a smoothed nucleotide model at
+    its default order, so nothing saw it.
     """
-    m = BEAM.BeamModel(NT_SEQS, abundances=NT_AB, alphabet="nt", strict=False)
+    m = default_model("nt")
     assert m.config["order"] == 6
+    assert m.config["alpha"] == (10.0,) * 7
     for s in NT_SEQS:
         assert math.isfinite(m.log_pseq(s))
-    # The open world gives mass to sequences the corpus never spelled; that is
-    # what it is for, and it is the property the backoff base carries. The
-    # probe has to be of an OBSERVED length, or the length prior rules it out
-    # before any residue is looked at and the test proves nothing.
     unseen = "A" * len(NT_SEQS[0])
     assert unseen not in NT_SEQS
     assert math.isfinite(m.log_pseq(unseen))
-    # And the closed world must still refuse it, or "open" means nothing.
-    closed = BEAM.BeamModel(NT_SEQS, abundances=NT_AB, alphabet="nt")
-    assert closed.log_pseq(unseen) == -math.inf
+    assert m.log_pseq(unseen) < min(m.log_pseq(s) for s in NT_SEQS)
+
+
+#: The J-proximal twelve bases of each junction: distinct, and short enough
+#: that order 7's 6**7-state trellis sweeps every length in about a second.
+NT_TAILS = [s[-12:] for s in NT_SEQS]
 
 
 @pytest.mark.parametrize("order", [4, 5, 6, 7])
-def test_every_order_survives_backoff(order):
-    """Order 4 is the boundary the base cap leaves alone; 5 upward exercise it.
-
-    Stops at 7 because backoff forces dense storage, and a dense nucleotide
-    wide table is `(depth_cap + 1) * 6**order * 5` doubles per direction --
-    0.3 GB at order 7 and 11 GB at order 9. Orders 5, 6 and 7 take the clamped
-    branch through identical code; the ceiling is built separately below,
-    where the closed world makes it affordable.
-    """
-    m = BEAM.BeamModel(NT_SEQS, abundances=NT_AB, alphabet="nt", order=order,
-                       max_length=42, strict=False)
-    assert math.isfinite(m.log_pseq(NT_SEQS[0]))
-    assert m.path_count() > 0
+def test_every_order_builds_under_the_prior(order):
+    """Order 4 is the highest any amino-acid model reaches; 5 upward are
+    orders only the nucleotide alphabet has, so their deeper levels are
+    exercised nowhere else. Sparse storage keeps each one small."""
+    assert len(set(NT_TAILS)) == len(NT_TAILS)
+    m = BEAM.BeamModel(NT_TAILS, abundances=NT_AB, alphabet="nt", order=order,
+                       max_length=12)
+    assert math.isfinite(m.log_pseq(NT_TAILS[0]))
+    assert math.isfinite(m.log_pseq("N" * 12))
+    assert m.path_count() == pytest.approx(
+        float(sum(5 ** L for L in range(1, 13))), rel=1e-12)
 
 
 def test_a_smoothed_nucleotide_model_is_still_a_distribution():
-    """Changing which table the wide expert backs off to could leave a model
-    that builds and scores but no longer sums to 1."""
+    """The prior's levels at an order past the sequences' own lengths could
+    leave a model that builds and scores but no longer sums to 1. Summed over
+    every string of A, C, G, T and N up to max_length -- 3,905 of them."""
+    import itertools
     m = BEAM.BeamModel(["TGT", "TGC", "GCC", "TCA"], abundances=[5, 3, 2, 4],
-                       alphabet="nt", order=5, max_length=5,
-                       strict=False)
-    logpi = m.log_length_prior(3)
-    total = 0.0
-    for a in "ACGTN":
-        for b in "ACGTN":
-            for c in "ACGTN":
-                lp = m.log_pseq(a + b + c)
-                if math.isfinite(lp):
-                    total += math.exp(lp - logpi)
-    assert total == pytest.approx(1.0, abs=1e-9)
+                       alphabet="nt", order=5, max_length=5)
+    every = ["".join(t) for L in range(1, 6)
+             for t in itertools.product("ACGTN", repeat=L)]
+    lp = m.log_pseq_batch(every)
+    assert np.isfinite(lp).all()
+    assert float(np.exp(lp).sum()) == pytest.approx(1.0, abs=1e-12)
 
 
 def test_the_ceiling_order_builds():
@@ -305,8 +321,8 @@ def test_the_ceiling_order_builds():
 
     That distinction is the whole lesson of the defect this file's other tests
     cover: the suite asserted `beam_config_valid` accepted order 9 and never
-    constructed one, and construction is where it segfaulted. Closed world, so
-    storage is sparse and this costs a few hundred megabytes rather than
+    constructed one, and construction is where it segfaulted. Storage is
+    sparse, the default, so this costs a few hundred megabytes rather than
     eleven gigabytes.
     """
     m = BEAM.BeamModel(["ACGTAC", "ACGTAG"], abundances=[2.0, 1.0],
@@ -314,6 +330,9 @@ def test_the_ceiling_order_builds():
     assert m.config["order"] == 9
     assert m.n_states == 6 ** 9
     assert math.isfinite(m.log_pseq("ACGTAC"))
+    # Unseen, so it is read through all ten levels of the prior.
+    assert math.isfinite(m.log_pseq("TTTTTT"))
+    assert m.log_pseq("TTTTTT") < m.log_pseq("ACGTAC")
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -334,13 +353,13 @@ def test_a_configuration_larger_than_the_budget_is_refused():
         BEAM.set_memory_budget(1_000_000)          # 1 MB
         with pytest.raises(MemoryError, match="memory budget"):
             BEAM.BeamModel(NT_SEQS, abundances=NT_AB, alphabet="nt",
-                           order=6, max_length=42, strict=False)
+                           order=6, max_length=42)
     finally:
         BEAM.set_memory_budget(before)
     assert BEAM.memory_budget() == before
     # and the same model builds once the budget allows it
     m = BEAM.BeamModel(NT_SEQS, abundances=NT_AB, alphabet="nt",
-                       order=6, max_length=42, strict=False)
+                       order=6, max_length=42)
     assert m.alphabet == "nt"
 
 
@@ -350,7 +369,7 @@ def test_the_refusal_says_what_it_needs_and_what_it_has():
     try:
         BEAM.set_memory_budget(1_000_000)
         with pytest.raises(MemoryError) as exc:
-            BEAM.BeamModel(NT_SEQS, alphabet="nt", strict=False)
+            BEAM.BeamModel(NT_SEQS, alphabet="nt")
     finally:
         BEAM.set_memory_budget(before)
     text = str(exc.value)

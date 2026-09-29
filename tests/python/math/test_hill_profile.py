@@ -26,14 +26,17 @@ def bits(a):
     return np.ascontiguousarray(np.asarray(a, dtype=np.float64)).view(np.uint64)
 
 
-@pytest.fixture(scope="module", params=["aa-strict", "aa-open", "nt-strict"])
+@pytest.fixture(scope="module", params=["aa", "nt"])
 def m(request):
-    if request.param == "nt-strict":
+    if request.param == "nt":
         s, a = make_nt_corpus(n=600)
-        return BeamModel(s, abundances=a, alphabet="nt", order=4)
+        # max_length at the corpus's longest (33) rather than the nucleotide
+        # default of 81: every length up to max_length is generated, so the
+        # default would sweep 81 lengths to test what 33 test as well.
+        return BeamModel(s, abundances=a, alphabet="nt", order=4,
+                         max_length=33)
     s, a = make_corpus(n=600, seed=31, lo=6, hi=11)
-    return BeamModel(s, abundances=a, order=2, max_length=12,
-                     strict=request.param == "aa-strict")
+    return BeamModel(s, abundances=a, order=2, max_length=12)
 
 
 def test_log_mellin_many_is_log_mellin_bit_for_bit(m):
@@ -70,19 +73,20 @@ def test_no_schedule_and_no_company_moves_a_bit(m):
 
 def test_hill_profile_agrees_with_hill_numbers_to_machine_precision(m):
     """1e-12 relative, on the default grid and on every order at least 0.01
-    from 1. Measured worst on the default grid: 1.05e-14."""
+    from 1. Measured worst on the default grid: 1.4e-14."""
     qs = np.concatenate([ORDERS, STRESS[np.abs(STRESS - 1.0) >= 0.01]])
     hp, hn = m.hill_profile(qs), m.hill_numbers(qs)
     assert np.max(np.abs(hp - hn) / np.abs(hn)) <= 1e-12
 
 
 def test_near_one_the_difference_is_conditioning_not_disagreement(m):
-    """Within 1e-3 of q = 1 the RELATIVE difference in D exceeds 1e-12 --
-    1.33e-12 measured at q = 1.001 on the open-world fixture -- and this test
-    does not pretend otherwise. D = exp(ln M / (1 - q)) multiplies any rounding
-    in ln M by 1 / |1 - q|, a thousand here, and both routes pay it. What the
-    two actually disagree on, ln M itself, stays at a few units in the last
-    place, which is what this asserts."""
+    """Within 1e-3 of q = 1 the RELATIVE difference in D is no longer at
+    machine precision -- 4.4e-13 measured at q = 1.001 on both fixtures, thirty
+    times the worst elsewhere, and 1.33e-12 on an earlier fixture -- and this
+    test does not pretend otherwise. D = exp(ln M / (1 - q)) multiplies any
+    rounding in ln M by 1 / |1 - q|, a thousand here, and both routes pay it.
+    What the two actually disagree on, ln M itself, stays at a few units in
+    the last place, which is what this asserts."""
     qs = np.concatenate([ORDERS, STRESS])
     hp, hn = m.hill_profile(qs), m.hill_numbers(qs)
     gen = (qs != 0.0) & (np.abs(qs - 1.0) >= 1e-12)

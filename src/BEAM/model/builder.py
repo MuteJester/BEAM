@@ -70,12 +70,14 @@ class Builder:
         order: int | None = None,
         weights: tuple[float, float] = (0.5, 0.5),
         max_length: int | None = None,
-        strict: bool = True,
+        alpha: float | Iterable[float] | None = None,
+        alpha_length: float | None = None,
         sparse: bool | None = None,
     ) -> None:
         self._cargs = _config_args(
             alphabet=alphabet, order=order, max_length=max_length,
-            weights=weights, strict=strict, sparse=sparse)
+            weights=weights, alpha=alpha, alpha_length=alpha_length,
+            sparse=sparse)
         self._g = _c.new(*self._cargs)
         self._spent = False
 

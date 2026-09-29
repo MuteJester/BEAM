@@ -121,15 +121,9 @@ path_count(length=None) -> float
 Distinct sequences the model can produce; `None` pools over every length.
 
 !!! danger "Read this before quoting a support size"
-    Under `strict=False` this is exactly `sum_L 20 ** L`, because the Laplace add-one leaves every cell strictly positive and so nothing is dead. **That number describes the smoothing, not the grammar.** For the corpus above it is `2.759e23`, which is exactly the sum of `20 ** L` over the observed lengths and therefore says nothing about the repertoire.
+    Under the hierarchical prior every sequence up to `max_length` is possible, so this is exactly `sum_L R ** L` over the lengths `1..max_length`: `1.413e35` for the corpus above, whatever the corpus. **That number describes the alphabet and the length range, not the repertoire.**
 
-    `strict=True` is the **default**, and there dead transitions stay dead:
-    `path_count` reports the exact support of the observed-transition DAG. For
-    the same corpus that is `2168` — twenty orders of magnitude smaller, and
-    the number that is about the data. Sparse and dense strict storage return
-    the same value.
-
-    It is kept because it is the exact `q=0` corner of the Hill family and because it is what the counting spectrum integrates to, so the two have to agree. `effective_diversity()` (`D1`) is the number to quote if you are quoting one — here `1.04e09` against that `2.76e23`.
+    It is kept because it is the exact `q=0` corner of the Hill family and because it is what the counting spectrum integrates to, so the two have to agree. `effective_diversity()` (`D1`) is the number to quote if you are quoting one -- here `4.66e08`.
 
 ### The Mellin transform
 
@@ -172,7 +166,7 @@ effective_diversity() -> float    # D1
 !!! note "`hill_profile` agrees with `hill_numbers` to machine precision, NOT bit for bit"
     `hill_number` reaches `sum P**q` through a different tilted sweep, one that rescales each layer by a different maximum and so rounds differently. Over nine models spanning both alphabets and both worlds, the two values of `ln sum P**q` differ by at most 7.1e-15, and on the grid 0 to 3 in steps of 0.1 the Hill numbers differ by at most 1.1e-14 relative. The two corners take `hill_number`'s own routes and are bit-identical.
 
-    **Near `q = 1` the relative difference grows as `1 / |1 - q|`**, because `D_q = exp(ln M / (1 - q))` magnifies any rounding in `ln M` by that factor on both routes: 1.3e-12 was measured at `q = 1.001` on an open-world model. Neither route is the more accurate one there.
+    **Near `q = 1` the relative difference grows as `1 / |1 - q|`**, because `D_q = exp(ln M / (1 - q))` magnifies any rounding in `ln M` by that factor on both routes: 1.3e-12 was measured at `q = 1.001` on a model whose support was every sequence up to its maximum length. Neither route is the more accurate one there.
 
     Keep `hill_numbers` wherever a profile has to reproduce one already published from it to the last bit.
 
@@ -387,7 +381,7 @@ For length `L`, element `r` is `sum_{len(s)=L} P(s)**q * ln(P(s))**r` — the un
 
 The graph models in this library carry a `diversity_under_edge_thresholds` sweep. BeamModel does **not** have it at all — not even as a method that raises, which is what this page used to claim.
 
-There is nothing for it to do. In the open world the Laplace add-one leaves every table cell strictly positive, so a threshold sweep would either be a no-op or describe a model the smoothing does not define. In the closed world there is already an exact zero-probability boundary, which is a property of the corpus rather than an arbitrary cut. `spectrum` and `atoms` answer where the mass and the sequences sit under either regime.
+There is nothing for it to do. The hierarchical prior leaves every table cell strictly positive, so a threshold sweep would describe a cut the model does not make. `spectrum` and `atoms` answer where the mass and the sequences sit.
 
 ## The distribution of the surprisal
 
@@ -446,13 +440,13 @@ By default `scale_score(s)` is `-log10 P(U >= -ln P(s))` under the exact per-len
 
 ```python
 cal = model.calibrate(bins=512)
-model.scale_score("CASSALNIWEQYF", cal)                   # 0.6881
-model.scale_score("CASSALNIWEQYF", cal, method="robust")  # 0.7017
-model.scale_score("CASSALNIWEQYW", cal)                   # inf — the closed
-                                                          # world cannot spell it
+model.scale_score("CASSALNIWEQYF", cal)                   # 0.0270
+model.scale_score("CASSALNIWEQYF", cal, method="robust")  # -1.0141
+model.scale_score("CASSALNIWEQYW", cal)                   # 4.0151 -- possible,
+                                                          # but far in the tail
 ```
 
-`inf` is what a sequence outside the support scores under the default `strict=True`: its surprisal is infinite, so no tail probability covers it. That is the honest answer rather than a large finite number, and it is why the corrupted sequence above is not quoted as a ratio here.
+`inf` is now reached only by a sequence the model cannot represent at all -- a character outside the alphabet, or a length past `max_length` -- whose surprisal is infinite. Every other sequence, the corrupted one above included, has a finite surprisal and a finite score.
 
 Under `method="robust"`, sequences drawn from the model are its null by definition, so their scores have median 0 and interquartile range 1; the tests assert both, and assert that the median of the score is flat across lengths where the median of the raw surprisal spans more than a nat. The default `pvalue` method is normalised differently — a threshold on it is a false positive rate, not a z-like deviation.
 

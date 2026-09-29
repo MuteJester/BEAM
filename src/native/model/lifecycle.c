@@ -26,6 +26,8 @@ void beam_free_tables(BeamModel *m) {
     for (uint32_t d = 0; d < BEAM_DIRS; ++d) {
         free(m->lp[d]); m->lp[d] = NULL;
         beam_sparse_destroy(&m->sp_lp[d]);
+        for (uint32_t k = 0; k < BEAM_MAX_ORDER; ++k)
+            beam_sparse_destroy(&m->sp_lo[d][k]);
     }
     free(m->log_pi); m->log_pi = NULL;
     free(m->log_z);  m->log_z  = NULL;
@@ -96,6 +98,12 @@ BeamModel *beam_model_new(const BeamModelConfig *cfg) {
     m->n_states     = beam_ipow_u32(m->n_alphabet, m->state_order);
     m->state_shift  = beam_ipow_u32(m->n_alphabet, m->state_order - 1u);
     m->n_ctx        = beam_ipow_u32(m->n_alphabet, m->order);
+    /* The hierarchical prior's level sizes, and the uniform row every chain
+     * of parents ends in. */
+    for (uint32_t k = 0; k <= m->order; ++k)
+        m->lo_ctx[k] = beam_ipow_u32(m->n_alphabet, k);
+    for (uint32_t x = 0; x < m->n_residues; ++x)
+        m->base_row[x] = -log((double)m->n_residues);
 
     /*
      * A sparse table addresses its rows with a uint32, and the row count

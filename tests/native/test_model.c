@@ -14,6 +14,11 @@
  *     the one being scored;
  *   - the partition function is checked by exhaustive enumeration, which is
  *     the only test here that cannot be passed by accident.
+ *
+ * Every model here carries the hierarchical prior, so every string over the
+ * alphabet up to `max_length` has positive probability. The enumerations
+ * therefore run over the WHOLE alphabet at every length the model admits,
+ * which is why their fixtures stop at length 3 for amino acids.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -98,22 +103,22 @@ static BeamModel *build(uint8_t order, uint8_t max_length) {
     return m;
 }
 
-/* The open world, asked for explicitly.
- *
- * `build` above takes the defaults, and the default is closed-world: the
- * model holds only what TRAIN spells. A few properties below belong to the
- * smoother rather than to the grammar -- a finite score for an unseen ending,
- * a support of 20^L, a posterior that can move a score it would otherwise
- * leave at -inf -- and those need backoff switched on. */
-static BeamModel *build_open(uint8_t order, uint8_t max_length) {
+/* Three sequences at order 2 and length 6. Small enough to hold densely,
+ * for the tests that compare the two storage layouts, and cheap to sweep, for
+ * the analytic identities: under the prior every analytic walks every state
+ * at every length, and an identity does not need more states to hold. */
+static const char *SMALL_TRAIN[] = { "CASSF", "CASSY", "CTTGW" };
+
+static BeamModel *build_small(bool sparse) {
     BeamModelConfig cfg;
     beam_model_config_default(&cfg);
-    cfg.order = order;
-    cfg.max_length = max_length;
-    cfg.strict = false;
+    cfg.order = 2;
+    cfg.max_length = 6;
+    cfg.sparse = sparse;
+
     BeamModel *m = beam_model_new(&cfg);
     if (!m) return NULL;
-    if (beam_model_observe(m, TRAIN, WEIGHT, N_TRAIN) != BEAM_OK
+    if (beam_model_observe(m, SMALL_TRAIN, NULL, 3) != BEAM_OK
         || beam_model_finalize(m) != BEAM_OK) {
         beam_model_destroy(m);
         return NULL;
@@ -121,19 +126,58 @@ static BeamModel *build_open(uint8_t order, uint8_t max_length) {
     return m;
 }
 
-static const char *STRICT_TRAIN[] = { "CASSF", "CASSY", "CTTGW" };
+static const char AMINO[] = "ACDEFGHIKLMNPQRSTVWY";
 
-static BeamModel *build_strict_mode(bool sparse) {
+/**
+ * Score every string of length 1..`max_len` over `letters`, which under the
+ * hierarchical prior is the model's whole support.
+ *
+ * Returns the scores in odometer order, shortest length first, and fills
+ * `*n` and, if asked, each string's length. The caller frees both. The
+ * enumerations below all go through this, so none of them can quietly
+ * enumerate a letter pool instead of the alphabet.
+ */
+static double *score_every_string(const BeamModel *m, const char *letters,
+                                  uint32_t max_len, uint32_t *n,
+                                  uint8_t **lens) {
+    const uint32_t nl = (uint32_t)strlen(letters);
+    uint64_t total = 0, per = 1;
+    for (uint32_t L = 1; L <= max_len; ++L) { per *= nl; total += per; }
+    double *lp = (double *)malloc((size_t)total * sizeof(double));
+    uint8_t *ln = (uint8_t *)malloc((size_t)total);
+    if (!lp || !ln) { free(lp); free(ln); *n = 0; return NULL; }
+
+    char buf[16];
+    uint32_t idx[16];
+    uint64_t k = 0;
+    for (uint32_t L = 1; L <= max_len; ++L) {
+        for (uint32_t i = 0; i < L; ++i) idx[i] = 0u;
+        buf[L] = '\0';
+        for (;;) {
+            for (uint32_t i = 0; i < L; ++i) buf[i] = letters[idx[i]];
+            ln[k] = (uint8_t)L;
+            lp[k++] = beam_model_log_pseq(m, buf);
+            uint32_t j = L;
+            while (j > 0u && ++idx[j - 1u] == nl) idx[--j] = 0u;
+            if (j == 0u) break;
+        }
+    }
+    *n = (uint32_t)k;
+    if (lens) *lens = ln; else free(ln);
+    return lp;
+}
+
+/* A model of `seqs` at the given shape, with the prior at its defaults. */
+static BeamModel *build_tiny(uint8_t order, uint8_t max_length,
+                             const char *const *seqs, const double *w,
+                             uint32_t n) {
     BeamModelConfig cfg;
     beam_model_config_default(&cfg);
-    cfg.order = 2;
-    cfg.max_length = 6;
-    cfg.strict = true;
-    cfg.sparse = sparse;
-
+    cfg.order = order;
+    cfg.max_length = max_length;
     BeamModel *m = beam_model_new(&cfg);
     if (!m) return NULL;
-    if (beam_model_observe(m, STRICT_TRAIN, NULL, 3) != BEAM_OK
+    if (beam_model_observe(m, seqs, w, n) != BEAM_OK
         || beam_model_finalize(m) != BEAM_OK) {
         beam_model_destroy(m);
         return NULL;
@@ -149,7 +193,16 @@ static void test_defaults_are_the_measured_ones(void) {
     ASSERT_MSG(c.order == 4, "default order should be 4");
     ASSERT_MSG(c.weight_forward == c.weight_backward,
                "the two anchors are weighted equally by default");
-    ASSERT_MSG(!c.sparse, "the low-level C default remains dense");
+    /* Dense costs gigabytes at order 4 and holds the same model bit for bit,
+     * so the C default matches the Python one rather than the layout that
+     * only equivalence checks want. */
+    ASSERT_MSG(c.sparse, "the C default stores rows sparsely");
+    /* Every level of the prior is filled, including the ones past `order`,
+     * so raising the order of a default config never leaves a level at the
+     * zero that would bring the closed world back. */
+    for (uint32_t k = 0; k <= BEAM_MAX_ORDER; ++k)
+        ASSERT_MSG(c.alpha[k] == 10.0, "every prior level defaults to 10");
+    ASSERT_MSG(c.alpha_length == 10.0, "the length prior defaults to 10");
     PASS();
 }
 
@@ -223,24 +276,23 @@ static void test_provenance_is_recorded_and_aggregated(void) {
 }
 
 /**
- * Both worlds, because one of them used to be wrong and this test missed it.
+ * Occupancy is read from the COUNTS, in both storage layouts.
  *
- * `beam_model_config_default` is STRICT, so running only the default let the
- * breakdown be read off the finalized tables -- where an unobserved cell is
- * -inf -- and agree. In the OPEN world the add-one makes every cell finite,
- * so that reading saturated: a three-sequence model reported every row and
- * every cell of the table as reached, while `n_nonzero_cells` beside it said
- * thirty. The identity asserted below is exactly what catches that, and it
- * only catches it if the open world is one of the models it is asserted on.
+ * Under the hierarchical prior every finalized cell is positive, so a reading
+ * of the finalized tables saturates: a three-sequence model would report
+ * every row and every cell as reached while `n_nonzero_cells` beside it said
+ * thirty. That is the defect this identity caught when the add-one of the old
+ * open world first made every cell finite, and the prior makes it the only
+ * world there is. The two layouts keep their counts in different structures
+ * (a flat block, and sparse rows frozen at finalize), so both are asked.
  */
-static void check_depth_occupancy(bool strict) {
+static void check_depth_occupancy(bool sparse) {
     const char *s[] = {"CASSLGEQYF", "CASSQDTQYF", "CASSLGTEAFF"};
     double w[] = {3.0, 1.0, 2.0};
     BeamModelConfig c;
     beam_model_config_default(&c);
     c.max_length = 12u; c.order = 3u;
-    c.strict = strict;
-    if (!strict) c.sparse = false;        /* sparse requires strict */
+    c.sparse = sparse;
     BeamModel *m = beam_model_new(&c);
     ASSERT_MSG(m != NULL, "model did not build");
 
@@ -276,28 +328,7 @@ static void check_depth_occupancy(bool strict) {
      * last that may be occupied. */
     ASSERT_MSG(rows[11u] <= tr && rows[12u + 11u] <= tr, "in range");
 
-    /*
-     * Compaction. A strict model keeps the answer, because an unobserved
-     * cell is -inf in the finalized tables and stays that way; an open-world
-     * one cannot, because the add-one overwrote the evidence and compact()
-     * released the counts that held it. Refused there rather than answered
-     * with the saturated reading.
-     */
-    const uint64_t want_rows = tr, want_cells = tc;
-    ASSERT_MSG(beam_model_compact(m) == BEAM_OK, "compact");
-    const BeamError e = beam_model_depth_occupancy(m, rows, cells);
-    if (strict) {
-        ASSERT_MSG(e == BEAM_OK, "a compacted strict model still knows");
-        uint64_t cr = 0, cc = 0;
-        for (uint32_t i = 0; i < 2u * 12u; ++i) { cr += rows[i]; cc += cells[i]; }
-        ASSERT_MSG(cr == want_rows && cc == want_cells,
-                   "and compaction did not move the figure");
-    } else {
-        ASSERT_MSG(e != BEAM_OK,
-                   "a compacted open-world model must refuse, not saturate");
-    }
     beam_model_destroy(m);
-    PASS();
 }
 
 static void test_log_z_splits_across_its_layers(void) {
@@ -309,8 +340,10 @@ static void test_log_z_splits_across_its_layers(void) {
      * trellis's own split instead of choosing one.
      *
      * The even split it replaces is not a small correction. On the fixture
-     * below one layer carries more than half of `-log Z` and four carry
-     * essentially none, where `1/L` would have put the same share on each.
+     * below, at length 8 the last layer carries 12.0 of the 20.2 nats of
+     * `-log Z` and the first three carry under 0.1 each, where `1/L` would
+     * have put 2.5 on every one. Shares can even be of the other sign: a
+     * layer can raise the running mass that an earlier one lowered.
      */
     const char *s[] = {"CASSLGEQYF", "CASSQDTQYF", "CASSLGTEAFF",
                        "CASSPGTGFF", "CASRDTQYF", "CASSLGEQYW"};
@@ -336,7 +369,7 @@ static void test_log_z_splits_across_its_layers(void) {
         ASSERT_MSG(beam_model_log_partition_by_layer(m, L, lm) == BEAM_OK,
                    "per-layer partition");
         const double z = beam_model_log_partition(m, L);
-        if (z == -INFINITY) continue;
+        ASSERT_MSG(isfinite(z), "every length has a finite partition function");
         /* The telescoping end point, bit for bit. */
         ASSERT_MSG(lm[L - 1u] == z,
                    "the last running mass must BE log Z, not approximate it");
@@ -354,7 +387,7 @@ static void test_log_z_splits_across_its_layers(void) {
         if (biggest > 4.0 * fabs(z) / (double)L) uneven++;
         checked++;
     }
-    ASSERT_MSG(checked > 0u, "no length was checked");
+    ASSERT_MSG(checked == 4u, "every length was checked");
     ASSERT_MSG(uneven > 0u,
                "every layer carried an even share, so the split this exists "
                "to replace would have done just as well");
@@ -363,50 +396,106 @@ static void test_log_z_splits_across_its_layers(void) {
 }
 
 static void test_depth_occupancy_sums_to_the_nonzero_cells(void) {
+    const int before = fail_count;
     check_depth_occupancy(true);
+    if (fail_count != before) return;
+    check_depth_occupancy(false);
+    if (fail_count != before) return;
+    PASS();
 }
 
-static void test_depth_occupancy_is_not_saturated_by_the_open_world(void) {
-    check_depth_occupancy(false);
+/**
+ * A compacted model refuses to report occupancy rather than saturating.
+ *
+ * `compact` releases the counts, and every finalized cell is positive under
+ * the prior, so nothing left in the model says which cells the corpus
+ * reached. The only honest answer is a refusal; the dishonest one is the
+ * saturated reading of the tables, which looks like a model that discovered
+ * the whole dictionary.
+ */
+static void test_a_compacted_model_cannot_report_depth_occupancy(void) {
+    const char *s[] = {"CASSLGEQYF", "CASSQDTQYF", "CASSLGTEAFF"};
+    BeamModelConfig c;
+    beam_model_config_default(&c);
+    c.max_length = 12u; c.order = 3u;
+    BeamModel *m = beam_model_new(&c);
+    ASSERT_MSG(m != NULL, "model did not build");
+    ASSERT_MSG(beam_model_observe(m, s, NULL, 3u) == BEAM_OK
+               && beam_model_finalize(m) == BEAM_OK, "build");
+
+    uint64_t rows[2u * 12u], cells[2u * 12u];
+    ASSERT_MSG(beam_model_depth_occupancy(m, rows, cells) == BEAM_OK,
+               "the uncompacted model answers");
+    const double score = beam_model_log_pseq(m, s[0]);
+    ASSERT_MSG(beam_model_compact(m) == BEAM_OK, "compact");
+    beam_clear_error();
+    const BeamError e = beam_model_depth_occupancy(m, rows, cells);
+    const int named = strstr(beam_error_message(), "compact") != NULL;
+    const double after = beam_model_log_pseq(m, s[0]);
+    beam_model_destroy(m);
+
+    ASSERT_MSG(e == BEAM_ERR_NOT_BUILT,
+               "a compacted model must refuse occupancy, not saturate it");
+    ASSERT_MSG(named, "and the refusal must say compaction is why");
+    ASSERT_MSG(after == score, "the refusal is about counts, not scoring");
+    PASS();
 }
 
 static void test_single_anchor_weights_are_accepted(void) {
     /* The anchor weights SHOULD sum to 1 and are deliberately not refused
-     * when they do not. Scoring one anchor's chain alone is the only way to
-     * separate a partition function below 1 into its two causes: the two
-     * chains disagreeing, and the closed world leaking mass at rows it never
-     * observed. A refusal here would make that unmeasurable. */
+     * when they do not. With one anchor's chain alone the partition function
+     * is exactly 1, which is the baseline that makes a partition function
+     * below 1 measurable as the two chains disagreeing. A refusal here would
+     * take that baseline away.
+     *
+     * The baseline is checked, not just the configuration: each chain alone
+     * is a product of per-position distributions that each sum to one, so
+     * summing it over every string of a length gives exactly one. */
+    for (int anchor = 0; anchor < 2; ++anchor) {
+        BeamModelConfig c;
+        beam_model_config_default(&c);
+        c.order = 2u; c.max_length = 12u;
+        c.weight_forward = anchor == 0 ? 1.0 : 0.0;
+        c.weight_backward = anchor == 0 ? 0.0 : 1.0;
+        BeamModel *m = beam_model_new(&c);
+        ASSERT_MSG(m != NULL, "a single-anchor configuration must build");
+        ASSERT_MSG(beam_model_observe(m, TRAIN, WEIGHT, N_TRAIN) == BEAM_OK
+                   && beam_model_finalize(m) == BEAM_OK, "and finalize");
+        double worst = 0.0;
+        for (uint32_t L = 1; L <= 12u; ++L) {
+            const double z = beam_model_log_partition(m, L);
+            if (!(fabs(z) <= worst)) worst = fabs(z);
+        }
+        beam_model_destroy(m);
+        ASSERT_MSG(worst < 1e-12,
+                   "one anchor's chain alone must normalise exactly");
+    }
     BeamModelConfig c;
-    beam_model_config_default(&c);
-    c.weight_forward = 1.0; c.weight_backward = 0.0;
-    BeamModel *m = beam_model_new(&c);
-    ASSERT_MSG(m != NULL, "a single-anchor configuration must build");
-    beam_model_destroy(m);
     beam_model_config_default(&c);
     c.order = 5;
     ASSERT_MSG(beam_model_new(&c) == NULL, "order 5 should be rejected");
     PASS();
 }
 
-static void test_sparse_requires_strict(void) {
-    /* An omitted count row is a dead probability row only in the closed
-     * world. The open world's add-one gives every row mass, including rows
-     * nothing was ever observed at, so a sparse table would have nowhere to
-     * put them and the scores would silently change. */
-    BeamModelConfig c;
-    beam_model_config_default(&c);
-    c.strict = false;
-    c.sparse = true;
-    ASSERT_MSG(beam_model_new(&c) == NULL,
-               "the open world cannot omit zero-count rows");
-
-    c.strict = true;
-
-    BeamModel *m = beam_model_new(&c);
-    ASSERT_MSG(m != NULL, "strict zero-backoff sparse storage must be valid");
-    ASSERT_MSG(beam_model_config(m)->sparse,
-               "the resolved C configuration must report sparse storage");
-    beam_model_destroy(m);
+static void test_either_storage_layout_is_a_valid_configuration(void) {
+    /* Sparse storage used to be refused outside the closed world, because an
+     * omitted row there was a dead row and the add-one gave every row mass.
+     * Under the prior an omitted row is exactly its parent, resolved at
+     * lookup, so both layouts describe the same model and both must build
+     * and report the layout they were given. */
+    for (int sparse = 0; sparse <= 1; ++sparse) {
+        BeamModelConfig c;
+        beam_model_config_default(&c);
+        c.order = 2u; c.max_length = 6u;
+        c.sparse = sparse != 0;
+        BeamModel *m = beam_model_new(&c);
+        ASSERT_MSG(m != NULL, "both storage layouts must be valid");
+        const bool reported = beam_model_config(m)->sparse;
+        beam_model_destroy(m);
+        ASSERT_MSG(reported == (sparse != 0),
+                   "the resolved configuration must report the layout asked "
+                   "for");
+    }
     PASS();
 }
 
@@ -515,14 +604,24 @@ static void test_sparse_growth_failure_is_atomic(void) {
     PASS();
 }
 
-static void test_sparse_strict_matches_dense_bit_for_bit(void) {
-    BeamModel *dense = build_strict_mode(false);
-    BeamModel *sparse = build_strict_mode(true);
-    ASSERT_MSG(dense && sparse, "build dense and sparse strict models");
+/**
+ * Sparse storage is the dense model, bit for bit.
+ *
+ * A sparse table stores only the rows something was observed at and resolves
+ * every other row through its nearest observed ancestor at lookup; a dense
+ * one materialises that resolution into every row. The two must therefore
+ * agree to the bit on every quantity, and most of all on the strings the
+ * corpus never spelled, which the sparse model scores entirely through the
+ * resolution.
+ */
+static void test_sparse_matches_dense_bit_for_bit(void) {
+    BeamModel *dense = build_small(false);
+    BeamModel *sparse = build_small(true);
+    ASSERT_MSG(dense && sparse, "build dense and sparse models");
     ASSERT_MSG(!dense->cfg.sparse && sparse->cfg.sparse,
                "the two models must use different storage backends");
-    ASSERT_MSG(!sparse->tables_all_finite,
-               "omitted sparse rows are semantically dead, not finite");
+    ASSERT_MSG(dense->tables_all_finite && sparse->tables_all_finite,
+               "under the prior no finalized cell is -inf in either layout");
 
     const char *probe[] = {
         "CASSF", "CASSY", "CTTGW", "CASSW", "WWWWW", "CTTGF"
@@ -531,8 +630,32 @@ static void test_sparse_strict_matches_dense_bit_for_bit(void) {
         ASSERT_MSG(beam_model_log_pseq(dense, probe[i])
                    == beam_model_log_pseq(sparse, probe[i]),
                    "dense and sparse scalar scores must be bit-identical");
-    ASSERT_MSG(beam_model_log_pseq(sparse, "CASSW") == -INFINITY,
-               "an omitted transition remains exactly impossible");
+    /* An omitted transition is improbable, not impossible: CASSW takes W
+     * where the corpus only ever ended CASS with F or Y. */
+    ASSERT_MSG(isfinite(beam_model_log_pseq(sparse, "CASSW"))
+               && beam_model_log_pseq(sparse, "CASSW")
+                  < beam_model_log_pseq(sparse, "CASSF"),
+               "an omitted transition scores finite and below an observed one");
+
+    /* Every string up to length 3, over the whole alphabet: almost all of
+     * them are scored purely through rows the sparse model does not hold. */
+    {
+        uint32_t nd = 0, ns = 0, differ = 0;
+        double *ld = score_every_string(dense, AMINO, 3, &nd, NULL);
+        double *ls = score_every_string(sparse, AMINO, 3, &ns, NULL);
+        ASSERT_MSG(ld && ls && nd == ns && nd == 8420u, "enumerate");
+        for (uint32_t i = 0; i < nd; ++i) if (ld[i] != ls[i]) differ++;
+        free(ld); free(ls);
+        ASSERT_MSG(differ == 0u,
+                   "every short string must score bit-identically");
+        for (uint32_t L = 1; L <= 6u; ++L)
+            ASSERT_MSG(beam_model_log_partition(dense, L)
+                       == beam_model_log_partition(sparse, L)
+                       && beam_model_log_length_prior(dense, L)
+                          == beam_model_log_length_prior(sparse, L),
+                       "partition functions and length priors must be "
+                       "bit-identical");
+    }
 
     /* One table per direction: max_length depth slots, A^order contexts,
      * twenty residues. Was three tables of three different shapes. */
@@ -550,7 +673,7 @@ static void test_sparse_strict_matches_dense_bit_for_bit(void) {
                "cell occupancy is independent of row storage");
     ASSERT_MSG(beam_model_memory_bytes(dense)
                >= 20u * beam_model_memory_bytes(sparse),
-               "a tiny strict corpus must be substantially smaller sparse");
+               "a tiny corpus must be substantially smaller sparse");
 
     double hd = 0.0, hs = 0.0;
     ASSERT_MSG(beam_model_entropy(dense, &hd) == BEAM_OK
@@ -606,8 +729,14 @@ static void test_the_state_is_exactly_one_context_wide(void) {
      * was; a narrower state would have made the order-3 index read a
      * neighbouring cell. With one table per direction there is nothing to be
      * wider than, and an order-2 model now carries a 2-residue state. */
-    BeamModel *m2 = build(2, 27);
-    BeamModel *m4 = build(4, 27);
+    /* The state width is fixed at construction, so nothing needs observing:
+     * an order-4 finalize now sweeps every one of its 194,481 states. */
+    BeamModelConfig c;
+    beam_model_config_default(&c);
+    c.order = 2;
+    BeamModel *m2 = beam_model_new(&c);
+    c.order = 4;
+    BeamModel *m4 = beam_model_new(&c);
     ASSERT_MSG(m2 && m4, "models should build");
     ASSERT_MSG(beam_model_n_states(m2) == A * A,
                "order 2 carries a 2-residue state");
@@ -882,14 +1011,16 @@ static uint32_t crc32c_by_hand(uint32_t crc, const uint8_t *p, size_t len) {
  * Without the second half this would pass on a build that refused everything.
  */
 static void test_a_top_k_search_cannot_split_its_way_past_the_budget(void) {
-    BeamModel *m = build(4, 12);
+    BeamModel *m = build(3, 12);
     ASSERT_MSG(m != NULL, "model built");
     const uint32_t n_states = beam_model_n_states(m);
     const uint32_t n_res = beam_model_n_residues(m);
-    uint32_t longest = 0;
-    for (uint32_t L = 1; L <= 12u; ++L)
-        if (isfinite(beam_model_log_length_prior(m, L))) longest = L;
-    ASSERT_MSG(longest > 0, "the model generates nothing");
+    /* The length prior gives every length up to max_length mass, so the
+     * longest search is at max_length. Searching exactly that length makes
+     * the field computed below the one the search holds. */
+    const uint32_t longest = 12u;
+    ASSERT_MSG(isfinite(beam_model_log_length_prior(m, longest)),
+               "the longest length must be one the model generates");
 
     const uint64_t field = ((uint64_t)longest + 1u) * n_states * sizeof(double)
                          + ((uint64_t)longest + 1u) * sizeof(double *)
@@ -906,13 +1037,13 @@ static void test_a_top_k_search_cannot_split_its_way_past_the_budget(void) {
 
     /* Above either part alone, below their sum. */
     beam_model_set_memory_budget(each + (field + layer - each) / 2u);
-    const BeamError split = beam_model_top_k(m, 8u, 0u, buf, lp, &n);
+    const BeamError split = beam_model_top_k(m, 8u, longest, buf, lp, &n);
 
     /* And with room for the sum it still works, so the refusal above is the
      * budget binding and not the search being broken. */
     beam_model_set_memory_budget(0);
     uint32_t n2 = 0;
-    const BeamError ample = beam_model_top_k(m, 8u, 0u, buf, lp, &n2);
+    const BeamError ample = beam_model_top_k(m, 8u, longest, buf, lp, &n2);
 
     beam_model_set_memory_budget(before);
     beam_model_destroy(m);
@@ -940,7 +1071,7 @@ static void test_a_top_k_search_cannot_split_its_way_past_the_budget(void) {
  * smashes the stack rather than passing quietly.
  */
 static void test_the_top_k_merge_buffer_is_refused_before_it_is_taken(void) {
-    BeamModel *m = build(3, 12);
+    BeamModel *m = build_small(true);
     ASSERT_MSG(m != NULL, "model built");
     const uint64_t before = beam_model_memory_budget();
 
@@ -953,7 +1084,7 @@ static void test_the_top_k_merge_buffer_is_refused_before_it_is_taken(void) {
 
     beam_model_set_memory_budget(before);
     uint32_t n2 = 0;
-    const BeamError small = beam_model_top_k(m, 4u, 0u, buf, lp, &n2);
+    const BeamError small = beam_model_top_k(m, 4u, 5u, buf, lp, &n2);
     beam_model_destroy(m);
 
     ASSERT_MSG(huge == BEAM_ERR_BUDGET,
@@ -1029,9 +1160,15 @@ static void test_results_do_not_depend_on_the_thread_count(void) {
      * maximum) or taken over a fixed number of chunks, so the answers must not
      * move when the thread count does. This is the test that would catch a
      * `reduction(+:)` slipping in.
+     *
+     * Order 3 so that a layer has thousands of states to split into chunks;
+     * length 6, because more layers only repeat the same reductions.
      */
+    static const char *SEQ[] = { "CASSLF", "CASSQF", "CASLAF", "CASSPF",
+                                 "CTTGWF", "CASRDF" };
+    static const double SW[] = { 9, 7, 5, 4, 3, 2 };
     const int before = beam_model_threads();
-    BeamModel *m = build(3, 27);
+    BeamModel *m = build_tiny(3, 6, SEQ, SW, 6);
     ASSERT_MSG(m != NULL, "build");
 
     double h1 = 0.0, h4 = 0.0, d1 = 0.0, d4 = 0.0, s1 = 0.0, s4 = 0.0;
@@ -1075,7 +1212,7 @@ static void test_spectrum_pair_equals_two_spectra(void) {
      * transport with one shift and one pair of splitting fractions, so every
      * arithmetic operation is the one the single-measure form performed.
      */
-    BeamModel *m = build(3, 27);
+    BeamModel *m = build_small(true);
     ASSERT_MSG(m != NULL, "build");
     const uint32_t bins = 256u;
     double *want_c = (double *)calloc(bins, sizeof(double));
@@ -1103,7 +1240,7 @@ static void test_spectrum_pair_equals_two_spectra(void) {
     memset(want_g, 0, bins * sizeof(double));
     memset(got_c, 0, bins * sizeof(double));
     memset(got_g, 0, bins * sizeof(double));
-    const uint32_t L = 10u;
+    const uint32_t L = 5u;
     ASSERT_MSG(beam_model_spectrum(m, true, L, bins, ds, want_c, NULL)
                == BEAM_OK, "counting spectrum at one length");
     ASSERT_MSG(beam_model_spectrum(m, false, L, bins, ds, want_g, NULL)
@@ -1121,12 +1258,13 @@ static void test_spectrum_pair_equals_two_spectra(void) {
 
 static void test_spectra_by_length_equal_one_at_a_time(void) {
     /*
-     * Same standard as the pair: the fused sweep replaces 27 separate ones and
-     * has to return what they returned, row for row. The rows must also sum to
-     * the pooled spectrum, which is what makes them a decomposition of it
-     * rather than 27 unrelated histograms.
+     * Same standard as the pair: the fused sweep replaces one separate sweep
+     * per length and has to return what they returned, row for row. The rows
+     * must also sum to the pooled spectrum, which is what makes them a
+     * decomposition of it rather than unrelated histograms. Order 2: under
+     * the prior every state is live, and the question does not need more.
      */
-    BeamModel *m = build(3, 27);
+    BeamModel *m = build_small(true);
     ASSERT_MSG(m != NULL, "build");
     const uint32_t bins = 256u;
     const uint32_t W = beam_model_config(m)->max_length;
@@ -1143,15 +1281,16 @@ static void test_spectra_by_length_equal_one_at_a_time(void) {
     ASSERT_MSG(beam_model_spectra_by_length(m, false, 0, bins, ds, rows, NULL)
                == BEAM_OK, "spectra by length");
 
+    /* Row 0 is the empty string, which no model generates. */
+    for (uint32_t b = 0; b < bins; ++b)
+        ASSERT_MSG(rows[b] == 0.0, "the length-0 row must be zero");
     for (uint32_t L = 1; L <= W; ++L) {
         memset(one, 0, bins * sizeof(double));
-        const bool live = isfinite(beam_model_log_length_prior(m, L));
-        if (!live) {
-            for (uint32_t b = 0; b < bins; ++b)
-                ASSERT_MSG(rows[(size_t)L * bins + b] == 0.0,
-                           "a length the model cannot generate must be zero");
-            continue;
-        }
+        /* The length prior gives every length mass, including the many the
+         * twelve training sequences never produced, so every row is a real
+         * sweep and none is skipped as dead. */
+        ASSERT_MSG(isfinite(beam_model_log_length_prior(m, L)),
+                   "every length up to max_length must be live");
         ASSERT_MSG(beam_model_spectrum(m, false, L, bins, ds, one, NULL)
                    == BEAM_OK, "single-length spectrum");
         for (uint32_t b = 0; b < bins; ++b) {
@@ -1182,7 +1321,7 @@ static void test_spectra_by_length_equal_one_at_a_time(void) {
     ASSERT_MSG(serial != NULL, "alloc");
 
     /* Far below the 4 GB default, so concurrency drops, but comfortably above
-     * one sweep of this order-3 model: the answer must not move. */
+     * one sweep of this order-2 model: the answer must not move. */
     beam_model_set_memory_budget(256ull << 20);
     ASSERT_MSG(beam_model_spectra_by_length(m, false, 0, bins, ds, serial,
                                                 NULL) == BEAM_OK,
@@ -1219,7 +1358,7 @@ static void test_length_derivatives_mix_to_the_pooled_moments(void) {
      * reproduce `surprisal_moments` exactly. At q = 1 the shares are the
      * length prior, which pins the normalisation independently.
      */
-    BeamModel *m = build(3, 27);
+    BeamModel *m = build_small(true);
     ASSERT_MSG(m != NULL, "build");
     const uint32_t W = beam_model_config(m)->max_length;
     const uint32_t order = 3u, NM = order + 1u;
@@ -1247,8 +1386,7 @@ static void test_length_derivatives_mix_to_the_pooled_moments(void) {
         }
         if (t == 0) {
             for (uint32_t L = 1; L <= W; ++L) {
-                const double lp = beam_model_log_length_prior(m, L);
-                const double want = isfinite(lp) ? exp(lp) : 0.0;
+                const double want = exp(beam_model_log_length_prior(m, L));
                 ASSERT_MSG(fabs(rows[(size_t)L * NM] - want) < 1e-12,
                            "at q = 1 the shares are the length prior");
             }
@@ -1267,28 +1405,38 @@ static void test_posterior_shrinks_towards_the_prior(void) {
      * prior's. In between, the identity that pins it is that adding kappa
      * pseudo-counts of a model to ITSELF is the same as scaling its counts,
      * which leaves every normalised row — and therefore every score — where it
-     * was, up to the backoff's own kappa.
+     * was, up to the hierarchical prior's own strengths, which do not scale.
      */
-    BeamModel *prior = build_open(3, 27);
+    BeamModel *prior = build(3, 12);
     ASSERT_MSG(prior != NULL, "build");
 
-    /* A thin individual: one sequence, so its own counts say almost nothing. */
+    /* A thin individual: one sequence, so its own counts say almost nothing.
+     * The probe is one the prior spelled and the individual did not. */
     BeamModelConfig cfg;
     beam_model_config_default(&cfg);
-    cfg.order = 3; cfg.max_length = 27;
-    /* Open, like the prior: under the closed-world default a model
-     * holding one sequence scores the probe -inf, and "moved closer to
-     * the prior" is not a statement about infinity. */
-    cfg.strict = false;
+    cfg.order = 3; cfg.max_length = 12;
     BeamModel *thin = beam_model_new(&cfg);
     const char *one[] = { "CASSLGEQYF" };
     ASSERT_MSG(thin && beam_model_observe(thin, one, NULL, 1) == BEAM_OK,
                "observe one");
     ASSERT_MSG(beam_model_finalize(thin) == BEAM_OK, "finalize thin");
 
-    const char *probe = "CASSLGGEQFF";
+    /*
+     * The probe has to run through rows the prior OBSERVED. The update adds
+     * the prior's normalised counts, not its smoothed rows, so on such a row
+     * a heavy kappa makes the individual's row the prior's observed
+     * frequencies. On a row the prior never observed there is nothing to add,
+     * and the individual ends up SHARPER than the prior rather than closer to
+     * it: its observed rows now carry kappa pseudo-counts, which leaves less
+     * of the hierarchical prior's mass for an unseen continuation. Measured
+     * on "CASSLGGEQFF": the prior scores it -18.7 and kappa = 1e5 takes the
+     * individual from -26.0 to -50.3.
+     */
+    const char *probe = "CASSQGEQYF";
     const double before = beam_model_log_pseq(thin, probe);
     const double want   = beam_model_log_pseq(prior, probe);
+    ASSERT_MSG(isfinite(before) && isfinite(want),
+               "the individual never spelled the probe and still scores it");
 
     /* kappa = 0 leaves the counts alone. */
     ASSERT_MSG(beam_model_posterior(thin, prior, 0.0) == BEAM_OK, "kappa 0");
@@ -1302,16 +1450,23 @@ static void test_posterior_shrinks_towards_the_prior(void) {
                "posterior must clear finalized, as add and subtract do");
     ASSERT_MSG(beam_model_finalize(thin) == BEAM_OK, "refinalize");
     const double after = beam_model_log_pseq(thin, probe);
-    ASSERT_MSG(fabs(after - want) < fabs(before - want),
-               "a heavy prior must move the score towards the prior's");
+    /* Most of the way, not merely closer: the individual's own one sequence
+     * is outweighed a thousand to one on every row of the probe's path. */
+    ASSERT_MSG(fabs(after - want) < 0.1 * fabs(before - want),
+               "a heavy prior must move the score most of the way to the "
+               "prior's");
 
     /* The sequence counters are observations, not pseudo-counts. */
     ASSERT_MSG(beam_model_n_observed(thin) == 1,
                "a pseudo-count is not an observed sequence");
 
-    /* Shape and argument checks. */
-    BeamModel *wide = build_open(4, 27);
-    ASSERT_MSG(wide != NULL, "build order 4");
+    /* Shape and argument checks. The shape is refused before any count is
+     * read, so the mismatched model needs no corpus and no finalize. */
+    BeamModelConfig wcfg;
+    beam_model_config_default(&wcfg);
+    wcfg.order = 4; wcfg.max_length = 12;
+    BeamModel *wide = beam_model_new(&wcfg);
+    ASSERT_MSG(wide != NULL, "new order 4");
     ASSERT_MSG(beam_model_posterior(thin, wide, 1.0) == BEAM_ERR_VARIANT_MISMATCH,
                "a shape mismatch must be refused");
     ASSERT_MSG(beam_model_posterior(thin, prior, -1.0)
@@ -1335,8 +1490,8 @@ static void test_posterior_of_a_model_with_itself_keeps_its_scores(void) {
      * stable, the model still finalizes, and the scores move by far less than
      * folding in a different model's belief does.
      */
-    BeamModel *a = build(3, 27);
-    BeamModel *b = build(3, 27);
+    BeamModel *a = build(3, 12);
+    BeamModel *b = build(3, 12);
     ASSERT_MSG(a && b, "build");
     const char *probe = "CASSLGEQYF";
     const double before = beam_model_log_pseq(a, probe);
@@ -1352,6 +1507,51 @@ static void test_posterior_of_a_model_with_itself_keeps_its_scores(void) {
     PASS();
 }
 
+/*
+ * One storage layout's run of the experiment below. Returns NULL when every
+ * check held and the failed check's message otherwise, so the caller can
+ * restore the thread count before reporting.
+ */
+static const char *finalize_rollback_one(bool sparse, int *n_failed) {
+    BeamModel *m = build_small(sparse);
+    if (!m) return "build";
+    /* A spelled sequence and one the corpus never saw: the second is scored
+     * entirely through the prior's lower levels, which finalize rebuilds
+     * alongside the top one. */
+    const char *probe[2] = { SMALL_TRAIN[0], "WWKWW" };
+    double want[2];
+    for (int p = 0; p < 2; ++p) want[p] = beam_model_log_pseq(m, probe[p]);
+    const char *why = NULL;
+    if (!isfinite(want[0]) || !isfinite(want[1]))
+        why = "the probes must score before the experiment";
+
+    for (long n = 0; n < 24 && !why; ++n) {
+        g_alloc_fail_at = n;
+        const BeamError e = beam_model_finalize(m);
+        g_alloc_fail_at = -1;
+        if (e != BEAM_OK) {
+            (*n_failed)++;
+            if (!beam_model_is_finalized(m))
+                why = "a failed finalize must leave the model finalized";
+            else if (!beam_model_error_is_reported())
+                why = "a failed finalize must say what ran out";
+        }
+        for (int p = 0; p < 2 && !why; ++p)
+            if (beam_model_log_pseq(m, probe[p]) != want[p])
+                why = e != BEAM_OK
+                    ? "a failed finalize must leave the scores untouched"
+                    : "a successful re-finalize must reproduce the scores";
+    }
+
+    /* And the model is still usable afterwards, not merely unbroken. */
+    if (!why && beam_model_finalize(m) != BEAM_OK)
+        why = "finalize after the storm";
+    for (int p = 0; p < 2 && !why; ++p)
+        if (beam_model_log_pseq(m, probe[p]) != want[p]) why = "scores survive";
+    beam_model_destroy(m);
+    return why;
+}
+
 static void test_finalize_rolls_back_on_allocation_failure(void) {
     /*
      * Fail the Nth allocation inside `finalize` for a range of N and demand
@@ -1365,44 +1565,22 @@ static void test_finalize_rolls_back_on_allocation_failure(void) {
      * it refuses cleanly. The final check that at least one N actually failed
      * is what stops this from passing vacuously if the wrapper is ever
      * disconnected.
+     *
+     * Both layouts, because they finalize through different code: the dense
+     * one fills every row, the sparse one builds its observed rows and the
+     * prior's lower levels as separate tables.
      */
     const int before_threads = beam_model_threads();
     beam_model_set_threads(1);          /* one thread, so N is meaningful */
-
-    BeamModel *m = build_strict_mode(false);
-    ASSERT_MSG(m != NULL, "build");
-    const char *probe = STRICT_TRAIN[0];
-    const double want = beam_model_log_pseq(m, probe);
-    ASSERT_MSG(isfinite(want), "the probe must score before the experiment");
-
-    int n_failed = 0;
-    for (long n = 0; n < 24; ++n) {
-        g_alloc_fail_at = n;
-        const BeamError e = beam_model_finalize(m);
-        g_alloc_fail_at = -1;
-        if (e != BEAM_OK) {
-            n_failed++;
-            ASSERT_MSG(beam_model_is_finalized(m),
-                       "a failed finalize must leave the model finalized");
-            ASSERT_MSG(beam_model_log_pseq(m, probe) == want,
-                       "a failed finalize must leave the scores untouched");
-            ASSERT_MSG(beam_model_error_is_reported(),
-                       "a failed finalize must say what ran out");
-        } else {
-            ASSERT_MSG(beam_model_log_pseq(m, probe) == want,
-                       "a successful re-finalize must reproduce the scores");
-        }
-    }
-    ASSERT_MSG(n_failed > 0,
-               "the injected failure must actually reach finalize, or this "
-               "test proves nothing");
-
-    /* And the model is still usable afterwards, not merely unbroken. */
-    ASSERT_MSG(beam_model_finalize(m) == BEAM_OK, "finalize after the storm");
-    ASSERT_MSG(beam_model_log_pseq(m, probe) == want, "scores survive");
-
-    beam_model_destroy(m);
+    int failed_dense = 0, failed_sparse = 0;
+    const char *why = finalize_rollback_one(false, &failed_dense);
+    if (!why) why = finalize_rollback_one(true, &failed_sparse);
     beam_model_set_threads(before_threads);
+
+    ASSERT_MSG(why == NULL, why);
+    ASSERT_MSG(failed_dense > 0 && failed_sparse > 0,
+               "the injected failure must actually reach finalize in both "
+               "layouts, or this test proves nothing");
     PASS();
 }
 
@@ -1418,7 +1596,7 @@ static void test_layer_weights_reproduce_the_scorer(void) {
      *
      * Walk the trellis along one known sequence and add the edge weights up.
      */
-    BeamModel *m = build(3, 27);
+    BeamModel *m = build(3, 12);
     ASSERT_MSG(m != NULL, "build");
 
     const char *seq = "CASSLGEQYF";
@@ -1459,7 +1637,10 @@ static void test_layer_weights_reproduce_the_scorer(void) {
 /* ── Scoring ─────────────────────────────────────────────────── */
 
 static void test_scores_are_finite_and_ordered(void) {
-    BeamModel *m = build_open(4, 27);
+    /* An ending the corpus never produced is improbable, not impossible:
+     * the C-anchored row that scores it is resolved through its parents,
+     * which carry the prior's mass. */
+    BeamModel *m = build(3, 12);
     ASSERT_MSG(m != NULL, "build");
     const double seen = beam_model_log_pseq(m, "CASSLGEQYF");
     const double rare = beam_model_log_pseq(m, "CASSLGEQYW");
@@ -1473,29 +1654,52 @@ static void test_c_anchor_penalises_a_bad_terminus(void) {
     /* This is the property a single left-to-right chain cannot have: by the
      * final position it has no strong opinion, while the C-anchored expert
      * has a very strong one. */
-    BeamModel *m = build(4, 27);
+    BeamModel *m = build(3, 12);
     ASSERT_MSG(m != NULL, "build");
     const double good = beam_model_log_pseq(m, "CASSLGEQYF");
     const double bad = beam_model_log_pseq(m, "CASSLGEQYW");
+    ASSERT_MSG(isfinite(bad), "an unseen terminus is improbable, not impossible");
     ASSERT_MSG(good - bad > log(100.0),
                "swapping the terminal residue should cost orders of magnitude");
+
+    /* And the C-anchored term at the last position carries that cost by
+     * itself, which is the claim above. The total alone would also pass if
+     * only the depth-indexed forward chain objected. */
+    double fg[BEAM_MAX_LENGTH_CEILING], bg[BEAM_MAX_LENGTH_CEILING];
+    double fb[BEAM_MAX_LENGTH_CEILING], bb[BEAM_MAX_LENGTH_CEILING];
+    uint32_t len = 0;
+    ASSERT_MSG(beam_model_explain(m, "CASSLGEQYF", fg, bg, &len) == BEAM_OK
+               && beam_model_explain(m, "CASSLGEQYW", fb, bb, &len) == BEAM_OK,
+               "explain");
+    ASSERT_MSG(bg[len - 1u] - bb[len - 1u] > log(100.0),
+               "the C anchor alone must penalise the bad terminus");
     beam_model_destroy(m);
     PASS();
 }
 
 static void test_rejects_unusable_sequences(void) {
-    BeamModel *m = build(4, 27);
+    /* The three things that are still impossible: a character outside the
+     * alphabet, the empty string, and a length past max_length. A length the
+     * corpus never produced is not among them -- the length prior gives it
+     * mass -- and neither is junk spelled from the right alphabet. */
+    BeamModel *m = build(3, 12);
     ASSERT_MSG(m != NULL, "build");
     ASSERT_MSG(beam_model_log_pseq(m, "CASSBGEQYF") == -INFINITY, "not an AA");
     ASSERT_MSG(beam_model_log_pseq(m, "") == -INFINITY, "empty");
-    ASSERT_MSG(beam_model_log_pseq(m, "CASSLG") == -INFINITY,
-               "a length never observed has prior zero");
+    ASSERT_MSG(beam_model_log_pseq(m, "CASSLGEQYFCAS") == -INFINITY,
+               "13 residues is past max_length");
+    const double short6 = beam_model_log_pseq(m, "CASSLG");
+    ASSERT_MSG(isfinite(short6), "a length never observed is still possible");
+    ASSERT_MSG(short6 < beam_model_log_pseq(m, "CASSLGEQYF"),
+               "and less probable than a sequence the corpus spelled");
+    ASSERT_MSG(isfinite(beam_model_log_pseq(m, "WWWWWWWWWWWW")),
+               "and junk at max_length is improbable, not impossible");
     beam_model_destroy(m);
     PASS();
 }
 
 static void test_batch_matches_scalar(void) {
-    BeamModel *m = build(4, 27);
+    BeamModel *m = build(3, 12);
     ASSERT_MSG(m != NULL, "build");
     double out[N_TRAIN];
     ASSERT_MSG(beam_model_log_pseq_batch(m, TRAIN, N_TRAIN, out) == BEAM_OK,
@@ -1509,7 +1713,7 @@ static void test_batch_matches_scalar(void) {
 }
 
 static void test_explain_reconstructs_the_score(void) {
-    BeamModel *m = build(4, 27);
+    BeamModel *m = build(3, 12);
     ASSERT_MSG(m != NULL, "build");
     const char *seq = "CASSLGEQYF";
     double fwd[BEAM_MAX_LENGTH_CEILING], bwd[BEAM_MAX_LENGTH_CEILING];
@@ -1538,44 +1742,70 @@ static void test_explain_reconstructs_the_score(void) {
 /* ── The partition function, by exhaustive enumeration ───────── */
 
 static void test_partition_normalises(void) {
-    /* Sum P(s | L) over EVERY sequence of length 3, all 8,000 of them. Any
-     * error in a context packing, in the backward lag, or in the sink weights
-     * shows up here and nowhere cheaper. */
-    BeamModelConfig cfg;
-    beam_model_config_default(&cfg);
-    cfg.order = 3;
-    cfg.max_length = 5;
-    BeamModel *m = beam_model_new(&cfg);
-    ASSERT_MSG(m != NULL, "new");
-    const char *tiny[] = { "CAS", "CAF", "GAS", "CQS", "CAS", "SAS" };
-    const double tw[] = { 5, 3, 2, 4, 1, 2 };
-    ASSERT_MSG(beam_model_observe(m, tiny, tw, 6) == BEAM_OK, "observe");
-    ASSERT_MSG(beam_model_finalize(m) == BEAM_OK, "finalize");
-
-    static const char AAs[] = "ACDEFGHIKLMNPQRSTVWY";
-    const double logpi = beam_model_log_length_prior(m, 3);
-    double total = 0.0;
-    char buf[4] = { 0, 0, 0, 0 };
-    for (int a = 0; a < 20; a++)
-      for (int b = 0; b < 20; b++)
-        for (int c = 0; c < 20; c++) {
-            buf[0] = AAs[a]; buf[1] = AAs[b]; buf[2] = AAs[c];
-            const double lp = beam_model_log_pseq(m, buf);
-            if (isfinite(lp)) total += exp(lp - logpi);
+    /* Sum P(s) over EVERY string the model admits: all 8,420 amino-acid
+     * strings of length 1 to 3. Any error in a context packing, in the
+     * backward lag, or in the sink weights shows up here and nowhere cheaper.
+     *
+     * Each length is checked on its own as well as in total, because the
+     * total is also 1 when a length's conditional is wrong in a way the length
+     * prior happens to cancel. Order 2 fills a whole context with residues at
+     * length 3; order 3 never does, so its contexts always carry a sentinel.
+     * Both are asked. */
+    const char *tiny[] = { "CAS", "CAF", "GAS", "CQS", "CAS", "SAS", "CA" };
+    const double tw[] = { 5, 3, 2, 4, 1, 2, 3 };
+    for (uint8_t order = 2; order <= 3; ++order) {
+        BeamModel *m = build_tiny(order, 3, tiny, tw, 7);
+        ASSERT_MSG(m != NULL, "build");
+        uint32_t n = 0;
+        uint8_t *lens = NULL;
+        double *lp = score_every_string(m, AMINO, 3, &n, &lens);
+        ASSERT_MSG(lp && n == 8420u, "enumerate");
+        double per[4] = {0}, total = 0.0;
+        uint32_t infinite = 0;
+        for (uint32_t i = 0; i < n; ++i) {
+            if (!isfinite(lp[i])) { infinite++; continue; }
+            total += exp(lp[i]);
+            per[lens[i]] += exp(lp[i] - beam_model_log_length_prior(m, lens[i]));
         }
-    ASSERT_MSG(fabs(total - 1.0) < 1e-9, "sum over all 8000 length-3 sequences");
-    beam_model_destroy(m);
+        free(lp); free(lens);
+        beam_model_destroy(m);
+        ASSERT_MSG(infinite == 0u, "every string over the alphabet has mass");
+        for (uint32_t L = 1; L <= 3u; ++L)
+            ASSERT_MSG(fabs(per[L] - 1.0) < 1e-9,
+                       "P(s | L) must sum to 1 over every string of length L");
+        ASSERT_MSG(fabs(total - 1.0) < 1e-9,
+                   "P(s) must sum to 1 over the whole support");
+    }
     PASS();
 }
 
 static void test_length_prior_normalises(void) {
-    BeamModel *m = build(4, 27);
+    /* Checked against the documented formula, computed here from the corpus
+     * itself rather than read back from the model:
+     *
+     *     P(L) = (n_L + alpha_length / max_length) / (N + alpha_length)
+     *
+     * with n_L the weight observed at length L and N the total. The order is
+     * irrelevant to the length prior, so the cheapest one is used. */
+    BeamModel *m = build(2, 27);
     ASSERT_MSG(m != NULL, "build");
-    double total = 0.0;
-    for (uint32_t L = 0; L <= 27; L++) {
-        const double lp = beam_model_log_length_prior(m, L);
-        if (isfinite(lp)) total += exp(lp);
+    const double a = beam_model_config(m)->alpha_length;
+    double nl[28] = {0}, big_n = 0.0;
+    for (uint32_t i = 0; i < N_TRAIN; ++i) {
+        nl[strlen(TRAIN[i])] += WEIGHT[i];
+        big_n += WEIGHT[i];
     }
+    ASSERT_MSG(beam_model_log_length_prior(m, 0) == -INFINITY,
+               "length 0 has no mass");
+    double total = 0.0, worst = 0.0;
+    for (uint32_t L = 1; L <= 27; L++) {
+        const double p = exp(beam_model_log_length_prior(m, L));
+        const double want = (nl[L] + a / 27.0) / (big_n + a);
+        const double rel = fabs(p - want) / want;
+        if (!(rel <= worst)) worst = rel;
+        total += p;
+    }
+    ASSERT_MSG(worst < 1e-12, "every length's prior must follow the formula");
     ASSERT_MSG(fabs(total - 1.0) < 1e-12, "length prior must sum to 1");
     beam_model_destroy(m);
     PASS();
@@ -1585,22 +1815,23 @@ static void test_length_prior_normalises(void) {
 
 static void test_support_is_all_of_sequence_space(void) {
     /* Documented, not desired, and the reason path_count carries a warning:
-     * hierarchical backoff leaves every cell positive, so nothing is dead.
-     * This number describes the smoother, not the grammar, and must never be
-     * quoted as a diversity. */
-    BeamModelConfig cfg;
-    beam_model_config_default(&cfg);
-    cfg.order = 3;
-    cfg.max_length = 5;
-    cfg.strict = false;   /* the support IS 20^L only with backoff on */
-    BeamModel *m = beam_model_new(&cfg);
+     * the hierarchical prior leaves every cell positive, so nothing is dead
+     * and the support at length L is exactly 20^L whatever was observed. This
+     * number describes the prior, not the grammar, and must never be quoted
+     * as a diversity. */
     const char *tiny[] = { "CAS", "CAF", "GAS", "CQS" };
     const double tw[] = { 5, 3, 2, 4 };
-    beam_model_observe(m, tiny, tw, 4);
-    ASSERT_MSG(beam_model_finalize(m) == BEAM_OK, "finalize");
-    const double want = 20.0 * 20.0 * 20.0;
-    ASSERT_MSG(fabs(beam_model_path_count(m, 3) - want) < 1e-6,
-               "the support at length 3 is exactly 20^3");
+    BeamModel *m = build_tiny(3, 5, tiny, tw, 4);
+    ASSERT_MSG(m != NULL, "build");
+    double want = 1.0, total = 0.0;
+    for (uint32_t L = 1; L <= 5u; ++L) {
+        want *= 20.0;
+        total += want;
+        ASSERT_MSG(fabs(beam_model_path_count(m, L) - want) <= 1e-12 * want,
+                   "the support at length L is exactly 20^L");
+    }
+    ASSERT_MSG(fabs(beam_model_path_count_total(m) - total) <= 1e-12 * total,
+               "and the total support is their sum");
     beam_model_destroy(m);
     PASS();
 }
@@ -1608,35 +1839,14 @@ static void test_support_is_all_of_sequence_space(void) {
 
 /* ── The live structure: its invariants and its cache ────────── */
 
-/**
- * Build a corpus-shaped model at a given order and smoothing regime.
- *
- * Strict here means what it means everywhere: no add-one, no probability
- * floor, all five backoff strengths zero. That is the regime where cells go
- * to -inf, and therefore the ONLY regime in which the frontier's edge masks
- * can be anything other than all ones -- which is why every test below runs
- * both regimes rather than the default one.
+/*
+ * Under the hierarchical prior no cell is -inf, so every state a layer can
+ * reach is live and every edge bit is set: the frontier is a function of the
+ * alphabet, the order and the length alone. What these tests guard is that
+ * the frontier still says so correctly at every order, and that the cache
+ * holding it is managed correctly, because nothing downstream can tell a
+ * stale frontier from a fresh one when both are complete.
  */
-static BeamModel *build_regime(uint8_t order, uint8_t max_length,
-                                  bool strict, const char *const *seqs,
-                                  const double *w, uint32_t n) {
-    BeamModelConfig cfg;
-    beam_model_config_default(&cfg);
-    cfg.order = order;
-    cfg.max_length = max_length;
-    cfg.strict = strict;
-    if (strict) {
-        cfg.sparse = true;
-    }
-    BeamModel *m = beam_model_new(&cfg);
-    if (!m) return NULL;
-    if (beam_model_observe(m, seqs, w, n) != BEAM_OK
-        || beam_model_finalize(m) != BEAM_OK) {
-        beam_model_destroy(m);
-        return NULL;
-    }
-    return m;
-}
 
 /**
  * The frontier's own claims, checked against the tables it read them from.
@@ -1648,39 +1858,35 @@ static BeamModel *build_regime(uint8_t order, uint8_t max_length,
  * downstream can catch it -- `beam_live_selfcheck` recomputes every one of
  * them from `beam_state_weights` and compares.
  *
- * ORDERS 2, 3 AND 4, both regimes. Order 4 is the default and is where every
- * reference value in this project was captured, which is exactly why it
- * cannot be the only order tested: the last defect in this area was verified
- * exhaustively over all 194,481 states at order 4 and drove every partition
- * function to -inf at order 2.
+ * ORDERS 2, 3 AND 4. Order 4 is the default and is where every reference
+ * value in this project was captured, which is exactly why it cannot be the
+ * only order tested: the last defect in this area was verified exhaustively
+ * over all 194,481 states at order 4 and drove every partition function to
+ * -inf at order 2.
  */
 static void test_live_frontier_invariants_hold_at_every_order(void) {
+    /* Length 6 is past every order's context, so every length from 5 on has
+     * states holding four real residues; longer lengths repeat the same
+     * layers at an order-4 cost that is now the whole state space. */
     static const char *SEQ[] = {
-        "CASSLGEQYF", "CASSLGEQFF", "CASSQGEQYF", "CASSPGEQYF",
-        "CASSLAEQYF", "CASSLGETQYF", "CASSVGEQYF", "CASSLGNTIYF",
-        "CASSLREQYF", "CASSDGEQYF", "CASSLGEQY", "CTTGWF",
+        "CASSLF", "CASSQF", "CASLAF", "CASSPF", "CTTGWF", "CASRDF",
     };
     for (uint8_t order = 2; order <= 4; ++order) {
-        for (int strict = 0; strict <= 1; ++strict) {
-            BeamModel *m = build_regime(order, 12, strict != 0, SEQ, NULL, 12);
-            ASSERT_MSG(m != NULL, "build");
-            int seen = 0;
-            for (uint32_t L = 1; L <= 12; ++L) {
-                if (!beam_length_live(m, L)) continue;
-                seen++;
-                const int rc = beam_live_selfcheck(m, L);
-                if (rc != 0) {
-                    printf("FAIL: order %u %s length %u: selfcheck %d\n",
-                           (unsigned)order, strict ? "strict" : "open",
-                           (unsigned)L, rc);
-                    fail_count++;
-                    beam_model_destroy(m);
-                    return;
-                }
+        BeamModel *m = build_tiny(order, 6, SEQ, NULL, 6);
+        ASSERT_MSG(m != NULL, "build");
+        for (uint32_t L = 1; L <= 6; ++L) {
+            /* -1 for a length the prior left dead, which it may not do. */
+            const int rc = beam_length_live(m, L) ? beam_live_selfcheck(m, L)
+                                                  : -1;
+            if (rc != 0) {
+                printf("FAIL: order %u length %u: selfcheck %d\n",
+                       (unsigned)order, (unsigned)L, rc);
+                fail_count++;
+                beam_model_destroy(m);
+                return;
             }
-            ASSERT_MSG(seen > 0, "the model must generate some length");
-            beam_model_destroy(m);
         }
+        beam_model_destroy(m);
     }
     PASS();
 }
@@ -1695,26 +1901,23 @@ static void test_live_frontier_invariants_hold_at_every_order(void) {
 static void test_live_cache_returns_identical_answers(void) {
     static const char *SEQ[] = { "CASSF", "CASSY", "CTTGW", "CASSW" };
     for (uint8_t order = 2; order <= 4; ++order) {
-        for (int strict = 0; strict <= 1; ++strict) {
-            BeamModel *m = build_regime(order, 6, strict != 0, SEQ, NULL, 4);
-            ASSERT_MSG(m != NULL, "build");
-            for (uint32_t L = 1; L <= 6; ++L) {
-                if (!beam_length_live(m, L)) continue;
-                const double cold = beam_model_path_count(m, L);
-                const double warm = beam_model_path_count(m, L);
-                ASSERT_MSG(cold == warm, "cached path_count must be identical");
-                double n0 = 0.0, e0 = 0.0, n1 = 0.0, e1 = 0.0;
-                ASSERT_MSG(beam_model_topology(m, L, &n0, &e0, NULL) == BEAM_OK,
-                           "topology");
-                ASSERT_MSG(beam_model_topology(m, L, &n1, &e1, NULL) == BEAM_OK,
-                           "topology again");
-                ASSERT_MSG(n0 == n1 && e0 == e1,
-                           "cached topology must be identical");
-            }
-            ASSERT_MSG(beam_live_cache_entries(m) > 0,
-                       "something should have been cached");
-            beam_model_destroy(m);
+        BeamModel *m = build_tiny(order, 5, SEQ, NULL, 4);
+        ASSERT_MSG(m != NULL, "build");
+        for (uint32_t L = 1; L <= 5; ++L) {
+            const double cold = beam_model_path_count(m, L);
+            const double warm = beam_model_path_count(m, L);
+            ASSERT_MSG(cold == warm, "cached path_count must be identical");
+            double n0 = 0.0, e0 = 0.0, n1 = 0.0, e1 = 0.0;
+            ASSERT_MSG(beam_model_topology(m, L, &n0, &e0, NULL) == BEAM_OK,
+                       "topology");
+            ASSERT_MSG(beam_model_topology(m, L, &n1, &e1, NULL) == BEAM_OK,
+                       "topology again");
+            ASSERT_MSG(n0 == n1 && e0 == e1,
+                       "cached topology must be identical");
         }
+        ASSERT_MSG(beam_live_cache_entries(m) > 0,
+                   "something should have been cached");
+        beam_model_destroy(m);
     }
     PASS();
 }
@@ -1724,18 +1927,29 @@ static void test_live_cache_returns_identical_answers(void) {
  * a model built that way from the start.
  *
  * The second half is what makes this a real test. Checking that the cache
- * emptied only proves a pointer was freed; checking that `path_count` now
- * reports what an independently built model reports proves the DP did not
+ * emptied only proves a pointer was freed; checking that the analytics now
+ * report what an independently built model reports proves they did not
  * quietly keep answering questions about the model as it used to be.
+ *
+ * The comparison is the entropy rather than `path_count`: every model's
+ * support is now 20^L, so a count could not tell the old model from the new
+ * one. The entropy sweeps through the same cached frontier and depends on
+ * every weight, and the counts here are whole numbers, so a model grown by
+ * `observe` or restored by `subtract` has the same counts as a fresh build
+ * to the bit, and the same entropy.
+ *
+ * Order 3 and length 6, because the frontier is complete at every order
+ * under the prior and an order-4 one costs 21 times as much to build for the
+ * same question.
  */
 static void test_live_cache_is_dropped_by_every_mutation(void) {
-    static const char *A_SEQ[] = { "CASSLGEQYF", "CASSQGEQYF", "CASSLAEQYF" };
-    static const char *B_SEQ[] = { "CTTGWEQYF", "CASSLGEQYF" };
-    const uint32_t LEN = 10u;
+    static const char *A_SEQ[] = { "CASSLF", "CASSQF", "CASLAF" };
+    static const char *B_SEQ[] = { "CTTGWF", "CASSLF" };
+    const uint32_t LEN = 5u;
 
     /* observe */
     {
-        BeamModel *m = build_regime(4, 12, true, A_SEQ, NULL, 3);
+        BeamModel *m = build_tiny(3, 6, A_SEQ, NULL, 3);
         ASSERT_MSG(m != NULL, "build");
         (void)beam_model_path_count(m, LEN);
         ASSERT_MSG(beam_live_cache_entries(m) > 0, "cache should be warm");
@@ -1743,42 +1957,48 @@ static void test_live_cache_is_dropped_by_every_mutation(void) {
         ASSERT_MSG(beam_live_cache_entries(m) == 0,
                    "observe must drop the live cache");
         ASSERT_MSG(beam_model_finalize(m) == BEAM_OK, "refinalize");
-        const char *both[] = { "CASSLGEQYF", "CASSQGEQYF", "CASSLAEQYF",
-                               "CTTGWEQYF", "CASSLGEQYF" };
-        BeamModel *ref = build_regime(4, 12, true, both, NULL, 5);
+        const char *both[] = { "CASSLF", "CASSQF", "CASLAF", "CTTGWF",
+                               "CASSLF" };
+        BeamModel *ref = build_tiny(3, 6, both, NULL, 5);
         ASSERT_MSG(ref != NULL, "reference build");
-        ASSERT_MSG(beam_model_path_count(m, LEN)
-                   == beam_model_path_count(ref, LEN),
-                   "after observe the count must match a fresh build");
+        double hm = 0.0, hr = 0.0;
+        ASSERT_MSG(beam_model_entropy(m, &hm) == BEAM_OK
+                   && beam_model_entropy(ref, &hr) == BEAM_OK, "entropy");
+        ASSERT_MSG(hm == hr,
+                   "after observe the entropy must match a fresh build");
         beam_model_destroy(m);
         beam_model_destroy(ref);
     }
     /* add, then subtract back */
     {
-        BeamModel *m = build_regime(4, 12, true, A_SEQ, NULL, 3);
-        BeamModel *o = build_regime(4, 12, true, B_SEQ, NULL, 2);
+        BeamModel *m = build_tiny(3, 6, A_SEQ, NULL, 3);
+        BeamModel *o = build_tiny(3, 6, B_SEQ, NULL, 2);
         ASSERT_MSG(m && o, "build");
-        const double before = beam_model_path_count(m, LEN);
+        double before = 0.0, grown = 0.0, back = 0.0;
+        ASSERT_MSG(beam_model_entropy(m, &before) == BEAM_OK, "entropy");
         ASSERT_MSG(beam_live_cache_entries(m) > 0, "cache should be warm");
         ASSERT_MSG(beam_model_add(m, o) == BEAM_OK, "add");
         ASSERT_MSG(beam_live_cache_entries(m) == 0,
                    "add must drop the live cache");
         ASSERT_MSG(beam_model_finalize(m) == BEAM_OK, "refinalize");
-        const double grown = beam_model_path_count(m, LEN);
+        ASSERT_MSG(beam_model_entropy(m, &grown) == BEAM_OK, "entropy");
         ASSERT_MSG(beam_model_subtract(m, o) == BEAM_OK, "subtract");
         ASSERT_MSG(beam_live_cache_entries(m) == 0,
                    "subtract must drop the live cache");
         ASSERT_MSG(beam_model_finalize(m) == BEAM_OK, "refinalize");
-        ASSERT_MSG(beam_model_path_count(m, LEN) == before,
-                   "add then subtract must restore the count exactly");
-        ASSERT_MSG(grown >= before, "adding sequences cannot shrink the support");
+        ASSERT_MSG(beam_model_entropy(m, &back) == BEAM_OK, "entropy");
+        ASSERT_MSG(back == before,
+                   "add then subtract must restore the entropy exactly");
+        ASSERT_MSG(grown != before,
+                   "the grown model's entropy must be its own, not the "
+                   "cached model's");
         beam_model_destroy(m);
         beam_model_destroy(o);
     }
     /* posterior */
     {
-        BeamModel *m = build_regime(4, 12, true, A_SEQ, NULL, 3);
-        BeamModel *p = build_regime(4, 12, true, B_SEQ, NULL, 2);
+        BeamModel *m = build_tiny(3, 6, A_SEQ, NULL, 3);
+        BeamModel *p = build_tiny(3, 6, B_SEQ, NULL, 2);
         ASSERT_MSG(m && p, "build");
         (void)beam_model_path_count(m, LEN);
         ASSERT_MSG(beam_live_cache_entries(m) > 0, "cache should be warm");
@@ -1788,15 +2008,22 @@ static void test_live_cache_is_dropped_by_every_mutation(void) {
         beam_model_destroy(m);
         beam_model_destroy(p);
     }
-    /* re-finalize on its own, and compact */
+    /* re-finalize on its own, a new prior, and compact */
     {
-        BeamModel *m = build_regime(4, 12, true, A_SEQ, NULL, 3);
+        BeamModel *m = build_tiny(3, 6, A_SEQ, NULL, 3);
         ASSERT_MSG(m != NULL, "build");
         (void)beam_model_path_count(m, LEN);
         ASSERT_MSG(beam_live_cache_entries(m) > 0, "cache should be warm");
         ASSERT_MSG(beam_model_finalize(m) == BEAM_OK, "refinalize");
         ASSERT_MSG(beam_live_cache_entries(m) == 0,
                    "finalize must drop the live cache");
+        (void)beam_model_path_count(m, LEN);
+        ASSERT_MSG(beam_live_cache_entries(m) > 0, "cache should be warm");
+        const double alpha[4] = { 2.0, 4.0, 8.0, 16.0 };
+        ASSERT_MSG(beam_model_set_prior(m, alpha, 4u, 3.0) == BEAM_OK,
+                   "set_prior");
+        ASSERT_MSG(beam_live_cache_entries(m) == 0,
+                   "a new prior re-finalizes, so it must drop the live cache");
         (void)beam_model_path_count(m, LEN);
         ASSERT_MSG(beam_live_cache_entries(m) > 0, "cache should be warm");
         ASSERT_MSG(beam_model_compact(m) == BEAM_OK, "compact");
@@ -1814,43 +2041,40 @@ static void test_live_cache_is_dropped_by_every_mutation(void) {
  * test that the two paths have not drifted apart.
  */
 static void test_live_cache_respects_the_memory_bound(void) {
-    static const char *SEQ[] = { "CASSLGEQYF", "CASSQGEQYF", "CASSLAEQYF",
-                                 "CTTGWEQYF" };
+    static const char *SEQ[] = { "CASSLF", "CASSQF", "CASLAF", "CTTGWF" };
+    enum { W = 6 };
     const uint64_t saved = beam_model_memory_budget();
-    BeamModel *m = build_regime(4, 12, true, SEQ, NULL, 4);
+    BeamModel *m = build_tiny(3, W, SEQ, NULL, 4);
     ASSERT_MSG(m != NULL, "build");
 
-    double cached[13], nodes[13], edges[13];
-    for (uint32_t L = 1; L <= 12; ++L) {
-        cached[L] = beam_length_live(m, L)
-                  ? beam_model_path_count(m, L) : 0.0;
+    double cached[W + 1], nodes[W + 1], edges[W + 1];
+    for (uint32_t L = 1; L <= W; ++L) {
+        cached[L] = beam_model_path_count(m, L);
         nodes[L] = edges[L] = 0.0;
-        if (beam_length_live(m, L))
-            (void)beam_model_topology(m, L, &nodes[L], &edges[L], NULL);
+        (void)beam_model_topology(m, L, &nodes[L], &edges[L], NULL);
     }
-    ASSERT_MSG(beam_live_cache_entries(m) > 0, "cache should be warm");
+    ASSERT_MSG(beam_live_cache_entries(m) == W,
+               "at the default budget every length should be cached");
     ASSERT_MSG(beam_live_cache_bytes(m) > 0, "a warm cache holds bytes");
 
     /*
-     * Two properties, and they can no longer be starved with one number.
+     * Two properties: the uncached path gives the cached answer, and a cap
+     * too small for an entry declines it without changing any answer.
      *
-     * The cache cap is a quarter of the budget, and the budget now also
-     * REFUSES a sweep too large to fit. On this model an entry averages
-     * 0.26 MB, so the cache declines only below about a 1.05 MB budget, while
-     * one path-counting sweep needs 5.45 MB. There is no budget at which the
-     * cache declines and that sweep still runs -- and there should not be:
-     * at 1 MB, refusing a 5.45 MB sweep is the whole point of the setting.
-     *
-     * So the fallback and the decline are exercised separately. Dropping the
-     * cache forces the build path, which IS the code that ran before the cache
-     * existed; and a budget that starves the cap is checked against topology,
-     * which needs 0.78 MB and therefore still fits.
+     * The cache cap is a quarter of the budget, and the budget also REFUSES a
+     * sweep too large to fit. Under the prior every state is live, so an
+     * entry here grows with the length, from 2.5 kB at length 1 to 0.24 MB at
+     * length 6, while a path-counting sweep needs 0.26 MB and a topology
+     * sweep 37 kB at every length (measured on this model). At a 1 MB budget
+     * the 250 kB cap holds the four shortest lengths and has to decline the
+     * other two, and both sweeps still fit.
      */
     int ok_count = 1, ok_topo = 1, ok_ret = 1;
 
-    /* The fallback path, at a budget where everything runs. */
-    for (uint32_t L = 1; L <= 12; ++L) {
-        if (!beam_length_live(m, L)) continue;
+    /* The fallback path, at a budget where everything runs. Dropping the
+     * cache forces the build path, which IS the code that ran before the
+     * cache existed. */
+    for (uint32_t L = 1; L <= W; ++L) {
         beam_live_cache_drop(m);
         if (beam_model_path_count(m, L) != cached[L]) ok_count = 0;
         beam_live_cache_drop(m);
@@ -1859,25 +2083,26 @@ static void test_live_cache_respects_the_memory_bound(void) {
         else if (n != nodes[L] || e != edges[L]) ok_topo = 0;
     }
 
-    /* The decline, at a budget below the cap but above a topology sweep. */
-    beam_model_set_memory_budget(1000000u);   /* cap 250 kB < a 256 kB entry */
+    /* The decline, at a budget whose cap is below the larger entries but
+     * above both sweeps. */
+    beam_model_set_memory_budget(1000000u);
     beam_live_cache_drop(m);
-    int ok_uncached = 1, ok_empty = 1;
-    for (uint32_t L = 1; L <= 12; ++L) {
-        if (!beam_length_live(m, L)) continue;
+    int ok_uncached = 1, ok_capped = 1;
+    for (uint32_t L = 1; L <= W; ++L) {
+        if (beam_model_path_count(m, L) != cached[L]) ok_uncached = 0;
         double n = 0.0, e = 0.0;
         if (beam_model_topology(m, L, &n, &e, NULL) != BEAM_OK
             || n != nodes[L] || e != edges[L]) ok_uncached = 0;
     }
     /*
      * The invariant is that the cache never exceeds its cap, not that it is
-     * necessarily empty: entries vary in size, and a budget low enough to
-     * exclude every one of them is also too low to run the topology sweep this
-     * loop needs. Asserting "empty" was asserting an accident of these two
-     * entries averaging 256 kB against a 250 kB cap.
+     * empty: entries vary in size, and the short lengths fit. What must also
+     * hold is that something WAS declined, or this budget never exercised the
+     * decline and the loop above only re-read the cache.
      */
     if (beam_live_cache_bytes(m) > beam_model_memory_budget() / 4u)
-        ok_empty = 0;
+        ok_capped = 0;
+    const uint32_t kept = beam_live_cache_entries(m);
 
     /*
      * Restored BEFORE the assertions. The budget is process-global, and an
@@ -1891,8 +2116,10 @@ static void test_live_cache_respects_the_memory_bound(void) {
     ASSERT_MSG(ok_ret, "topology");
     ASSERT_MSG(ok_topo, "the uncached path must give the identical topology");
     ASSERT_MSG(ok_uncached,
-               "declining to cache must not change the topology");
-    ASSERT_MSG(ok_empty, "the cache must stay within its cap");
+               "declining to cache must not change the count or the topology");
+    ASSERT_MSG(ok_capped, "the cache must stay within its cap");
+    ASSERT_MSG(kept < W,
+               "the starved cap must have declined at least one length");
     ASSERT_MSG(beam_model_memory_budget() == saved, "budget restored");
     beam_model_destroy(m);
     PASS();
@@ -1901,7 +2128,7 @@ static void test_live_cache_respects_the_memory_bound(void) {
 /* ── Hill numbers ────────────────────────────────────────────── */
 
 static void test_hill_numbers(void) {
-    BeamModel *m = build(3, 27);
+    BeamModel *m = build_small(true);
     ASSERT_MSG(m != NULL, "build");
     double h = 0.0, d1 = 0.0;
     ASSERT_MSG(beam_model_entropy(m, &h) == BEAM_OK, "entropy");
@@ -1923,7 +2150,7 @@ static void test_hill_numbers(void) {
 /* ── Spectrum ────────────────────────────────────────────────── */
 
 static void test_spectrum_totals_and_identity(void) {
-    BeamModel *m = build(3, 27);
+    BeamModel *m = build_small(true);
     ASSERT_MSG(m != NULL, "build");
     const uint32_t bins = 512;
     double *wc = (double *)calloc(bins, sizeof(double));
@@ -1975,7 +2202,7 @@ static void test_accumulator_max_ignores_an_earlier_threads_error(void) {
      * reports a per-item refusal inside a parallel region leaves one behind;
      * what matters is that a later, successful call is not affected by it.
      */
-    BeamModel *m = build(3, 27);
+    BeamModel *m = build_small(true);
     ASSERT_MSG(m != NULL, "build");
     const double clean = beam_model_accumulator_max(m);
     ASSERT_MSG(clean > 0.0 && beam_last_error() == BEAM_OK,
@@ -1996,7 +2223,7 @@ static void test_accumulator_max_ignores_an_earlier_threads_error(void) {
 }
 
 static void test_accumulator_max_is_not_the_surprisal(void) {
-    BeamModel *m = build(3, 27);
+    BeamModel *m = build_small(true);
     ASSERT_MSG(m != NULL, "build");
     const double hi = beam_model_accumulator_max(m);
     ASSERT_MSG(hi > 0.0, "accumulator must reach somewhere");
@@ -2024,29 +2251,38 @@ static void test_accumulator_max_is_not_the_surprisal(void) {
 /* ── Generation ──────────────────────────────────────────────── */
 
 static void test_sampling(void) {
-    BeamModel *m = build(4, 27);
+    BeamModel *m = build(3, 12);
     ASSERT_MSG(m != NULL, "build");
-    const uint32_t n = 200, stride = 28;
+    const uint32_t n = 200, stride = 13;   /* max_length + 1 */
     char *buf = (char *)calloc((size_t)n * stride + 1, 1);
     uint32_t *lens = (uint32_t *)calloc(n, sizeof(uint32_t));
     BeamRng rng;
     beam_rng_seed(&rng, 42);
     ASSERT_MSG(beam_model_sample(m, n, 10, &rng, buf, lens) == BEAM_OK, "sample");
+    uint32_t c_first = 0;
     for (uint32_t i = 0; i < n; i++) {
         const char *s = buf + (size_t)i * stride;
         ASSERT_MSG(strlen(s) == 10, "fixed-length draws must have that length");
         ASSERT_MSG(isfinite(beam_model_log_pseq(m, s)),
                    "every draw must be scoreable by the model that made it");
+        c_first += s[0] == 'C';
     }
     free(buf); free(lens);
+    /* Scoreable is no longer a filter: every string of the alphabet is. What
+     * says the draws come from THIS model is where they put their mass. Every
+     * training sequence starts with C and the model gives position 0 to C
+     * almost surely, where a sampler ignoring the tables would start one draw
+     * in twenty with it. */
+    ASSERT_MSG(c_first >= 190u, "the draws must follow the model's own first "
+                                "residue");
     beam_model_destroy(m);
     PASS();
 }
 
 static void test_sampling_is_reproducible(void) {
-    BeamModel *m = build(4, 27);
+    BeamModel *m = build(3, 12);
     ASSERT_MSG(m != NULL, "build");
-    const uint32_t n = 50, stride = 28;
+    const uint32_t n = 50, stride = 13;    /* max_length + 1 */
     char *a = (char *)calloc((size_t)n * stride + 1, 1);
     char *b = (char *)calloc((size_t)n * stride + 1, 1);
     BeamRng r1, r2;
@@ -2067,6 +2303,7 @@ static void test_subtract_is_the_additive_inverse(void) {
      * than a recount of the corpus. */
     BeamModelConfig cfg;
     beam_model_config_default(&cfg);
+    cfg.order = 3; cfg.max_length = 12;
     BeamModel *full = beam_model_new(&cfg);
     BeamModel *tail = beam_model_new(&cfg);
     BeamModel *head = beam_model_new(&cfg);
@@ -2179,7 +2416,19 @@ static void test_failures_carry_a_message(void) {
     ASSERT_MSG(strstr(beam_error_message(), "order") != NULL,
                "the config refusal must name the field it refused");
 
+    /* A zero strength would let an unobserved residue reach probability
+     * zero at that level, so it is refused, and by name. */
     beam_model_config_default(&cfg);
+    cfg.alpha[1] = 0.0;
+    beam_clear_error();
+    ASSERT_MSG(beam_model_new(&cfg) == NULL, "a zero prior strength");
+    ASSERT_MSG(strstr(beam_error_message(), "alpha[1]") != NULL,
+               "the prior refusal must name the level it refused");
+
+    /* Order 2: nothing below depends on the order, and every finalize now
+     * sweeps the whole state space for every length. */
+    beam_model_config_default(&cfg);
+    cfg.order = 2u;
     BeamModel *m = beam_model_new(&cfg);
     ASSERT_MSG(m != NULL, "new");
     beam_clear_error();
@@ -2196,10 +2445,15 @@ static void test_failures_carry_a_message(void) {
     ASSERT_MSG(strstr(beam_error_message(), "NULL") != NULL,
                "a null argument must be named");
 
+    /* Under the length prior every length up to max_length is generated,
+     * so the length refused is the first one past it. */
     beam_clear_error();
-    ASSERT_MSG(beam_model_topology(m, 3u, NULL, NULL, NULL) != BEAM_OK,
+    const uint32_t past = (uint32_t)beam_model_config(m)->max_length + 1u;
+    ASSERT_MSG(beam_model_topology(m, past, NULL, NULL, NULL) != BEAM_OK,
                "a length the model never generates must be refused");
-    ASSERT_MSG(strstr(beam_error_message(), "length") != NULL,
+    char said[32];
+    snprintf(said, sizeof said, "length %u", (unsigned)past);
+    ASSERT_MSG(strstr(beam_error_message(), said) != NULL,
                "the length refusal must say which length");
 
     beam_model_destroy(m);
@@ -2208,113 +2462,165 @@ static void test_failures_carry_a_message(void) {
 
 /* ── Persistence ─────────────────────────────────────────────── */
 
+/**
+ * A saved model loads back as the same model, prior included.
+ *
+ * The file stores counts, so every load re-finalizes: the prior's strengths
+ * have to travel with the counts, or the loaded model scores the same counts
+ * under the defaults and quietly becomes a different model. The strengths
+ * here are set with `set_prior` after the build and are nowhere near the
+ * defaults, so a reader that dropped them could not pass.
+ *
+ * Both layouts, because they write different payloads: a flat block, and
+ * the frozen sparse encoding.
+ */
 static void test_save_load_round_trip(void) {
-    BeamModel *m = build(3, 27);
-    ASSERT_MSG(m != NULL, "build");
-    const char *path = "build/test_model.tmp";
-    ASSERT_MSG(beam_model_save(m, path) == BEAM_OK, "save");
-    BeamModel *back = beam_model_load(path);
-    ASSERT_MSG(back != NULL, "load");
-    ASSERT_MSG(beam_model_n_observed(back) == beam_model_n_observed(m),
-               "observed count");
-    ASSERT_MSG(beam_model_config(back)->order
-               == beam_model_config(m)->order, "order");
-    for (uint32_t i = 0; i < N_TRAIN; i++) {
-        ASSERT_MSG(fabs(beam_model_log_pseq(back, TRAIN[i])
-                        - beam_model_log_pseq(m, TRAIN[i])) < 1e-12,
-                   "round trip must be exact");
+    const double alpha[4] = { 0.75, 3.5, 22.0, 140.0 };
+    const double alpha_length = 2.5;
+    const char *probe[] = { "CASSLGEQYF", "CASSLGEQYW", "WWKWWKW", "C" };
+    for (int sparse = 1; sparse >= 0; --sparse) {
+        /* Dense at order 2: it materialises every row, and the payload it
+         * writes is the whole table. */
+        const uint8_t order = sparse ? 3u : 2u;
+        BeamModelConfig cfg;
+        beam_model_config_default(&cfg);
+        cfg.order = order;
+        cfg.max_length = 12u;
+        cfg.sparse = sparse != 0;
+        BeamModel *m = beam_model_new(&cfg);
+        ASSERT_MSG(m != NULL, "new");
+        ASSERT_MSG(beam_model_observe(m, TRAIN, WEIGHT, N_TRAIN) == BEAM_OK
+                   && beam_model_finalize(m) == BEAM_OK, "build");
+        ASSERT_MSG(beam_model_set_prior(m, alpha, order + 1u, alpha_length)
+                   == BEAM_OK, "set_prior");
+
+        const char *path = "build/test_model.tmp";
+        ASSERT_MSG(beam_model_save(m, path) == BEAM_OK, "save");
+        BeamModel *back = beam_model_load(path);
+        remove(path);
+        ASSERT_MSG(back != NULL, "load");
+
+        const BeamModelConfig *c0 = beam_model_config(m);
+        const BeamModelConfig *c1 = beam_model_config(back);
+        ASSERT_MSG(beam_model_n_observed(back) == beam_model_n_observed(m),
+                   "observed count");
+        ASSERT_MSG(c1->order == c0->order && c1->max_length == c0->max_length
+                   && c1->sparse == c0->sparse, "shape and layout");
+        for (uint32_t k = 0; k <= order; ++k)
+            ASSERT_MSG(c1->alpha[k] == alpha[k],
+                       "every prior strength must survive the round trip");
+        ASSERT_MSG(c1->alpha_length == alpha_length,
+                   "the length prior's strength must survive the round trip");
+
+        for (uint32_t i = 0; i < N_TRAIN; i++)
+            ASSERT_MSG(beam_model_log_pseq(back, TRAIN[i])
+                       == beam_model_log_pseq(m, TRAIN[i]),
+                       "a loaded model must score bit-identically");
+        /* Unseen strings are scored through the prior's lower levels and
+         * the length prior, which is exactly what the strengths decide. */
+        for (uint32_t i = 0; i < 4u; i++)
+            ASSERT_MSG(beam_model_log_pseq(back, probe[i])
+                       == beam_model_log_pseq(m, probe[i]),
+                       "an unseen string must score bit-identically too");
+        beam_model_destroy(back);
+        beam_model_destroy(m);
     }
-    beam_model_destroy(back);
-    beam_model_destroy(m);
-    remove(path);
     PASS();
 }
 
 /*
- * Rewrite a format-3 file as an older format, in place.
+ * Rewrite the format word of a saved file, in place, and re-seal it.
  *
- * The format-3 header appends eight bytes -- the alphabet and a reserved word
- * -- to what formats 1 and 2 wrote, so an older header is exactly a prefix of
- * a newer one and downgrading is a splice: drop those eight bytes, relabel
- * the format, recompute the CRC. That is what lets the backward-compatible
- * reader be pinned without carrying binary fixtures that nothing regenerates.
+ * The checksum is recomputed over everything before it, exactly as the
+ * writer computes it, so the file differs from a valid one in the format
+ * word alone. A refusal of the result is therefore a refusal of the format,
+ * and cannot be a checksum failure standing in for one.
  */
-static bool rewrite_as_legacy_format(const char *path, uint32_t format) {
+static bool rewrite_format_word(const char *path, uint32_t format) {
     FILE *f = fopen(path, "rb");
     if (!f) return false;
     if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return false; }
     const long end = ftell(f);
     rewind(f);
+    if (end < (long)(3u * sizeof(uint32_t))) { fclose(f); return false; }
     unsigned char *b = (unsigned char *)malloc((size_t)end);
     if (!b || fread(b, 1, (size_t)end, f) != (size_t)end) {
         free(b); fclose(f); return false;
     }
     fclose(f);
 
-    const size_t tail = 2u * sizeof(uint32_t);   /* alphabet + reserved */
-    const size_t v2_bytes = 136u;
+    /* The magic, then the format, both little-endian words. */
     memcpy(b + sizeof(uint32_t), &format, sizeof format);
-    memmove(b + v2_bytes, b + v2_bytes + tail,
-            (size_t)end - v2_bytes - tail);
-    const long shorter = end - (long)tail;
-
-    const uint32_t crc = beam_crc32c_update(0u, b,
-                                         (size_t)shorter - sizeof(uint32_t));
-    memcpy(b + shorter - (long)sizeof crc, &crc, sizeof crc);
+    const size_t body = (size_t)end - sizeof(uint32_t);
+    const uint32_t crc = beam_crc32c_update(0u, b, body);
+    memcpy(b + body, &crc, sizeof crc);
 
     f = fopen(path, "wb");
     if (!f) { free(b); return false; }
-    const bool ok = fwrite(b, 1, (size_t)shorter, f) == (size_t)shorter;
+    const bool ok = fwrite(b, 1, (size_t)end, f) == (size_t)end;
     fclose(f);
     free(b);
     return ok;
 }
 
-/* Both formats that predate the alphabet field must still load, and must load
- * as amino acid -- which is what they are, and what a zeroed field says. */
+/**
+ * A file from an earlier development build is refused as a VERSION, by name.
+ *
+ * This build reads only its own format. A file of an older one is not
+ * damaged, so it must not be reported as corrupt -- that would send the
+ * caller hunting for a disk fault -- and the message has to say which format
+ * the file is and what to do about it, because nothing converts it.
+ *
+ * The rewrite with this build's own format number is the control: it must
+ * load, which proves the rewrite leaves an otherwise valid file and that the
+ * refusals are about the number and nothing else.
+ */
 static void test_legacy_format_files_are_refused_by_name(void) {
     BeamModel *m = build(2, 12);
     ASSERT_MSG(m != NULL, "build");
+    const char *path = "build/test_legacy_format.tmp";
 
-    const uint32_t legacy[] = { 1u, 2u };
-    for (unsigned k = 0; k < 2u; ++k) {
-        const char *path = "build/test_legacy_format.tmp";
+    ASSERT_MSG(beam_model_save(m, path) == BEAM_OK, "save current format");
+    ASSERT_MSG(rewrite_format_word(path, 8u), "rewrite as format 8");
+    BeamModel *same = beam_model_load(path);
+    ASSERT_MSG(same != NULL, "the control rewrite must still load");
+    ASSERT_MSG(beam_model_log_pseq(same, TRAIN[0])
+               == beam_model_log_pseq(m, TRAIN[0]),
+               "and must be the same model");
+    beam_model_destroy(same);
+
+    const uint32_t legacy[] = { 1u, 2u, 3u, 4u, 5u, 6u, 7u };
+    for (unsigned k = 0; k < sizeof legacy / sizeof legacy[0]; ++k) {
         ASSERT_MSG(beam_model_save(m, path) == BEAM_OK, "save current format");
-        ASSERT_MSG(rewrite_as_legacy_format(path, legacy[k]),
-                   "rewrite as a legacy format");
+        ASSERT_MSG(rewrite_format_word(path, legacy[k]),
+                   "rewrite as an older format");
 
-        /* Refused, and the message must say which format and why. A file
-         * written before this change carries a CLAMPED depth index, so which
-         * depth an observation came from was discarded at training time and
-         * no transformation recovers it. Reading it anyway would produce
-         * wrong payload extents and then a checksum failure, which blames an
-         * intact file for the reader's mistake. */
         beam_clear_error();
         BeamModel *back = beam_model_load(path);
-        ASSERT_MSG(back == NULL, "a legacy file must be refused");
-        ASSERT_MSG(strstr(beam_error_message(), "three experts") != NULL,
-                   "the refusal must say what the file was written by");
-        ASSERT_MSG(strstr(beam_error_message(), "checksum") == NULL
-                   && strstr(beam_error_message(), "corrupt") == NULL,
-                   "an intact legacy file must not be called corrupt");
-        continue;
-        ASSERT_MSG(beam_model_alphabet(back) == BEAM_ALPHABET_AA,
-                   "a file written before the alphabet field is amino acid");
-        ASSERT_MSG(!beam_model_config(back)->sparse,
-                   "legacy dense storage stays dense");
-        for (uint32_t i = 0; i < 3u; ++i)
-            ASSERT_MSG(beam_model_log_pseq(back, STRICT_TRAIN[i])
-                       == beam_model_log_pseq(m, STRICT_TRAIN[i]),
-                       "a legacy score must round-trip bit-identically");
-        beam_model_destroy(back);
+        const BeamError code = beam_last_error();
+        char said[64];
+        snprintf(said, sizeof said, "is a format %u BEAM model",
+                 (unsigned)legacy[k]);
+        const bool named = strstr(beam_error_message(), said) != NULL;
+        const bool advised = strstr(beam_error_message(), "Rebuild") != NULL;
+        const bool blamed = strstr(beam_error_message(), "checksum") != NULL
+                         || strstr(beam_error_message(), "corrupt") != NULL;
         remove(path);
+        if (back) beam_model_destroy(back);
+
+        ASSERT_MSG(back == NULL, "an older format must be refused");
+        ASSERT_MSG(code == BEAM_ERR_IO_VERSION,
+                   "and refused as a version, not as corruption");
+        ASSERT_MSG(named, "the refusal must name the file's format");
+        ASSERT_MSG(advised, "and say the model has to be rebuilt");
+        ASSERT_MSG(!blamed, "an intact older file must not be called corrupt");
     }
     beam_model_destroy(m);
     PASS();
 }
 
 static void test_corrupt_file_is_rejected(void) {
-    BeamModel *m = build(3, 27);
+    BeamModel *m = build(3, 12);
     ASSERT_MSG(m != NULL, "build");
     const char *path = "build/test_corrupt.tmp";
     ASSERT_MSG(beam_model_save(m, path) == BEAM_OK, "save");
@@ -2338,14 +2644,20 @@ static void test_corrupt_file_is_rejected(void) {
 /* ── Compaction ──────────────────────────────────────────────── */
 
 static void test_compact_keeps_scores(void) {
-    BeamModel *m = build(3, 27);
+    /* The unseen probes matter as much as the spelled one: they are scored
+     * through the prior's lower-level tables, which compaction keeps while
+     * it releases the counts those tables were built from. */
+    BeamModel *m = build(3, 12);
     ASSERT_MSG(m != NULL, "build");
-    const double before = beam_model_log_pseq(m, TRAIN[0]);
+    const char *probe[] = { TRAIN[0], "CASSLGEQYW", "WWKWWKW", "C" };
+    double before[4];
+    for (int i = 0; i < 4; ++i) before[i] = beam_model_log_pseq(m, probe[i]);
     const uint64_t mem = beam_model_memory_bytes(m);
     ASSERT_MSG(beam_model_compact(m) == BEAM_OK, "compact");
     ASSERT_MSG(beam_model_memory_bytes(m) < mem, "memory must fall");
-    ASSERT_MSG(beam_model_log_pseq(m, TRAIN[0]) == before,
-               "compaction must not change a single score");
+    for (int i = 0; i < 4; ++i)
+        ASSERT_MSG(beam_model_log_pseq(m, probe[i]) == before[i],
+                   "compaction must not change a single score");
     ASSERT_MSG(beam_model_save(m, "build/nope.tmp") != BEAM_OK,
                "a compacted model has no counts to save");
     beam_model_destroy(m);
@@ -2355,7 +2667,7 @@ static void test_compact_keeps_scores(void) {
 /* ── Mellin transform ────────────────────────────────────────── */
 
 static void test_log_mellin_endpoints(void) {
-    BeamModel *m = build(3, 27);
+    BeamModel *m = build_small(true);
     ASSERT_MSG(m != NULL, "build");
     double at0 = 0.0, at1 = 0.0;
     ASSERT_MSG(beam_model_log_mellin(m, 0.0, &at0) == BEAM_OK, "q=0");
@@ -2370,7 +2682,7 @@ static void test_log_mellin_endpoints(void) {
 }
 
 static void test_hill_matches_mellin(void) {
-    BeamModel *m = build(3, 27);
+    BeamModel *m = build_small(true);
     ASSERT_MSG(m != NULL, "build");
     const double alphas[] = { 0.5, 2.0, 3.0 };
     for (int i = 0; i < 3; i++) {
@@ -2387,7 +2699,7 @@ static void test_hill_matches_mellin(void) {
 /* ── Surprisal moments ───────────────────────────────────────── */
 
 static void test_surprisal_mean_is_the_entropy(void) {
-    BeamModel *m = build(3, 27);
+    BeamModel *m = build_small(true);
     ASSERT_MSG(m != NULL, "build");
     double mu[2] = {0}, h = 0.0;
     ASSERT_MSG(beam_model_surprisal_moments(m, 1.0, 1u, mu) == BEAM_OK, "moments");
@@ -2400,46 +2712,40 @@ static void test_surprisal_mean_is_the_entropy(void) {
 }
 
 static void test_surprisal_moments_by_enumeration(void) {
-    /* Exhaustive over every length-3 sequence: the jet DP against a direct
-     * weighted sum, which is the only way to know the binomial bookkeeping is
-     * right rather than merely self-consistent. */
-    BeamModelConfig cfg;
-    beam_model_config_default(&cfg);
-    cfg.order = 3; cfg.max_length = 4;
-    BeamModel *m = beam_model_new(&cfg);
-    ASSERT_MSG(m != NULL, "new");
-    const char *tiny[] = { "CAS", "CAF", "GAS", "CQS", "SAF", "CAY" };
-    const double tw[] = { 9, 4, 3, 6, 2, 5 };
-    beam_model_observe(m, tiny, tw, 6);
-    ASSERT_MSG(beam_model_finalize(m) == BEAM_OK, "finalize");
+    /* Exhaustive over the whole support, every amino-acid string of length
+     * 1 to 3: the jet DP against a direct weighted sum, which is the only way
+     * to know the binomial bookkeeping is right rather than merely
+     * self-consistent. The length prior spreads mass over every length, so
+     * the enumeration has to cover them all for the sum to be the moment. */
+    const char *tiny[] = { "CAS", "CAF", "GAS", "CQS", "SAF", "CAY", "CA" };
+    const double tw[] = { 9, 4, 3, 6, 2, 5, 2 };
+    BeamModel *m = build_tiny(3, 3, tiny, tw, 7);
+    ASSERT_MSG(m != NULL, "build");
 
-    static const char AAs[] = "ACDEFGHIKLMNPQRSTVWY";
+    uint32_t n = 0;
+    double *lp = score_every_string(m, AMINO, 3, &n, NULL);
+    ASSERT_MSG(lp != NULL, "enumerate");
     double wsum = 0.0, acc[4] = {0};
-    char buf[4] = {0};
-    for (int a = 0; a < 20; a++)
-      for (int b = 0; b < 20; b++)
-        for (int c = 0; c < 20; c++) {
-            buf[0] = AAs[a]; buf[1] = AAs[b]; buf[2] = AAs[c];
-            const double lp = beam_model_log_pseq(m, buf);
-            if (!isfinite(lp)) continue;
-            const double w = exp(lp), u = -lp;
-            wsum += w;
-            double up = 1.0;
-            for (int k = 0; k < 4; k++) { acc[k] += w * up; up *= u; }
-        }
+    for (uint32_t i = 0; i < n; ++i) {
+        const double w = exp(lp[i]), u = -lp[i];
+        wsum += w;
+        double up = 1.0;
+        for (int k = 0; k < 4; k++) { acc[k] += w * up; up *= u; }
+    }
+    free(lp);
+    ASSERT_MSG(fabs(wsum - 1.0) < 1e-9,
+               "the enumeration must be the whole support");
     double mu[4] = {0};
     ASSERT_MSG(beam_model_surprisal_moments(m, 1.0, 3u, mu) == BEAM_OK, "moments");
-    for (int k = 1; k < 4; k++) {
-        const double want = acc[k] / wsum;
-        ASSERT_MSG(fabs(mu[k] - want) < 1e-7 * fabs(want),
+    for (int k = 1; k < 4; k++)
+        ASSERT_MSG(fabs(mu[k] - acc[k]) < 1e-7 * fabs(acc[k]),
                    "raw moment must match the exhaustive sum");
-    }
     beam_model_destroy(m);
     PASS();
 }
 
 static void test_cumulants_follow_from_moments(void) {
-    BeamModel *m = build(3, 27);
+    BeamModel *m = build_small(true);
     ASSERT_MSG(m != NULL, "build");
     double mu[4] = {0}, k[3] = {0};
     ASSERT_MSG(beam_model_surprisal_moments(m, 1.0, 3u, mu) == BEAM_OK, "moments");
@@ -2457,30 +2763,28 @@ static void test_cumulants_follow_from_moments(void) {
 /* ── Surprisal range ─────────────────────────────────────────── */
 
 static void test_surprisal_range_by_enumeration(void) {
-    BeamModelConfig cfg;
-    beam_model_config_default(&cfg);
-    cfg.order = 3; cfg.max_length = 4;
-    BeamModel *m = beam_model_new(&cfg);
+    /* Both ends of the range are attained somewhere in the support, and the
+     * support is every string up to max_length: the least probable one is
+     * junk the corpus never came near, which the old closed world could not
+     * score at all. */
     const char *tiny[] = { "CAS", "CAF", "GAS", "CQS" };
     const double tw[] = { 9, 4, 3, 6 };
-    beam_model_observe(m, tiny, tw, 4);
-    ASSERT_MSG(beam_model_finalize(m) == BEAM_OK, "finalize");
+    BeamModel *m = build_tiny(3, 3, tiny, tw, 4);
+    ASSERT_MSG(m != NULL, "build");
 
     double lo = 0.0, hi = 0.0;
     ASSERT_MSG(beam_model_surprisal_range(m, &lo, &hi) == BEAM_OK, "range");
 
-    static const char AAs[] = "ACDEFGHIKLMNPQRSTVWY";
+    uint32_t n = 0;
+    double *lp = score_every_string(m, AMINO, 3, &n, NULL);
+    ASSERT_MSG(lp != NULL, "enumerate");
     double seen_lo = INFINITY, seen_hi = -INFINITY;
-    char buf[4] = {0};
-    for (int a = 0; a < 20; a++)
-      for (int b = 0; b < 20; b++)
-        for (int c = 0; c < 20; c++) {
-            buf[0] = AAs[a]; buf[1] = AAs[b]; buf[2] = AAs[c];
-            const double lp = beam_model_log_pseq(m, buf);
-            if (!isfinite(lp)) continue;
-            if (-lp < seen_lo) seen_lo = -lp;
-            if (-lp > seen_hi) seen_hi = -lp;
-        }
+    for (uint32_t i = 0; i < n; ++i) {
+        if (-lp[i] < seen_lo) seen_lo = -lp[i];
+        if (-lp[i] > seen_hi) seen_hi = -lp[i];
+    }
+    free(lp);
+    ASSERT_MSG(isfinite(seen_hi), "the least probable string is still possible");
     ASSERT_MSG(fabs(lo - seen_lo) < 1e-9, "minimum surprisal must be attained");
     ASSERT_MSG(fabs(hi - seen_hi) < 1e-9, "maximum surprisal must be attained");
     beam_model_destroy(m);
@@ -2490,7 +2794,7 @@ static void test_surprisal_range_by_enumeration(void) {
 /* ── Per-length marginals ────────────────────────────────────── */
 
 static void test_length_marginals_decompose(void) {
-    BeamModel *m = build(3, 27);
+    BeamModel *m = build_small(true);
     ASSERT_MSG(m != NULL, "build");
     const uint32_t n = (uint32_t)beam_model_config(m)->max_length + 1u;
     double *c = (double *)calloc(n, sizeof(double));
@@ -2530,58 +2834,64 @@ static void test_length_marginals_decompose(void) {
 
 /* ── Top k ───────────────────────────────────────────────────── */
 
+static int cmp_desc(const void *a, const void *b) {
+    const double x = *(const double *)a, y = *(const double *)b;
+    return (x < y) - (x > y);
+}
+
 static void test_top_k_by_enumeration(void) {
     /* The claim is exactness, not a beam, so it is checked against a full
      * enumeration. A beam would silently drop a sequence whose prefix looked
-     * unpromising and give no sign of having done so. */
-    BeamModelConfig cfg;
-    beam_model_config_default(&cfg);
-    cfg.order = 3; cfg.max_length = 4;
-    /* Open world: the check below enumerates all 20^3 length-3 sequences and
-     * asserts none beats the K-th, which is only a statement about the whole
-     * space while backoff keeps every cell positive. Under the closed-world
-     * default this corpus of five sequences cannot even produce K=12. */
-    cfg.strict = false;
-    BeamModel *m = beam_model_new(&cfg);
-    const char *tiny[] = { "CAS", "CAF", "GAS", "CQS", "SAF" };
-    const double tw[] = { 9, 4, 3, 6, 2 };
-    beam_model_observe(m, tiny, tw, 5);
-    ASSERT_MSG(beam_model_finalize(m) == BEAM_OK, "finalize");
+     * unpromising and give no sign of having done so.
+     *
+     * The K reported scores must BE the K best of the enumeration, in order,
+     * once at a single length and once over every length. The second pools
+     * per-length searches, which is where a length could be dropped. */
+    const char *tiny[] = { "CAS", "CAF", "GAS", "CQS", "SAF", "CA" };
+    const double tw[] = { 9, 4, 3, 6, 2, 3 };
+    BeamModel *m = build_tiny(3, 3, tiny, tw, 6);
+    ASSERT_MSG(m != NULL, "build");
 
-    const uint32_t K = 12, stride = 5;
+    uint32_t n_all = 0;
+    uint8_t *lens = NULL;
+    double *every = score_every_string(m, AMINO, 3, &n_all, &lens);
+    ASSERT_MSG(every != NULL, "enumerate");
+    double *len3 = (double *)malloc((size_t)n_all * sizeof(double));
+    ASSERT_MSG(len3 != NULL, "alloc");
+    uint32_t n3 = 0;
+    for (uint32_t i = 0; i < n_all; ++i) if (lens[i] == 3u) len3[n3++] = every[i];
+    free(lens);
+    qsort(every, n_all, sizeof(double), cmp_desc);
+    qsort(len3, n3, sizeof(double), cmp_desc);
+
+    const uint32_t K = 12, stride = 4;
     char *out = (char *)calloc((size_t)K * stride + 1, 1);
     double *lp = (double *)calloc(K, sizeof(double));
-    uint32_t n = 0;
-    ASSERT_MSG(beam_model_top_k(m, K, 3, out, lp, &n) == BEAM_OK, "top_k");
-    ASSERT_MSG(n == K, "should find K sequences");
-
-    /* Descending, and every reported score must be the model's own. */
-    for (uint32_t i = 0; i < n; i++) {
-        const char *s = out + (size_t)i * stride;
-        ASSERT_MSG(fabs(beam_model_log_pseq(m, s) - lp[i]) < 1e-9,
-                   "reported score must equal log_pseq");
-        if (i) ASSERT_MSG(lp[i] <= lp[i - 1] + 1e-12, "must be descending");
-    }
-
-    /* No length-3 sequence may beat the K-th. */
-    static const char AAs[] = "ACDEFGHIKLMNPQRSTVWY";
-    uint32_t better = 0;
-    char buf[4] = {0};
-    for (int a = 0; a < 20; a++)
-      for (int b = 0; b < 20; b++)
-        for (int c = 0; c < 20; c++) {
-            buf[0] = AAs[a]; buf[1] = AAs[b]; buf[2] = AAs[c];
-            const double v = beam_model_log_pseq(m, buf);
-            if (isfinite(v) && v > lp[n - 1] + 1e-12) better++;
+    ASSERT_MSG(out && lp, "alloc");
+    for (int pass = 0; pass < 2; ++pass) {
+        const uint32_t length = pass == 0 ? 3u : 0u;
+        const double *want = pass == 0 ? len3 : every;
+        uint32_t n = 0;
+        ASSERT_MSG(beam_model_top_k(m, K, length, out, lp, &n) == BEAM_OK,
+                   "top_k");
+        ASSERT_MSG(n == K, "should find K sequences");
+        for (uint32_t i = 0; i < n; i++) {
+            const char *s = out + (size_t)i * stride;
+            ASSERT_MSG(length == 0u || strlen(s) == length,
+                       "a single-length search returns that length only");
+            ASSERT_MSG(fabs(beam_model_log_pseq(m, s) - lp[i]) < 1e-9,
+                       "reported score must equal log_pseq");
+            ASSERT_MSG(fabs(lp[i] - want[i]) < 1e-9,
+                       "the i-th reported score must be the i-th best there is");
         }
-    ASSERT_MSG(better < n, "no sequence outside the top-k may beat its last member");
-    free(out); free(lp);
+    }
+    free(out); free(lp); free(every); free(len3);
     beam_model_destroy(m);
     PASS();
 }
 
 static void test_top_sequence_attains_the_minimum_surprisal(void) {
-    BeamModel *m = build(3, 27);
+    BeamModel *m = build_small(true);
     ASSERT_MSG(m != NULL, "build");
     double lo = 0.0, hi = 0.0;
     ASSERT_MSG(beam_model_surprisal_range(m, &lo, &hi) == BEAM_OK, "range");
@@ -2602,6 +2912,7 @@ static void test_top_sequence_attains_the_minimum_surprisal(void) {
 static void test_add_then_subtract_is_identity(void) {
     BeamModelConfig cfg;
     beam_model_config_default(&cfg);
+    cfg.order = 3; cfg.max_length = 12;
     BeamModel *a = beam_model_new(&cfg);
     BeamModel *b = beam_model_new(&cfg);
     BeamModel *ref = beam_model_new(&cfg);
@@ -2627,6 +2938,7 @@ static void test_add_then_subtract_is_identity(void) {
 static void test_add_equals_counting_together(void) {
     BeamModelConfig cfg;
     beam_model_config_default(&cfg);
+    cfg.order = 3; cfg.max_length = 12;
     BeamModel *a = beam_model_new(&cfg);
     BeamModel *b = beam_model_new(&cfg);
     BeamModel *whole = beam_model_new(&cfg);
@@ -2692,7 +3004,6 @@ static void test_clamped_marginals_survive_a_wide_dynamic_range(void) {
     cfg.alphabet = BEAM_ALPHABET_NT;
     cfg.order = 3;
     cfg.max_length = 70;
-    cfg.strict = false;
     BeamModel *m = beam_model_new(&cfg);
     ASSERT_MSG(m != NULL, "nucleotide model built");
     ASSERT_MSG(beam_model_observe(m, seqs, ab, NSEQ) == BEAM_OK, "observed");
@@ -2711,11 +3022,12 @@ static void test_clamped_marginals_survive_a_wide_dynamic_range(void) {
     ASSERT_MSG(beam_model_positional_marginals(m, LEN, clamp, out, &logz)
                == BEAM_OK, "clamped marginals");
     /* Thousands of nats down was reachable when an unobserved cell could be
-     * floored at 1e-300. The open world is now a Laplace add-one that bottoms
-     * out at 1/(n + R), so the deepest a clamped mass goes is set by how many
-     * positions are pinned rather than by a floor artefact. The claim that
-     * matters is that the mass is real and far below the mode, and that the
-     * log-space path returns it at all. */
+     * floored at 1e-300. Under the hierarchical prior an unobserved cell is
+     * its parent's probability shrunk by the prior's strengths, so the depth
+     * of a clamped mass is set by how unlike the corpus the pins are rather
+     * than by a floor artefact. The claim that matters is that the mass is
+     * real and far below the mode, and that the log-space path returns it at
+     * all. */
     ASSERT_MSG(isfinite(logz) && logz < -5.0,
                "the clamped mass is real and below the mode");
 
@@ -2753,14 +3065,17 @@ static void test_clamped_marginals_survive_a_wide_dynamic_range(void) {
  * one, so `q * wmax` is a minimum instead: every `exp(q * w - qmax)` became an
  * `exp` of a large positive number and the layer overflowed to infinity.
  *
- * The trigger is ordinary -- the open world with backoff off, where unobserved
- * cells sit at `ln(1e-300)` and any `|q| > 1.03` overflows. It was not a loud
- * failure: `log_mellin(-5)` returned `-inf` and `hill_number(-5)` returned
- * `0.0`, both with BEAM_OK, and at `q = -1.5` the answer came back FINITE and
- * wrong, which is worse than either.
+ * The trigger was ordinary at the time -- the open world with backoff off,
+ * where unobserved cells sat at `ln(1e-300)` and any `|q| > 1.03` overflowed.
+ * It was not a loud failure: `log_mellin(-5)` returned `-inf` and
+ * `hill_number(-5)` returned `0.0`, both with BEAM_OK, and at `q = -1.5` the
+ * answer came back FINITE and wrong, which is worse than either. The prior's
+ * weights are not that wide, but a steep negative tilt still puts the largest
+ * tilted weight at the smallest untilted one, which is the case that broke.
  *
- * The reference is the model scoring its own support, one sequence at a time,
- * which shares no sweep with the quantity under test.
+ * The reference is the model scoring its own support -- every nucleotide
+ * string up to max_length, N included -- one sequence at a time, which shares
+ * no sweep with the quantity under test.
  */
 static void test_a_negative_tilt_does_not_overflow_the_sweeps(void) {
     static const char *NT_TRAIN[10] = {
@@ -2770,41 +3085,34 @@ static void test_a_negative_tilt_does_not_overflow_the_sweeps(void) {
     BeamModelConfig cfg;
     beam_model_config_default(&cfg);
     cfg.alphabet = BEAM_ALPHABET_NT;
-    cfg.order = 3; cfg.max_length = 5; cfg.strict = false;
+    cfg.order = 3; cfg.max_length = 5;
     BeamModel *m = beam_model_new(&cfg);
     ASSERT_MSG(m != NULL, "model built");
     ASSERT_MSG(beam_model_observe(m, NT_TRAIN, NULL, 10) == BEAM_OK, "observed");
     ASSERT_MSG(beam_model_finalize(m) == BEAM_OK, "finalized");
 
-    const uint32_t NR = BEAM_NT_RESIDUES;
+    /* The letters are the alphabet's own, read from its descriptor, so the
+     * enumeration is the whole support -- N included -- by construction. */
     const BeamAlphabetInfo *ai = beam_alphabet_info(BEAM_ALPHABET_NT);
-    const double qs[5] = {-0.5, -1.5, -2.0, -5.0, -24.0};
+    char letters[BEAM_NT_RESIDUES + 1];
+    for (uint32_t x = 0; x < BEAM_NT_RESIDUES; ++x) letters[x] = ai->idx_to_char[x];
+    letters[BEAM_NT_RESIDUES] = '\0';
+    uint32_t n = 0;
+    double *lp = score_every_string(m, letters, 5u, &n, NULL);
+    ASSERT_MSG(lp != NULL && n == 3905u, "enumerate 5 + 25 + ... + 3125");
+    uint32_t infinite = 0;
+    for (uint32_t i = 0; i < n; ++i) if (!isfinite(lp[i])) infinite++;
+    ASSERT_MSG(infinite == 0u, "every string is in the support");
 
+    const double qs[5] = {-0.5, -1.5, -2.0, -5.0, -24.0};
     for (uint32_t k = 0; k < 5u; ++k) {
         const double q = qs[k];
         /* ln sum_s P(s)^q over the whole support, by enumeration. */
         double mx = -INFINITY, acc = 0.0;
-        char buf[8];
-        uint8_t idx[8];
-        for (uint32_t len = 1u; len <= 5u; ++len) {
-            for (uint32_t i = 0; i < len; ++i) idx[i] = 0u;
-            buf[len] = '\0';
-            for (;;) {
-                for (uint32_t i = 0; i < len; ++i) buf[i] = ai->idx_to_char[idx[i]];
-                const double lp = beam_model_log_pseq(m, buf);
-                if (isfinite(lp)) {
-                    const double v = q * lp;
-                    if (v > mx) { acc *= exp(mx - v); mx = v; acc += 1.0; }
-                    else acc += exp(v - mx);
-                }
-                uint32_t j = len;
-                while (j-- > 0u) {
-                    if (++idx[j] < NR) break;
-                    idx[j] = 0u;
-                    if (j == 0u) goto next_q;
-                }
-            }
-next_q:     ;
+        for (uint32_t i = 0; i < n; ++i) {
+            const double v = q * lp[i];
+            if (v > mx) { acc *= exp(mx - v); mx = v; acc += 1.0; }
+            else acc += exp(v - mx);
         }
         const double want = mx + log(acc);
         double got = 0.0;
@@ -2815,6 +3123,7 @@ next_q:     ;
         ASSERT_MSG(fabs(got - want) < 1e-9 * fabs(want),
                    "and it is the answer the model's own scores give");
     }
+    free(lp);
     beam_model_destroy(m);
     PASS();
 }
@@ -2824,34 +3133,38 @@ next_q:     ;
 /**
  * `weight_forward = 0` must not put NaNs in the edge weights.
  *
- * Regression for a defect found by review. A dead cell mixes to `-inf`, and
- * the forward half formed `weight_forward * mix`, so a weight of zero made
- * `0 * -inf` a NaN rather than the `-inf` it must be. The BACKWARD half was
- * already guarded, and that asymmetry is what gave the defect away.
+ * Regression for a defect found by review, in the closed world that has since
+ * been removed. A dead cell mixed to `-inf`, and the forward half formed
+ * `weight_forward * mix`, so a weight of zero made `0 * -inf` a NaN rather
+ * than the `-inf` it must be. The BACKWARD half was already guarded, and that
+ * asymmetry is what gave the defect away.
  *
  * Nothing rejected the weight -- the config validates only `>= 0` -- and the
  * NaNs were latent here, because every sweep iterates reached states and
  * skipped them. On a larger corpus they were not latent: `finalize` reported
  * that the model could generate nothing. Measured on this model before the
  * fix: 608,573 NaN edge weights of 1,666,980.
+ *
+ * The prior leaves no cell at `-inf`, so the product that broke no longer
+ * arises from the tables. The check stays because the weight is still legal
+ * and still multiplies every forward log probability, and any `-inf` the
+ * trellis itself uses for an impossible edge still meets it.
  */
 /*
  * Both storage modes, because the first version of this test checked only one
  * and the defect survived in the other for exactly that reason.
  *
- * `beam_model_config_default` sets `sparse = false`, so building from the
- * default exercised the DENSE kernel -- which the fix guarded. The Python
- * layer selects sparse for the default closed world, so the path users
- * actually run was the unguarded one, and it still produced 115 NaN edge
- * weights of 3,519,180 on this model. A test that takes the default
- * configuration tests the default configuration, not the shipped one.
+ * The C default was then dense, so building from the default exercised the
+ * DENSE kernel -- which the fix guarded -- while Python selected sparse, so
+ * the path users actually ran was the unguarded one, and it still produced
+ * 115 NaN edge weights of 3,519,180 on this model. A test that takes the
+ * default configuration tests the default configuration, not the shipped one.
  */
 static void zero_forward_weight_one_mode(bool sparse) {
     BeamModelConfig cfg;
     beam_model_config_default(&cfg);
     cfg.order = 3; cfg.max_length = 12;
     cfg.sparse = sparse;
-    cfg.strict = sparse ? true : cfg.strict;   /* sparse is valid only strict */
     cfg.weight_forward = 0.0; cfg.weight_backward = 1.0;
     BeamModel *m = beam_model_new(&cfg);
     ASSERT_MSG(m != NULL, "a zero anchor weight is a legal configuration");
@@ -2879,8 +3192,11 @@ static void zero_forward_weight_one_mode(bool sparse) {
 }
 
 static void test_a_zero_forward_weight_leaves_no_nan_edge_weights(void) {
+    const int before = fail_count;
     zero_forward_weight_one_mode(false);   /* dense  */
+    if (fail_count != before) return;
     zero_forward_weight_one_mode(true);    /* sparse */
+    if (fail_count != before) return;
     PASS();
 }
 
@@ -2891,12 +3207,12 @@ int main(void) {
     RUN_TEST(test_provenance_is_recorded_and_aggregated);
     RUN_TEST(test_log_z_splits_across_its_layers);
     RUN_TEST(test_depth_occupancy_sums_to_the_nonzero_cells);
-    RUN_TEST(test_depth_occupancy_is_not_saturated_by_the_open_world);
+    RUN_TEST(test_a_compacted_model_cannot_report_depth_occupancy);
     RUN_TEST(test_single_anchor_weights_are_accepted);
-    RUN_TEST(test_sparse_requires_strict);
+    RUN_TEST(test_either_storage_layout_is_a_valid_configuration);
     RUN_TEST(test_sparse_rows_boundaries_and_erase);
     RUN_TEST(test_sparse_growth_failure_is_atomic);
-    RUN_TEST(test_sparse_strict_matches_dense_bit_for_bit);
+    RUN_TEST(test_sparse_matches_dense_bit_for_bit);
     RUN_TEST(test_the_state_is_exactly_one_context_wide);
     RUN_TEST(test_observe_counts_and_rejects);
 

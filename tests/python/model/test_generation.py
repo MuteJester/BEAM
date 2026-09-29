@@ -21,12 +21,18 @@ def test_sample_is_reproducible(model):
 
 
 def test_sample_respects_the_model(model):
-    """Draws must be scoreable and follow the length prior."""
+    """Draws must be scoreable and follow the length prior.
+
+    Every string up to max_length is scoreable under the prior, so the first
+    half is only a floor; the second is the real check. Four hundred draws put
+    the total variation from pi(L) near 0.06 by sampling noise alone.
+    """
     draws = model.sample(400, seed=3)
     assert all(math.isfinite(model.log_pseq(s)) for s in draws)
     pmf = model.length_pmf()
-    for s in draws:
-        assert pmf[len(s)] > 0
+    freq = np.bincount([len(s) for s in draws], minlength=len(pmf)) / len(draws)
+    assert len(freq) == len(pmf), "a draw is longer than max_length"
+    assert 0.5 * np.abs(freq - pmf).sum() < 0.15
 
 
 def test_sample_fixed_length(model):

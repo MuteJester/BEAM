@@ -45,15 +45,15 @@ def test_posterior_closes_on_the_prior_but_never_reaches_it(corpus):
     """Raising kappa pulls the individual toward the prior, and then stops.
 
     It stops because `posterior` is not a blend of two models: it adds
-    pseudo-counts to ROWS, and three things survive any kappa — rows the
-    prior never observed, this model's own hierarchical backoff reapplied to
+    pseudo-counts to ROWS, and three things survive any kappa -- rows the
+    prior never observed, this model's own hierarchical prior reapplied to
     the blended counts, and its own Z(L) and pi(L). Anyone reading
     `posterior` as "become the prior at large kappa" would be wrong, so the
     floor is asserted rather than left to be discovered.
     """
     seqs, abund = corpus
-    donor = BeamModel(seqs[:200], abundances=abund[:200], order=2, max_length=20, strict=False)
-    prior = BeamModel(seqs[200:], abundances=abund[200:], order=2, max_length=20, strict=False)
+    donor = BeamModel(seqs[:200], abundances=abund[:200], order=2, max_length=20)
+    prior = BeamModel(seqs[200:], abundances=abund[200:], order=2, max_length=20)
     probe = seqs[900:1100]
     ref = prior.log_pseq_batch(probe)
 

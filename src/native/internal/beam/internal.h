@@ -8,10 +8,11 @@
  *
  * Every table has the following LOGICAL indexing, packed
  * most-distant-context-first and matching the reference implementation exactly
- * so dense and sparse models can be compared cell by cell. The open-world
- * backend is a flat `double` array. The zero-backoff strict backend keeps the
- * same row index in a dense uint32 directory and stores only occupied
- * 20-double rows. For a context of order `k` at depth `d`, scoring residue `x`:
+ * so dense and sparse models can be compared cell by cell. The dense backend
+ * is a flat `double` array holding every row. The sparse backend keeps the
+ * same row index in a directory and stores only occupied rows, resolving an
+ * absent one through its parent (see `beam_lp_row`). For a context of order
+ * `k` at depth `d`, scoring residue `x`:
  *
  *     [ d ][ c_k ]...[ c_1 ][ x ]
  *

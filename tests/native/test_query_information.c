@@ -5,10 +5,18 @@
  * Two corpora here have answers known before the model is built, which is the
  * best kind of test available. In one, positions 1 and 2 always agree, so
  * knowing either determines the other and the mutual information between them
- * must be exactly one bit -- `ln 2` nats. In the other, all four combinations
- * appear equally, so the two positions are independent and their mutual
- * information must be exactly zero. Neither number is read off the model; both
- * are what information theory requires, and the engine has to produce them.
+ * must be one bit -- `ln 2` nats. In the other, all four combinations appear
+ * equally, so the two positions are independent and their mutual information
+ * must be zero. Neither number is read off the model; both are what
+ * information theory requires of the corpus, and the engine has to produce
+ * them.
+ *
+ * Under the hierarchical prior those answers hold in the limit of a vanishing
+ * prior, because at any finite strength every string has mass and no position
+ * is certain. So the known-answer tests turn the prior down until its leak is
+ * below rounding and ask for the answers to 1e-12, and a companion test asks
+ * the default prior for the facts positivity forces instead: every position
+ * carries entropy and no dependency is exact.
  *
  * Beyond that, the whole matrix is compared against one assembled by
  * enumerating the support and counting, and against identities a wrong
@@ -17,6 +25,12 @@
  * different positions, and the total correlation `sum_i H(X_i) - H(X)` must
  * come out non-negative and must agree with the matrix on the two corpora
  * where it is known.
+ *
+ * Everything is on nucleotides. The matrix takes one sweep per (position,
+ * residue) that carries mass, and under the prior every one of them does, so
+ * five residues rather than twenty keep the whole support enumerable (5^4
+ * strings) and the sweep count small. Nothing here is about which letters the
+ * residues are.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -34,24 +48,33 @@ static int pass_count = 0, fail_count = 0;
 
 #include "test_utils.h"
 
-#define R BEAM_AA_RESIDUES
-#define AA_A_  0u
-#define AA_S_ 15u
+#define R BEAM_NT_RESIDUES
+/* Indices into "ACGTN". */
+#define NT_A 0u
+#define NT_C 1u
+#define NT_G 2u
 #define LN2 0.69314718055994530942
 
+/* A consensus with single substitutions scattered over it, weighted unevenly,
+ * so there is real structure between positions for the matrix to find. */
 #define N_SHORT 10
 static const char *SHORT_TRAIN[N_SHORT] = {
-    "CASF","CASY","CAGF","CGSF","CASL","CTSF","CASQ","CVSF","CASE","CAAF",
+    "ACGT","ACGA","AGGT","CCGT","ACTT","TCGT","ACGC","GCGT","ACAT","AAGT",
 };
 static const double SHORT_WEIGHT[N_SHORT] = {40,25,18,15,12,10,9,7,6,5};
 
-static BeamModel *build(const char **seqs, const double *w, uint32_t n,
-                        uint8_t order, bool open_world) {
+/**
+ * A nucleotide model of order `order` up to six residues. `alpha` sets every
+ * level's prior strength; zero keeps the default.
+ */
+static BeamModel *build_with_prior(const char **seqs, const double *w,
+                                   uint32_t n, uint8_t order, double alpha) {
     BeamModelConfig cfg;
-    beam_model_config_default(&cfg);
+    beam_model_config_default_for(BEAM_ALPHABET_NT, &cfg);
     cfg.order = order;
     cfg.max_length = 6u;
-    if (open_world) cfg.strict = 0;
+    if (alpha > 0.0)
+        for (uint32_t k = 0; k <= order; ++k) cfg.alpha[k] = alpha;
     BeamModel *m = beam_model_new(&cfg);
     if (!m) return NULL;
     if (beam_model_observe(m, seqs, w, n) != BEAM_OK
@@ -61,6 +84,21 @@ static BeamModel *build(const char **seqs, const double *w, uint32_t n,
     }
     return m;
 }
+
+static BeamModel *build(const char **seqs, const double *w, uint32_t n,
+                        uint8_t order) {
+    return build_with_prior(seqs, w, n, order, 0.0);
+}
+
+/*
+ * Prior strength for the known-answer tests. Against counts of one, a residue
+ * the corpus never put in a context gets about 1e-6 of it at each level, and a
+ * string off the corpus has to pay that in both chains and at several
+ * positions at once. Its mass then sits far below rounding -- a fixed position
+ * measures an entropy near 1e-23 -- so the limiting answers can be asked for
+ * to 1e-12.
+ */
+#define VANISHING 1e-6
 
 /* ── Independent reference: the matrix by counting ───────────── */
 
@@ -75,7 +113,7 @@ static BeamModel *build(const char **seqs, const double *w, uint32_t n,
 static void enumerate_matrix(const BeamModel *m, uint32_t length,
                              bool (*keep)(const uint8_t *, uint32_t),
                              double *out_mi, double *out_h) {
-    const BeamAlphabetInfo *ai = beam_alphabet_info(BEAM_ALPHABET_AA);
+    const BeamAlphabetInfo *ai = beam_alphabet_info(BEAM_ALPHABET_NT);
     const size_t JN = (size_t)length * length * R * R;
     double *joint = (double *)calloc(JN, sizeof(double));
     double *marg  = (double *)calloc((size_t)length * R, sizeof(double));
@@ -88,15 +126,15 @@ static void enumerate_matrix(const BeamModel *m, uint32_t length,
     for (;;) {
         for (uint32_t i = 0; i < length; ++i) buf[i] = ai->idx_to_char[idx[i]];
         if (!keep || keep(idx, length)) {
+            /* No zero test: under the prior every string has mass, and one
+             * that did not would add nothing here anyway. */
             const double p = exp(beam_model_log_pseq(m, buf));
-            if (p > 0.0) {
-                total += p;
-                for (uint32_t i = 0; i < length; ++i) {
-                    marg[(size_t)i * R + idx[i]] += p;
-                    for (uint32_t j = 0; j < length; ++j)
-                        joint[(((size_t)i * length + j) * R + idx[i]) * R
-                              + idx[j]] += p;
-                }
+            total += p;
+            for (uint32_t i = 0; i < length; ++i) {
+                marg[(size_t)i * R + idx[i]] += p;
+                for (uint32_t j = 0; j < length; ++j)
+                    joint[(((size_t)i * length + j) * R + idx[i]) * R
+                          + idx[j]] += p;
             }
         }
         uint32_t k = length;
@@ -133,12 +171,12 @@ done:
 
 /* ── Corpora with answers known in advance ───────────────────── */
 
-static void test_a_deterministic_dependency_carries_exactly_one_bit(void) {
+static void test_a_deterministic_dependency_carries_one_bit_as_the_prior_vanishes(void) {
     /* Position 2 always repeats position 1, so each tells you the other
      * completely and the information they share is the whole of either. */
-    const char *seqs[2] = {"CAAF", "CGGF"};
+    const char *seqs[2] = {"CAAT", "CGGT"};
     const double w[2] = {1.0, 1.0};
-    BeamModel *m = build(seqs, w, 2u, 3u, false);
+    BeamModel *m = build_with_prior(seqs, w, 2u, 3u, VANISHING);
     ASSERT_MSG(m != NULL, "model built");
     const uint32_t L = 4u;
 
@@ -174,12 +212,12 @@ static void test_a_deterministic_dependency_carries_exactly_one_bit(void) {
     PASS();
 }
 
-static void test_independent_positions_share_no_information(void) {
+static void test_independent_positions_share_no_information_as_the_prior_vanishes(void) {
     /* All four combinations, equally weighted: knowing one position says
      * nothing whatever about the other. */
-    const char *seqs[4] = {"CAAF", "CAGF", "CGAF", "CGGF"};
+    const char *seqs[4] = {"CAAT", "CAGT", "CGAT", "CGGT"};
     const double w[4] = {1.0, 1.0, 1.0, 1.0};
-    BeamModel *m = build(seqs, w, 4u, 3u, false);
+    BeamModel *m = build_with_prior(seqs, w, 4u, 3u, VANISHING);
     ASSERT_MSG(m != NULL, "model built");
     const uint32_t L = 4u;
 
@@ -208,10 +246,49 @@ static void test_independent_positions_share_no_information(void) {
     PASS();
 }
 
+static void test_the_default_prior_leaves_no_position_certain_and_no_dependency_exact(void) {
+    /*
+     * The same deterministic corpus at the default strength. Nothing here is
+     * a measured number: each claim follows from every string having
+     * positive mass. Every residue then has positive probability at every
+     * position, so no position entropy is zero; and every cell of a pair
+     * joint is positive, so position 2 is never a function of position 1,
+     * H(X_2 | X_1) > 0, and the information they share falls strictly short
+     * of what either carries. Two observations cannot outvote a prior worth
+     * ten.
+     */
+    const char *seqs[2] = {"CAAT", "CGGT"};
+    const double w[2] = {1.0, 1.0};
+    BeamModel *m = build(seqs, w, 2u, 3u);
+    ASSERT_MSG(m != NULL, "model built");
+    const uint32_t L = 4u;
+
+    double h[4], joint[R * R];
+    BeamConstraint *c = beam_query_constraint_new(L, R);
+    ASSERT_MSG(beam_query_position_entropy(m, c, h) == BEAM_OK, "entropy");
+    for (uint32_t i = 0; i < L; ++i)
+        ASSERT_MSG(h[i] > 0.0, "no position is certain, not even a fixed one");
+
+    ASSERT_MSG(beam_query_pair_joint(m, c, 1u, 2u, joint) == BEAM_OK, "joint");
+    double hj = 0.0;
+    for (uint32_t k = 0; k < R * R; ++k) {
+        ASSERT_MSG(joint[k] > 0.0, "every pair of residues has mass");
+        hj -= joint[k] * log(joint[k]);
+    }
+    const double mi = h[1] + h[2] - hj;
+    ASSERT_MSG(mi > 0.0, "the dependency is still there");
+    ASSERT_MSG(mi < h[1] - 1e-6 && mi < h[2] - 1e-6,
+               "but no longer exact: the two positions share strictly less "
+               "than either carries");
+    beam_query_constraint_free(c);
+    beam_model_destroy(m);
+    PASS();
+}
+
 /* ── The matrix against enumeration ──────────────────────────── */
 
 static void test_the_information_matrix_matches_enumeration(void) {
-    BeamModel *m = build(SHORT_TRAIN, SHORT_WEIGHT, N_SHORT, 2u, true);
+    BeamModel *m = build(SHORT_TRAIN, SHORT_WEIGHT, N_SHORT, 2u);
     ASSERT_MSG(m != NULL, "model built");
     const uint32_t L = 4u;
 
@@ -249,17 +326,17 @@ static void test_the_information_matrix_matches_enumeration(void) {
     PASS();
 }
 
-static bool keep_has_as(const uint8_t *s, uint32_t n) {
+static bool keep_has_cg(const uint8_t *s, uint32_t n) {
     for (uint32_t i = 0; i + 1u < n; ++i)
-        if (s[i] == AA_A_ && s[i + 1u] == AA_S_) return true;
+        if (s[i] == NT_C && s[i + 1u] == NT_G) return true;
     return false;
 }
 
 static void test_the_matrix_under_a_constraint_matches_enumeration(void) {
-    BeamModel *m = build(SHORT_TRAIN, SHORT_WEIGHT, N_SHORT, 2u, true);
+    BeamModel *m = build(SHORT_TRAIN, SHORT_WEIGHT, N_SHORT, 2u);
     ASSERT_MSG(m != NULL, "model built");
     const uint32_t L = 4u;
-    const uint8_t motif[2] = {AA_A_, AA_S_};
+    const uint8_t motif[2] = {NT_C, NT_G};
 
     double *mi = (double *)malloc((size_t)L * L * sizeof(double));
     double *h  = (double *)malloc((size_t)L * sizeof(double));
@@ -279,7 +356,7 @@ static void test_the_matrix_under_a_constraint_matches_enumeration(void) {
     ASSERT_MSG(beam_query_position_entropy(m, c, h) == BEAM_OK, "entropy");
     ASSERT_MSG(beam_query_information_matrix(m, c, mi) == BEAM_OK, "matrix");
     beam_query_constraint_free(c);
-    enumerate_matrix(m, L, keep_has_as, wm, wh);
+    enumerate_matrix(m, L, keep_has_cg, wm, wh);
 
     for (uint32_t i = 0; i < L; ++i) {
         ASSERT_MSG(fabs(h[i] - wh[i]) < 1e-12, "conditional entropy matches");
@@ -295,7 +372,7 @@ static void test_the_matrix_under_a_constraint_matches_enumeration(void) {
 /* ── Identities the assembly must satisfy ────────────────────── */
 
 static void test_the_matrix_obeys_the_identities_information_must(void) {
-    BeamModel *m = build(SHORT_TRAIN, SHORT_WEIGHT, N_SHORT, 2u, true);
+    BeamModel *m = build(SHORT_TRAIN, SHORT_WEIGHT, N_SHORT, 2u);
     ASSERT_MSG(m != NULL, "model built");
     const uint32_t L = 4u;
     double *mi = (double *)malloc((size_t)L * L * sizeof(double));
@@ -340,7 +417,7 @@ static void test_the_matrix_obeys_the_identities_information_must(void) {
 }
 
 static void test_summed_position_entropies_never_undercut_the_sequence(void) {
-    BeamModel *m = build(SHORT_TRAIN, SHORT_WEIGHT, N_SHORT, 2u, true);
+    BeamModel *m = build(SHORT_TRAIN, SHORT_WEIGHT, N_SHORT, 2u);
     ASSERT_MSG(m != NULL, "model built");
     const uint32_t L = 4u;
     double *h = (double *)malloc((size_t)L * sizeof(double));
@@ -366,7 +443,7 @@ static void test_summed_position_entropies_never_undercut_the_sequence(void) {
 /* ── Pair joints ─────────────────────────────────────────────── */
 
 static void test_a_pair_joint_is_a_distribution_with_the_right_marginals(void) {
-    BeamModel *m = build(SHORT_TRAIN, SHORT_WEIGHT, N_SHORT, 2u, true);
+    BeamModel *m = build(SHORT_TRAIN, SHORT_WEIGHT, N_SHORT, 2u);
     ASSERT_MSG(m != NULL, "model built");
     const uint32_t L = 4u;
     double *joint = (double *)malloc((size_t)R * R * sizeof(double));
@@ -431,7 +508,7 @@ static void test_a_pair_joint_is_a_distribution_with_the_right_marginals(void) {
 }
 
 static void test_the_matrix_agrees_with_the_pair_joints(void) {
-    BeamModel *m = build(SHORT_TRAIN, SHORT_WEIGHT, N_SHORT, 2u, true);
+    BeamModel *m = build(SHORT_TRAIN, SHORT_WEIGHT, N_SHORT, 2u);
     ASSERT_MSG(m != NULL, "model built");
     const uint32_t L = 4u;
 
@@ -474,7 +551,7 @@ static void test_the_matrix_agrees_with_the_pair_joints(void) {
 /* ── Cost ────────────────────────────────────────────────────── */
 
 static void test_the_information_cost_reports_the_whole_job(void) {
-    BeamModel *m = build(SHORT_TRAIN, SHORT_WEIGHT, N_SHORT, 2u, true);
+    BeamModel *m = build(SHORT_TRAIN, SHORT_WEIGHT, N_SHORT, 2u);
     ASSERT_MSG(m != NULL, "model built");
     const uint32_t L = 4u;
     BeamConstraint *c = beam_query_constraint_new(L, R);
@@ -482,7 +559,8 @@ static void test_the_information_cost_reports_the_whole_job(void) {
     ASSERT_MSG(beam_query_estimate(m, c, &one) == BEAM_OK, "one sweep");
     ASSERT_MSG(beam_query_information_cost(m, c, &all) == BEAM_OK, "matrix");
     /* One sweep per (position, residue), plus the one that finds out which
-     * of them carry mass. */
+     * of them carry mass. Under the prior every one of them does, so on an
+     * unconstrained query this is the count exactly rather than a bound. */
     ASSERT_MSG(all.edges == one.edges * (L * R + 1u),
                "the matrix is costed as the sweeps it will actually take");
     /*
@@ -508,7 +586,7 @@ static void test_the_information_cost_reports_the_whole_job(void) {
      * well. A three-state uniform motif over R residues adds its table and its
      * accepting flags.
      */
-    const uint8_t motif[2] = {AA_A_, AA_S_};
+    const uint8_t motif[2] = {NT_C, NT_G};
     BeamConstraint *d = beam_query_constraint_new(L, R);
     ASSERT_MSG(beam_query_constrain_automaton(
                    d, beam_query_automaton_motif(L, R, motif, 2u)) == BEAM_OK,
@@ -526,7 +604,7 @@ static void test_the_information_cost_reports_the_whole_job(void) {
 }
 
 static void test_every_entry_point_refuses_the_impossible(void) {
-    BeamModel *m = build(SHORT_TRAIN, SHORT_WEIGHT, N_SHORT, 2u, true);
+    BeamModel *m = build(SHORT_TRAIN, SHORT_WEIGHT, N_SHORT, 2u);
     ASSERT_MSG(m != NULL, "model built");
     const uint32_t L = 4u;
     double *h = (double *)malloc((size_t)L * sizeof(double));
@@ -548,7 +626,7 @@ static void test_every_entry_point_refuses_the_impossible(void) {
 }
 
 static void test_information_refuses_what_it_cannot_answer(void) {
-    BeamModel *m = build(SHORT_TRAIN, SHORT_WEIGHT, N_SHORT, 2u, true);
+    BeamModel *m = build(SHORT_TRAIN, SHORT_WEIGHT, N_SHORT, 2u);
     ASSERT_MSG(m != NULL, "model built");
     const uint32_t L = 4u;
     double *mi = (double *)malloc((size_t)L * L * sizeof(double));
@@ -567,8 +645,9 @@ static void test_information_refuses_what_it_cannot_answer(void) {
 
 int main(void) {
     printf("\n[answers known before the model is built]\n");
-    RUN_TEST(test_a_deterministic_dependency_carries_exactly_one_bit);
-    RUN_TEST(test_independent_positions_share_no_information);
+    RUN_TEST(test_a_deterministic_dependency_carries_one_bit_as_the_prior_vanishes);
+    RUN_TEST(test_independent_positions_share_no_information_as_the_prior_vanishes);
+    RUN_TEST(test_the_default_prior_leaves_no_position_certain_and_no_dependency_exact);
 
     printf("\n[enumeration]\n");
     RUN_TEST(test_the_information_matrix_matches_enumeration);

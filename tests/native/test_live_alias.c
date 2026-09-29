@@ -13,6 +13,13 @@
  * list it no longer owns, and that the frontier's own self-check still passes
  * on an aliased cache. Whether the analytics still agree is the business of
  * the suites that already compare their values.
+ *
+ * Under the hierarchical prior every finalized cell is positive, so every
+ * state a model reaches can also finish, and on a real model the lists agree
+ * on every layer of every length. That is checked as it stands. The branch
+ * that keeps `live` as a list of its own is still the library's, though, and
+ * it is where a double free would hide, so the negative case is run on a
+ * model with some states made dead by hand (see `build_with_dead_states`).
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -29,6 +36,12 @@ static int pass_count = 0, fail_count = 0;
 #include "test_utils.h"
 
 
+#define MAX_LEN 9u
+#define ORDER   3u
+/* The layer `build_with_dead_states` kills half the states of. At or above
+ * ORDER, so every one of the 20^3 residue contexts is reached there. */
+#define DEAD_DEPTH 4u
+
 #define N_TRAIN 12
 static const char *TRAIN[N_TRAIN] = {
     "CASSF",  "CASSY",  "CAGSF",  "CGSSF",  "CASSL",   "CTSSF",
@@ -36,16 +49,15 @@ static const char *TRAIN[N_TRAIN] = {
 };
 static const double WEIGHT[N_TRAIN] = { 40,25,18,15,12,10,9,8,7,6,5,4 };
 
-static BeamModel *build(uint32_t max_length, bool strict) {
+static BeamModel *build(bool sparse) {
     BeamModelConfig cfg;
     beam_model_config_default(&cfg);
-    cfg.order = 3u;
-    cfg.max_length = max_length;
-    cfg.strict = strict;
-    /* Sparse storage is only accepted in the fully closed world, so the
-     * open-world case here is necessarily dense. Both reach the same live
-     * cache -- liveness is a property of the trellis, not of the layout. */
-    cfg.sparse = strict;
+    cfg.order = ORDER;
+    cfg.max_length = MAX_LEN;
+    /* Sparse and dense are the same model bit for bit and reach the same
+     * live cache -- liveness is a property of the trellis, not of the
+     * layout -- but they read their rows through different code. */
+    cfg.sparse = sparse;
     BeamModel *m = beam_model_new(&cfg);
     if (!m) return NULL;
     if (beam_model_observe(m, TRAIN, WEIGHT, N_TRAIN) != BEAM_OK
@@ -57,6 +69,90 @@ static BeamModel *build(uint32_t max_length, bool strict) {
 }
 
 /**
+ * A model on which `live` and `reached` genuinely differ.
+ *
+ * No finalized model has such a layer any more: under the prior every cell is
+ * positive, so every reached state has twenty finite edges and a finite tail.
+ * To reach the non-aliasing branch at all, every forward row at depth
+ * DEAD_DEPTH whose context index is even is overwritten with -inf. The states
+ * carrying those contexts are still reached at layer DEAD_DEPTH -- the edges
+ * INTO them read depth DEAD_DEPTH - 1 -- but no edge leaves them, so they
+ * are reached and not live, and every length longer than DEAD_DEPTH has one
+ * layer whose lists differ.
+ *
+ * Dense, because a dense row is one contiguous run of cells to overwrite,
+ * where a sparse row may be interned, packed, or absent and resolved through
+ * its ancestors. The cache is dropped afterwards so nothing built from the
+ * unmodified tables survives.
+ */
+static BeamModel *build_with_dead_states(void) {
+    BeamModel *m = build(false);
+    if (!m) return NULL;
+    const uint32_t R = m->n_residues;
+    for (uint32_t ctx = 0; ctx < m->n_ctx; ctx += 2u) {
+        double *row = m->lp[BEAM_FWD] + (size_t)beam_row(m, DEAD_DEPTH, ctx) * R;
+        for (uint32_t x = 0; x < R; ++x) row[x] = -INFINITY;
+    }
+    beam_live_cache_drop(m);
+    return m;
+}
+
+/** `R^k`, the number of residue contexts of length `k`. */
+static uint32_t power(uint32_t R, uint32_t k) {
+    uint32_t p = 1u;
+    while (k--) p *= R;
+    return p;
+}
+
+/**
+ * Every layer of a real model aliases, and reaches every context there is.
+ *
+ * Both halves are arithmetic the prior makes exact. A state at layer `i`
+ * holds the last `min(i, order)` residues, and with every edge finite each of
+ * the `R^min(i, order)` combinations is reached; with every tail finite each
+ * of them can also finish, so `live` equals `reached` and the alias must be
+ * taken. A layer that failed to alias here would leave the saving on the
+ * table without any answer ever saying so; a count that differed would mean
+ * an edge or a tail the prior forbids from being -inf was read as one.
+ */
+static void test_every_layer_of_a_real_model_aliases(void) {
+    BeamModel *m = build(true);
+    ASSERT_MSG(m != NULL, "model did not build");
+    const uint32_t R = m->n_residues;
+
+    uint32_t layers = 0;
+    for (uint32_t len = 1; len <= MAX_LEN; ++len) {
+        LiveHandle h;
+        if (beam_live_acquire(m, len, &h) != BEAM_OK) {
+            beam_model_destroy(m);
+            ASSERT_MSG(0, "a live set would not build");
+        }
+        const BeamLive *L = h.L;
+        for (uint32_t i = 0; i <= L->len; ++i) {
+            const uint32_t want = power(R, i < ORDER ? i : ORDER);
+            const bool ok = L->n_reached[i] == want
+                         && L->n_live[i] == want
+                         && L->live[i] == L->reached[i];
+            if (!ok) {
+                printf("FAIL: len=%u layer=%u reached=%u live=%u want=%u "
+                       "alias=%d\n", len, i, L->n_reached[i], L->n_live[i],
+                       want, (int)(L->live[i] == L->reached[i]));
+                fail_count++;
+                beam_live_release(&h);
+                beam_model_destroy(m);
+                return;
+            }
+            layers++;
+        }
+        beam_live_release(&h);
+    }
+    beam_model_destroy(m);
+    ASSERT_MSG(layers == MAX_LEN * (MAX_LEN + 3u) / 2u,
+               "not every layer of every length was inspected");
+    PASS();
+}
+
+/**
  * Aliased exactly where the lists are equal, and nowhere else.
  *
  * Both directions matter. Aliasing a layer whose lists differ would hand
@@ -64,11 +160,11 @@ static BeamModel *build(uint32_t max_length, bool strict) {
  * simply leave the saving on the table, and no answer would ever say so.
  */
 static void test_the_alias_is_taken_exactly_when_the_lists_agree(void) {
-    BeamModel *m = build(9u, true);
+    BeamModel *m = build_with_dead_states();
     ASSERT_MSG(m != NULL, "model did not build");
 
     uint32_t aliased = 0, distinct = 0, layers = 0;
-    for (uint32_t len = 1; len <= 9u; ++len) {
+    for (uint32_t len = 1; len <= MAX_LEN; ++len) {
         LiveHandle h;
         if (beam_live_acquire(m, len, &h) != BEAM_OK) continue;
         const BeamLive *L = h.L;
@@ -108,8 +204,11 @@ static void test_the_alias_is_taken_exactly_when_the_lists_agree(void) {
 
     ASSERT_MSG(layers > 0u, "no layer was inspected");
     ASSERT_MSG(aliased > 0u, "the alias never fired: nothing was saved");
-    ASSERT_MSG(distinct > 0u,
-               "every layer aliased: the negative case was never exercised");
+    /* One layer per length longer than DEAD_DEPTH, and no more: the dead
+     * states are the only difference between the lists anywhere. */
+    ASSERT_MSG(distinct == MAX_LEN - DEAD_DEPTH,
+               "the lists differed on a layer other than the one made dead, "
+               "or not on that one");
     PASS();
 }
 
@@ -121,11 +220,11 @@ static void test_the_alias_is_taken_exactly_when_the_lists_agree(void) {
  * back -- a saving that costs cache hits.
  */
 static void test_the_byte_count_drops_by_the_aliased_lists(void) {
-    BeamModel *m = build(9u, true);
+    BeamModel *m = build(true);
     ASSERT_MSG(m != NULL, "model did not build");
 
     uint64_t aliased_bytes = 0;
-    for (uint32_t len = 1; len <= 9u; ++len) {
+    for (uint32_t len = 1; len <= MAX_LEN; ++len) {
         LiveHandle h;
         if (beam_live_acquire(m, len, &h) != BEAM_OK) continue;
         const BeamLive *L = h.L;
@@ -141,7 +240,7 @@ static void test_the_byte_count_drops_by_the_aliased_lists(void) {
     /* The reported total must EXCLUDE the aliased lists. Recompute the total
      * the old accounting would have produced and require the difference. */
     uint64_t naive = reported;
-    for (uint32_t len = 1; len <= 9u; ++len) {
+    for (uint32_t len = 1; len <= MAX_LEN; ++len) {
         LiveHandle h;
         if (beam_live_acquire(m, len, &h) != BEAM_OK) continue;
         const BeamLive *L = h.L;
@@ -162,19 +261,20 @@ static void test_the_byte_count_drops_by_the_aliased_lists(void) {
  * state that was never reached; an alias satisfies both trivially, which is
  * the point -- this asserts the checker was not silently skipped.
  *
- * Run in both worlds. The open world is the one where `live` and `reached`
- * most often differ, because a state can be reachable and still have no
- * finite tail, so it exercises the branch the closed world rarely takes.
+ * Run on sparse and dense storage, where every layer aliases, and on the
+ * model with dead states, which is the only one that takes the branch where
+ * `live` is a list of its own.
  */
 static void test_the_selfcheck_passes_on_an_aliased_cache(void) {
-    for (int strict = 0; strict < 2; ++strict) {
-        BeamModel *m = build(9u, strict != 0);
+    static const char *const kinds[3] = {"sparse", "dense", "dead states"};
+    for (int kind = 0; kind < 3; ++kind) {
+        BeamModel *m = kind == 2 ? build_with_dead_states() : build(kind == 0);
         ASSERT_MSG(m != NULL, "model did not build");
-        for (uint32_t len = 1; len <= 9u; ++len) {
+        for (uint32_t len = 1; len <= MAX_LEN; ++len) {
             const int rc = beam_live_selfcheck(m, len);
-            if (rc != 0 && rc != BEAM_LIVE_SELFCHECK_BUILD) {
-                printf("FAIL: strict=%d len=%u selfcheck code %d\n",
-                       strict, len, rc);
+            if (rc != 0) {
+                printf("FAIL: %s len=%u selfcheck code %d\n",
+                       kinds[kind], len, rc);
                 fail_count++;
                 beam_model_destroy(m);
                 return;
@@ -190,12 +290,14 @@ static void test_the_selfcheck_passes_on_an_aliased_cache(void) {
  *
  * Under a plain allocator a double free is undefined and may look like a
  * pass; this test earns its keep when the suite is built with
- * `-fsanitize=address`, which is how it was checked.
+ * `-fsanitize=address`, which is how it was checked. It runs on the model
+ * with dead states, so the cache it drops holds aliased and owned lists side
+ * by side -- the mixture a wrong "is this mine to free" test would get wrong.
  */
 static void test_dropping_an_aliased_cache_frees_each_list_once(void) {
-    BeamModel *m = build(9u, true);
+    BeamModel *m = build_with_dead_states();
     ASSERT_MSG(m != NULL, "model did not build");
-    for (uint32_t len = 1; len <= 9u; ++len) {
+    for (uint32_t len = 1; len <= MAX_LEN; ++len) {
         LiveHandle h;
         if (beam_live_acquire(m, len, &h) == BEAM_OK) beam_live_release(&h);
     }
@@ -206,7 +308,7 @@ static void test_dropping_an_aliased_cache_frees_each_list_once(void) {
 
     /* Warm it again after the drop: the second build must not reuse a freed
      * list from the first. */
-    for (uint32_t len = 1; len <= 9u; ++len) {
+    for (uint32_t len = 1; len <= MAX_LEN; ++len) {
         LiveHandle h;
         if (beam_live_acquire(m, len, &h) == BEAM_OK) beam_live_release(&h);
     }
@@ -217,6 +319,7 @@ static void test_dropping_an_aliased_cache_frees_each_list_once(void) {
 
 int main(void) {
     printf("\nlive/reached aliasing\n");
+    RUN_TEST(test_every_layer_of_a_real_model_aliases);
     RUN_TEST(test_the_alias_is_taken_exactly_when_the_lists_agree);
     RUN_TEST(test_the_byte_count_drops_by_the_aliased_lists);
     RUN_TEST(test_the_selfcheck_passes_on_an_aliased_cache);

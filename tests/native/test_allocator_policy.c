@@ -14,9 +14,15 @@
  * was right all along. Only resident memory shows it, which is why this test
  * reads /proc rather than any BEAM accessor.
  *
- * The bound is deliberately loose. The measured ratio is about 2x and the
- * regression it guards is 35x, so 8x separates them by a wide margin while
- * leaving room for allocator differences between machines.
+ * The bound is deliberately loose, and the fixture is sized so that it
+ * separates the two cases. The ratio compares a fixed cost -- an order-4
+ * sweep's scratch, which the ratchet pins -- to the model's size, so a model
+ * that is too large hides the regression: the 60,000-sequence, length-20
+ * fixture this used to build holds 236 MB under the hierarchical prior and
+ * measured 1.8x with the policy and only 5.2x without it, passing either way.
+ * This one measured 2.7x with the policy and 17.4x with it disabled
+ * (BEAM_MMAP_THRESHOLD=0), so 8x sits between them with room for allocator
+ * differences between machines.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -52,7 +58,7 @@ static BeamModel *build(uint32_t n_seqs) {
     double *w = (double *)malloc(n_seqs * sizeof(double));
     if (!seqs || !w) { free(seqs); free(w); return NULL; }
     for (uint32_t k = 0; k < n_seqs; ++k) {
-        const uint32_t L = 8u + rnd(10u);
+        const uint32_t L = 6u + rnd(5u);
         char *s = (char *)malloc(L + 3u);
         s[0] = 'C';
         for (uint32_t j = 0; j < L; ++j) s[1 + j] = AA[rnd(20u)];
@@ -61,7 +67,7 @@ static BeamModel *build(uint32_t n_seqs) {
     }
     BeamModelConfig cfg;
     beam_model_config_default(&cfg);
-    cfg.order = 4u; cfg.max_length = 20u; cfg.sparse = true;
+    cfg.order = 4u; cfg.max_length = 12u; cfg.sparse = true;
     BeamModel *m = beam_model_new(&cfg);
     if (m && (beam_model_observe(m, (const char **)seqs, w, n_seqs) != BEAM_OK
               || beam_model_finalize(m) != BEAM_OK)) {
@@ -97,7 +103,7 @@ static void test_resident_memory_stays_near_the_model_size(void) {
     const long before = rss_bytes();
     ASSERT_MSG(before > 0, "/proc/self/statm is unreadable");
 
-    BeamModel *m = build(60000u);
+    BeamModel *m = build(10000u);
     ASSERT_MSG(m != NULL, "model did not build");
 
     /* One analytic, because the old behaviour got dramatically worse here. */
@@ -117,7 +123,7 @@ static void test_resident_memory_stays_near_the_model_size(void) {
     printf("\n      model %.1f MB, resident grew %.1f MB, ratio %.2fx  ",
            model / 1e6, grew / 1e6, ratio);
     if (ratio > 8.0)
-        printf("\n      (was ~35x before the mmap threshold was pinned)  ");
+        printf("\n      (about 17x on this fixture without the pinned threshold)  ");
     ASSERT_MSG(ratio <= 8.0,
                "resident memory is many times the model's own size");
     PASS();

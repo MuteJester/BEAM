@@ -53,8 +53,4 @@ void beam_free_counts(BeamModel *m);
 /** Release the finalized log-probability tables, dense or sparse. */
 void beam_free_tables(BeamModel *m);
 
-
-/** Convert probabilities to logs in place. Returns false on a dead table. */
-bool beam_to_log_inplace(double *p, size_t n, bool strict);
-
 #endif /* BEAM_INTERNAL_MODEL_BUILD_H */

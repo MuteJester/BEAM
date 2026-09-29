@@ -21,6 +21,11 @@
  * and the message naming the figure and the remedy was replaced by "a
  * partition function could not be computed". Refusing on the calling thread
  * is what keeps it.
+ *
+ * The model is order 3. Neither property depends on the order, and under the
+ * hierarchical prior every state of the trellis is live at every layer, so an
+ * order-4 finalize costs about twenty times as much -- five of them made this
+ * one of the slowest files in the directory for no added coverage.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -46,7 +51,7 @@ static const double WEIGHT[N_TRAIN] = { 40,25,18,15,12,10,9,8,7,6,5,4,3,2 };
 static BeamModel *build(uint32_t max_length) {
     BeamModelConfig cfg;
     beam_model_config_default(&cfg);
-    cfg.order = 4u;
+    cfg.order = 3u;
     cfg.max_length = max_length;
     cfg.sparse = true;
     BeamModel *m = beam_model_new(&cfg);
@@ -131,7 +136,7 @@ static void test_a_budget_too_small_refuses_and_says_why(void) {
 
     BeamModelConfig cfg;
     beam_model_config_default(&cfg);
-    cfg.order = 4u; cfg.max_length = 12u; cfg.sparse = true;
+    cfg.order = 3u; cfg.max_length = 12u; cfg.sparse = true;
     BeamModel *m = beam_model_new(&cfg);
     ASSERT_MSG(m != NULL, "the model did not allocate");
     if (beam_model_observe(m, TRAIN, WEIGHT, N_TRAIN) != BEAM_OK) {

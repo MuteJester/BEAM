@@ -169,6 +169,14 @@ typedef enum {
  */
 #define BEAM_MAX_ORDER       9u
 
+/**
+ * Starting strengths of the hierarchical prior, in pseudo-observations: every
+ * context level and the length distribution. A starting point, not a
+ * measurement; fit them to a corpus by held-out likelihood.
+ */
+#define BEAM_DEFAULT_ALPHA        10.0
+#define BEAM_DEFAULT_ALPHA_LENGTH 10.0
+
 /* ── Configuration ───────────────────────────────────────────── */
 
 /**
@@ -218,64 +226,53 @@ typedef struct {
      * length, which leaves within-length ranking untouched and wrecks
      * cross-length comparison. It is not refused, because `(1, 0)` and
      * `(0, 1)` are the only way to measure each anchor's chain on its own,
-     * which is what separates a partition function below 1 into the two
-     * causes that can put it there: the two chains disagreeing, and the
-     * closed world leaking mass at rows it never observed.
+     * which is what shows where a partition function below 1 comes from:
+     * the two chains disagreeing about a sequence.
      */
     double weight_forward, weight_backward;
 
     /**
-     * Closed-world mode: a sequence the graph cannot spell scores exactly zero.
-     * Default TRUE.
+     * Prior strengths of the hierarchical Bayesian smoothing, one per context
+     * level. Every sequence up to `max_length` has positive probability; the
+     * observed ones pull the mass toward themselves.
      *
-     * The default is closed-world because that is what the model is for: it
-     * should hold what the sequences it was given actually spell, not a full
-     * dictionary over every state the alphabet permits. Clearing this field
-     * selects the open world instead, and that is now the deliberate choice.
+     * A row of either table is (depth, the `order` nearest residues). Its
+     * level-k parent is the same depth with only the k nearest residues, and
+     * level 0 is the depth alone. Each level is the posterior mean of a
+     * Dirichlet centred on its parent:
      *
-     * Two things make zero unreachable in the open world, and this turns off
-     * both. The order-0 base level adds one pseudo-count to every
-     * residue, so nothing is ever unseen there; and probabilities are floored
-     * at `BEAM_PROB_FLOOR` before the log, so a genuine zero arrives as a
-     * large finite negative rather than -inf. With `strict` set, the base
-     * level is the raw MLE and no floor is applied, so an unobserved
-     * transition is -inf and any path through it is impossible.
+     *     P_k(x) = (n_k(x) + alpha[k] * P_{k-1}(x)) / (n_k + alpha[k])
      *
-     * WHAT IT COSTS. Clearing this field is why BEAM can rank unseen CDR3s:
-     * a sequence absent from the corpus still receives a graded probability
-     * rather than a flat zero. Under the closed-world default it receives
-     * zero, and a held-out sequence using one unobserved context is
-     * unscoreable rather than merely improbable. This is the FlashBack trade,
-     * made explicitly.
+     * with P_{-1} the uniform 1/R. `n_k` are the counts the model already
+     * keeps, summed over the residues level k drops. A row nothing was ever
+     * observed at is therefore exactly its parent, so an unseen context
+     * predicts what its shorter context predicts rather than being
+     * impossible (the old closed world) or uniform (the old open world).
      *
-     * WHAT IT BUYS. D0 stops being `sum_L 20**L` and becomes a real path
-     * count over the transitions the corpus actually produced, so support and
-     * diversity say something about the data instead of about the smoother.
-     *
-     * `strict` alone IS the closed world: only the exact observed
-     * transitions carry mass. It used to be half of it -- the backoff
-     * hierarchy still carried mass from shorter contexts, so the closed world
-     * was strict AND every backoff strength at zero -- and that hierarchy
-     * went with the three-expert mixture. There is nothing left to set
-     * beside it.
-     *
-     * Unrelated to the `kappa` of `beam_model_posterior`, which is a
-     * Dirichlet concentration and still very much alive.
+     * `alpha[k]` for k = 0..order is how many pseudo-observations the parent
+     * is worth at level k; entries past `order` are ignored. Every one must be
+     * finite and positive: a zero would let an unobserved residue reach
+     * probability zero and bring the closed world back through one level.
      */
-    bool strict;
+    double alpha[BEAM_MAX_ORDER + 1];
 
     /**
-     * Store closed-world count and probability tables as occupied 20-residue
-     * rows instead of dense cell arrays. Default false at the C API level.
+     * Prior strength of the length distribution:
      *
-     * Sparse storage is exact only when `strict` is true. A configuration
-     * that requests it in the open world is rejected: the open world's
-     * add-one gives an unobserved row non-zero mass, so
-     * omitting it would change the model.
+     *     P(L) = (n_L + alpha_length / max_length) / (N + alpha_length)
      *
-     * The Python API selects this mode automatically for the usual
-     * `strict=True` configuration and exposes `sparse=False` for dense/sparse
-     * equivalence checks and reproducibility.
+     * over every length 1..max_length, so a length the corpus never produced
+     * is improbable rather than impossible. Finite and positive.
+     */
+    double alpha_length;
+
+    /**
+     * Store only the rows something was observed at, and resolve every other
+     * row through its parent at lookup, instead of materialising all
+     * `max_length * radix^order` rows. Default TRUE.
+     *
+     * Both layouts represent the same model bit for bit; dense exists for
+     * equivalence checks and costs gigabytes at order 4.
      */
     bool sparse;
 } BeamModelConfig;
@@ -353,6 +350,28 @@ BeamError beam_model_observe(BeamModel *m,
 BeamError beam_model_subtract(BeamModel *m, const BeamModel *other);
 
 /**
+ * Raise a finalized model to a power: `P_t(s) proportional to P(s)^t`.
+ *
+ * In place, and only on a FINALIZED model, because it is the log tables rather
+ * than the counts that are scaled. `t` must be finite and strictly positive:
+ * `t = 0` would send every finite log weight to zero and every -inf to NaN,
+ * and a negative `t` would turn an unspellable edge into the likeliest one.
+ *
+ * `t > 1` concentrates the distribution on its likeliest sequences and `t < 1`
+ * flattens it toward the rare ones. The SUPPORT is unchanged either way, so
+ * `beam_model_path_count` does not move.
+ *
+ * Exact: the result satisfies `ln P_t(s) = t ln P(s) - ln sum_s P(s)^t`
+ * identically, the second term being `beam_model_log_mellin` at `t`.
+ *
+ * RELEASES THE COUNTS, as `beam_model_compact` does, and for a reason that is
+ * not about memory: a tempered model's distribution is not a function of its
+ * counts, so add, subtract, posterior and copy would each silently rebuild the
+ * untempered tables. They refuse instead.
+ */
+BeamError beam_model_temper(BeamModel *m, double t);
+
+/**
  * Add another model's counts into this one. The inverse of
  * `beam_model_subtract`, and the reason both exist: counts are additive,
  * so a corpus can be counted in shards and combined without re-reading
@@ -393,6 +412,18 @@ BeamError beam_model_add(BeamModel *m, const BeamModel *other);
 BeamError beam_model_posterior(BeamModel *m,
                                   const BeamModel *prior,
                                   double kappa);
+
+/**
+ * Change the hierarchical prior's strengths and re-finalize from the counts.
+ *
+ * `alpha` holds `n_alpha` = order + 1 strengths, one per level 0..order, and
+ * `alpha_length` the length prior's. Validated exactly as a build config is;
+ * on any refusal the model is left as it was. Nothing is re-observed: the
+ * counts are the only state the prior reads, which is what makes fitting the
+ * strengths by held-out likelihood a sequence of re-finalizes of one model.
+ */
+BeamError beam_model_set_prior(BeamModel *m, const double *alpha,
+                               uint32_t n_alpha, double alpha_length);
 
 /**
  * Turn accumulated counts into log-probability tables and compute the
@@ -478,14 +509,10 @@ void beam_model_drop_caches(BeamModel *m);
 /**
  * Natural log of the sequence probability, `ln P(s)`.
  *
- * Under `strict=false`, returns `-INFINITY` only for a sequence the model
- * cannot read: one longer than `max_length`, one containing a character
- * outside the 20 amino acids, or one whose length was never observed and so
- * has no length prior. The Laplace add-one keeps every readable sequence of
- * an observed length finite in that regime.
- *
- * `strict` is the DEFAULT, and there a path containing an unsupported
- * transition also returns `-INFINITY`.
+ * Finite for every sequence the model can represent: under the hierarchical
+ * prior every string over the alphabet of length 1..max_length has positive
+ * probability. `-INFINITY` only for a sequence it cannot read at all -- empty,
+ * longer than `max_length`, or containing a character outside the alphabet.
  */
 double beam_model_log_pseq(const BeamModel *m, const char *seq);
 
@@ -546,12 +573,10 @@ double beam_model_log_length_prior(const BeamModel *m, uint32_t length);
  * Number of distinct sequences of length `L` the model can produce, by exact
  * path counting over the trellis.
  *
- * Under `strict=false` it will be `R^L` for R residues, and that is not a
- * bug: the Laplace add-one leaves every table cell strictly positive, so the
- * number describes the smoothing and not the grammar. Under `strict`, which
- * is the DEFAULT, dead transitions remain dead and this reports the exact
- * support of the observed-transition trellis. Dense and sparse storage return
- * the same count.
+ * Under the hierarchical prior this is exactly `R^L` for R residues: every
+ * table cell is positive, so every string of the length is possible. The
+ * number describes the alphabet, not the corpus. Dense and sparse storage
+ * return the same count.
  *
  * The function is kept because it is the exact q=0 corner of the Hill family
  * and because it is what the counting spectrum integrates to, so the two have
@@ -762,10 +787,8 @@ BeamError beam_model_surprisal_by_depth(const BeamModel *m, double q,
  * `out_nodes` and `out_edges` receive totals; `out_layer_nodes`, if non-NULL,
  * receives `length + 1` per-layer live-state counts.
  *
- * Expect these to come back saturated under `strict=false`: the Laplace
- * add-one leaves every cell positive, so every reachable state is live. Under
- * `strict`, which is the DEFAULT, the same trimming pass reports only the
- * structure supported by non-zero transitions.
+ * Expect these to come back saturated: the hierarchical prior leaves every
+ * cell positive, so every reachable state is live.
  */
 BeamError beam_model_topology(const BeamModel *m, uint32_t length,
                                  double *out_nodes, double *out_edges,
@@ -853,9 +876,8 @@ BeamError beam_model_length_marginals(const BeamModel *m,
  *               Without a clamp it is `ln Z(length)` reached by the backward
  *               sweep instead of the forward one.
  *
- * Zero-probability cells come back as exactly 0.0. No floor is applied and
- * none is wanted: in a strict model an unspellable residue at a position is
- * information, not a number to be smoothed.
+ * No floor is applied. Under the hierarchical prior no cell is zero, so a
+ * residue the corpus never put at a position comes back small, not absent.
  *
  * @return BEAM_ERR_PARAM_OUT_OF_RANGE if the model does not generate this
  *         length or a clamp names a residue outside the alphabet, and
@@ -971,12 +993,9 @@ BeamError beam_model_positional_marginals(const BeamModel *m, uint32_t length,
  * membership is accurate to O(spacing), so a band only a few bins wide
  * measures the grid rather than the model.
  *
- * Choosing the spacing automatically is right for a STRICT model and less
- * so for a smoothed one, whose accumulator maximum is set by its least likely
- * cell rather than by anything it generates often. This used to be far worse:
- * the open world had a probability floor near `1e-300`, putting the bound
- * hundreds of nats past anything real, and that floor no longer fires at all
- * -- the smallest cell is now `1/(n + R)` from the add-one. `out_position_mass` is how that is
+ * Choosing the spacing automatically is imperfect for a smoothed model, whose
+ * accumulator maximum is set by its least likely cell rather than by anything
+ * it generates often. `out_position_mass` is how that is
  * detected: its positions agree to the last bits when the grid resolves the
  * bands and visibly disagree when it does not.
  *
@@ -1162,29 +1181,18 @@ uint64_t beam_model_n_nonzero_cells(const BeamModel *m);
 /* ── Persistence ─────────────────────────────────────────────── */
 
 /**
- * Write the model's counts and configuration to `path`. Counts rather than
- * derived tables, so a loaded model can still be subtracted from and
- * re-finalized under different smoothing. Sparse counts are persisted as
- * sorted occupied-row records; the reader also accepts legacy dense format-1
- * files.
+ * Write the model's counts and configuration, the prior's strengths included,
+ * to `path`. Counts rather than derived tables, so a loaded model can still be
+ * observed into, subtracted from and re-finalized under other strengths.
  */
 BeamError beam_model_save(const BeamModel *m, const char *path);
 
-/** Read a model written by `beam_model_save`. Returns NULL on failure. */
-BeamModel *beam_model_load(const char *path);
-
 /**
- * @brief True if `path` is a model file written before the BEAM split.
- *
- * Those files carry the old EDGE magic and cannot be loaded: the format is
- * unchanged but the identifier is not, and the foundation models are being
- * rebuilt rather than migrated. This exists so a caller can say "this is a
- * pre-BEAM file, rebuild it" instead of the generic load failure, which is
- * otherwise indistinguishable from a truncated or corrupt file.
- *
- * Returns false for a missing file, a short file, or any other magic.
+ * Read a model written by `beam_model_save` of this build. Returns NULL on
+ * failure, with the reason in the error context. A file from an earlier
+ * development build is refused, not converted: rebuild it from its sequences.
  */
-bool beam_model_is_legacy_file(const char *path);
+BeamModel *beam_model_load(const char *path);
 
 /* ── Parallelism ─────────────────────────────────────────────── */
 

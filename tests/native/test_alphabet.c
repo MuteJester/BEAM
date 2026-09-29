@@ -11,6 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <math.h>
 
 #include "beam/common.h"
 #include "beam/model.h"
@@ -79,11 +80,12 @@ static void test_defaults_sit_inside_their_own_ceilings(void) {
         /* The state is max(order, 3), so an alphabet whose ceiling is below 3
          * would build a state too narrow to feed the order-3 mid expert. */
         ASSERT_MSG(a->max_order >= 3, "the state can never be narrower than 3");
-        /* BEAM_MAX_ORDER sizes every order-indexed scratch array -- `slot[]`
-         * in the context packers, `level_counts[]` and `scratch[]` in the
-         * backoff hierarchy, `mid_p[]`/`agg_p[]` in finalize. It is only a
-         * safe bound while no alphabet lets a caller ask for more, and
-         * `indexing.h` would silently CLAMP rather than fail if one did. */
+        /* BEAM_MAX_ORDER sizes every order-indexed array -- `slot[]` in the
+         * context packers, the prior's strengths `alpha[]`, its lower-level
+         * tables and radix powers, and finalize's per-level `cnt[]`, `tot[]`
+         * and `prob[]`. It is only a safe bound while no alphabet lets a
+         * caller ask for more, and `indexing.h` would silently CLAMP rather
+         * than fail if one did. */
         ASSERT_MSG(a->max_order <= BEAM_MAX_ORDER,
                    "an alphabet cannot allow an order past the bound that "
                    "sizes the arrays indexed by it");
@@ -352,9 +354,9 @@ static void test_alphabet_names_are_distinct(void) {
 
 /*
  * Adding a field to BeamModelConfig must not have moved a single default.
- * The expected values are written out rather than read from the descriptor,
- * so that editing the descriptor cannot quietly redefine what "unchanged"
- * means.
+ * The expected values are written out rather than read from the descriptor
+ * or from BEAM_DEFAULT_ALPHA, so that editing either cannot quietly redefine
+ * what "unchanged" means.
  */
 static void test_the_amino_acid_defaults_are_unchanged(void) {
     BeamModelConfig c;
@@ -365,7 +367,14 @@ static void test_the_amino_acid_defaults_are_unchanged(void) {
     ASSERT_MSG(c.max_length == 27, "max_length");
     ASSERT_MSG(c.weight_forward == 0.5 && c.weight_backward == 0.5,
                "anchor weights");
-    ASSERT_MSG(c.strict && !c.sparse, "strict, dense");
+    /* Every slot, not only 0..order: a caller who raises the order after
+     * defaulting must not find an unset strength at the new top level. */
+    for (unsigned k = 0; k <= BEAM_MAX_ORDER; ++k)
+        ASSERT_MSG(c.alpha[k] == 10.0, "every prior level starts at 10");
+    ASSERT_MSG(c.alpha_length == 10.0, "the length prior starts at 10");
+    /* Sparse, because a dense table under the prior materialises every row
+     * there is, which is gigabytes at order 4. */
+    ASSERT_MSG(c.sparse, "sparse storage is the default");
     PASS();
 }
 
@@ -385,7 +394,16 @@ static void test_per_alphabet_defaults_come_from_the_descriptor(void) {
     ASSERT_MSG(nt.weight_forward == aa.weight_forward
                && nt.weight_backward == aa.weight_backward,
                "anchor weights are alphabet-independent");
-    ASSERT_MSG(nt.strict == aa.strict, "closed world is alphabet-independent");
+    /* The prior is a starting point that `fit_alpha` replaces for a real
+     * corpus, so it is the same for both alphabets -- and written out as a
+     * literal for each, since comparing the two to each other would pass if
+     * both moved together. */
+    for (unsigned k = 0; k <= BEAM_MAX_ORDER; ++k)
+        ASSERT_MSG(aa.alpha[k] == 10.0 && nt.alpha[k] == 10.0,
+                   "every prior level starts at 10 in both alphabets");
+    ASSERT_MSG(aa.alpha_length == 10.0 && nt.alpha_length == 10.0,
+               "the length prior starts at 10 in both alphabets");
+    ASSERT_MSG(aa.sparse && nt.sparse, "both alphabets default to sparse");
     PASS();
 }
 
@@ -465,19 +483,20 @@ static void test_max_length_is_free_up_to_the_ceiling(void) {
  * The refusal used to be assembled by the caller from a fixed list -- order,
  * max_length, depth_cap, the coefficient sum, the anchor weights -- each
  * printed with its value and its range. A rule not on that list could not be
- * named, and two are not: the backoff strengths, and the requirement that
- * sparse storage implies the closed world. Asking for sparse on a nucleotide
- * model produced five fields, every one of them inside its stated range, and
- * no reason. It cost two build cycles in one afternoon, twice, because a
- * message that lists only valid things reads as though nothing is wrong.
+ * named, and at the time two were not. Tripping one of them produced five
+ * fields, every one of them inside its stated range, and no reason. It cost
+ * two build cycles in one afternoon, twice, because a message that lists only
+ * valid things reads as though nothing is wrong.
  *
  * So this pins the property rather than the wording: for each way to make a
  * config invalid, the reason must contain a token that belongs to THAT rule
  * and could not have come from any other. A message naming everything would
- * pass a test that only checked the message was non-empty.
+ * pass a test that only checked the message was non-empty. The prior's
+ * strengths are held to the index: a refusal of alpha[2] that named alpha[0]
+ * would send the caller to the wrong level.
  */
 static void test_every_config_refusal_names_its_own_rule(void) {
-    struct { const char *what; const char *token; BeamModelConfig c; } cases[8];
+    struct { const char *what; const char *token; BeamModelConfig c; } cases[12];
     uint32_t n = 0;
 
     cases[n].what = "order past the alphabet ceiling"; cases[n].token = "order=";
@@ -486,21 +505,42 @@ static void test_every_config_refusal_names_its_own_rule(void) {
     cases[n].what = "a zero max_length"; cases[n].token = "max_length=";
     cases[n].c = valid_for(BEAM_ALPHABET_AA); cases[n].c.max_length = 0; ++n;
 
-    /* The backoff-strength and coefficient rules went with the three-expert
-     * mixture; there is nothing left to refuse. Their entries were emptied
-     * rather than deleted, which left three writes to a slot that the next
-     * case overwrote. */
     cases[n].what = "a negative anchor weight"; cases[n].token = "anchor weights";
     cases[n].c = valid_for(BEAM_ALPHABET_AA);
     cases[n].c.weight_backward = -0.5; ++n;
 
-    cases[n].what = "sparse in the open world"; cases[n].token = "strict=true";
-    cases[n].c = valid_for(BEAM_ALPHABET_AA);
-    cases[n].c.sparse = true; cases[n].c.strict = false; ++n;
+    /* A zero strength would let an unobserved residue reach probability zero
+     * at that level, bringing the closed world back through one row; a
+     * negative or non-finite one is not a Dirichlet at all. The cases run
+     * from the bottom level to the order itself. */
+    cases[n].what = "a zero strength at level 0"; cases[n].token = "alpha[0]=";
+    cases[n].c = valid_for(BEAM_ALPHABET_AA); cases[n].c.alpha[0] = 0.0; ++n;
 
-    /* "sparse with backoff on" stood here without its `++n`, so the loop
-     * never reached it. That was load-bearing by accident: sparse AND strict
-     * is now a VALID config, so had it ever run it would have failed. */
+    cases[n].what = "an infinite strength at level 1"; cases[n].token = "alpha[1]=";
+    cases[n].c = valid_for(BEAM_ALPHABET_AA);
+    cases[n].c.alpha[1] = INFINITY; ++n;
+
+    cases[n].what = "a NaN strength at level 2"; cases[n].token = "alpha[2]=";
+    cases[n].c = valid_for(BEAM_ALPHABET_AA); cases[n].c.alpha[2] = NAN; ++n;
+
+    cases[n].what = "a negative strength at the order"; cases[n].token = "alpha[4]=";
+    cases[n].c = valid_for(BEAM_ALPHABET_AA); cases[n].c.alpha[4] = -1.0; ++n;
+
+    /* The nucleotide default order reaches levels the amino acids never
+     * have. */
+    cases[n].what = "a zero strength at nucleotide level 6";
+    cases[n].token = "alpha[6]=";
+    cases[n].c = valid_for(BEAM_ALPHABET_NT); cases[n].c.alpha[6] = 0.0; ++n;
+
+    cases[n].what = "a zero length strength"; cases[n].token = "alpha_length=";
+    cases[n].c = valid_for(BEAM_ALPHABET_AA); cases[n].c.alpha_length = 0.0; ++n;
+
+    cases[n].what = "an infinite length strength"; cases[n].token = "alpha_length=";
+    cases[n].c = valid_for(BEAM_ALPHABET_AA);
+    cases[n].c.alpha_length = INFINITY; ++n;
+
+    cases[n].what = "a NaN length strength"; cases[n].token = "alpha_length=";
+    cases[n].c = valid_for(BEAM_ALPHABET_AA); cases[n].c.alpha_length = NAN; ++n;
 
     static char msg[512];
     char why[BEAM_CONFIG_REASON_MAX];
@@ -522,6 +562,26 @@ static void test_every_config_refusal_names_its_own_rule(void) {
     BeamModelConfig ok = valid_for(BEAM_ALPHABET_AA);
     ASSERT_MSG(beam_config_invalid_reason(&ok, why, sizeof why) == NULL,
                "a valid config produced a rejection reason");
+    PASS();
+}
+
+/*
+ * Strengths past the order are documented as ignored, and must be: a caller
+ * who lowers the order of a config built for a higher one leaves stale
+ * values in the upper slots, and refusing the config for a level the model
+ * does not have would be refusing it for nothing.
+ */
+static void test_prior_strengths_past_the_order_are_ignored(void) {
+    BeamModelConfig c = valid_for(BEAM_ALPHABET_AA);
+    c.order = 2;
+    c.alpha[3] = -1.0;
+    c.alpha[BEAM_MAX_ORDER] = NAN;
+    ASSERT_MSG(beam_config_valid(&c),
+               "an unusable strength above the order must not be refused");
+
+    c.alpha[2] = -1.0;
+    ASSERT_MSG(!beam_config_valid(&c),
+               "and the same value AT the order must be");
     PASS();
 }
 
@@ -572,15 +632,14 @@ static void test_a_model_longer_than_the_old_ceiling_builds_and_scores(void) {
     BeamModelConfig lng = valid_for(BEAM_ALPHABET_AA);
     lng.max_length = 60;
     /*
-     * Sparse, and that is not incidental. The depth axis is now `max_length`
-     * slots rather than `depth_cap + 1`, so a DENSE table at this length asks
-     * for about 7.5 GB and `beam_model_new` refuses it against the 4 GiB
-     * budget -- correctly, and before allocating. The claim here is about the
-     * LENGTH ceiling, not about storage, so the model is built in the mode
-     * that a length this long is actually usable in.
+     * Order 2, and that is not incidental. Finalize sweeps the partition
+     * function over every state of every layer for every length, so its cost
+     * grows with the state space and faster than linearly with max_length:
+     * at the default order 4 this one model takes tens of seconds, at order
+     * 2 a fraction of one. The claim here is about the LENGTH ceiling, which
+     * the order does not touch.
      */
-    lng.strict = true;
-    lng.sparse = true;
+    lng.order = 2;
     BeamModel *m = beam_model_new(&lng);
     ASSERT_MSG(m != NULL, "a max_length of 60 must build now");
     ASSERT_MSG(beam_model_config(m)->max_length == 60, "and keep its length");
@@ -600,13 +659,22 @@ static void test_a_model_longer_than_the_old_ceiling_builds_and_scores(void) {
      * undersized buffer would smash its stack here rather than fail a
      * comparison.
      *
-     * `explain` rather than `log_pseq`, because log_pseq answers -INFINITY
-     * both for a sequence it cannot read and for one it can read but cannot
-     * spell, so it cannot tell the boundary from the model's own support.
+     * Under the hierarchical prior `log_pseq` is -INFINITY only for what the
+     * model cannot read, so it now tells the boundary apart by itself: sixty
+     * A's were never observed and must still score, and sixty-one must not.
+     * `explain` is kept alongside, because it reports the length it read and
+     * refuses with an error rather than a value.
      */
     char at_limit[61], past_limit[62];
     memset(at_limit, 'A', 60);    at_limit[60] = '\0';
     memset(past_limit, 'A', 61);  past_limit[61] = '\0';
+
+    const double lp_at = beam_model_log_pseq(m, at_limit);
+    ASSERT_MSG(isfinite(lp_at) && lp_at < lp,
+               "an unseen sequence of exactly max_length must score finitely, "
+               "and below an observed one");
+    ASSERT_MSG(beam_model_log_pseq(m, past_limit) == -INFINITY,
+               "one residue past max_length cannot be read");
 
     double fwd[BEAM_MAX_LENGTH_CEILING], bwd[BEAM_MAX_LENGTH_CEILING];
     uint32_t got_len = 0;
@@ -623,8 +691,9 @@ static void test_a_model_longer_than_the_old_ceiling_builds_and_scores(void) {
 /* ── Nucleotide models ───────────────────────────────────────── */
 
 /* Small on purpose. A nucleotide model at its own defaults is order 6 over 81
- * positions with every depth resolved, which is a 151 MB wide table per
- * direction -- correct, and not something a unit test should allocate. */
+ * positions, and finalize sweeps the partition function over every state of
+ * every layer for each of the 81 lengths -- correct, and not something a unit
+ * test should wait for. */
 static BeamModel *nt_model(uint32_t order, uint32_t max_length) {
     BeamModelConfig c;
     beam_model_config_default_for(BEAM_ALPHABET_NT, &c);
@@ -656,75 +725,188 @@ static void test_a_nucleotide_model_builds_and_scores(void) {
 }
 
 /*
- * The strongest check available: sum P(s | L) over EVERY nucleotide sequence
- * of length 3, all 125 of them. It exercises the context packing, the
- * backward lag, the sink weights and the partition function at radix 6 in one
- * assertion, and the amino-acid suite has had the same test at radix 21 all
- * along. An error in any of the dimensions the migration made runtime shows
- * up here and nowhere cheaper.
+ * Every nucleotide string of length 1..max_length, all 3,905 of them, in
+ * order, through `visit`. Written with a counter in base 5 over the letters
+ * rather than through the alphabet descriptor, so a mis-ordered table cannot
+ * make the enumeration skip the string it mis-orders.
+ */
+typedef void (*VisitFn)(const char *seq, uint32_t len, void *ctx);
+
+static void for_every_nucleotide_string(uint32_t max_length, VisitFn visit,
+                                        void *ctx) {
+    char buf[16];
+    uint32_t digit[16];
+    for (uint32_t len = 1; len <= max_length; ++len) {
+        for (uint32_t i = 0; i < len; ++i) digit[i] = 0;
+        for (;;) {
+            for (uint32_t i = 0; i < len; ++i) buf[i] = NT_UPPER[digit[i]];
+            buf[len] = '\0';
+            visit(buf, len, ctx);
+            uint32_t i = 0;
+            while (i < len && ++digit[i] == 5u) digit[i++] = 0;
+            if (i == len) break;
+        }
+    }
+}
+
+/* Per-length and whole-space totals of one enumeration. */
+typedef struct {
+    const BeamModel *m;
+    double   by_len[8];        /* sum over length L of P(s) / pi(L) */
+    double   total;            /* sum of P(s) */
+    double   neg_plogp;        /* sum of -P(s) ln P(s) */
+    double   sum_p2;           /* sum of P(s)^2 */
+    uint32_t finite[8];        /* strings of length L scoring finitely */
+    uint32_t visited[8];
+} Tally;
+
+static void tally_one(const char *seq, uint32_t len, void *ctx) {
+    Tally *t = (Tally *)ctx;
+    const double lp = beam_model_log_pseq(t->m, seq);
+    t->visited[len]++;
+    if (!isfinite(lp)) return;
+    t->finite[len]++;
+    const double p = exp(lp);
+    t->by_len[len] += exp(lp - beam_model_log_length_prior(t->m, len));
+    t->total     += p;
+    t->neg_plogp -= p * lp;
+    t->sum_p2    += p * p;
+}
+
+/* A corpus of three and four residues, so lengths 1, 2 and 5 are ones the
+ * corpus never produced: their mass comes from the length prior alone, and
+ * the strings in them from the context prior alone. */
+static BeamModel *nt_tiny(uint32_t order) {
+    BeamModel *m = nt_model(order, 5);
+    if (!m) return NULL;
+    const char *tiny[] = { "TGT", "TGC", "GCC", "TCA", "TGTA", "GCCT" };
+    const double tw[] = { 5, 3, 2, 4, 3, 2 };
+    if (beam_model_observe(m, tiny, tw, 6) != BEAM_OK
+        || beam_model_finalize(m) != BEAM_OK) {
+        beam_model_destroy(m);
+        return NULL;
+    }
+    return m;
+}
+
+/*
+ * The strongest check available: sum P(s) over EVERY nucleotide sequence the
+ * model can read, all 3,905 strings of length 1 to 5. It exercises the
+ * context packing, the backward lag, the sink weights, the partition
+ * function and the length prior at radix 6 in one assertion. An error in any
+ * of the dimensions that follow from the alphabet shows up here and nowhere
+ * cheaper.
+ *
+ * Under the hierarchical prior every one of those strings has positive
+ * probability, so there is nothing to skip: each must score finitely, each
+ * length must sum to 1 given its length, and the lot to 1 outright.
  */
 static void test_the_partition_normalises_over_nucleotides(void) {
-    BeamModel *m = nt_model(3, 5);
-    ASSERT_MSG(m != NULL, "new");
-    const char *tiny[] = { "TGT", "TGC", "GCC", "TCA", "TGT", "AGT" };
-    const double tw[] = { 5, 3, 2, 4, 1, 2 };
-    ASSERT_MSG(beam_model_observe(m, tiny, tw, 6) == BEAM_OK, "observe");
-    ASSERT_MSG(beam_model_finalize(m) == BEAM_OK, "finalize");
+    BeamModel *m = nt_tiny(3);
+    ASSERT_MSG(m != NULL, "build");
 
-    const double logpi = beam_model_log_length_prior(m, 3);
-    double total = 0.0;
-    char buf[4] = { 0, 0, 0, 0 };
-    for (int a = 0; a < 5; a++)
-      for (int b = 0; b < 5; b++)
-        for (int c = 0; c < 5; c++) {
-            buf[0] = NT_UPPER[a]; buf[1] = NT_UPPER[b]; buf[2] = NT_UPPER[c];
-            const double lp = beam_model_log_pseq(m, buf);
-            if (isfinite(lp)) total += exp(lp - logpi);
+    Tally t;
+    memset(&t, 0, sizeof t);
+    t.m = m;
+    for_every_nucleotide_string(5, tally_one, &t);
+
+    static char msg[256];
+    uint32_t want = 1;
+    for (uint32_t len = 1; len <= 5; ++len) {
+        want *= 5u;
+        ASSERT_MSG(t.visited[len] == want, "the enumeration missed strings");
+        if (t.finite[len] != want) {
+            snprintf(msg, sizeof msg, "only %u of the %u strings of length %u "
+                     "score finitely", (unsigned)t.finite[len], (unsigned)want,
+                     (unsigned)len);
+            beam_model_destroy(m);
+            ASSERT_MSG(false, msg);
         }
-    ASSERT_MSG(fabs(total - 1.0) < 1e-9,
-               "the 125 length-3 nucleotide sequences must sum to 1");
+        if (fabs(t.by_len[len] - 1.0) > 1e-9) {
+            snprintf(msg, sizeof msg, "the %u strings of length %u sum to "
+                     "%.17g given their length", (unsigned)want, (unsigned)len,
+                     t.by_len[len]);
+            beam_model_destroy(m);
+            ASSERT_MSG(false, msg);
+        }
+    }
+    const double total = t.total;
     beam_model_destroy(m);
+    ASSERT_MSG(fabs(total - 1.0) < 1e-9,
+               "the 3,905 readable nucleotide sequences must sum to 1");
     PASS();
 }
 
 /*
  * The dynamic programs, checked against enumeration rather than against
- * themselves. In the closed world a sequence is spellable exactly when it
- * scores finitely, so counting the length-3 strings that do must equal what
- * the path-count sweep reports -- and that sweep shares the trellis, the
- * liveness frontier and the edge weights with every other analytic. Scoring
- * alone would not catch a frontier that mis-decodes a state at radix 6.
+ * themselves. The path-count sweep, the entropy and the Hill numbers share
+ * the trellis, the liveness frontier and the edge weights with every other
+ * analytic; scoring alone would not catch a frontier that mis-decodes a
+ * state at radix 6, and these do, because each is compared with a sum over
+ * the same 3,905 strings computed from `log_pseq` and nothing else.
  */
-static void test_path_count_matches_enumeration_for_nucleotides(void) {
-    BeamModel *m = nt_model(3, 5);
-    ASSERT_MSG(m != NULL, "new");
-    const char *tiny[] = { "TGT", "TGC", "GCC", "TCA", "TGT", "AGT" };
-    const double tw[] = { 5, 3, 2, 4, 1, 2 };
-    ASSERT_MSG(beam_model_observe(m, tiny, tw, 6) == BEAM_OK, "observe");
-    ASSERT_MSG(beam_model_finalize(m) == BEAM_OK, "finalize");
+static void test_the_analytics_match_enumeration_for_nucleotides(void) {
+    BeamModel *m = nt_tiny(3);
+    ASSERT_MSG(m != NULL, "build");
 
-    uint32_t spellable = 0;
-    char buf[4] = { 0, 0, 0, 0 };
-    for (int a = 0; a < 5; a++)
-      for (int b = 0; b < 5; b++)
-        for (int c = 0; c < 5; c++) {
-            buf[0] = NT_UPPER[a]; buf[1] = NT_UPPER[b]; buf[2] = NT_UPPER[c];
-            if (isfinite(beam_model_log_pseq(m, buf))) spellable++;
-        }
-    const double counted = beam_model_path_count(m, 3);
-    ASSERT_MSG(counted == (double)spellable,
-               "the path count must equal the sequences that actually score");
-    ASSERT_MSG(spellable > 0, "and the corpus must spell something");
+    Tally t;
+    memset(&t, 0, sizeof t);
+    t.m = m;
+    for_every_nucleotide_string(5, tally_one, &t);
 
-    /* The remaining analytics have to run and answer sanely on this trellis;
-     * an entropy outside [0, log(support)] would mean the sweep and the
-     * support disagree about which edges exist. */
-    double h = 0.0;
+    /* Every string of a length is a path, so the count is the alphabet's,
+     * 5^L, and not the corpus's; it is compared with the enumeration rather
+     * than with 5^L so that it still tests the sweep if the model changes. */
+    double support = 0.0;
+    for (uint32_t len = 1; len <= 5; ++len) {
+        ASSERT_MSG(beam_model_path_count(m, len) == (double)t.finite[len],
+                   "the path count must equal the sequences that actually score");
+        support += (double)t.finite[len];
+    }
+    ASSERT_MSG(beam_model_path_count_total(m) == support,
+               "and the total support must be their sum");
+
+    double h = 0.0, d2 = 0.0;
     ASSERT_MSG(beam_model_entropy(m, &h) == BEAM_OK, "entropy");
-    ASSERT_MSG(isfinite(h) && h >= 0.0, "entropy must be finite and positive");
-    double d2 = 0.0;
     ASSERT_MSG(beam_model_hill_number(m, 2.0, &d2) == BEAM_OK, "hill");
-    ASSERT_MSG(isfinite(d2) && d2 >= 1.0, "a Hill number is at least one");
+    const double want_h = t.neg_plogp, want_d2 = 1.0 / t.sum_p2;
+    beam_model_destroy(m);
+
+    static char msg[256];
+    if (!(fabs(h - want_h) <= 1e-9 * want_h)) {
+        snprintf(msg, sizeof msg, "entropy %.17g nats against the enumerated "
+                 "%.17g", h, want_h);
+        ASSERT_MSG(false, msg);
+    }
+    if (!(fabs(d2 - want_d2) <= 1e-9 * want_d2)) {
+        snprintf(msg, sizeof msg, "Hill number of order 2 is %.17g against "
+                 "the enumerated %.17g", d2, want_d2);
+        ASSERT_MSG(false, msg);
+    }
+    PASS();
+}
+
+/*
+ * What still scores -INFINITY. The enumeration above shows every readable
+ * string has mass; this is the other half, that the only strings without it
+ * are the ones the model cannot read at all.
+ */
+static void test_only_an_unreadable_sequence_scores_minus_infinity(void) {
+    BeamModel *m = nt_tiny(3);
+    ASSERT_MSG(m != NULL, "build");
+
+    ASSERT_MSG(beam_model_log_pseq(m, "") == -INFINITY,
+               "the empty string is not a sequence");
+    ASSERT_MSG(beam_model_log_pseq(m, "TGTAC") > -INFINITY,
+               "max_length itself is readable");
+    ASSERT_MSG(beam_model_log_pseq(m, "TGTACG") == -INFINITY,
+               "one past max_length is not");
+    ASSERT_MSG(beam_model_log_pseq(m, "TGRT") == -INFINITY,
+               "an ambiguity code is outside the alphabet");
+    ASSERT_MSG(beam_model_log_pseq(m, "TG.T") == -INFINITY,
+               "the sentinel's display character is not a residue");
+    ASSERT_MSG(beam_model_log_pseq(m, "TGUT") == -INFINITY,
+               "U is not a DNA residue");
     beam_model_destroy(m);
     PASS();
 }
@@ -888,7 +1070,8 @@ static void test_a_nucleotide_model_round_trips_through_a_file(void) {
 /* Overwrite the alphabet field of a saved model and repair the CRC, so what
  * the loader is left to catch is the mislabelling itself rather than a
  * checksum that no longer matches. */
-static bool relabel_alphabet(const char *path, uint32_t alphabet) {
+static bool relabel_alphabet(const char *path, uint32_t expect_was,
+                             uint32_t alphabet) {
     FILE *f = fopen(path, "rb");
     if (!f) return false;
     if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return false; }
@@ -900,7 +1083,17 @@ static bool relabel_alphabet(const char *path, uint32_t alphabet) {
     }
     fclose(f);
 
-    memcpy(b + 136, &alphabet, sizeof alphabet);   /* the appended tail */
+    /* The third word of the format-8 header, after the magic and the format
+     * number. Checked before it is overwritten: had the layout moved, this
+     * would otherwise corrupt some other field and the loader's refusal
+     * would prove nothing about the alphabet. */
+    const size_t at = 2u * sizeof(uint32_t);
+    uint32_t was = 0;
+    if ((size_t)end >= at + sizeof was) memcpy(&was, b + at, sizeof was);
+    if ((size_t)end < at + sizeof was || was != expect_was) {
+        free(b); return false;
+    }
+    memcpy(b + at, &alphabet, sizeof alphabet);
     const uint32_t crc = beam_crc32c_update(0u, b,
                                          (size_t)end - sizeof(uint32_t));
     memcpy(b + end - (long)sizeof crc, &crc, sizeof crc);
@@ -915,7 +1108,7 @@ static bool relabel_alphabet(const char *path, uint32_t alphabet) {
 
 /*
  * A nucleotide file must not be readable as an amino-acid one. The two agree
- * on order, length and depth in the header, so before the alphabet field the
+ * on order and length in the header, so before the alphabet field the
  * loader had nothing to tell them apart and would have built a radix-21 model
  * over a radix-6 payload.
  *
@@ -934,7 +1127,8 @@ static void test_a_nucleotide_file_relabelled_as_amino_acid_is_rejected(void) {
 
     const char *path = "build/test_nt_relabelled.tmp";
     ASSERT_MSG(beam_model_save(m, path) == BEAM_OK, "save");
-    ASSERT_MSG(relabel_alphabet(path, (uint32_t)BEAM_ALPHABET_AA),
+    ASSERT_MSG(relabel_alphabet(path, (uint32_t)BEAM_ALPHABET_NT,
+                                (uint32_t)BEAM_ALPHABET_AA),
                "relabel as amino acid and repair the checksum");
 
     ASSERT_MSG(beam_model_load(path) == NULL,
@@ -945,10 +1139,19 @@ static void test_a_nucleotide_file_relabelled_as_amino_acid_is_rejected(void) {
     PASS();
 }
 
-static void test_an_unknown_alphabet_in_a_file_is_refused(void) {
+/* A small amino-acid model stands in for any: the refusal is about the id
+ * in the header, and every full-space sweep a default-sized model pays for
+ * on finalize would only slow the test down. */
+static BeamModel *aa_small(void) {
     BeamModelConfig c;
     beam_model_config_default(&c);
-    BeamModel *m = beam_model_new(&c);
+    c.order = 3u;
+    c.max_length = 12u;
+    return beam_model_new(&c);
+}
+
+static void test_an_unknown_alphabet_in_a_file_is_refused(void) {
+    BeamModel *m = aa_small();
     const char *seqs[] = { "CASSLGQAYEQY" };
     const double ab[] = { 1.0 };
     ASSERT_MSG(m && beam_model_observe(m, seqs, ab, 1) == BEAM_OK
@@ -960,7 +1163,7 @@ static void test_an_unknown_alphabet_in_a_file_is_refused(void) {
     /* An id no build knows, with the checksum repaired so the refusal has to
      * come from the alphabet check rather than from the CRC. Every table
      * dimension behind it is unreadable, so guessing is not an option. */
-    ASSERT_MSG(relabel_alphabet(path, 99u), "write a wild id");
+    ASSERT_MSG(relabel_alphabet(path, (uint32_t)BEAM_ALPHABET_AA, 99u), "write a wild id");
 
     ASSERT_MSG(beam_model_load(path) == NULL,
                "an unknown alphabet must be refused, not guessed at");
@@ -973,10 +1176,7 @@ static void test_an_unknown_alphabet_in_a_file_is_refused(void) {
  * other, and scoring both, is the cheapest check that no descriptor, table or
  * cached dimension leaked between them. */
 static void test_the_two_alphabets_do_not_interfere(void) {
-    BeamModelConfig ac;
-    beam_model_config_default(&ac);
-
-    BeamModel *aa1 = beam_model_new(&ac);
+    BeamModel *aa1 = aa_small();
     const char *aa_seqs[] = { "CASSLGQAYEQY", "CASSLGQAYEQF" };
     const double ab[] = { 3.0, 1.0 };
     ASSERT_MSG(aa1 && beam_model_observe(aa1, aa_seqs, ab, 2) == BEAM_OK
@@ -988,7 +1188,7 @@ static void test_the_two_alphabets_do_not_interfere(void) {
     ASSERT_MSG(nt && beam_model_observe(nt, nt_seqs, ab, 2) == BEAM_OK
                && beam_model_finalize(nt) == BEAM_OK, "nt in between");
 
-    BeamModel *aa2 = beam_model_new(&ac);
+    BeamModel *aa2 = aa_small();
     ASSERT_MSG(aa2 && beam_model_observe(aa2, aa_seqs, ab, 2) == BEAM_OK
                && beam_model_finalize(aa2) == BEAM_OK, "aa after");
     const double after = beam_model_log_pseq(aa2, "CASSLGQAYEQY");
@@ -1008,135 +1208,127 @@ static void test_the_two_alphabets_do_not_interfere(void) {
 }
 
 /*
- * Every order the nucleotide alphabet allows, with backoff switched ON.
+ * Every order the nucleotide alphabet allows, built, finalized and scored.
  *
- * This is the configuration the suite had no coverage of, and it segfaulted:
- * the wide expert's backoff base was indexed at `order - 1`, into arrays of
- * four pointers holding the mid hierarchy's orders 0..3. Amino acids cap at
- * order 4, so `order - 1` was always in range and always a level that had been
- * built; a nucleotide model at its own default order 6 read two slots past the
- * end. Only the all-kappas-zero path escaped, which is exactly what every
- * other nucleotide test here uses.
+ * Amino acids cap at order 4, so every per-level array of the prior -- the
+ * strengths, the lower-level count tables, the level-k parent of a row --
+ * is only ever indexed up to 4 by them. Nucleotides go to 9. An array sized
+ * or indexed by the amino-acid ceiling rather than BEAM_MAX_ORDER is
+ * invisible to every amino-acid test and walks off its end here; that is
+ * how a segfault of exactly this shape once reached the backoff hierarchy
+ * the prior replaced.
  *
- * The base is now the order below capped at 3, since `kappa` has three entries
- * and no count table holds order-4 context at full depth. Orders 2 to 4 are
- * kept in the loop because they must be unaffected by that cap.
+ * The unseen string is the point of scoring. Its top-level row was never
+ * observed, so its score is resolved through every level of the hierarchy
+ * down to where the corpus has counts, which is the path an out-of-range
+ * level index would take.
  */
-static void test_every_nucleotide_order_finalizes_with_backoff(void) {
-    const char *seqs[] = { "TGTGCCAGCAGTGATAGC", "TGTGCCAGCAGTGATAGG",
-                           "TGTGCCAGCAGCCCGGAC" };
-    const double ab[] = { 4.0, 2.0, 1.0 };
+static bool order_builds_and_scores(uint32_t order, uint32_t max_length,
+                                    const char *const *seqs, uint32_t n,
+                                    const char *unseen, char *msg, size_t cap) {
+    static const double ab[] = { 4.0, 2.0, 1.0 };
+    BeamModelConfig c;
+    beam_model_config_default_for(BEAM_ALPHABET_NT, &c);
+    c.order = (uint8_t)order;
+    c.max_length = (uint8_t)max_length;
+
+    BeamModel *m = beam_model_new(&c);
+    if (!m) {
+        snprintf(msg, cap, "order %u did not build", (unsigned)order);
+        return false;
+    }
+    if (beam_model_observe(m, seqs, ab, n) != BEAM_OK
+        || beam_model_finalize(m) != BEAM_OK) {
+        snprintf(msg, cap, "order %u did not finalize: %s", (unsigned)order,
+                 beam_error_message());
+        beam_model_destroy(m);
+        return false;
+    }
+    const double seen = beam_model_log_pseq(m, seqs[0]);
+    const double other = beam_model_log_pseq(m, unseen);
+    beam_model_destroy(m);
+    if (!(isfinite(seen) && isfinite(other) && other < seen)) {
+        snprintf(msg, cap, "order %u: an observed sequence scores %.17g and "
+                 "an unseen one %.17g; both must be finite and the unseen one "
+                 "lower", (unsigned)order, seen, other);
+        return false;
+    }
+    return true;
+}
+
+static void test_every_nucleotide_order_finalizes_and_scores(void) {
+    static char msg[256];
+
+    /* Long enough that every order here also sees contexts made entirely of
+     * residues, not only of residues and end padding. */
+    const char *eight[] = { "TGTGCCAG", "TGTGCCAC", "TGTGCTCA" };
+    for (uint32_t order = 2; order <= 7; ++order)
+        if (!order_builds_and_scores(order, 8, eight, 3, "NNACGTNN",
+                                     msg, sizeof msg))
+            ASSERT_MSG(false, msg);
 
     /*
-     * Orders 2 to 7, and the ceiling separately below.
-     *
-     * Backoff forces DENSE storage -- beam_config_valid refuses sparse with
-     * any non-zero kappa -- and a dense nucleotide wide table is
-     * (depth_cap + 1) * 6^order * 5 doubles per direction. That is 0.27 GB at
-     * order 7 and 9.7 GB at order 9, which is not a thing a unit test should
-     * allocate. Orders 5, 6 and 7 all take the clamped branch through the
-     * identical code, so the ceiling adds coverage of the CONFIGURATION, not
-     * of the arithmetic -- and it is built below in the closed world, where
-     * the same order costs a third of a gigabyte instead of ten.
+     * Orders 8 and the ceiling, at length 2. Finalize sweeps the partition
+     * function over every state of every layer, and at 6^9 states that is
+     * seconds per unit of max_length. A longer corpus would buy nothing
+     * here: at these orders every context of any sequence a unit test can
+     * afford includes end padding, so length 2 reaches the same levels of
+     * the hierarchy that length 8 would.
      */
-    for (uint32_t order = 2; order <= 7; ++order) {
-        BeamModelConfig c;
-        beam_model_config_default_for(BEAM_ALPHABET_NT, &c);
-        c.order = (uint8_t)order;
-        c.max_length = 20;
-        /* Open world: every backoff strength positive, which is what puts the
-         * wide expert's base lookup on the path at all. */
-        c.strict = false;
+    const char *two[] = { "TG", "TC", "A" };
+    for (uint32_t order = 8; order <= 9; ++order)
+        if (!order_builds_and_scores(order, 2, two, 3, "NN", msg, sizeof msg))
+            ASSERT_MSG(false, msg);
 
-        BeamModel *m = beam_model_new(&c);
-        ASSERT_MSG(m != NULL, "a nucleotide model must build at every order");
-        ASSERT_MSG(beam_model_observe(m, seqs, ab, 3) == BEAM_OK, "observe");
-        ASSERT_MSG(beam_model_finalize(m) == BEAM_OK,
-                   "finalize must not walk off the backoff level array");
-        const double lp = beam_model_log_pseq(m, seqs[0]);
-        ASSERT_MSG(isfinite(lp),
-                   "the open world gives every readable sequence mass");
-        beam_model_destroy(m);
-    }
-
-    /*
-     * The ceiling itself, built rather than merely asserted legal -- which is
-     * the shape of coverage that let the original defect through. Closed
-     * world, so the storage is sparse and the row directory is what is paid
-     * for, not 6^9 * 5 dense cells per depth bucket.
-     */
-    {
-        BeamModelConfig c;
-        beam_model_config_default_for(BEAM_ALPHABET_NT, &c);
-        c.order = 9;
-        c.max_length = 6;
-        c.sparse = true;
-        BeamModel *m = beam_model_new(&c);
-        ASSERT_MSG(m != NULL, "the nucleotide ceiling order must build");
-        ASSERT_MSG(beam_model_n_states(m) == 10077696u, "6^9 states");
-        const char *nine[] = { "ACGTAC", "ACGTAG" };
-        const double nab[] = { 2.0, 1.0 };
-        ASSERT_MSG(beam_model_observe(m, nine, nab, 2) == BEAM_OK, "observe");
-        ASSERT_MSG(beam_model_finalize(m) == BEAM_OK, "finalize at the ceiling");
-        ASSERT_MSG(isfinite(beam_model_log_pseq(m, nine[0])), "and it scores");
-        beam_model_destroy(m);
-    }
+    BeamModelConfig c;
+    beam_model_config_default_for(BEAM_ALPHABET_NT, &c);
+    c.order = 9;
+    c.max_length = 2;
+    BeamModel *probe = beam_model_new(&c);
+    ASSERT_MSG(probe != NULL, "the nucleotide ceiling order must build");
+    /* Asserted so a change to the ceiling is seen here and not only as a
+     * loop bound. */
+    const uint32_t states = beam_model_n_states(probe);
+    beam_model_destroy(probe);
+    ASSERT_MSG(states == 10077696u, "6^9 states");
     PASS();
 }
 
 /*
- * And the model that comes out is still a distribution. Changing which table
- * the wide expert backs off to could leave a perfectly buildable model whose
- * probabilities no longer sum to 1, which nothing above would notice.
+ * And the model that comes out is still a distribution above order four,
+ * where the hierarchy has levels no amino-acid model reaches. A level
+ * resolved to the wrong parent, or a strength read from the wrong slot,
+ * leaves a perfectly buildable model whose probabilities no longer sum to
+ * 1, which nothing above would notice.
+ *
+ * Order 5 against strings of at most five residues, so every context row the
+ * enumeration touches is padded with sentinels at one end or the other, and
+ * the rows at full width are exactly the ones the corpus never saw.
  */
-static void test_the_partition_normalises_with_backoff_above_order_four(void) {
-    BeamModelConfig c;
-    beam_model_config_default_for(BEAM_ALPHABET_NT, &c);
-    c.order = 5;                       /* base capped from 4 down to 3 */
-    c.max_length = 5;
-    /*
-     * One, so that every position past the first takes the DEPTH-AGGREGATED
-     * backoff base rather than the per-depth one. With a cap at or above the
-     * length being enumerated, `d < depth_cap` holds everywhere and the
-     * `agg_p[k1]` branch -- the other half of the fix -- is never reached.
-     */
-    c.strict = false;
+static void test_the_partition_normalises_above_order_four(void) {
+    BeamModel *m = nt_tiny(5);
+    ASSERT_MSG(m != NULL, "build");
 
-    BeamModel *m = beam_model_new(&c);
-    ASSERT_MSG(m != NULL, "new");
-    /* Both lengths observed, so both have a length prior and both can be
-     * enumerated. A length the corpus never spelled sums to zero, correctly,
-     * and would say nothing about the backoff. */
-    const char *tiny[] = { "TGT", "TGC", "GCC", "TCA", "TGTA", "GCCT" };
-    const double tw[] = { 5, 3, 2, 4, 3, 2 };
-    ASSERT_MSG(beam_model_observe(m, tiny, tw, 6) == BEAM_OK, "observe");
-    ASSERT_MSG(beam_model_finalize(m) == BEAM_OK, "finalize");
-
-    /* With the cap at 1 there are two buckets, and bucket 1 is the
-     * depth-AGGREGATED one, so every position past the first reaches the
-     * `agg_p` half of the backoff rather than the per-depth half. */
-    char buf[5] = { 0, 0, 0, 0, 0 };
-    for (uint32_t len = 3; len <= 4; ++len) {
-        const double logpi = beam_model_log_length_prior(m, len);
-        ASSERT_MSG(isfinite(logpi), "both lengths must have a prior");
-        double total = 0.0;
-        for (int a = 0; a < 5; a++)
-          for (int b = 0; b < 5; b++)
-            for (int d = 0; d < 5; d++)
-              for (int e = 0; e < 5; e++) {
-                if (len == 3 && e != 0) continue;   /* enumerate once */
-                buf[0] = NT_UPPER[a]; buf[1] = NT_UPPER[b];
-                buf[2] = NT_UPPER[d];
-                buf[3] = (len == 4) ? NT_UPPER[e] : '\0';
-                buf[len] = '\0';
-                const double lp = beam_model_log_pseq(m, buf);
-                if (isfinite(lp)) total += exp(lp - logpi);
-            }
-        ASSERT_MSG(fabs(total - 1.0) < 1e-9,
-                   "a smoothed order-5 nucleotide model must still normalise, "
-                   "including where the backoff base is the aggregated one");
-    }
+    Tally t;
+    memset(&t, 0, sizeof t);
+    t.m = m;
+    for_every_nucleotide_string(5, tally_one, &t);
     beam_model_destroy(m);
+
+    static char msg[256];
+    uint32_t want = 1;
+    for (uint32_t len = 1; len <= 5; ++len) {
+        want *= 5u;
+        ASSERT_MSG(t.finite[len] == want,
+                   "every readable string must score at order 5");
+        if (fabs(t.by_len[len] - 1.0) > 1e-9) {
+            snprintf(msg, sizeof msg, "an order-5 nucleotide model sums to "
+                     "%.17g over length %u", t.by_len[len], (unsigned)len);
+            ASSERT_MSG(false, msg);
+        }
+    }
+    ASSERT_MSG(fabs(t.total - 1.0) < 1e-9,
+               "and to 1 over every length together");
     PASS();
 }
 
@@ -1179,6 +1371,7 @@ int main(void) {
     RUN_TEST(test_validation_refuses_an_unknown_alphabet);
     RUN_TEST(test_max_length_is_free_up_to_the_ceiling);
     RUN_TEST(test_every_config_refusal_names_its_own_rule);
+    RUN_TEST(test_prior_strengths_past_the_order_are_ignored);
 
     printf("\n[construction]\n");
     RUN_TEST(test_a_model_reports_the_alphabet_it_was_built_with);
@@ -1188,7 +1381,8 @@ int main(void) {
     printf("\n[nucleotide models]\n");
     RUN_TEST(test_a_nucleotide_model_builds_and_scores);
     RUN_TEST(test_the_partition_normalises_over_nucleotides);
-    RUN_TEST(test_path_count_matches_enumeration_for_nucleotides);
+    RUN_TEST(test_the_analytics_match_enumeration_for_nucleotides);
+    RUN_TEST(test_only_an_unreadable_sequence_scores_minus_infinity);
     RUN_TEST(test_lower_case_scores_as_upper_case);
     RUN_TEST(test_lower_case_trains_as_upper_case);
     RUN_TEST(test_N_is_a_residue_and_other_codes_are_not);
@@ -1198,8 +1392,8 @@ int main(void) {
     RUN_TEST(test_a_nucleotide_file_relabelled_as_amino_acid_is_rejected);
     RUN_TEST(test_an_unknown_alphabet_in_a_file_is_refused);
     RUN_TEST(test_the_two_alphabets_do_not_interfere);
-    RUN_TEST(test_every_nucleotide_order_finalizes_with_backoff);
-    RUN_TEST(test_the_partition_normalises_with_backoff_above_order_four);
+    RUN_TEST(test_every_nucleotide_order_finalizes_and_scores);
+    RUN_TEST(test_the_partition_normalises_above_order_four);
 
     printf("\n==============================================================\n");
     printf("Results: %d passed, %d failed\n", pass_count, fail_count);

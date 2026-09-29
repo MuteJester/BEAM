@@ -24,16 +24,25 @@ from BEAM import BeamModel
 from BEAM.constants import BEAM_ALPHABET as AA
 
 
-L_ENUM = 15
+LENGTH = 15
 EXACT = 1e-12
 
-#: A surprisal inside this fixture, whose length-15 sequences run from about
-#: 2.3 to 4.1 nats. Bands are checked against the grid, so an edge past it
-#: is refused rather than quietly clamped.
-CUT = 3.0
+#: A surprisal inside this fixture, whose length-15 sequences run from 4.8 to
+#: 63.3 nats under the prior, with the median at 21.8: 20 nats splits the mass
+#: about 40/60, so both bands are substantial. Bands are checked against the
+#: grid, so an edge past it is refused rather than quietly clamped.
+CUT = 20.0
 
 
-def _enumerable(order=3, alphabet="AG", n=10, seed=7):
+def _cdr3_model(order=2, alphabet="AG", n=10, seed=7):
+    """Ten CDR3-shaped sequences: a conserved CASS...EQYF frame around a
+    two-letter middle.
+
+    Order 2 rather than 3: the prior makes every string of the length
+    possible, so a banded sweep runs over the whole state space, and nothing
+    here depends on the width of the context -- the checks are on the reshape
+    and the keywords. Order 3 costs twenty times more per banded logo.
+    """
     rng = np.random.default_rng(seed)
     seqs = ["CASS" + "".join(rng.choice(list(alphabet), 7)) + "EQYF"
             for _ in range(n)]
@@ -42,7 +51,7 @@ def _enumerable(order=3, alphabet="AG", n=10, seed=7):
 
 @pytest.fixture(scope="module")
 def model():
-    return _enumerable()
+    return _cdr3_model()
 
 
 @pytest.fixture(scope="module")
@@ -63,41 +72,41 @@ def test_the_unconditional_logo_is_the_exact_marginal(model):
     sum; only comparing position by position against a known answer tells
     them apart.
     """
-    g = model.insights.logo(L_ENUM)
-    assert g.probability.shape == (L_ENUM, len(AA))
-    assert np.abs(g.probability - model.positional_marginals(L_ENUM)).max() < EXACT
+    g = model.insights.logo(LENGTH)
+    assert g.probability.shape == (LENGTH, len(AA))
+    assert np.abs(g.probability - model.positional_marginals(LENGTH)).max() < EXACT
     assert g.resolution_error is None, "no grid was involved, so there is no error"
 
 
 def test_the_stack_sums_to_the_information(model):
-    g = model.insights.logo(L_ENUM)
+    g = model.insights.logo(LENGTH)
     assert g.height_bits.sum(axis=1) == pytest.approx(g.information_bits)
     assert g.height_nats.sum(axis=1) == pytest.approx(g.information_nats)
-    assert g.probability.sum(axis=1) == pytest.approx(np.ones(L_ENUM))
+    assert g.probability.sum(axis=1) == pytest.approx(np.ones(LENGTH))
 
 
 def test_information_is_the_ceiling_less_the_entropy(model):
-    g = model.insights.logo(L_ENUM)
-    s = model.insights.logos(L_ENUM)
+    g = model.insights.logo(LENGTH)
+    s = model.insights.logos(LENGTH)
     assert g.information_bits == pytest.approx(s.max_entropy_bits - g.entropy_bits)
     assert s.max_entropy_bits == pytest.approx(math.log2(20))
 
 
 def test_consensus_reads_out_as_a_sequence(model):
-    g = model.insights.logo(L_ENUM)
+    g = model.insights.logo(LENGTH)
     seq = g.consensus_sequence
-    assert len(seq) == L_ENUM
+    assert len(seq) == LENGTH
     assert seq.startswith("CASS"), "the fixture's conserved head"
     by_hand = "".join(AA[int(a)] for a in g.probability.argmax(axis=1))
     assert seq == by_hand
 
 
 def test_as_dict_is_keyed_by_residue_and_matches_the_heights(model):
-    g = model.insights.logo(L_ENUM)
+    g = model.insights.logo(LENGTH)
     d = g.as_dict()
     assert set(d) == set(AA)
     assert d["C"] == pytest.approx(g.height_bits[:, AA.index("C")])
-    assert d["C"].shape == (L_ENUM,)
+    assert d["C"].shape == (LENGTH,)
     with pytest.raises(ValueError, match="bits.*nats"):
         g.as_dict(unit="decibans")
 
@@ -113,11 +122,11 @@ def test_pseq_above_and_below_are_complementary(model):
     logo of the wrong sequences, so it is pinned by construction rather than
     by reading.
     """
-    # Inside this fixture's surprisal, which runs from about 2.3 to 4.1 nats.
+    # Inside this fixture's surprisal, which runs from 4.8 to 63.3 nats.
     # A threshold past the grid is refused, and says so.
     t = math.exp(-CUT)
-    hi_p = model.insights.logo(L_ENUM, pseq_above=t, bins=2048)
-    lo_p = model.insights.logo(L_ENUM, pseq_below=t, bins=2048)
+    hi_p = model.insights.logo(LENGTH, pseq_above=t, bins=2048)
+    lo_p = model.insights.logo(LENGTH, pseq_below=t, bins=2048)
 
     assert hi_p.lo_nats == pytest.approx(0.0)
     assert hi_p.hi_nats == pytest.approx(CUT)
@@ -138,10 +147,10 @@ def test_surprisal_keywords_select_the_same_sequences_as_the_pseq_ones(model):
     compares the arrays rather than the band edges.
     """
     t = math.exp(-CUT)
-    common_p = model.insights.logo(L_ENUM, pseq_above=t, bins=2048)
-    common_s = model.insights.logo(L_ENUM, surprisal_below=CUT, bins=2048)
-    rare_p = model.insights.logo(L_ENUM, pseq_below=t, bins=2048)
-    rare_s = model.insights.logo(L_ENUM, surprisal_above=CUT, bins=2048)
+    common_p = model.insights.logo(LENGTH, pseq_above=t, bins=2048)
+    common_s = model.insights.logo(LENGTH, surprisal_below=CUT, bins=2048)
+    rare_p = model.insights.logo(LENGTH, pseq_below=t, bins=2048)
+    rare_s = model.insights.logo(LENGTH, surprisal_above=CUT, bins=2048)
 
     assert np.array_equal(common_p.probability, common_s.probability)
     assert np.array_equal(rare_p.probability, rare_s.probability)
@@ -153,8 +162,8 @@ def test_surprisal_keywords_select_the_same_sequences_as_the_pseq_ones(model):
 
 def test_edges_in_nats_need_no_conversion(model):
     """`edges` is the native axis, so it must agree with the keyword form."""
-    a = model.insights.logo(L_ENUM, edges=[-math.inf, CUT], bins=2048)
-    b = model.insights.logo(L_ENUM, surprisal_below=CUT, bins=2048)
+    a = model.insights.logo(LENGTH, edges=[-math.inf, CUT], bins=2048)
+    b = model.insights.logo(LENGTH, surprisal_below=CUT, bins=2048)
     assert np.array_equal(a.probability, b.probability)
     assert a.lo_nats == b.lo_nats and a.hi_nats == b.hi_nats
 
@@ -166,20 +175,20 @@ def test_the_bands_recombine_into_the_pooled_logo(model):
     that is the honest bound rather than a convenient one. Each band's mass is
     reported at position 0 while its marginals are normalised per position, so
     the reconstruction cannot be better than those agree -- which is exactly
-    what `resolution_error` measures. Measured here the reconstruction is a
-    third of it or less.
+    what `resolution_error` measures. Measured here the bands' error is about
+    1.5e-3 and the reconstruction a ninth of it.
 
-    This fixture's support is twenty-five sequences, so its spectrum is
-    twenty-five spikes and an edge near one of them makes that spike's
-    membership genuinely grid-dependent. That is why the error is percent-
-    scale and does not shrink much with `bins`: it is the discreteness of the
-    support, not the fineness of the grid.
+    Under the prior the support is every string of the length, so the
+    spectrum is dense rather than a few spikes, and an edge splits the
+    linear-splitting spread of the sequences near it rather than the whole
+    mass of one spike. That is why the error is per-mille rather than
+    percent-scale.
     """
-    s = model.insights.logos(L_ENUM, edges=[-math.inf, CUT, math.inf],
+    s = model.insights.logos(LENGTH, edges=[-math.inf, CUT, math.inf],
                              bins=2048)
     assert len(s) == 2
     mix = sum(g.mass * g.probability for g in s) / sum(g.mass for g in s)
-    worst = float(np.abs(mix - model.positional_marginals(L_ENUM)).max())
+    worst = float(np.abs(mix - model.positional_marginals(LENGTH)).max())
     bound = max(g.resolution_error for g in s)
     assert worst <= bound, (
         f"recombination is off by {worst:.3g}, worse than the bands' own "
@@ -188,9 +197,9 @@ def test_the_bands_recombine_into_the_pooled_logo(model):
 
 def test_a_band_differs_from_the_pooled_logo(model):
     """Otherwise everything above would pass with banding doing nothing."""
-    s = model.insights.logos(L_ENUM, edges=[-math.inf, CUT, math.inf],
+    s = model.insights.logos(LENGTH, edges=[-math.inf, CUT, math.inf],
                              bins=2048)
-    pooled = model.positional_marginals(L_ENUM)
+    pooled = model.positional_marginals(LENGTH)
     assert max(np.abs(g.probability - pooled).max() for g in s) > 1e-3
 
 
@@ -198,7 +207,7 @@ def test_a_band_differs_from_the_pooled_logo(model):
 # ═══════════════════════════════════════════════════════════════
 
 def test_a_set_reports_its_grid_and_its_shortfall(model):
-    s = model.insights.logos(L_ENUM, edges=[-math.inf, CUT, math.inf],
+    s = model.insights.logos(LENGTH, edges=[-math.inf, CUT, math.inf],
                              bins=2048)
     assert s.spacing is not None and s.spacing > 0
     assert not s.exact
@@ -207,7 +216,7 @@ def test_a_set_reports_its_grid_and_its_shortfall(model):
 
 
 def test_the_unconditional_set_has_no_grid_at_all(model):
-    s = model.insights.logos(L_ENUM)
+    s = model.insights.logos(LENGTH)
     assert s.exact
     assert s.spacing is None
     assert s[0].resolution_error is None
@@ -216,10 +225,10 @@ def test_the_unconditional_set_has_no_grid_at_all(model):
 
 
 def test_a_single_band_over_everything_is_still_exact(model):
-    s = model.insights.logos(L_ENUM, edges=[-math.inf, math.inf], bins=1024)
+    s = model.insights.logos(LENGTH, edges=[-math.inf, math.inf], bins=1024)
     assert s.exact, "no interior edge means nothing can be misclassified"
     assert np.abs(s[0].probability
-                  - model.positional_marginals(L_ENUM)).max() < EXACT
+                  - model.positional_marginals(LENGTH)).max() < EXACT
 
 
 # Nucleotides, where the reference alphabet matters
@@ -259,7 +268,7 @@ def test_the_nucleotide_ceiling_is_log2_of_five_unless_asked_otherwise(nt_model)
 ])
 def test_a_malformed_request_is_refused_by_name(model, kw, fragment):
     with pytest.raises(ValueError, match=fragment):
-        model.insights.logo(L_ENUM, **kw)
+        model.insights.logo(LENGTH, **kw)
 
 
 @pytest.mark.parametrize("kw", [
@@ -272,12 +281,15 @@ def test_two_conditions_at_once_are_refused(model, kw):
     probability and a surprisal has almost certainly confused which is
     which."""
     with pytest.raises(ValueError, match="at most one of"):
-        model.insights.logo(L_ENUM, **kw)
+        model.insights.logo(LENGTH, **kw)
 
 
 def test_a_length_the_model_cannot_produce_is_refused(model):
+    """Every length up to max_length is produced now -- length 2, which the
+    corpus never had, included -- so the one it cannot is past max_length."""
+    assert model.insights.logo(2).probability.shape == (2, len(AA))
     with pytest.raises(ValueError, match="not one this model generates"):
-        model.insights.logo(2)
+        model.insights.logo(int(model.config["max_length"]) + 1)
 
 
 def test_an_empty_band_is_refused_rather_than_reported_as_conserved(model):
@@ -288,13 +300,13 @@ def test_an_empty_band_is_refused_rather_than_reported_as_conserved(model):
     is perfectly conserved.
     """
     with pytest.raises((ValueError, RuntimeError)) as ex:
-        model.insights.logo(L_ENUM, edges=[1e-9, 1e-6], bins=2048)
+        model.insights.logo(LENGTH, edges=[1e-9, 1e-6], bins=2048)
     assert "no sequence" in str(ex.value) or "no mass" in str(ex.value)
 
 
 def test_asking_for_one_logo_from_several_bands_is_refused(model):
     with pytest.raises(ValueError, match="defines 3 bands"):
-        model.insights.logo(L_ENUM, edges=[-math.inf, 3.0, 3.6, math.inf],
+        model.insights.logo(LENGTH, edges=[-math.inf, CUT, CUT + 5.0, math.inf],
                             bins=2048)
 
 
@@ -302,9 +314,9 @@ def test_asking_for_one_logo_from_several_bands_is_refused(model):
 # ═══════════════════════════════════════════════════════════════
 
 def test_the_cost_is_reported_before_the_sweep_and_scales_with_bins(model):
-    a = model.insights.cost(L_ENUM, edges=[-math.inf, math.inf], bins=1024)
-    b = model.insights.cost(L_ENUM, edges=[-math.inf, math.inf], bins=2048)
-    c = model.insights.cost(L_ENUM, edges=[-math.inf, math.inf], bins=4096)
+    a = model.insights.cost(LENGTH, edges=[-math.inf, math.inf], bins=1024)
+    b = model.insights.cost(LENGTH, edges=[-math.inf, math.inf], bins=2048)
+    c = model.insights.cost(LENGTH, edges=[-math.inf, math.inf], bins=4096)
     assert a["bytes"] > 0
     assert (c["bytes"] - b["bytes"]) == pytest.approx(
         2 * (b["bytes"] - a["bytes"]), rel=1e-9)

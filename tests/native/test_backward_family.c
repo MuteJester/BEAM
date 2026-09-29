@@ -34,6 +34,11 @@
  * `-INFINITY` elsewhere, where `beam_betas` computes a finite value for states
  * the forward pass never gets to. The inequality survives that, which is why
  * it is the right relation to pin.
+ *
+ * Both checks run on sparse and on dense storage. The two are the same model
+ * bit for bit, but they reach a row by different code -- the sparse lookup
+ * resolves an unobserved row to its nearest observed ancestor, the dense one
+ * reads a materialised row -- and the sweeps must not care which.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -60,12 +65,16 @@ static const double WEIGHT[N_TRAIN] = {
     40, 25, 18, 15, 12, 10, 9, 8, 7, 6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 12, 9, 7, 5,
 };
 
-static BeamModel *build(uint32_t order, bool strict) {
+static BeamModel *build(uint32_t order, bool sparse) {
     BeamModelConfig cfg;
     beam_model_config_default(&cfg);
     cfg.order = order;
-    cfg.max_length = 12u;
-    cfg.strict = strict;
+    /* The longest training sequence. Every length up to max_length is live
+     * under the prior, so each one added costs a backward sweep and a
+     * best-completion sweep over every state of every layer, per storage;
+     * nine layers is already enough for the descending loop to go wrong in. */
+    cfg.max_length = 9u;
+    cfg.sparse = sparse;
     BeamModel *m = beam_model_new(&cfg);
     if (!m) return NULL;
     if (beam_model_observe(m, TRAIN, WEIGHT, N_TRAIN) != BEAM_OK
@@ -97,18 +106,20 @@ static void field_free(double **f, uint32_t len) {
 /**
  * The best completion never exceeds the total, at every layer and state.
  *
- * Run over every live length of the model rather than one, because the layer
- * loop is where a descending sweep goes wrong and a single length can be too
- * short to show it.
+ * Run over every length of the model rather than one, because the layer loop
+ * is where a descending sweep goes wrong and a single length can be too short
+ * to show it. Under the prior every length from 1 to max_length carries mass,
+ * so every one of them is compared.
  */
-static void test_the_best_completion_never_exceeds_the_total(void) {
-    /* OPEN world: with backoff on, every residue keeps a finite weight, so
-     * every reached state has a full complement of completions and the
-     * inequality is compared over eight thousand states per layer rather
-     * than a handful. */
-    BeamModel *m = build(3u, false);
+static void best_never_exceeds_total(bool sparse) {
+    /* Under the prior every residue keeps a finite weight, so every reached
+     * state has its full twenty completions, and from layer 3 on the
+     * inequality is compared over all 20^3 = 8,000 residue contexts rather
+     * than the handful a corpus of 24 sequences observed. */
+    BeamModel *m = build(3u, sparse);
     ASSERT_MSG(m, "model did not build");
     const uint32_t S = m->n_states;
+    const uint32_t max_len = m->max_len;
 
     uint32_t lengths = 0, compared = 0, seeds = 0;
     static char msg[256];
@@ -130,8 +141,8 @@ static void test_the_best_completion_never_exceeds_the_total(void) {
         for (uint32_t s = 0; s < S; ++s) {
             if (best[len][s] != beta[len][s]) {
                 snprintf(msg, sizeof msg,
-                         "the seed layers differ at length %u state %u: "
-                         "best %.17g, beta %.17g",
+                         "%s: the seed layers differ at length %u state %u: "
+                         "best %.17g, beta %.17g", sparse ? "sparse" : "dense",
                          (unsigned)len, (unsigned)s, best[len][s], beta[len][s]);
                 field_free(beta, len); field_free(best, len);
                 beam_model_destroy(m);
@@ -143,15 +154,16 @@ static void test_the_best_completion_never_exceeds_the_total(void) {
         for (uint32_t i = 0; i < len; ++i) {
             for (uint32_t s = 0; s < S; ++s) {
                 const double a = best[i][s], b = beta[i][s];
-                if (a == -INFINITY) continue;      /* unreached, or no path */
+                if (a == -INFINITY) continue;      /* unreached */
                 ++compared;
                 /* A sum of positive terms is at least its largest, so in logs
                  * the total is at least the maximum. The slack is the tiny
                  * rounding of `mx + log(acc)` when `acc` is exactly 1. */
                 if (!(a <= b + 1e-9)) {
                     snprintf(msg, sizeof msg,
-                             "a best completion exceeds the total at length %u "
-                             "layer %u state %u: best %.17g > beta %.17g",
+                             "%s: a best completion exceeds the total at length "
+                             "%u layer %u state %u: best %.17g > beta %.17g",
+                             sparse ? "sparse" : "dense",
                              (unsigned)len, (unsigned)i, (unsigned)s, a, b);
                     field_free(beta, len); field_free(best, len);
                     beam_model_destroy(m);
@@ -164,7 +176,9 @@ static void test_the_best_completion_never_exceeds_the_total(void) {
     }
     beam_model_destroy(m);
 
-    ASSERT_MSG(lengths >= 2, "fewer than two live lengths were compared");
+    ASSERT_MSG(lengths == max_len,
+               "a length below max_length was not live, which the prior rules "
+               "out");
     ASSERT_MSG(seeds > 0 && compared > 0,
                "no state was actually compared, so this proves nothing");
     PASS();
@@ -184,13 +198,15 @@ static void test_the_best_completion_never_exceeds_the_total(void) {
  * and the sink values, both ways, and each sweep is required to match its own.
  * The reference shares no code with either.
  *
- * Strict inequality would have been the cheaper check and is not safe: with
- * backoff on, an unobserved cell sits near `ln(1e-300)`, so one completion can
- * dominate the rest by seven hundred nats and `log(acc)` rounds to zero. The
- * total is then equal to the maximum in floating point, legitimately.
+ * Strict inequality would have been the cheaper check and is not safe in
+ * general: once one completion outweighs the rest by enough that `log(acc)`
+ * falls below half an ulp of the total -- thirty-odd nats at the magnitudes
+ * here -- the total equals the maximum in floating point, legitimately.
+ * Whether that happens is a property of the data; the reference below does
+ * not depend on it.
  */
-static void test_each_sweep_computes_its_own_semiring(void) {
-    BeamModel *m = build(3u, false);
+static void each_sweep_computes_its_own_semiring(bool sparse) {
+    BeamModel *m = build(3u, sparse);
     ASSERT_MSG(m, "model did not build");
     const uint32_t S = m->n_states;
     const uint32_t R = m->n_residues;
@@ -239,15 +255,17 @@ static void test_each_sweep_computes_its_own_semiring(void) {
         if (live > 1u) ++multi;
         if (fabs(best[len - 1u][s] - ref_max) > 1e-12) {
             snprintf(msg, sizeof msg,
-                     "state %u: the best-completion sweep gave %.17g where the "
-                     "maximum over its completions is %.17g",
+                     "%s, state %u: the best-completion sweep gave %.17g where "
+                     "the maximum over its completions is %.17g",
+                     sparse ? "sparse" : "dense",
                      (unsigned)s, best[len - 1u][s], ref_max);
             goto fail;
         }
         if (fabs(beta[len - 1u][s] - ref_sum) > 1e-9) {
             snprintf(msg, sizeof msg,
-                     "state %u: the backward sweep gave %.17g where the total "
-                     "over its completions is %.17g",
+                     "%s, state %u: the backward sweep gave %.17g where the "
+                     "total over its completions is %.17g",
+                     sparse ? "sparse" : "dense",
                      (unsigned)s, beta[len - 1u][s], ref_sum);
             goto fail;
         }
@@ -266,10 +284,28 @@ fail:
     ASSERT_MSG(false, msg);
 }
 
+static void test_sparse_best_completion_never_exceeds_the_total(void) {
+    best_never_exceeds_total(true);
+}
+
+static void test_dense_best_completion_never_exceeds_the_total(void) {
+    best_never_exceeds_total(false);
+}
+
+static void test_sparse_sweeps_each_compute_their_own_semiring(void) {
+    each_sweep_computes_its_own_semiring(true);
+}
+
+static void test_dense_sweeps_each_compute_their_own_semiring(void) {
+    each_sweep_computes_its_own_semiring(false);
+}
+
 int main(void) {
     printf("the backward family\n");
-    RUN_TEST(test_the_best_completion_never_exceeds_the_total);
-    RUN_TEST(test_each_sweep_computes_its_own_semiring);
+    RUN_TEST(test_sparse_best_completion_never_exceeds_the_total);
+    RUN_TEST(test_dense_best_completion_never_exceeds_the_total);
+    RUN_TEST(test_sparse_sweeps_each_compute_their_own_semiring);
+    RUN_TEST(test_dense_sweeps_each_compute_their_own_semiring);
     printf("  %d passed, %d failed\n", pass_count, fail_count);
     return fail_count ? 1 : 0;
 }

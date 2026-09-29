@@ -125,10 +125,12 @@ BeamError beam_compute_log_z(BeamModel *m, uint32_t len, double *out,
 
     for (uint32_t i = 0; i < len; ++i) {
         /*
-         * Rescale by the exact all-state maximum, but materialise only weights
-         * the frontier will consume. The sparse thin-frontier kernel does both
-         * in one directory traversal; densely reached layers use the batched
-         * full-layer build and obtain its fused maximum.
+         * Rescale by a maximum over the weights this layer will actually
+         * consume. A thinly reached layer builds only the frontier's rows and
+         * takes their maximum; a densely reached one uses the batched
+         * full-layer build and its fused maximum. The rescale cancels in the
+         * result, so either choice is exact; it only has to keep the consumed
+         * terms representable, which the frontier's own maximum does.
          *
          * This sweep is the partition function, run once per live length at
          * the end of finalize, and it was the 1.6s floor on every build -- and
@@ -138,10 +140,8 @@ BeamError beam_compute_log_z(BeamModel *m, uint32_t len, double *out,
         if (m->cfg.sparse && (uint64_t)reach * 8u < (uint64_t)S) {
             /*
              * Thinly reached: mark only the rows the accumulation consumes,
-             * but take the maximum over every occupied state.  The combined
-             * kernel writes marked rows while max-only-scoring the rest, so a
-             * frontier state is never scored once for the maximum and again
-             * for the transition.
+             * and rescale by their maximum. Each frontier state is scored
+             * once, for the transition and the maximum together.
              */
             for (uint32_t k = 0; k < nsrc; ++k) {
                 const uint32_t s = src[k];

@@ -28,10 +28,14 @@ from BEAM import _cbeam as _c
 
 SEQS = ["CASSLF", "CASSQF", "CASRLF", "CTTGWF", "CASSLG", "CASSQG"]
 
+#: The prior's strengths as the raw `_cbeam` entry points take them: one per
+#: level 0..order, and the length prior's.
+ALPHA, ALPHA_LENGTH = (10.0,) * 3, 10.0
+
 
 @pytest.fixture(scope="module")
 def model():
-    return BEAM.BeamModel(SEQS, order=2, max_length=8, strict=True)
+    return BEAM.BeamModel(SEQS, order=2, max_length=8)
 
 
 @pytest.fixture
@@ -137,7 +141,7 @@ def test_a_budget_refusal_reports_a_figure_in_a_readable_unit(restore_budget):
     """Three refusal sites never adopted the unit scaling and read '0.0 GB'."""
     BEAM.set_memory_budget(2048)
     with pytest.raises(Exception) as exc:
-        BEAM.BeamModel(SEQS, order=2, max_length=8, strict=True)
+        BEAM.BeamModel(SEQS, order=2, max_length=8)
     text = str(exc.value)
     assert "0.0 GB" not in text, f"unit did not scale: {text}"
     assert any(u in text for u in ("bytes", "kB", "MB", "GB")), text
@@ -147,7 +151,7 @@ def test_a_budget_refusal_reports_a_figure_in_a_readable_unit(restore_budget):
 
 def _unfinalized():
     """A model with no sequences observed and no finalize called."""
-    return _c.new(2, 8, (0.5, 0.5), True, True, "aa")
+    return _c.new(2, 8, (0.5, 0.5), ALPHA, ALPHA_LENGTH, True, "aa")
 
 
 def test_path_count_total_refuses_an_unfinalized_model(model):
@@ -173,11 +177,13 @@ def test_the_length_accessors_separate_an_error_from_an_answer(model):
 
     So the error conditions have to be carried by the error context, not by
     the same value. Only the out-of-range case changed; both -inf answers
-    below must survive.
+    below must survive. The prior gives every length from 1 to max_length a
+    share, so the empty sequence is the one in-range length left to ask.
     """
     g = model._g
-    assert _c.log_partition(g, 3) == float("-inf")        # real answer
-    assert _c.log_length_prior(g, 3) == float("-inf")     # real answer
+    assert _c.log_partition(g, 0) == float("-inf")        # real answer
+    assert _c.log_length_prior(g, 0) == float("-inf")     # real answer
+    assert _c.log_length_prior(g, 3) > float("-inf")      # never observed
 
     for L in (200, 4_000_000_000):
         for fn in (_c.log_partition, _c.log_length_prior):
@@ -195,8 +201,10 @@ def test_a_build_parameter_too_large_is_refused_not_wrapped(model):
     with nothing to indicate it.
     """
     def build(order=2, maxlen=8):
-        return _c.build(SEQS, None, order, maxlen,
-                        (0.5, 0.5), True, True, "aa")
+        # One strength per level, so the only thing wrong is the one under
+        # test; a mis-sized alpha is refused with a message of its own.
+        return _c.build(SEQS, None, order, maxlen, (0.5, 0.5),
+                        (10.0,) * max(order + 1, 0), ALPHA_LENGTH, True, "aa")
 
     assert _c.config(build())["order"] == 2               # the sane case still works
 

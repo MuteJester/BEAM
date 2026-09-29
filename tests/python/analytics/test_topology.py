@@ -53,5 +53,23 @@ def test_topology_edges_bound_the_paths(corpus):
     assert 0.0 < t["density"] <= 1.0
 
 
+def test_topology_is_the_complete_trellis(corpus):
+    """Under the prior no cell is zero, so every state is live at every layer
+    and every residue leaves every non-final node. The trellis is therefore
+    known in closed form: layer i holds 20**min(i, order) states, each emits
+    20 edges, and the paths number 20**L. Counted here from that arithmetic
+    rather than from the model."""
+    seqs, abund = corpus
+    m = BeamModel(seqs, abundances=abund, order=2)
+    length, order, R = 13, 2, 20
+    t = m.topology(length)
+    want_layers = [R ** min(i, order) for i in range(length + 1)]
+    assert [int(v) for v in t["nodes_by_layer"]] == want_layers
+    assert t["n_nodes"] == sum(want_layers)
+    assert t["n_edges"] == R * sum(want_layers[:-1])
+    assert m.path_count(length) == pytest.approx(float(R) ** length,
+                                                 rel=1e-12)
+
+
 
 # ═══════════════════════════════════════════════════════════════

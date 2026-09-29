@@ -2,21 +2,22 @@
  * @file test_layer_max.c
  * @brief `beam_layer_max` against the definition it is an optimisation of.
  *
- * `beam_layer_max` exists so a caller can rescale a layer without building
+ * `beam_layer_max` exists so a caller can rescale a layer without keeping
  * it. Its contract is exact: the value it returns must be the maximum edge
  * weight over EVERY state of the layer, to the last bit -- three callers
  * divide by it (`beam_compute_log_z` and both Hill-number sweeps), and
  * `diversity.c` documents what happened the day a maximum was taken over a
- * subset instead: the open-world Hill numbers moved at every order.
+ * subset instead: the Hill numbers moved at every order.
  *
  * So the reference here is not another implementation. It is the definition:
  * ask `beam_state_weights` for every state and take the maximum. That keeps
  * the test honest across changes to how the shortcut finds its rows.
  *
- * This matters because the shortcut's row source is changing. It used to walk
- * the finalized slot -> row map; it now walks the directory slice that holds
- * the layer's depth bucket. Both reach the same rows, and this file is what
- * says so in values rather than in a comment.
+ * Under the hierarchical prior there is no row a state can skip: an
+ * unobserved context is its nearest observed ancestor's distribution, and can
+ * carry the layer's maximum. A shortcut that walked only the stored rows, as
+ * the sparse one once did, would be wrong here, and this file is what says
+ * so in values rather than in a comment.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -109,15 +110,15 @@ static void check_every_layer(const char *what, uint8_t order,
     }
     beam_model_destroy(m);
 
-    /* A run where every layer was dead would pass the comparison above
-     * without exercising anything. */
+    /* Every layer carries an edge under the prior, so a -inf here is a
+     * layer the shortcut and the definition both lost. */
     ASSERT_MSG(checked > 0u, "no layer was checked at all");
-    ASSERT_MSG(finite > 0u, "every layer came back -inf: nothing was tested");
+    ASSERT_MSG(finite == checked, "a layer came back -inf");
     PASS();
 }
 
 static void test_sparse_order_4_matches_the_definition(void) {
-    check_every_layer("sparse order 4", 4u, 8u, true);
+    check_every_layer("sparse order 4", 4u, 6u, true);
 }
 
 static void test_sparse_order_2_matches_the_definition(void) {
@@ -134,14 +135,16 @@ static void test_dense_matches_the_definition(void) {
 }
 
 /**
- * A depth bucket with no occupied row at all.
+ * A depth bucket with no occupied row at all still has its maximum.
  *
- * The shortcut slices the directory by depth bucket, so a bucket the corpus
- * never reached is the case where it must find nothing and say `-inf` rather
- * than run off the slice. Short sequences under a high `depth_cap` leave the
- * deep buckets empty, which is how a real per-repertoire model looks.
+ * Short sequences under a long `max_length` leave the deep buckets empty at
+ * every level of the prior, which is how a real per-repertoire model looks.
+ * Those layers used to carry no edge and answer -inf. Now every state there
+ * resolves to the uniform row, so the layer is live, and the answer must be
+ * the definition's finite maximum rather than -inf or a read past the end of
+ * an empty directory slice.
  */
-static void test_a_depth_bucket_with_no_rows_is_minus_infinity(void) {
+static void test_a_depth_bucket_with_no_rows_matches_the_definition(void) {
     static const char *SHORT[4] = { "CASF", "CASY", "CAGF", "CGSF" };
     static const double W[4] = { 4, 3, 2, 1 };
 
@@ -158,22 +161,25 @@ static void test_a_depth_bucket_with_no_rows_is_minus_infinity(void) {
         ASSERT_MSG(false, "model did not build");
     }
 
-    /* Nothing longer than four residues was ever seen, so every bucket from
-     * five on is empty. Both the shortcut and the definition must agree that
-     * those layers carry no edge. */
+    /* Nothing longer than four residues was ever seen, so every forward
+     * bucket from four on is empty. */
     uint32_t empty_seen = 0;
     for (uint32_t len = 6; len <= 18u; ++len) {
         for (uint32_t i = 5; i < len; ++i) {
             const double got = beam_layer_max(m, i, len);
             const double want = reference_layer_max(m, i, len);
-            if (!same_double(got, want)) {
+            if (!same_double(got, want) || !isfinite(got)) {
                 printf("FAIL: empty bucket len=%u layer=%u got %.17g want %.17g\n",
                        len, i, got, want);
                 fail_count++;
                 beam_model_destroy(m);
                 return;
             }
-            if (got == -INFINITY) empty_seen++;
+            bool stored = false;
+            for (uint32_t c = 0; c < m->n_ctx && !stored; ++c)
+                stored = beam_sparse_log_row(&m->sp_lp[BEAM_FWD],
+                                             i * m->n_ctx + c).present;
+            if (!stored) empty_seen++;
         }
     }
     beam_model_destroy(m);
@@ -182,11 +188,20 @@ static void test_a_depth_bucket_with_no_rows_is_minus_infinity(void) {
 }
 
 /**
- * The log-Z thin-frontier path asks one traversal for two things: the exact
- * all-state maximum and complete rows for a marked subset. Pin both halves of
- * that contract to the old, independent state-at-a-time definition.
+ * The log-Z thin-frontier path asks one traversal for two things: the rows of
+ * a marked subset, and their maximum to rescale by.
+ *
+ * On a sparse table the maximum is over the MARKED states only -- the rows it
+ * builds -- not over the layer. That is the right rescale for a caller that
+ * consumes only those rows: the scale cancels, and all it has to do is keep
+ * the consumed terms representable. An all-state maximum would defeat the
+ * marking, because under the hierarchical prior every state is live and it
+ * would mean building the whole layer. `beam_layer_max` is the all-state
+ * figure, pinned by the tests above; this pins the marked one, both halves
+ * against the state-at-a-time definition, and checks that on this fixture the
+ * two differ, so the test can tell which contract the kernel keeps.
  */
-static void test_sparse_combined_max_and_marked_rows(void) {
+static void test_sparse_combined_max_is_over_the_marked_rows(void) {
     BeamModel *m = build(4u, 8u, true);
     ASSERT_MSG(m != NULL, "model did not build");
 
@@ -202,20 +217,10 @@ static void test_sparse_combined_max_and_marked_rows(void) {
         ASSERT_MSG(false, "combined-path buffers did not allocate");
     }
 
-    /* Include definitely live rows plus arbitrary states whose forward-wide
-     * row may be absent, since both must be fully written. */
-    double reference[BEAM_MAX_RESIDUES];
-    uint32_t finite_marked = 0u;
-    for (uint32_t s = 0; s < S && finite_marked < 24u; ++s) {
-        beam_state_weights(m, i, len, s, reference);
-        bool finite = false;
-        for (uint32_t x = 0; x < R; ++x)
-            if (reference[x] != -INFINITY) { finite = true; break; }
-        if (finite) {
-            alive[s] = 1u;
-            finite_marked++;
-        }
-    }
+    /* A leading block, a stride across the whole state space -- states with
+     * an observed forward row and states resolved through an ancestor -- and
+     * the all-sentinel state. */
+    for (uint32_t s = 0; s < 24u; ++s) alive[s] = 1u;
     const uint32_t step = S / 19u;
     for (uint32_t s = 0; s < S; s += step) alive[s] = 1u;
     alive[S - 1u] = 1u;
@@ -223,20 +228,17 @@ static void test_sparse_combined_max_and_marked_rows(void) {
 
     double got_max = -INFINITY;
     beam_layer_weights_live(m, i, len, out, &got_max, alive);
-    const double want_max = reference_layer_max(m, i, len);
-    if (!same_double(got_max, want_max)) {
-        printf("FAIL: combined max got %.17g want %.17g\n",
-               got_max, want_max);
-        fail_count++;
-        free(alive);
-        free(out);
-        beam_model_destroy(m);
-        return;
-    }
 
+    /* The definition, over the marked states and every row they build. */
+    double reference[BEAM_MAX_RESIDUES];
+    double want_max = -INFINITY;
+    uint32_t marked = 0u;
     for (uint32_t s = 0; s < S; ++s) {
         if (!alive[s]) continue;
+        marked++;
         beam_state_weights(m, i, len, s, reference);
+        for (uint32_t x = 0; x < R; ++x)
+            if (reference[x] > want_max) want_max = reference[x];
         const double *got = out + (size_t)s * R;
         if (memcmp(got, reference, (size_t)R * sizeof(double)) != 0) {
             printf("FAIL: combined marked row state=%u\n", s);
@@ -247,11 +249,22 @@ static void test_sparse_combined_max_and_marked_rows(void) {
             return;
         }
     }
-
+    const double layer_max = reference_layer_max(m, i, len);
     free(alive);
     free(out);
     beam_model_destroy(m);
-    ASSERT_MSG(finite_marked > 0u, "no finite marked row was exercised");
+
+    if (!same_double(got_max, want_max)) {
+        static char msg[160];
+        snprintf(msg, sizeof msg, "combined max got %.17g, the marked rows' "
+                 "maximum is %.17g", got_max, want_max);
+        ASSERT_MSG(false, msg);
+    }
+    ASSERT_MSG(isfinite(got_max), "the marked rows' maximum is not finite");
+    ASSERT_MSG(marked > 24u, "too few states were marked");
+    ASSERT_MSG(!same_double(want_max, layer_max),
+               "on this fixture the marked maximum equals the layer's, so the "
+               "test cannot tell the two contracts apart");
     PASS();
 }
 
@@ -260,8 +273,8 @@ int main(void) {
     RUN_TEST(test_sparse_order_4_matches_the_definition);
     RUN_TEST(test_sparse_order_2_matches_the_definition);
     RUN_TEST(test_dense_matches_the_definition);
-    RUN_TEST(test_a_depth_bucket_with_no_rows_is_minus_infinity);
-    RUN_TEST(test_sparse_combined_max_and_marked_rows);
+    RUN_TEST(test_a_depth_bucket_with_no_rows_matches_the_definition);
+    RUN_TEST(test_sparse_combined_max_is_over_the_marked_rows);
 
     printf("\n  %d passed, %d failed\n\n", pass_count, fail_count);
     return fail_count == 0 ? 0 : 1;

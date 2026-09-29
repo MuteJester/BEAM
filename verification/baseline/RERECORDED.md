@@ -1695,3 +1695,142 @@ the one arbitrary choice in the vector.
 COST is one add inside a loop that already rescales and collects every
 surviving state, plus one forward sweep per call where `log_partition` reads a
 value cached at finalize.
+
+# Why five inventories were re-recorded for tempering
+
+Re-recorded 2026-09-29, for `BeamModel.tempered` -- the tempered law
+`P_t(s) proportional to P(s)^t` materialised as a model rather than carried
+inside a sweep.
+
+Five files, and every one of them gained lines without losing any. That is
+the whole claim, and it is checkable rather than asserted:
+
+    cbeam_methods.txt        +1  -0     temper
+    c_public_symbols.txt     +1  -0     beam_model_temper
+    c_symbols.txt            +1  -0     the same, newly external
+    python_api.txt           +1  -0     def tempered(self, t: 'float') -> 'BeamModel'
+    pytest_cases.txt        +14  -0     tests/python/model/test_tempering.py
+
+`git diff verification/baseline/` shows no `-` line in any of them.
+
+Nothing NUMERIC moved, which is the part worth stating plainly. `numeric`
+(78 keys, order 2/3/4 x open/strict), `exact against enumeration` (351
+quantities), `saved-model bytes` and `thread independence` all passed
+UNCHANGED against the recordings made before this work. Tempering adds an
+operation and alters no existing one: `beam_model_temper` is only ever
+reached through `tempered`, it is the only caller of the scaling it performs,
+and it runs on a COPY, so no model that existed before can observe it.
+
+The new C symbol is public rather than internal because the header declares
+it, which is deliberate: it is an operation on a model, of the same standing
+as `beam_model_add` and `beam_model_compact` beside it, and the note the gate
+prints about a symbol newly external is the honest description of a function
+that was written for this purpose rather than exposed by a file split.
+
+The fourteen cases are listed here so a later reader can tell an added test
+from a renamed one:
+
+    test_tempering_at_one_is_the_identity
+    test_the_defining_identity
+    test_the_tempered_mellin_transform_is_the_original_reparametrised
+    test_the_tempered_model_is_a_distribution
+    test_the_length_prior_is_the_tilted_share
+    test_tempering_reweights_the_support_without_widening_it
+    test_the_entropy_follows_the_mellin_derivative
+    test_raising_the_exponent_lowers_the_entropy
+    test_within_one_length_the_ranking_survives
+    test_what_tempering_refuses
+    test_the_result_has_no_counts_left
+    test_the_original_is_untouched
+    test_the_identity_holds_for_every_storage_and_world[cfg0]
+    test_the_identity_holds_for_every_storage_and_world[cfg1]
+
+None of them replaces anything. Each was also shown to FAIL against a
+deliberately broken implementation before being trusted: dropping `Z_t(L)`
+from the length prior fails 7, never recomputing `Z_t` fails 8, scaling only
+the N-anchored table fails 6, skipping the sparse dictionary branch fails 5,
+and leaving the length prior unnormalised fails 7. A test battery that has
+never failed pins nothing, and this one was made to.
+
+## What this re-record deliberately did NOT absorb
+
+`pytest_cases.txt` was recorded at 778 cases: the 764 the previous baseline
+held, plus the 14 above. The suite as it stands in this working tree collects
+**785**, and the seven-case difference is `tests/python/likelihood/
+test_lattice.py`.
+
+Those seven were left out on purpose. `tests/python/likelihood/` and
+`src/BEAM/likelihood/` are UNTRACKED -- `git ls-files` returns nothing for
+either -- so they are uncommitted work in the tree rather than part of the
+repository. Recording them would pin, in a tracked baseline, tests that no
+fresh clone and no `git clean` can produce, and the gate would then fail for
+everyone else with those seven under `missing`.
+
+So the gate's `pytest inventory` row FAILS on this branch, and it failed the
+same way before this work: the previous baseline's 764 contains no
+`test_lattice` case either, while the files were already present and already
+collectable. The row is a statement about the untracked likelihood work, not
+about tempering. Committing that work, or removing it, is what resolves the
+row; re-recording around it would only hide which of the two happened.
+
+# Why every baseline was re-recorded for the hierarchical prior
+
+Re-recorded 2026-09-29, tag `preprior`: the closed world (`strict=True`) and
+the open world (`strict=False`, a Laplace add-one) were REMOVED and replaced by
+one model, a hierarchical Bayesian prior. Every row of either table is now the
+posterior mean of a Dirichlet centred on its parent, the same depth with one
+residue less of context,
+
+    P_k(x) = (n_k(x) + alpha[k] * P_{k-1}(x)) / (n_k + alpha[k]),
+
+down to the depth alone and then the uniform 1/R, and the length prior is the
+same rule over lengths 1..max_length. Every string up to `max_length` is
+possible; an unobserved context predicts what its shorter context predicts.
+This is a change of MODEL, so every number moved, and every file below was
+re-recorded from one gate run (`check.py --record preprior`) with the previous
+copy kept beside it.
+
+## The independent witness passed before anything was recorded
+
+`exact.py` was moved to the new support first -- every length 1..max_length,
+168,420 amino-acid strings per configuration, orders 2/3/4 crossed with the
+default prior and an uneven one (strengths five orders of magnitude apart
+between levels) -- and passed all 351 quantities, worst 4.4% of its tolerance.
+The recorder refuses to write while it fails. Beyond the gate, the finalized
+tables match a plain-Python evaluation of the rule to ~1e-14, and
+`tests/reference/beam_model.py` (rewritten for the prior, with its own Z(L)
+sweep) matches whole-model scores to ~1e-13.
+
+## What moved
+
+    numeric.json      all 78 keys, relabelled o{2,3,4}/{default,uneven}
+                      from o{2,3,4}/{open,strict}; D0 is now sum_L 20^L
+                      exactly (3.449e19 at max_length 15); fixture sha256
+                      cba4c711.. -> 64c3b695.., 233,050 -> 233,082 bytes
+                      (format 8: the header carries the prior's strengths)
+    threads.json      re-recorded; identical at 1, 4 and 16 threads
+    python_api.txt    1135 -> 1234 lines: `strict=` removed from BeamModel
+                      and Builder; `alpha=`, `alpha_length=`, `set_alpha`,
+                      `fit_alpha`/`AlphaFit` added, and the likelihood
+                      package's public API (below)
+    pytest_cases.txt  778 -> 817: +142 -103, the migration of every test
+                      that asserted a closed-world fact, the new prior and
+                      format tests, and tests/python/likelihood
+    c_cases.txt       325 -> 331: +32 -26, the same migration in C
+    cbeam_methods     +set_prior
+    c_public_symbols  +beam_model_set_prior, -beam_model_is_legacy_file
+    c_symbols         the same, and -beam_to_log_inplace (the add-one's
+                      log conversion, dead with it)
+
+`beam_model_is_legacy_file` is removed on purpose: only the current file
+format (8) is read, and a file from an earlier development build -- EDGE's
+included -- is refused with its format number and "Rebuild the model from its
+sequences". There are no readers for formats 1-7 left to test.
+
+## What this re-record absorbs that the previous one declined
+
+The tempering section above left `tests/python/likelihood/` out of
+`pytest_cases.txt` because it was untracked. It is recorded now: the
+likelihood package is part of this branch's work and is to be committed with
+it. If it is not, this row fails for exactly that reason, which is the
+honest place for it to fail.

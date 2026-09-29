@@ -8,17 +8,28 @@
  * accumulate beside them: a measured peak of 1,993 MB for a model that ends up
  * occupying 807.
  *
- * It now expands ONE table, writes its log table, and destroys it before the
- * next -- but only for a model that arrives frozen and has no backoff, because
- * `beam_build_hierarchy` reads counts across tables and would find them gone.
+ * It now expands ONE direction's table, writes that direction's log tables --
+ * the top level and every lower level of the hierarchical prior -- and
+ * destroys it before the next. That is only sound because every level of the
+ * prior is summed out of the SAME direction's counts; nothing one direction
+ * builds reads the other's table. A sparse model that arrives frozen takes
+ * this lazy path. A sparse model whose counts are mutable, and every dense
+ * model, read the model's own thawed tables instead.
  *
- * The risk is that the two paths quietly stop agreeing: the lazy one reads a
+ * The risk is that the paths quietly stop agreeing: the lazy one reads a
  * locally thawed table through a different pointer, and a mistake there gives
  * plausible numbers from the wrong rows. So the test finalizes the SAME model
- * both ways and compares every cell of every table. It also pins the thing the
- * first version of this change got wrong -- the loader's empty count
- * directories were left allocated, 29,563,416 B of them, because the
- * thaw-then-freeze cycle that used to dispose of them no longer ran.
+ * both ways and compares every stored cell of every level, and then compares
+ * the lazy sparse model against a dense one, which never takes the lazy path,
+ * on every row the prior resolves. It also pins the thing the first version
+ * of this change got wrong -- the loader's empty count directories were left
+ * allocated, 29,563,416 B of them, because the thaw-then-freeze cycle that
+ * used to dispose of them no longer ran.
+ *
+ * Order 3 rather than the default 4. Nothing here depends on the order, and
+ * under the prior every state of the trellis is live, so each finalize's
+ * partition functions cost about twenty times more at order 4 -- and this file
+ * finalizes nine times.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -39,7 +50,10 @@ static uint64_t rs;
 static uint32_t rnd(uint32_t n){ rs^=rs<<13; rs^=rs>>7; rs^=rs<<17;
                                  return (uint32_t)(rs % n); }
 
-static BeamModel *build(uint32_t n_seqs, uint8_t order, uint32_t max_length) {
+#define ORDER   3u
+#define MAX_LEN 16u     /* the corpus below spans lengths 8..15 */
+
+static BeamModel *build(uint32_t n_seqs, bool sparse) {
     rs = 88172645463325252ull;
     char **seqs = (char **)malloc(n_seqs * sizeof(char *));
     double *w = (double *)malloc(n_seqs * sizeof(double));
@@ -54,7 +68,7 @@ static BeamModel *build(uint32_t n_seqs, uint8_t order, uint32_t max_length) {
     }
     BeamModelConfig cfg;
     beam_model_config_default(&cfg);
-    cfg.order = order; cfg.max_length = max_length; cfg.sparse = true;
+    cfg.order = ORDER; cfg.max_length = MAX_LEN; cfg.sparse = sparse;
     BeamModel *m = beam_model_new(&cfg);
     if (m && (beam_model_observe(m, (const char **)seqs, w, n_seqs) != BEAM_OK
               || beam_model_finalize(m) != BEAM_OK)) {
@@ -65,37 +79,57 @@ static BeamModel *build(uint32_t n_seqs, uint8_t order, uint32_t max_length) {
     return m;
 }
 
-static BeamSparseRows *lp_of(BeamModel *m, uint32_t i) {
-    const uint32_t d = i / 3u, k = i % 3u;
-    if (k == 0u) return &m->sp_lp[d];
-    if (k == 1u) return &m->sp_lp[d];
-    return &m->sp_lp[d];
-}
-static BeamSparseRows *cnt_of(BeamModel *m, uint32_t i) {
-    const uint32_t d = i / 3u, k = i % 3u;
-    if (k == 0u) return &m->sp_cnt[d];
-    if (k == 1u) return &m->sp_cnt[d];
-    return &m->sp_cnt[d];
+/*
+ * Every finalized table of one direction: the top level, then level 0 up to
+ * `order - 1`. The lower levels are finalized state exactly as much as the top
+ * one is -- an unobserved top row IS its nearest stored ancestor -- so a path
+ * that got them wrong would change scores while leaving the top rows intact.
+ */
+static uint32_t n_tables(const BeamModel *m) { return BEAM_DIRS * (m->order + 1u); }
+static const BeamSparseRows *table_of(const BeamModel *m, uint32_t i) {
+    const uint32_t d = i / (m->order + 1u), lvl = i % (m->order + 1u);
+    return lvl == 0u ? &m->sp_lp[d] : &m->sp_lo[d][lvl - 1u];
 }
 
-/** Every cell of every finalized table, in dense-row order. */
-static double *snapshot(BeamModel *m, uint64_t *n_out) {
-    uint64_t cap = 0;
-    for (uint32_t t = 0; t < 6u; ++t)
-        cap += (uint64_t)lp_of(m, t)->n_dense_rows * m->n_residues;
-    double *v = (double *)malloc((size_t)cap * sizeof(double));
-    if (!v) return NULL;
-    uint64_t n = 0;
-    for (uint32_t t = 0; t < 6u; ++t) {
-        const BeamSparseRows *tb = lp_of(m, t);
+/*
+ * What a sparse model stores: which rows each table holds, and the bits of
+ * every cell of those rows. A row a table does not hold resolves to its
+ * ancestor, which is a function of these, so comparing them compares every
+ * answer the model can give.
+ */
+typedef struct {
+    uint8_t *held;       /* one per dense row of every table, in order */
+    double  *cells;      /* R per held row, in the same order          */
+    uint64_t n_rows, n_held;
+} Snapshot;
+
+static void snapshot_free(Snapshot *s) { free(s->held); free(s->cells); }
+
+static bool snapshot(const BeamModel *m, Snapshot *s) {
+    memset(s, 0, sizeof(*s));
+    uint64_t rows = 0, held = 0;
+    for (uint32_t t = 0; t < n_tables(m); ++t) {
+        const BeamSparseRows *tb = table_of(m, t);
+        rows += tb->n_dense_rows;
+        held += beam_sparse_n_rows(tb);
+    }
+    s->held  = (uint8_t *)malloc((size_t)rows);
+    s->cells = (double *)malloc((size_t)(held ? held : 1u) * m->n_residues
+                                * sizeof(double));
+    if (!s->held || !s->cells) { snapshot_free(s); return false; }
+    for (uint32_t t = 0; t < n_tables(m); ++t) {
+        const BeamSparseRows *tb = table_of(m, t);
         for (uint32_t r = 0; r < tb->n_dense_rows; ++r) {
             const BeamLogRow lr = beam_sparse_log_row(tb, r);
-            for (uint32_t x = 0; x < m->n_residues; ++x)
-                v[n++] = lr.present ? beam_log_cell(&lr, x) : -INFINITY;
+            s->held[s->n_rows++] = lr.present;
+            if (!lr.present) continue;
+            if (s->n_held == held) { snapshot_free(s); return false; }
+            beam_log_row_into(&lr, m->n_residues,
+                              s->cells + s->n_held * m->n_residues);
+            s->n_held++;
         }
     }
-    *n_out = n;
-    return v;
+    return true;
 }
 
 /*
@@ -104,36 +138,54 @@ static double *snapshot(BeamModel *m, uint64_t *n_out) {
  * path, and thawing first takes the original one.
  */
 static void test_lazy_and_eager_finalize_agree(void) {
-    BeamModel *m = build(600u, 4u, 16u);
+    BeamModel *m = build(600u, true);
     ASSERT_MSG(m != NULL, "model did not build");
     ASSERT_MSG(m->counts_frozen, "counts are not frozen after finalize");
+
+    /* One stored top row per observed count row: the lazy path must not
+     * lose any of them, and a table with none would compare nothing. */
+    uint64_t observed = 0;
+    for (uint32_t d = 0; d < BEAM_DIRS; ++d)
+        observed += beam_model_frozen_table(m, d)->n_rows;
 
     /* Lazy: counts arrive frozen. */
     ASSERT_MSG(beam_model_finalize(m) == BEAM_OK, "lazy finalize failed");
     ASSERT_MSG(m->counts_frozen, "the lazy path left the counts thawed");
-    uint64_t n_lazy = 0; double *lazy = snapshot(m, &n_lazy);
-    ASSERT_MSG(lazy != NULL, "out of memory");
+    Snapshot lazy, eager;
+    ASSERT_MSG(snapshot(m, &lazy), "out of memory");
+    uint64_t top_held = 0;
+    for (uint32_t d = 0; d < BEAM_DIRS; ++d)
+        top_held += beam_sparse_n_rows(&m->sp_lp[d]);
+    double lz[MAX_LEN + 1u], lpi[MAX_LEN + 1u];
+    memcpy(lz, m->log_z, sizeof lz);
+    memcpy(lpi, m->log_pi, sizeof lpi);
 
     /* Eager: thaw first, so finalize takes the original path. */
     ASSERT_MSG(beam_model_thaw_counts(m) == BEAM_OK, "thaw failed");
     ASSERT_MSG(!m->counts_frozen, "thaw did not clear the flag");
     ASSERT_MSG(beam_model_finalize(m) == BEAM_OK, "eager finalize failed");
-    uint64_t n_eager = 0; double *eager = snapshot(m, &n_eager);
-    ASSERT_MSG(eager != NULL, "out of memory");
+    if (!snapshot(m, &eager)) { snapshot_free(&lazy); beam_model_destroy(m);
+                                ASSERT_MSG(false, "out of memory"); }
 
-    uint64_t bad = 0, checked = 0, finite = 0;
-    if (n_lazy == n_eager)
-        for (uint64_t i = 0; i < n_lazy; ++i) {
-            checked++;
-            if (lazy[i] > -INFINITY) finite++;
-            if (memcmp(&lazy[i], &eager[i], sizeof(double)) != 0) bad++;
-        }
-    free(lazy); free(eager);
+    const bool same_shape = lazy.n_rows == eager.n_rows
+                         && lazy.n_held == eager.n_held;
+    const bool same_rows = same_shape
+        && memcmp(lazy.held, eager.held, (size_t)lazy.n_rows) == 0;
+    const bool same_cells = same_rows
+        && memcmp(lazy.cells, eager.cells,
+                  (size_t)lazy.n_held * m->n_residues * sizeof(double)) == 0;
+    const bool same_z = memcmp(lz, m->log_z, sizeof lz) == 0
+                     && memcmp(lpi, m->log_pi, sizeof lpi) == 0;
+    snapshot_free(&lazy); snapshot_free(&eager);
     beam_model_destroy(m);
 
-    ASSERT_MSG(n_lazy == n_eager, "the two paths produced different table sizes");
-    ASSERT_MSG(finite > 1000u, "too few live cells for this to mean anything");
-    ASSERT_MSG(bad == 0u, "the lazy and eager paths disagree on a cell");
+    ASSERT_MSG(observed > 0u, "nothing was observed, so nothing is compared");
+    ASSERT_MSG(top_held == observed,
+               "the lazy path did not store one top row per observed row");
+    ASSERT_MSG(same_shape, "the two paths produced different table sizes");
+    ASSERT_MSG(same_rows, "the two paths stored different rows");
+    ASSERT_MSG(same_cells, "the lazy and eager paths disagree on a cell");
+    ASSERT_MSG(same_z, "the two paths gave different partition functions");
     PASS();
 }
 
@@ -151,7 +203,7 @@ static void test_lazy_and_eager_finalize_agree(void) {
  * Only a loaded model has directories the loader itself allocated.
  */
 static void test_a_loaded_model_keeps_no_count_directory(void) {
-    BeamModel *src = build(600u, 4u, 16u);
+    BeamModel *src = build(600u, true);
     ASSERT_MSG(src != NULL, "model did not build");
     const char *path = "build/tests/lazy_thaw_roundtrip.beam";
     const BeamError se = beam_model_save(src, path);
@@ -164,8 +216,8 @@ static void test_a_loaded_model_keeps_no_count_directory(void) {
     ASSERT_MSG(m->counts_frozen, "a loaded model did not arrive frozen");
 
     uint64_t left = 0;
-    for (uint32_t t = 0; t < 6u; ++t)
-        left += beam_sparse_memory_bytes(cnt_of(m, t));
+    for (uint32_t d = 0; d < BEAM_DIRS; ++d)
+        left += beam_sparse_memory_bytes(&m->sp_cnt[d]);
     const uint64_t total = beam_model_memory_bytes(m);
     /* The frozen counts must still be there -- releasing THOSE would be a
      * different and much worse bug than the one this guards. */
@@ -182,55 +234,62 @@ static void test_a_loaded_model_keeps_no_count_directory(void) {
 }
 
 /*
- * The lazy path is gated on `cfg.sparse`, and `beam_config_ok` refuses sparse
- * storage with any non-zero kappa -- backoff can populate a row that was never
- * observed, and a sparse table has nowhere to put it. So a backoff model is
- * necessarily DENSE and necessarily takes the original path. This pins that:
- * if the config rule ever relaxes and sparse+backoff becomes constructible,
- * the lazy path would start reading counts that `beam_build_hierarchy` needs
- * across tables, and this test is where that shows up.
+ * The lazy path is taken only by a sparse model, so a dense one is the control
+ * that never takes it: `finalize` thaws both of its tables before building
+ * anything, re-finalize included. Sparse and dense are the same model stored
+ * two ways, so the dense one re-finalized from both thawed tables must give,
+ * on EVERY row -- stored or resolved to an ancestor -- the bits the sparse one
+ * gives after expanding its tables one at a time.
+ *
+ * This is where a level of the prior that needed the other direction's counts
+ * would show up. It used to be where sparse storage with backoff would have,
+ * when the config refused that pairing; every model now carries the prior and
+ * sparse is the default, so the pairing is the ordinary case.
  */
-static void test_a_backoff_model_is_dense_and_unaffected(void) {
-    BeamModelConfig cfg;
-    beam_model_config_default(&cfg);
-    cfg.order = 4u; cfg.max_length = 16u; cfg.strict = false;
+static void test_a_dense_model_finalizes_eagerly_to_the_same_bits(void) {
+    BeamModel *sp = build(400u, true);
+    BeamModel *dn = build(400u, false);
+    if (!sp || !dn) { beam_model_destroy(sp); beam_model_destroy(dn);
+                      ASSERT_MSG(false, "the models did not build"); }
 
-    cfg.sparse = true;
-    BeamModel *bad = beam_model_new(&cfg);
-    if (bad) { beam_model_destroy(bad);
-               ASSERT_MSG(false, "sparse storage was accepted with backoff on"); }
+    /* Re-finalize both: the sparse one lazily, from its frozen counts; the
+     * dense one by thawing both tables first. */
+    const BeamError fs = beam_model_finalize(sp);
+    const BeamError fd = beam_model_finalize(dn);
+    const bool sparse_on = sp->cfg.sparse, sparse_off = !dn->cfg.sparse;
 
-    cfg.sparse = false;
-    BeamModel *m = beam_model_new(&cfg);
-    ASSERT_MSG(m != NULL, "the dense backoff model did not construct");
-
-    rs = 88172645463325252ull;
-    const uint32_t n = 400u;
-    char **seqs = (char **)malloc(n * sizeof(char *));
-    double *w = (double *)malloc(n * sizeof(double));
-    if (!seqs || !w) { free(seqs); free(w); beam_model_destroy(m);
-                       ASSERT_MSG(false, "out of memory"); }
-    for (uint32_t k = 0; k < n; ++k) {
-        const uint32_t L = 6u + rnd(8u);
-        char *s2 = (char *)malloc(L + 3u);
-        s2[0] = 'C';
-        for (uint32_t j = 0; j < L; ++j) s2[1 + j] = AA[rnd(20u)];
-        s2[L + 1] = 'F'; s2[L + 2] = 0;
-        seqs[k] = s2; w[k] = 1.0;
+    uint64_t rows = 0, differ = 0;
+    if (fs == BEAM_OK && fd == BEAM_OK) {
+        const uint32_t R = sp->n_residues;
+        double a[BEAM_MAX_RESIDUES], b[BEAM_MAX_RESIDUES];
+        for (uint32_t d = 0; d < BEAM_DIRS; ++d)
+            for (uint32_t depth = 0; depth < sp->max_len; ++depth)
+                for (uint32_t c = 0; c < sp->n_ctx; ++c) {
+                    const BeamLogRow ra = beam_lp_row(sp, d, depth, c);
+                    const BeamLogRow rb = beam_lp_row(dn, d, depth, c);
+                    beam_log_row_into(&ra, R, a);
+                    beam_log_row_into(&rb, R, b);
+                    if (!ra.present || !rb.present
+                        || memcmp(a, b, (size_t)R * sizeof(double)) != 0)
+                        differ++;
+                    rows++;
+                }
+        for (uint32_t L = 0; L <= sp->max_len; ++L)
+            if (memcmp(&sp->log_z[L], &dn->log_z[L], sizeof(double)) != 0
+                || memcmp(&sp->log_pi[L], &dn->log_pi[L], sizeof(double)) != 0)
+                differ++;
     }
-    const BeamError oe = beam_model_observe(m, (const char **)seqs, w, n);
-    for (uint32_t k = 0; k < n; ++k) free(seqs[k]);
-    free(seqs); free(w);
-    if (oe != BEAM_OK) { beam_model_destroy(m);
-                         ASSERT_MSG(false, "observe failed"); }
+    const uint64_t want_rows = (uint64_t)BEAM_DIRS * sp->max_len * sp->n_ctx;
+    beam_model_destroy(sp); beam_model_destroy(dn);
 
-    const BeamError f1 = beam_model_finalize(m);
-    const BeamError f2 = f1 == BEAM_OK ? beam_model_finalize(m) : f1;
-    const bool sparse_off = !m->cfg.sparse;
-    beam_model_destroy(m);
-    ASSERT_MSG(f1 == BEAM_OK, "the dense backoff model did not finalize");
-    ASSERT_MSG(f2 == BEAM_OK, "it did not re-finalize");
-    ASSERT_MSG(sparse_off, "a backoff model reported sparse storage");
+    ASSERT_MSG(sparse_on && sparse_off, "the two storage modes were not built");
+    ASSERT_MSG(fs == BEAM_OK, "the sparse model did not re-finalize");
+    ASSERT_MSG(fd == BEAM_OK, "the dense model did not re-finalize");
+    ASSERT_MSG(rows == want_rows, "not every row was compared");
+    if (differ) printf("FAIL: %llu rows or lengths differ\n",
+                       (unsigned long long)differ);
+    ASSERT_MSG(differ == 0u,
+               "the dense eager path and the sparse lazy path disagree");
     PASS();
 }
 
@@ -238,7 +297,7 @@ int main(void) {
     printf("\nexpanding counts one table at a time\n");
     RUN_TEST(test_lazy_and_eager_finalize_agree);
     RUN_TEST(test_a_loaded_model_keeps_no_count_directory);
-    RUN_TEST(test_a_backoff_model_is_dense_and_unaffected);
+    RUN_TEST(test_a_dense_model_finalizes_eagerly_to_the_same_bits);
 
     printf("\n  %d passed, %d failed\n\n", pass_count, fail_count);
     return fail_count == 0 ? 0 : 1;

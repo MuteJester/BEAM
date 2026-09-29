@@ -18,7 +18,13 @@ from BEAM import BeamModel
 from BEAM.analytics.rules import (CanonicalRule, Rule, canonicalise, extract,
                                   reproducible)
 
-CFG = dict(order=4, max_length=27, strict=True, sparse=True)
+#: Order 3, not the amino-acid default of 4. Under the prior every string is
+#: possible, so each clamped conditional the search runs is a sweep over the
+#: whole state space: 9,261 states a layer at order 3 against 194,481 at
+#: order 4, which is the difference between seconds and many minutes for the
+#: searches below. Every planted echo that must be found is within 3 residues,
+#: and the one that must not be is 6 away, so order 3 decides the same things.
+CFG = dict(order=3, max_length=27)
 #: Marginals and clamped conditionals are both exact, so agreement between a
 #: rule's stored probability and a fresh clamp is a machine-precision matter.
 EXACT = 1e-10
@@ -60,12 +66,19 @@ def test_finds_a_planted_rule(rng):
     echoes = [r for r in got[11]
               if r.pos == (3, 6) and r.res[0] == r.res[1]]
     assert echoes, "the planted rule was not found"
-    # P(x6 = a | x3 = a) is 1 by construction, so the conditional lift is
-    # 1 / P(x6 = a) ~ 4 for a 4-letter alphabet.
+    # P(x6 = a | x3 = a) is 1 in the corpus, so the conditional lift is
+    # 1 / P(x6 = a) ~ 4 for a 4-letter alphabet, less what the prior's
+    # pseudo-counts take (measured 3.2 to 3.6).
     assert min(r.min_cond_lift for r in echoes) > 3.0
-    # and a mismatched pair at the same positions must be impossible
-    assert not [r for r in got[11]
-                if r.pos == (3, 6) and r.res[0] != r.res[1]]
+    # A mismatched pair at the same positions never occurs in the corpus. It
+    # is possible under the prior -- about 1% each, through rows too thin to
+    # outvote their pseudo-counts -- but it must be strongly DEPLETED, not
+    # merely unenriched: measured lift 0.19 to 0.21, against the echo's 3+.
+    mismatched = [r for r in got[11]
+                  if r.pos == (3, 6) and r.res[0] != r.res[1]]
+    assert mismatched, "the prior makes every pair possible"
+    assert max(r.min_cond_lift for r in mismatched) < 0.3
+    assert max(r.p for r in mismatched) < min(r.p for r in echoes) / 10
 
 
 def test_a_rule_beyond_the_model_order_is_not_representable(rng):
@@ -78,7 +91,7 @@ def test_a_rule_beyond_the_model_order_is_not_representable(rng):
     search for long-range rules must raise the model order first.
     """
     seqs = _corpus(2500, 12, rng, echo=(3, 9), filler="ACDE")
-    m = BeamModel(seqs, **CFG)          # order 4, the gap is 6
+    m = BeamModel(seqs, **CFG)          # order 3, the gap is 6
     got = extract(m, lengths=[12], max_order=2, min_p=1e-3, min_marginal=1e-3)
     echoes = [r for r in got[12]
               if r.pos == (3, 9) and r.res[0] == r.res[1]]
@@ -90,7 +103,10 @@ def test_probability_matches_a_fresh_clamp(rng):
     """A rule's stored probability is the model's own clamped probability."""
     seqs = _corpus(3000, 11, rng, echo=(2, 7), filler="ACDEF")
     m = BeamModel(seqs, **CFG)
-    got = extract(m, lengths=[11], max_order=3, min_p=2e-3, min_marginal=2e-3)
+    # A narrow beam: this checks what a rule stores, not how wide the search
+    # runs, and every pair carried forward costs one sweep of the full space.
+    got = extract(m, lengths=[11], max_order=3, min_p=2e-3, min_marginal=2e-3,
+                  beam=20)
     assert got[11]
     for r in got[11][:20]:
         clamp = dict(zip(r.pos, r.res))
@@ -107,7 +123,14 @@ def test_passenger_position_caps_the_score(rng):
     """
     seqs = _corpus(2500, 11, rng, echo=(3, 6), filler="ACDE")
     m = BeamModel(seqs, **CFG)
-    got = extract(m, lengths=[11], max_order=3, min_p=1e-3, min_marginal=1e-3)
+    # Every triple is REPORTED (a large top_k) and few pairs are carried
+    # forward (a narrow beam). The passenger triple's lift is ~1, so its score
+    # is ~0 by design, and under the prior the depleted triples -- a
+    # mismatched echo is possible now, at a lift of 0.2 -- outrank it; the
+    # default top_k of 200 no longer reaches it. The echo pairs head the beam,
+    # so a narrow one still extends them, at a sixth of the sweeps.
+    got = extract(m, lengths=[11], max_order=3, min_p=1e-3, min_marginal=1e-3,
+                  beam=40, top_k=100_000)
 
     pair = [r for r in got[11]
             if r.order == 2 and r.pos == (3, 6) and r.res[0] == r.res[1]]
@@ -138,7 +161,7 @@ def test_a_planted_rule_surfaces_on_a_nucleotide_model(rng):
         out.add("".join(s))
     seqs = sorted(out)
 
-    m = BeamModel(seqs, alphabet="nt", order=3, max_length=12, strict=True)
+    m = BeamModel(seqs, alphabet="nt", order=3, max_length=12)
     assert m.alphabet == "nt" and m.n_residues == 5
 
     got = extract(m, lengths=[9], max_order=2, min_p=1e-3, min_marginal=1e-3)

@@ -1,6 +1,7 @@
 /**
  * @file sparse.c
- * @brief Dense-directory, sparse-payload storage for strict BEAM tables.
+ * @brief Dense-directory, sparse-payload storage for BEAM tables: the
+ *        observed rows of every level of the hierarchical prior.
  */
 
 #include "beam/internal.h"

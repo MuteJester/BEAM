@@ -85,8 +85,12 @@ void beam_layer_weights(const BeamModel *m, uint32_t i, uint32_t len,
 /**
  * As above, but skipping states `alive` marks dead. When `out_max == NULL`,
  * this is safe only where the caller provably never reads a dead row. When
- * `out_max != NULL`, sparse tables still take the exact global maximum while
- * materialising only marked rows; dense tables build the complete layer.
+ * `out_max != NULL`, the maximum is over the MARKED states only -- the rows it
+ * builds -- not over the whole layer, in either storage form. That is the
+ * right rescale for a caller that consumes only those rows, and the only one
+ * that does not defeat the point of marking: under the hierarchical prior
+ * every state is live, so an all-state maximum would build the whole layer.
+ * `beam_layer_max` is the all-state maximum when that is what is wanted.
  */
 void beam_layer_weights_live(const BeamModel *m, uint32_t i, uint32_t len,
                                  double *out, double *out_max,
@@ -122,8 +126,8 @@ void beam_tail_weights(const BeamModel *m, uint32_t len, double *out);
  * overflows to infinity.
  *
  * That is not a theoretical concern. Three sweeps did exactly this, and in the
- * open world with backoff off -- `beam_model_config_default()` with `strict`
- * cleared -- unobserved cells sit at `ln(1e-300)`, so any `|q| > 1.03`
+ * open world of an earlier build, with backoff off, unobserved cells sat at
+ * `ln(1e-300)`, so any `|q| > 1.03`
  * overflowed. `beam_model_log_mellin(-5)` returned `-inf` and
  * `beam_model_hill_number(-5)` returned `0.0`, both with BEAM_OK, where the
  * true values are finite; and at `q = -1.5` the answer came back finite and

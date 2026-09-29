@@ -4,13 +4,15 @@
  *
  * Four kinds of check, in rising order of what they would catch.
  *
- * Enumeration. On a model whose whole support at one length is 20^4 sequences,
- * every moment can be compared against the sum it is defined as.
+ * Enumeration. On a nucleotide model whose whole support at one length is
+ * 5^5 strings -- every one of them, since under the prior every string has
+ * mass -- every moment can be compared against the sum it is defined as.
  *
  * Agreement with the library's OTHER route to the same number. BEAM already
  * computes `E[-ln P | L]` and its variance through the moment jet, code with
  * no line in common with this sweep and already covered by the verification
- * gate. Entropy must reproduce it for every producible length.
+ * gate. Entropy must reproduce it at every length up to max_length, all of
+ * which the prior makes producible.
  *
  * Agreement with the OTHER new engine. `E[1{x_i = a}]` must be the marginal
  * that `beam_query_marginals` reports, and `E[count(a)]` the sum of those
@@ -47,6 +49,12 @@ static int pass_count = 0, fail_count = 0;
 #define AA_S_ 15u
 #define AA_W 18u
 
+#define NR BEAM_NT_RESIDUES
+/* Indices into "ACGTN". */
+#define NT_A 0u
+#define NT_C 1u
+#define NT_G 2u
+
 #define N_TRAIN 12
 static const char *TRAIN[N_TRAIN] = {
     "CASSLGEQYF",  "CASSLGEQFF",  "CASSQGEQYF",  "CASSPGEQYF",
@@ -55,19 +63,36 @@ static const char *TRAIN[N_TRAIN] = {
 };
 static const double WEIGHT[N_TRAIN] = {50,30,20,15,12,25,18,22,9,7,11,6};
 
+/*
+ * The enumeration fixture, on nucleotides: a consensus with single
+ * substitutions scattered over it. Five residues rather than twenty keep one
+ * length's whole support at 5^5 strings, and nothing the enumeration checks
+ * is about which letters they are.
+ */
 #define N_SHORT 10
 static const char *SHORT_TRAIN[N_SHORT] = {
-    "CASF","CASY","CAGF","CGSF","CASL","CTSF","CASQ","CVSF","CASE","CAAF",
+    "ACGTA","ACGTT","AGGTA","ACCTA","ACGAA",
+    "TCGTA","ACGTC","GCGTA","ACATA","AAGTA",
 };
 static const double SHORT_WEIGHT[N_SHORT] = {40,25,18,15,12,10,9,7,6,5};
+#define SHORT_L 5u
 
-static BeamModel *build(const char **seqs, const double *w, uint32_t n,
-                        uint8_t order, uint8_t max_length, bool open_world) {
+/**
+ * Build a model. `alpha` > 0 sets every level's prior strength and
+ * `anchor_weight` > 0 both anchor weights; zero keeps either default.
+ */
+static BeamModel *build_full(BeamAlphabet alphabet, const char **seqs,
+                             const double *w, uint32_t n, uint8_t order,
+                             uint8_t max_length, double alpha,
+                             double anchor_weight) {
     BeamModelConfig cfg;
-    beam_model_config_default(&cfg);
+    beam_model_config_default_for(alphabet, &cfg);
     cfg.order = order;
     cfg.max_length = max_length;
-    if (open_world) cfg.strict = 0;
+    if (alpha > 0.0)
+        for (uint32_t k = 0; k <= order; ++k) cfg.alpha[k] = alpha;
+    if (anchor_weight > 0.0)
+        cfg.weight_forward = cfg.weight_backward = anchor_weight;
     BeamModel *m = beam_model_new(&cfg);
     if (!m) return NULL;
     if (beam_model_observe(m, seqs, w, n) != BEAM_OK
@@ -76,6 +101,18 @@ static BeamModel *build(const char **seqs, const double *w, uint32_t n,
         return NULL;
     }
     return m;
+}
+
+/* The CDR3 corpus at order 2: every claim made of it holds at any order, and
+ * order 2 keeps each of the many sweeps below cheap. */
+static BeamModel *build_train(double alpha, double anchor_weight) {
+    return build_full(BEAM_ALPHABET_AA, TRAIN, WEIGHT, N_TRAIN, 2u, 14u,
+                      alpha, anchor_weight);
+}
+
+static BeamModel *build_short(void) {
+    return build_full(BEAM_ALPHABET_NT, SHORT_TRAIN, SHORT_WEIGHT, N_SHORT,
+                      2u, 6u, 0.0, 0.0);
 }
 
 /* ── Independent reference: moments by enumeration ───────────── */
@@ -91,7 +128,8 @@ static void enumerate_moments(const BeamModel *m, uint32_t length,
                               const double *table,
                               double *out_mean, double *out_var,
                               double *out_entropy) {
-    const BeamAlphabetInfo *ai = beam_alphabet_info(BEAM_ALPHABET_AA);
+    const BeamAlphabetInfo *ai = beam_alphabet_info(beam_model_alphabet(m));
+    const uint32_t A = beam_model_n_residues(m);
     char buf[8];
     uint8_t idx[8];
     double total = 0.0, mean = 0.0, var = 0.0, H = 0.0;
@@ -102,22 +140,22 @@ static void enumerate_moments(const BeamModel *m, uint32_t length,
         for (;;) {
             for (uint32_t i = 0; i < length; ++i)
                 buf[i] = ai->idx_to_char[idx[i]];
+            /* No zero test: under the prior every string has mass, and a
+             * zero would surface as a NaN entropy rather than hide. */
             const double raw = exp(beam_model_log_pseq(m, buf));
-            if (raw > 0.0) {
-                double f = 0.0;
-                if (table)
-                    for (uint32_t i = 0; i < length; ++i)
-                        f += table[(size_t)i * R + idx[i]];
-                if (pass == 0) { total += raw; mean += raw * f; }
-                else {
-                    const double p = raw / total;
-                    var += p * (f - mean) * (f - mean);
-                    H   -= p * log(p);
-                }
+            double f = 0.0;
+            if (table)
+                for (uint32_t i = 0; i < length; ++i)
+                    f += table[(size_t)i * A + idx[i]];
+            if (pass == 0) { total += raw; mean += raw * f; }
+            else {
+                const double p = raw / total;
+                var += p * (f - mean) * (f - mean);
+                H   -= p * log(p);
             }
             uint32_t k = length;
             while (k-- > 0u) {
-                if (++idx[k] < R) break;
+                if (++idx[k] < A) break;
                 idx[k] = 0u;
                 if (k == 0u) goto next_pass;
             }
@@ -138,7 +176,8 @@ static void enumerate_moments_where(const BeamModel *m, uint32_t length,
                                     const double *table, uint32_t pos,
                                     BeamResidueMask keep,
                                     double *out_mean, double *out_var) {
-    const BeamAlphabetInfo *ai = beam_alphabet_info(BEAM_ALPHABET_AA);
+    const BeamAlphabetInfo *ai = beam_alphabet_info(beam_model_alphabet(m));
+    const uint32_t A = beam_model_n_residues(m);
     char buf[8];
     uint8_t idx[8];
     double total = 0.0, mean = 0.0, var = 0.0;
@@ -151,17 +190,15 @@ static void enumerate_moments_where(const BeamModel *m, uint32_t length,
                 for (uint32_t i = 0; i < length; ++i)
                     buf[i] = ai->idx_to_char[idx[i]];
                 const double raw = exp(beam_model_log_pseq(m, buf));
-                if (raw > 0.0) {
-                    double f = 0.0;
-                    for (uint32_t i = 0; i < length; ++i)
-                        f += table[(size_t)i * R + idx[i]];
-                    if (pass == 0) { total += raw; mean += raw * f; }
-                    else var += (raw / total) * (f - mean) * (f - mean);
-                }
+                double f = 0.0;
+                for (uint32_t i = 0; i < length; ++i)
+                    f += table[(size_t)i * A + idx[i]];
+                if (pass == 0) { total += raw; mean += raw * f; }
+                else var += (raw / total) * (f - mean) * (f - mean);
             }
             uint32_t k = length;
             while (k-- > 0u) {
-                if (++idx[k] < R) break;
+                if (++idx[k] < A) break;
                 idx[k] = 0u;
                 if (k == 0u) goto next_pass;
             }
@@ -176,11 +213,11 @@ next_pass:
 /* ── Entropy ─────────────────────────────────────────────────── */
 
 static void test_entropy_matches_enumeration(void) {
-    BeamModel *m = build(SHORT_TRAIN, SHORT_WEIGHT, N_SHORT, 2u, 6u, true);
+    BeamModel *m = build_short();
     ASSERT_MSG(m != NULL, "model built");
-    const uint32_t L = 4u;
+    const uint32_t L = SHORT_L;
 
-    BeamConstraint *c = beam_query_constraint_new(L, R);
+    BeamConstraint *c = beam_query_constraint_new(L, NR);
     double h = 0.0, v = 0.0;
     ASSERT_MSG(beam_query_entropy(m, c, &h, &v) == BEAM_OK, "entropy");
     beam_query_constraint_free(c);
@@ -190,11 +227,10 @@ static void test_entropy_matches_enumeration(void) {
     ASSERT_MSG(want_h > 0.5, "the reference found real entropy");
     /*
      * The reference sums -p ln p over the whole enumerated support in a plain
-     * loop with no compensation, so its own error is about N * eps * H. At
-     * L = 4 that is order 1e-10, and the two agree to 1.4e-11. A 1e-12
-     * tolerance was asserting the oracle is more accurate than it is; it held
-     * before because the summands happened to align, not because it was
-     * justified.
+     * loop with no compensation, so its own error is about N * eps * H. A
+     * 1e-12 tolerance would assert the oracle is more accurate than it is;
+     * it held once because the summands happened to align, not because it
+     * was justified.
      */
     ASSERT_MSG(fabs(h - want_h) < 1e-9,
                "H matches -sum p ln p over the whole support");
@@ -204,7 +240,7 @@ static void test_entropy_matches_enumeration(void) {
 }
 
 static void test_entropy_reproduces_the_models_own_surprisal_moments(void) {
-    BeamModel *m = build(TRAIN, WEIGHT, N_TRAIN, 3u, 14u, false);
+    BeamModel *m = build_train(0.0, 0.0);
     ASSERT_MSG(m != NULL, "model built");
 
     const uint32_t n = 64u;
@@ -216,10 +252,12 @@ static void test_entropy_reproduces_the_models_own_surprisal_moments(void) {
     ASSERT_MSG(beam_model_length_marginals(m, cn, gn, sm, vr) == BEAM_OK,
                "the moment jet ran");
 
+    /* The corpus spells lengths 9 to 11 only, but under the prior every
+     * length up to max_length has mass, so every one is compared. */
     uint32_t checked = 0u;
-    for (uint32_t L = 1u; L < 14u; ++L) {
+    for (uint32_t L = 1u; L <= 14u; ++L) {
         const double prior = beam_model_log_length_prior(m, L);
-        if (!isfinite(prior)) continue;
+        ASSERT_MSG(isfinite(prior), "every length is producible");
         BeamConstraint *c = beam_query_constraint_new(L, R);
         double h = 0.0, v = 0.0;
         const BeamError e = beam_query_entropy(m, c, &h, &v);
@@ -238,22 +276,45 @@ static void test_entropy_reproduces_the_models_own_surprisal_moments(void) {
                    "shift having no effect on a variance");
         checked++;
     }
-    ASSERT_MSG(checked >= 3u, "several lengths were compared");
+    ASSERT_MSG(checked == 14u, "all fourteen lengths were compared");
     free(cn); free(gn); free(sm); free(vr);
     beam_model_destroy(m);
     PASS();
 }
 
-static void test_a_length_with_one_sequence_has_no_entropy(void) {
-    BeamModel *m = build(TRAIN, WEIGHT, N_TRAIN, 3u, 14u, false);
+static void test_a_length_spelled_once_has_no_entropy_as_the_prior_vanishes(void) {
+    /*
+     * The corpus spells exactly one sequence of length 9. Under any finite
+     * prior every other string of that length has mass too, so the entropy
+     * there is positive; the claim that a certain outcome carries no
+     * information survives as the limit of a vanishing prior. At order 2 the
+     * mass leaking onto other strings shrinks in proportion to alpha --
+     * measured H(9) of 6e-11 at 1e-9 and 5e-14 at 1e-12 -- so at 1e-15 it is
+     * below rounding and the old tolerances apply.
+     */
+    BeamModel *m = build_train(1e-15, 0.0);
     ASSERT_MSG(m != NULL, "model built");
-    /* The corpus spells exactly one sequence of length 9. */
     BeamConstraint *c = beam_query_constraint_new(9u, R);
     double h = -1.0, v = -1.0;
     ASSERT_MSG(beam_query_entropy(m, c, &h, &v) == BEAM_OK, "entropy");
     beam_query_constraint_free(c);
     ASSERT_MSG(fabs(h) < 1e-12, "a certain outcome carries no information");
     ASSERT_MSG(v >= 0.0 && v < 1e-12, "and its surprisal does not vary");
+    /* Certain by an independent route too: the scorer puts all of the
+     * length's mass on the one sequence, P(s | 9) = P(s) / P(9). */
+    const double lp = beam_model_log_pseq(m, "CASSLGEQY")
+                    - beam_model_log_length_prior(m, 9u);
+    ASSERT_MSG(fabs(lp) < 1e-12, "and the scorer agrees it is the only one");
+
+    /* At the default strength the same length is uncertain, which is the
+     * point of the prior rather than a failure of this test. */
+    BeamModel *d = build_train(0.0, 0.0);
+    ASSERT_MSG(d != NULL, "default model built");
+    c = beam_query_constraint_new(9u, R);
+    ASSERT_MSG(beam_query_entropy(d, c, &h, &v) == BEAM_OK, "entropy");
+    beam_query_constraint_free(c);
+    ASSERT_MSG(h > 0.0, "at the default prior no length is certain");
+    beam_model_destroy(d);
     beam_model_destroy(m);
     PASS();
 }
@@ -261,25 +322,33 @@ static void test_a_length_with_one_sequence_has_no_entropy(void) {
 /* ── Agreement with the posterior sweep ──────────────────────── */
 
 static void test_an_indicator_expectation_is_the_marginal(void) {
-    BeamModel *m = build(TRAIN, WEIGHT, N_TRAIN, 3u, 14u, false);
+    /*
+     * Every cell of the trellis, so on the nucleotide fixture: one moment
+     * sweep per (position, residue), and twenty-five of them rather than two
+     * hundred. Under the prior each cell is a genuine Bernoulli -- every
+     * residue has mass at every position and none is certain -- so none of
+     * the comparisons below is the trivial 0 or 1.
+     */
+    BeamModel *m = build_short();
     ASSERT_MSG(m != NULL, "model built");
-    const uint32_t L = 10u;
+    const uint32_t L = SHORT_L;
 
-    double *marg = (double *)malloc((size_t)L * R * sizeof(double));
-    double *tab  = (double *)calloc((size_t)L * R, sizeof(double));
+    double *marg = (double *)malloc((size_t)L * NR * sizeof(double));
+    double *tab  = (double *)calloc((size_t)L * NR, sizeof(double));
     ASSERT_MSG(marg && tab, "alloc");
-    BeamConstraint *c = beam_query_constraint_new(L, R);
+    BeamConstraint *c = beam_query_constraint_new(L, NR);
     ASSERT_MSG(beam_query_marginals(m, c, marg, NULL) == BEAM_OK, "marginals");
 
     uint32_t compared = 0u;
     for (uint32_t i = 0; i < L; ++i) {
-        for (uint32_t a = 0; a < R; ++a) {
-            memset(tab, 0, (size_t)L * R * sizeof(double));
-            tab[(size_t)i * R + a] = 1.0;
+        for (uint32_t a = 0; a < NR; ++a) {
+            memset(tab, 0, (size_t)L * NR * sizeof(double));
+            tab[(size_t)i * NR + a] = 1.0;
             const BeamFunctional f = { BEAM_FUNCTIONAL_TABLE, tab };
             BeamQueryMoments mo;
             ASSERT_MSG(beam_query_expect(m, c, &f, &mo) == BEAM_OK, "expect");
-            const double p = marg[(size_t)i * R + a];
+            const double p = marg[(size_t)i * NR + a];
+            ASSERT_MSG(p > 0.0 && p < 1.0, "a residue that may or may not occur");
             ASSERT_MSG(fabs(mo.mean - p) < 1e-12,
                        "E[1{x_i = a}] is the marginal, from a sweep that "
                        "shares no accumulator with the one that produced it");
@@ -289,7 +358,7 @@ static void test_an_indicator_expectation_is_the_marginal(void) {
             compared++;
         }
     }
-    ASSERT_MSG(compared == L * R, "every cell compared");
+    ASSERT_MSG(compared == L * NR, "every cell compared");
     beam_query_constraint_free(c);
     free(marg); free(tab);
     beam_model_destroy(m);
@@ -297,7 +366,7 @@ static void test_an_indicator_expectation_is_the_marginal(void) {
 }
 
 static void test_an_expected_count_is_the_column_of_marginals(void) {
-    BeamModel *m = build(TRAIN, WEIGHT, N_TRAIN, 3u, 14u, false);
+    BeamModel *m = build_train(0.0, 0.0);
     ASSERT_MSG(m != NULL, "model built");
     const uint32_t L = 10u;
     double *marg = (double *)malloc((size_t)L * R * sizeof(double));
@@ -329,7 +398,7 @@ static void test_an_expected_count_is_the_column_of_marginals(void) {
 }
 
 static void test_the_moment_sweep_agrees_about_the_partition(void) {
-    BeamModel *m = build(TRAIN, WEIGHT, N_TRAIN, 3u, 14u, false);
+    BeamModel *m = build_train(0.0, 0.0);
     ASSERT_MSG(m != NULL, "model built");
     const uint32_t L = 10u;
     double *marg = (double *)malloc((size_t)L * R * sizeof(double));
@@ -357,20 +426,20 @@ static void test_the_moment_sweep_agrees_about_the_partition(void) {
 /* ── Enumeration, constrained and unconstrained ──────────────── */
 
 static void test_moments_match_enumeration_under_a_constraint(void) {
-    BeamModel *m = build(SHORT_TRAIN, SHORT_WEIGHT, N_SHORT, 2u, 6u, true);
+    BeamModel *m = build_short();
     ASSERT_MSG(m != NULL, "model built");
-    const uint32_t L = 4u;
+    const uint32_t L = SHORT_L;
 
     /* A functional with structure: different weights per position and per
      * residue, so a sweep that confused an index cannot pass by symmetry. */
-    double *tab = (double *)calloc((size_t)L * R, sizeof(double));
+    double *tab = (double *)calloc((size_t)L * NR, sizeof(double));
     ASSERT_MSG(tab != NULL, "alloc");
     for (uint32_t i = 0; i < L; ++i)
-        for (uint32_t a = 0; a < R; ++a)
-            tab[(size_t)i * R + a] = 0.25 * (double)(i + 1u)
-                                   + 0.03 * (double)a;
+        for (uint32_t a = 0; a < NR; ++a)
+            tab[(size_t)i * NR + a] = 0.25 * (double)(i + 1u)
+                                    + 0.03 * (double)a;
 
-    BeamConstraint *c = beam_query_constraint_new(L, R);
+    BeamConstraint *c = beam_query_constraint_new(L, NR);
     const BeamFunctional f = { BEAM_FUNCTIONAL_TABLE, tab };
     BeamQueryMoments mo;
     ASSERT_MSG(beam_query_expect(m, c, &f, &mo) == BEAM_OK, "expect");
@@ -389,8 +458,8 @@ static void test_moments_match_enumeration_under_a_constraint(void) {
      * variance was non-negative, which any number satisfies; review was right
      * to call it out.
      */
-    const BeamResidueMask keep = (1u << AA_A_) | (1u << AA_G);
-    BeamConstraint *d = beam_query_constraint_new(L, R);
+    const BeamResidueMask keep = (1u << NT_A) | (1u << NT_G);
+    BeamConstraint *d = beam_query_constraint_new(L, NR);
     ASSERT_MSG(beam_query_constrain_set(d, 1u, keep) == BEAM_OK, "mask");
     BeamQueryMoments md;
     ASSERT_MSG(beam_query_expect(m, d, &f, &md) == BEAM_OK, "expect");
@@ -411,45 +480,45 @@ static void test_moments_match_enumeration_under_a_constraint(void) {
 /* ── The numerical claim ─────────────────────────────────────── */
 
 static void test_variance_survives_a_large_constant_offset(void) {
-    BeamModel *m = build(SHORT_TRAIN, SHORT_WEIGHT, N_SHORT, 2u, 6u, true);
+    BeamModel *m = build_short();
     ASSERT_MSG(m != NULL, "model built");
-    const uint32_t L = 4u;
+    const uint32_t L = SHORT_L;
 
-    double *plain  = (double *)calloc((size_t)L * R, sizeof(double));
-    double *offset = (double *)calloc((size_t)L * R, sizeof(double));
+    double *plain  = (double *)calloc((size_t)L * NR, sizeof(double));
+    double *offset = (double *)calloc((size_t)L * NR, sizeof(double));
     ASSERT_MSG(plain && offset, "alloc");
     for (uint32_t i = 0; i < L; ++i) {
-        for (uint32_t a = 0; a < R; ++a) {
-            const double v = 0.5 * (double)a - 0.25 * (double)i;
-            plain[(size_t)i * R + a]  = v;
-            /* Every path gains exactly 4e8, so the variance cannot move. */
-            offset[(size_t)i * R + a] = v + 1e8;
+        for (uint32_t a = 0; a < NR; ++a) {
+            const double v = 2.5 * (double)a - 0.25 * (double)i;
+            plain[(size_t)i * NR + a]  = v;
+            /* Every path gains exactly 5e8, so the variance cannot move. */
+            offset[(size_t)i * NR + a] = v + 1e8;
         }
     }
     const BeamFunctional fp = { BEAM_FUNCTIONAL_TABLE, plain };
     const BeamFunctional fo = { BEAM_FUNCTIONAL_TABLE, offset };
-    BeamConstraint *c = beam_query_constraint_new(L, R);
+    BeamConstraint *c = beam_query_constraint_new(L, NR);
     BeamQueryMoments a, b;
     ASSERT_MSG(beam_query_expect(m, c, &fp, &a) == BEAM_OK, "plain");
     ASSERT_MSG(beam_query_expect(m, c, &fo, &b) == BEAM_OK, "offset");
     beam_query_constraint_free(c);
 
     ASSERT_MSG(a.variance > 1.0, "there is a variance to lose");
-    ASSERT_MSG(fabs(b.mean - (a.mean + 4e8)) < 1e-6, "the mean shifted by 4e8");
+    ASSERT_MSG(fabs(b.mean - (a.mean + 5e8)) < 1e-6, "the mean shifted by 5e8");
 
     /*
      * Shifting a functional cannot change its variance, so the two must
-     * agree. Carrying means of magnitude 4e8 in a double costs about
-     * 4e8 * 2^-52, so the answer degrades to roughly 1e-8 relative and no
-     * further -- measured at 6e-9 on this model.
+     * agree. Carrying means of magnitude 5e8 in a double costs about
+     * 5e8 * 2^-52, so the answer degrades to roughly 1e-8 relative and no
+     * further -- measured at 9e-9 on this model.
      */
     ASSERT_MSG(fabs(b.variance - a.variance) < 1e-6 * a.variance,
                "a constant offset of 1e8 per position leaves the variance");
 
     /*
      * And this is what the rejected alternative would have produced. `E[f^2]`
-     * is about 1.6e17, whose spacing between representable doubles is around
-     * 32 -- so a variance of 20 cannot survive being recovered by subtracting
+     * is about 2.5e17, whose spacing between representable doubles is 32 --
+     * so a variance of 22 cannot survive being recovered by subtracting
      * `E[f]^2` from it, and does not. Demonstrated rather than asserted,
      * because it is the entire reason the merge above is written centred.
      */
@@ -480,52 +549,79 @@ static void test_variance_survives_an_offset_that_squares_to_infinity(void) {
      */
     const char *seqs[2] = {"CASF", "CAGF"};
     const double w[2] = {1.0, 1.0};
-    BeamModel *m = build(seqs, w, 2u, 2u, 6u, false);
+    BeamModel *m = build_full(BEAM_ALPHABET_AA, seqs, w, 2u, 2u, 6u, 0.0, 0.0);
     ASSERT_MSG(m != NULL, "model built");
     const uint32_t L = 4u;
 
     double *tab = (double *)calloc((size_t)L * R, sizeof(double));
     ASSERT_MSG(tab != NULL, "alloc");
-    /* Every path totals about 4e155; the two differ by 1e150, so the true
-     * variance is about 2.5e299 -- large, and perfectly representable. */
+    /* Every path totals about 4e155, and those with S at position 2 total
+     * d = 1e150 more, so the true variance is about 1e300 * p(1 - p) --
+     * large, and perfectly representable. */
     for (uint32_t i = 0; i < L; ++i)
         for (uint32_t a = 0; a < R; ++a)
             tab[(size_t)i * R + a] = 1e155;
     tab[(size_t)2 * R + AA_S_] = 1e155 + 1e150;
+    const double d = tab[(size_t)2 * R + AA_S_] - 1e155;
 
     const BeamFunctional f = { BEAM_FUNCTIONAL_TABLE, tab };
     BeamConstraint *c = beam_query_constraint_new(L, R);
     BeamQueryMoments mo;
     ASSERT_MSG(beam_query_expect(m, c, &f, &mo) == BEAM_OK, "expect");
-    beam_query_constraint_free(c);
 
-    /* Two equally likely paths differing by 1e150: variance is (d/2)^2. */
-    const double want = 0.25 * 1e150 * 1e150;
+    /*
+     * The functional is a constant plus d times the indicator of S at
+     * position 2, so its variance is d^2 p (1 - p) with p that indicator's
+     * marginal -- read from the posterior sweep, which shares nothing with
+     * this one. Under the prior every residue has mass there, so this is a
+     * weighted mixture of 20^4 paths rather than the two the corpus spells,
+     * and p is not the one half it would be without the prior.
+     */
+    double *marg = (double *)malloc((size_t)L * R * sizeof(double));
+    ASSERT_MSG(marg != NULL, "alloc");
+    ASSERT_MSG(beam_query_marginals(m, c, marg, NULL) == BEAM_OK, "marginals");
+    beam_query_constraint_free(c);
+    const double p = marg[(size_t)2 * R + AA_S_];
+    ASSERT_MSG(p > 0.05 && p < 0.95, "S is a genuine coin flip there");
+    const double want = d * d * p * (1.0 - p);
     ASSERT_MSG(mo.variance > 0.0,
                "a finite variance is not reported as zero");
     ASSERT_MSG(fabs(mo.variance - want) < 1e-6 * want,
-               "and it is the variance the two paths actually have");
+               "and it is the variance the paths actually have");
     ASSERT_MSG(isfinite(mo.mean) && mo.mean > 1e155, "the mean is finite too");
-    free(tab);
+    free(tab); free(marg);
     beam_model_destroy(m);
     PASS();
 }
+
+/*
+ * Both anchor weights for the two tests below: fourteen times the default.
+ * Scaling both by one factor multiplies every log weight by it, which leaves
+ * the ranking within a length untouched and pushes an all-W sequence -- about
+ * -68 nats at the default, since the corpus never spells W -- to about -930,
+ * below the -745 where exp() underflows. It is kept that low so the one free
+ * position of the second test still spreads its mass over several residues.
+ */
+#define RARE_ANCHOR_WEIGHT 7.0
 
 static void test_many_rare_paths_still_mix_into_an_entropy(void) {
     /*
      * The test below pins every position, so each state has exactly one
      * arrival and the merge never has to COMBINE two contributions. This one
-     * leaves a position free, giving twenty paths all around 6,900 nats below
-     * the mode, so the mixture is exercised where its weights would underflow.
+     * leaves a position free, giving twenty paths all more than 745 nats
+     * below the mode, so the mixture is exercised where its weights would
+     * underflow.
      *
      * Taking those weights as `exp(a) / (exp(a) + exp(b))` -- the obvious
      * form -- gives 0/0 at these magnitudes. The merge subtracts the larger
      * log first, so its two weights are exact complements whatever the inputs,
      * and that is the whole reason this file carries logarithms.
      */
-    BeamModel *m = build(TRAIN, WEIGHT, N_TRAIN, 3u, 14u, true);
-    ASSERT_MSG(m != NULL, "open-world model built");
+    BeamModel *m = build_train(0.0, RARE_ANCHOR_WEIGHT);
+    ASSERT_MSG(m != NULL, "model built");
     const uint32_t L = 10u, FREE = 4u;
+    ASSERT_MSG(beam_model_log_pseq(m, "WWWWWWWWWW") < -745.0,
+               "the pinned residues alone put every path out of exp()'s reach");
 
     BeamConstraint *c = beam_query_constraint_new(L, R);
     for (uint32_t i = 0; i < L; ++i)
@@ -577,32 +673,13 @@ static void test_a_rare_but_certain_event_has_moments(void) {
      * Pinning every position leaves exactly one sequence, so its conditional
      * entropy and variance are exactly zero and its log Z is its own score.
      */
-    BeamModel *m = build(TRAIN, WEIGHT, N_TRAIN, 3u, 14u, true);
-    ASSERT_MSG(m != NULL, "open-world model built");
+    BeamModel *m = build_train(0.0, RARE_ANCHOR_WEIGHT);
+    ASSERT_MSG(m != NULL, "model built");
     const uint32_t L = 10u;
     const char *rare = "WWWWWWWWWW";
     const double score = beam_model_log_pseq(m, rare);
-    /*
-     * It used to be asserted that this sequence scores below -700, which is
-     * where exp() underflows and the linear-space path this test exists to
-     * guard against gave up. That score is no longer reachable, and the
-     * reason is worth recording rather than working around.
-     *
-     * Under the previous open world an unobserved cell could normalise to
-     * essentially nothing and then be floored at 1e-300 by
-     * `beam_to_log_inplace`, which is a single cell worth about -690 nats.
-     * That is where the thousands of nats came from: a floor artefact, not a
-     * probability the model meant. The open world is now a Laplace add-one,
-     * so the smallest a cell can be is 1/(n + R) and the 1e-300 floor never
-     * fires at all.
-     *
-     * Measured on this fixture: an all-W sequence scores -31.5, and so does
-     * every other sequence built entirely from unobserved contexts, because
-     * an unobserved row is uniform. The machinery still has to survive the
-     * lowest score the model CAN produce, which is what is asserted.
-     */
-    ASSERT_MSG(isfinite(score) && score < -25.0,
-               "producible, and far below the mode");
+    ASSERT_MSG(isfinite(score) && score < -745.0,
+               "producible, and further below the mode than exp() can reach");
 
     BeamConstraint *c = beam_query_constraint_new(L, R);
     for (uint32_t i = 0; i < L; ++i)
@@ -630,39 +707,39 @@ static void test_a_rare_but_certain_event_has_moments(void) {
 /* ── Constrained by an automaton ─────────────────────────────── */
 
 static void test_moments_respect_an_automaton(void) {
-    BeamModel *m = build(SHORT_TRAIN, SHORT_WEIGHT, N_SHORT, 2u, 6u, true);
+    BeamModel *m = build_short();
     ASSERT_MSG(m != NULL, "model built");
-    const uint32_t L = 4u;
-    const uint8_t motif[2] = {AA_A_, AA_S_};
+    const uint32_t L = SHORT_L;
+    const uint8_t motif[2] = {NT_C, NT_G};
 
-    /* Counting the S's, so the motif constraint must move the answer. */
-    double *tab = (double *)calloc((size_t)L * R, sizeof(double));
+    /* Counting the G's, so the motif constraint must move the answer. */
+    double *tab = (double *)calloc((size_t)L * NR, sizeof(double));
     ASSERT_MSG(tab != NULL, "alloc");
-    for (uint32_t i = 0; i < L; ++i) tab[(size_t)i * R + AA_S_] = 1.0;
+    for (uint32_t i = 0; i < L; ++i) tab[(size_t)i * NR + NT_G] = 1.0;
     const BeamFunctional f = { BEAM_FUNCTIONAL_TABLE, tab };
 
-    BeamConstraint *free_c = beam_query_constraint_new(L, R);
-    BeamConstraint *mot_c  = beam_query_constraint_new(L, R);
+    BeamConstraint *free_c = beam_query_constraint_new(L, NR);
+    BeamConstraint *mot_c  = beam_query_constraint_new(L, NR);
     ASSERT_MSG(beam_query_constrain_automaton(
-                   mot_c, beam_query_automaton_motif(L, R, motif, 2u))
+                   mot_c, beam_query_automaton_motif(L, NR, motif, 2u))
                == BEAM_OK, "attached");
 
     BeamQueryMoments a, b;
     ASSERT_MSG(beam_query_expect(m, free_c, &f, &a) == BEAM_OK, "free");
     ASSERT_MSG(beam_query_expect(m, mot_c, &f, &b) == BEAM_OK, "motif");
-    /* Requiring AS somewhere guarantees at least one S, so the conditional
+    /* Requiring CG somewhere guarantees at least one G, so the conditional
      * expectation must exceed the unconditional one. */
     ASSERT_MSG(b.mean > a.mean + 1e-6,
-               "conditioning on a motif containing S raises E[count(S)]");
+               "conditioning on a motif containing G raises E[count(G)]");
     ASSERT_MSG(b.mean >= 1.0 - 1e-12,
-               "and it cannot fall below the one S the motif guarantees");
+               "and it cannot fall below the one G the motif guarantees");
 
     /* The same conditional, cross-checked against the posterior sweep. */
-    double *marg = (double *)malloc((size_t)L * R * sizeof(double));
+    double *marg = (double *)malloc((size_t)L * NR * sizeof(double));
     ASSERT_MSG(marg != NULL, "alloc");
     ASSERT_MSG(beam_query_marginals(m, mot_c, marg, NULL) == BEAM_OK, "marg");
     double want = 0.0;
-    for (uint32_t i = 0; i < L; ++i) want += marg[(size_t)i * R + AA_S_];
+    for (uint32_t i = 0; i < L; ++i) want += marg[(size_t)i * NR + NT_G];
     ASSERT_MSG(fabs(b.mean - want) < 1e-12,
                "the moment sweep and the product posterior agree under an "
                "automaton, not only under masks");
@@ -677,7 +754,7 @@ static void test_moments_respect_an_automaton(void) {
 /* ── Refusals and shape ──────────────────────────────────────── */
 
 static void test_moments_of_an_impossible_constraint_do_not_exist(void) {
-    BeamModel *m = build(TRAIN, WEIGHT, N_TRAIN, 3u, 14u, false);
+    BeamModel *m = build_train(0.0, 0.0);
     ASSERT_MSG(m != NULL, "model built");
     const uint32_t L = 10u;
     double *tab = (double *)calloc((size_t)L * R, sizeof(double));
@@ -692,18 +769,37 @@ static void test_moments_of_an_impossible_constraint_do_not_exist(void) {
                "an empty constraint has no moments");
     beam_query_constraint_free(c);
 
+    /*
+     * Under the prior a constraint admitting any string at all has mass, so
+     * the only other way to have none is a language with no strings in it:
+     * "exactly one residue drawn from the empty set" leaves every position
+     * mask full and still accepts nothing. That takes the sweep's own
+     * refusal rather than the empty-mask shortcut above.
+     */
     BeamConstraint *d = beam_query_constraint_new(L, R);
-    for (uint32_t i = 0; i < 4u; ++i) beam_query_constrain_position(d, i, 0u);
+    ASSERT_MSG(beam_query_constrain_automaton(
+                   d, beam_query_automaton_count(L, R, 0u, 1u, 1u)) == BEAM_OK,
+               "attached");
     ASSERT_MSG(beam_query_expect(m, d, &f, &mo) == BEAM_ERR_NO_LIVE_PATHS,
-               "nor has one the trellis cannot satisfy");
+               "nor has a language that accepts nothing");
     beam_query_constraint_free(d);
+
+    /* Four leading alanines, which the corpus never spells: improbable, so
+     * no longer refused. */
+    BeamConstraint *e = beam_query_constraint_new(L, R);
+    for (uint32_t i = 0; i < 4u; ++i) beam_query_constrain_position(e, i, AA_A_);
+    ASSERT_MSG(beam_query_expect(m, e, &f, &mo) == BEAM_OK,
+               "but a prefix the corpus never spells has moments");
+    ASSERT_MSG(isfinite(mo.log_z) && mo.mean == 0.0 && mo.variance == 0.0,
+               "over a finite partition, and a zero functional's are zero");
+    beam_query_constraint_free(e);
     free(tab);
     beam_model_destroy(m);
     PASS();
 }
 
 static void test_a_functional_the_engine_cannot_sum_is_refused(void) {
-    BeamModel *m = build(TRAIN, WEIGHT, N_TRAIN, 3u, 14u, false);
+    BeamModel *m = build_train(0.0, 0.0);
     ASSERT_MSG(m != NULL, "model built");
     BeamConstraint *c = beam_query_constraint_new(10u, R);
     BeamQueryMoments mo;
@@ -775,7 +871,7 @@ int main(void) {
     printf("\n[entropy]\n");
     RUN_TEST(test_entropy_matches_enumeration);
     RUN_TEST(test_entropy_reproduces_the_models_own_surprisal_moments);
-    RUN_TEST(test_a_length_with_one_sequence_has_no_entropy);
+    RUN_TEST(test_a_length_spelled_once_has_no_entropy_as_the_prior_vanishes);
 
     printf("\n[agreement with the posterior sweep]\n");
     RUN_TEST(test_an_indicator_expectation_is_the_marginal);

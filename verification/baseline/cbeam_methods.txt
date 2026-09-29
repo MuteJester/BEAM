@@ -63,6 +63,7 @@ query_probability
 sample
 save
 set_memory_budget
+set_prior
 set_threads
 spectra_by_length
 spectrum
@@ -73,6 +74,7 @@ surprisal_cumulants
 surprisal_moments
 surprisal_range
 surprisal_tilt
+temper
 threads
 top_k
 topology

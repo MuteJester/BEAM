@@ -23,11 +23,10 @@
  * The per-residue log term of ONE direction: a single table lookup.
  *
  * There is no mixture. A weighted geometric mean of several experts used to
- * live here, and with it the rule that any dead expert killed the edge. What
- * survives of that rule is the closed world itself: an absent row, or an
- * absent cell within a present row, is -INFINITY, and a caller that scales it
- * must not turn `0 * -inf` into a NaN. Every caller does that test itself,
- * because each one has a cheaper place to put it than here.
+ * live here, and with it the rule that any dead expert killed the edge. Under
+ * the hierarchical prior no finalized cell is -INFINITY, but the guard every
+ * caller keeps against `0 * -inf` costs one comparison and stays: a row that
+ * could not be resolved would be a bug, and it should read as dead.
  */
 static inline double beam_cell_dense(const BeamModel *m, uint32_t dir,
                                      uint32_t depth, uint32_t ctx,
@@ -45,9 +44,9 @@ static inline double beam_cell_sparse(const BeamModel *m, uint32_t dir,
 
 /**
  * Sum of both directions' per-residue log terms for an ENCODED sequence, before the
- * length prior and the partition function are applied. `-INFINITY` as soon as
- * any residue is unreachable, which is what makes the closed world cheap: a
- * sequence the model cannot spell costs one position, not the whole length.
+ * length prior and the partition function are applied. Finite for every
+ * sequence of the alphabet up to `max_length`; the early `-INFINITY` return
+ * survives for a row that could not be resolved, which is never.
  *
  * `model/scoring.c` is the only caller today, so this could fold back into it.
  * It stays declared here because the reason it was shared is still the right

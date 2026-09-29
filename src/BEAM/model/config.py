@@ -12,7 +12,38 @@ from .validation import _check_int
 from .._simulation_result import SimulationResult
 
 
-def _config_args(*, order, max_length, weights, strict=True,
+#: Starting strengths of the hierarchical prior, in pseudo-observations. The
+#: same numbers as BEAM_DEFAULT_ALPHA and BEAM_DEFAULT_ALPHA_LENGTH in
+#: include/beam/model.h, which a test holds them to. Starting points only:
+#: :func:`BEAM.fit_alpha` fits them to a corpus by held-out likelihood.
+DEFAULT_ALPHA = 10.0
+DEFAULT_ALPHA_LENGTH = 10.0
+
+
+def _alpha_levels(alpha, order: int) -> tuple:
+    """One positive, finite strength per level 0..order."""
+    import math
+    if alpha is None:
+        levels = (DEFAULT_ALPHA,) * (order + 1)
+    elif isinstance(alpha, (int, float)) and not isinstance(alpha, bool):
+        levels = (float(alpha),) * (order + 1)
+    else:
+        levels = tuple(float(a) for a in alpha)
+        if len(levels) != order + 1:
+            raise ValueError(
+                f"alpha has {len(levels)} entries, but an order-{order} model "
+                f"has {order + 1} levels (0..order): pass one number for every "
+                f"level, or exactly one per level")
+    for k, a in enumerate(levels):
+        if not (math.isfinite(a) and a > 0.0):
+            raise ValueError(
+                f"alpha[{k}]={a!r}: every prior strength must be finite and "
+                f"positive, since a zero would make an unobserved residue "
+                f"impossible at that level")
+    return levels
+
+
+def _config_args(*, order, max_length, weights, alpha=None, alpha_length=None,
                  sparse=None, alphabet=alphabets.DEFAULT_ALPHABET) -> tuple:
     """Validate a build configuration and flatten it for the C entry points.
 
@@ -37,23 +68,26 @@ def _config_args(*, order, max_length, weights, strict=True,
     max_length = _check_int("max_length", max_length, 2,
                             BEAM_MAX_LENGTH_CEILING)
     weights = tuple(float(w) for w in weights)
-    strict = bool(strict)
+    alpha = _alpha_levels(alpha, order)
+    alpha_length = (DEFAULT_ALPHA_LENGTH if alpha_length is None
+                    else float(alpha_length))
+    import math
+    if not (math.isfinite(alpha_length) and alpha_length > 0.0):
+        raise ValueError(f"alpha_length={alpha_length!r} must be finite and "
+                         f"positive")
 
     # The weights SHOULD sum to 1 and are not refused if they do not: (1, 0)
     # and (0, 1) are how each anchor's chain is measured on its own, which is
     # what separates a partition function below 1 into the two causes that can
     # put it there. Off 1, log W scales with the length, so within-length
     # ranking is untouched and cross-length comparison is not meaningful.
-    if sparse is None:
-        sparse = strict
-    else:
-        sparse = bool(sparse)
-        if sparse and not strict:
-            raise ValueError("sparse=True requires strict=True")
+    # Sparse by default: a dense model materialises every row, which is
+    # gigabytes at order 4, and represents exactly the same model.
+    sparse = True if sparse is None else bool(sparse)
 
     # The alphabet is appended rather than placed first, where it belongs, so
     # every existing position in the tuple keeps its meaning.
-    return (order, max_length, weights, strict, sparse, alphabet)
+    return (order, max_length, weights, alpha, alpha_length, sparse, alphabet)
 
 
 def _config_args_from_dict(cfg: dict[str, Any]) -> tuple:
@@ -63,5 +97,6 @@ def _config_args_from_dict(cfg: dict[str, Any]) -> tuple:
                         order=cfg["order"],
                         max_length=cfg["max_length"],
                         weights=cfg["weights"],
-                        strict=cfg.get("strict", True),
-                        sparse=cfg.get("sparse", False))
+                        alpha=cfg.get("alpha"),
+                        alpha_length=cfg.get("alpha_length"),
+                        sparse=cfg.get("sparse", True))

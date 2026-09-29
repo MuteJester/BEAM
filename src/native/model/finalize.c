@@ -10,238 +10,365 @@
 
 
 
-/* ── Finalize ────────────────────────────────────────────────── */
+/* ── Finalize: the hierarchical prior ────────────────────────── */
 
-/**
- * Row-normalise counts straight into probabilities.
+/*
+ * Every row is the posterior mean of a Dirichlet centred on its parent:
  *
- * The whole backoff hierarchy collapses to this when every kappa is zero:
- * `backoff_level` computes `cr[x] + kappa * pr[x]`, so a zero kappa erases
- * the parent and leaves the row's own counts. The marginals feeding those
- * parents are then built and discarded -- at order 4 that is the order-0..2
- * mid hierarchy plus a depth-aggregated copy, per direction, and it costs
- * about 1.6 SECONDS on every strict build regardless of how much data the
- * model holds. `strict` defaults kappa to zero, so every strict model paid
- * it, and so did every load, since the file stores counts and re-finalizes.
+ *     P_k(x) = (n_k(x) + alpha[k] * P_{k-1}(x)) / (n_k + alpha[k])
  *
- * Bit-identical, not approximately: `cr[x] + 0.0 * pr[x]` is `cr[x]` exactly
- * for any finite `pr[x]`, and the parents are probabilities in [0, 1].
+ * where level k keeps the k residues NEAREST the scored one, level 0 is the
+ * depth alone, and P_{-1} is the uniform 1/R. `n_k` is the observed counts
+ * summed over the residues level k drops, so no count beyond what the model
+ * already keeps is ever stored, and a model stays exactly as expandable as it
+ * was.
+ *
+ * A row nothing was observed at is exactly its parent. The sparse form stores
+ * only observed rows, at every level, and `beam_lp_row` resolves the rest by
+ * walking to the nearest observed ancestor; the dense form writes that
+ * ancestor's row into every unobserved slot. The two are the same numbers.
+ *
+ * Worked depth by depth. Every level of one depth is a function of that
+ * depth's top rows alone, so the scratch below is one depth's worth -- about
+ * 3 MB at order 4 -- rather than a table's, and the rows come out in the
+ * ascending order the finalized payloads must be written in.
  */
-static BeamError finalize_direction(BeamModel *m, uint32_t dir) {
-    const uint32_t R  = m->n_residues;
-    const uint32_t nc = m->n_ctx;
-    const int64_t  n_rows = (int64_t)m->max_len * nc;
 
-    /*
-     * One table per direction, so finalize is what it always was underneath:
-     * normalise each row of counts into a conditional over the residues, then
-     * take logs. The backoff hierarchy that used to sit here is gone with the
-     * experts it served.
-     *
-     * The open world is a Laplace add-one at this one table rather than a
-     * hierarchy. It has to be something: with no parent to fall back on, an
-     * unobserved row would otherwise normalise to nothing and then floor to
-     * twenty equal tiny logs that do not sum to one, which is not a
-     * distribution. Add-one keeps every row normalised, costs no memory, and
-     * adds no parameter, since the constant is fixed.
-     *
-     * The closed world is unchanged: an unobserved row stays all-zero and
-     * `beam_to_log_inplace` turns it into twenty -inf, which is the support.
-     */
-    const double add = m->cfg.strict ? 0.0 : 1.0;
+/* One depth's lower levels, in COUNTS packing (most-distant-first), so the
+ * level-k context of a top context `c` is `c % lo_ctx[k]` in either
+ * direction. Converted to a direction's finalized packing only on output. */
+typedef struct {
+    double *cnt[BEAM_MAX_ORDER];    /* [lo_ctx[k] * R] summed counts          */
+    double *tot[BEAM_MAX_ORDER];    /* [lo_ctx[k]]     row totals             */
+    double *prob[BEAM_MAX_ORDER];   /* [lo_ctx[k] * R] log P_k, where tot > 0 */
+} HierScratch;
 
-    /*
-     * The C-anchored table is written NEAREST-first, one row per context but
-     * not at the context's own index. The counts keep the common
-     * most-distant-first packing, so the relabelling is confined to the
-     * destination address of the finished row and nothing upstream, the file
-     * format included, has to know about it. See the note in beam/internal.h
-     * for what it buys, and note that the two context helpers are named apart
-     * precisely so a call site cannot confuse them.
-     */
-    const bool reverse = (dir == BEAM_BWD);
-#ifdef _OPENMP
-    #pragma omp parallel for schedule(static) num_threads(beam_threads())
-#endif
-    for (int64_t row = 0; row < n_rows; ++row) {
-        const uint32_t d = (uint32_t)(row / nc);
-        const uint32_t c = (uint32_t)(row % nc);
-        const double *cr = m->cnt[dir] + (size_t)row * R;
-        const uint32_t dst = reverse
-            ? beam_ctx_reverse(c, m->order, m->n_alphabet) : c;
-        double *orow = m->lp[dir] + ((size_t)d * nc + dst) * R;
-        double tot = 0.0;
-        for (uint32_t x = 0; x < R; ++x) {
-            orow[x] = cr[x] + add;
-            tot += orow[x];
-        }
-        for (uint32_t x = 0; x < R; ++x)
-            orow[x] = tot > 0.0 ? orow[x] / tot : 0.0;
+static void hier_scratch_free(HierScratch *h, uint32_t order) {
+    for (uint32_t k = 0; k < order; ++k) {
+        free(h->cnt[k]); free(h->tot[k]); free(h->prob[k]);
     }
-    if (beam_to_log_inplace(m->lp[dir], beam_n_table(m), m->cfg.strict))
-        m->tables_all_finite = false;
+}
+
+static BeamError hier_scratch_alloc(HierScratch *h, const BeamModel *m) {
+    memset(h, 0, sizeof *h);
+    const uint32_t R = m->n_residues;
+    for (uint32_t k = 0; k < m->order; ++k) {
+        const size_t nc = m->lo_ctx[k];
+        h->cnt[k]  = (double *)malloc(nc * R * sizeof(double));
+        h->tot[k]  = (double *)malloc(nc * sizeof(double));
+        h->prob[k] = (double *)malloc(nc * R * sizeof(double));
+        if (!h->cnt[k] || !h->tot[k] || !h->prob[k]) {
+            hier_scratch_free(h, m->order);
+            return BEAM_EALLOC("the hierarchical prior's per-depth scratch");
+        }
+    }
     return BEAM_OK;
 }
 
-/** The sparse log table of one direction. */
-static BeamSparseRows *sparse_log_table(BeamModel *m, uint32_t dir) {
-    return &m->sp_lp[dir];
+static void hier_scratch_clear(HierScratch *h, const BeamModel *m) {
+    const uint32_t R = m->n_residues;
+    for (uint32_t k = 0; k < m->order; ++k) {
+        memset(h->cnt[k], 0, (size_t)m->lo_ctx[k] * R * sizeof(double));
+        memset(h->tot[k], 0, (size_t)m->lo_ctx[k] * sizeof(double));
+    }
 }
 
-/**
- * Finalize one zero-backoff strict table row by row.
+/* Add one observed top row (counts packing `c`) into every lower level. */
+static void hier_accumulate(HierScratch *h, const BeamModel *m, uint32_t c,
+                            const double *counts) {
+    const uint32_t R = m->n_residues;
+    double tot = 0.0;
+    for (uint32_t x = 0; x < R; ++x) tot += counts[x];
+    for (uint32_t k = 0; k < m->order; ++k) {
+        const uint32_t ck = c % m->lo_ctx[k];
+        double *dst = h->cnt[k] + (size_t)ck * R;
+        for (uint32_t x = 0; x < R; ++x) dst[x] += counts[x];
+        h->tot[k][ck] += tot;
+    }
+}
+
+/*
+ * One cell of the rule, in logs:
  *
- * The arithmetic deliberately mirrors the dense loops: sum x=0..19, divide
- * each cell by that total, then take its log. Missing count rows are omitted
- * and therefore read as twenty -inf values. The backward table is packed
- * nearest-first; iterating DESTINATION rows and reversing back to the count
- * row keeps its sparse payload sorted in the order the DP scans.
+ *     log P_k(x) = log(n(x) + alpha * P_{k-1}(x)) - log(n + alpha)
+ *
+ * and for an unobserved residue, n(x) = 0, the same as
+ * log(alpha) + log P_{k-1}(x) - log(n + alpha). Written that way because the
+ * linear form underflows: a residue unobserved at every level carries
+ * alpha^(k+1) / prod(n) of mass, which a small alpha drives below the smallest
+ * double within a few levels -- and a cell that underflows to 0 is the closed
+ * world back, silently. In logs it is an exact sum of finite terms for every
+ * alpha > 0.
  */
+static inline double prior_cell_log(double n_x, double a, double log_a,
+                                    double log_parent, double log_z) {
+    return n_x > 0.0 ? log(n_x + a * exp(log_parent)) - log_z
+                     : log_a + log_parent - log_z;
+}
+
+/* log P_k for every observed lower row of this depth, bottom-up. */
+static void hier_solve(HierScratch *h, const BeamModel *m) {
+    const uint32_t R = m->n_residues;
+    for (uint32_t k = 0; k < m->order; ++k) {
+        const double a = m->cfg.alpha[k], log_a = log(a);
+        for (uint32_t ck = 0; ck < m->lo_ctx[k]; ++ck) {
+            const double n = h->tot[k][ck];
+            if (!(n > 0.0)) continue;
+            const double log_z = log(n + a);
+            const double *cnt = h->cnt[k] + (size_t)ck * R;
+            const double *par = k ? h->prob[k - 1]
+                                    + (size_t)(ck % m->lo_ctx[k - 1]) * R
+                                  : m->base_row;
+            double *out = h->prob[k] + (size_t)ck * R;
+            for (uint32_t x = 0; x < R; ++x)
+                out[x] = prior_cell_log(cnt[x], a, log_a, par[x], log_z);
+        }
+    }
+}
+
+/*
+ * The nearest observed ancestor of a top context `c` (counts packing), as a
+ * log row, or NULL when even the depth was never observed and the answer is
+ * the uniform row.
+ */
+static const double *hier_ancestor(const HierScratch *h, const BeamModel *m,
+                                   uint32_t c) {
+    for (uint32_t k = m->order; k-- > 0; ) {
+        const uint32_t ck = c % m->lo_ctx[k];
+        if (h->tot[k][ck] > 0.0)
+            return h->prob[k] + (size_t)ck * m->n_residues;
+    }
+    return NULL;
+}
+
+/* Finalized packing of a level-k context: most-distant-first forward, the
+ * digits reversed (nearest-first) backward. */
+static inline uint32_t hier_fin_ctx(const BeamModel *m, uint32_t dir,
+                                    uint32_t ck, uint32_t k) {
+    return dir == BEAM_BWD ? beam_ctx_reverse(ck, k, m->n_alphabet) : ck;
+}
+
+/* Write this depth's observed lower rows into their finalized tables, in
+ * ascending finalized row order. */
+static BeamError hier_emit_lower(const HierScratch *h, BeamModel *st,
+                                 uint32_t dir, uint32_t d) {
+    const uint32_t R = st->n_residues;
+    for (uint32_t k = 0; k < st->order; ++k) {
+        BeamSparseRows *out = &st->sp_lo[dir][k];
+        for (uint32_t j = 0; j < st->lo_ctx[k]; ++j) {
+            /* j is the FINALIZED index; its counts index is the same digits
+             * reversed backward, and reversal is its own inverse. */
+            const uint32_t ck = hier_fin_ctx(st, dir, j, k);
+            if (!(h->tot[k][ck] > 0.0)) continue;
+            double *lp = beam_sparse_row_mut(out, d * st->lo_ctx[k] + j, 0u, true);
+            if (!lp) return BEAM_EALLOC("a hierarchical prior row");
+            const double *p = h->prob[k] + (size_t)ck * R;
+            for (uint32_t x = 0; x < R; ++x) lp[x] = p[x];
+        }
+    }
+    return BEAM_OK;
+}
+
 static int cmp_row_u32(const void *a, const void *b) {
     const uint32_t x = *(const uint32_t *)a, y = *(const uint32_t *)b;
     return (x > y) - (x < y);
 }
 
-static const BeamSparseRows *sparse_count_table_const(const BeamModel *m,
-                                                      uint32_t dir) {
-    return &m->sp_cnt[dir];
+/*
+ * The observed top rows of one direction, as DESTINATION rows sorted
+ * ascending, which is depth-major. `cnt` is a locally thawed count table or
+ * NULL for the model's own.
+ */
+static BeamError list_top_rows(const BeamModel *m, uint32_t dir,
+                               const BeamSparseRows *cnt,
+                               uint32_t **rows_out, uint32_t *n_out) {
+    *rows_out = NULL; *n_out = 0;
+    const BeamSparseRows *ct = cnt ? cnt : &m->sp_cnt[dir];
+    if (!(ct && ct->row_ids && ct->size)) return BEAM_OK;
+    uint64_t cap = 0;
+    for (uint32_t part = 0; part < ct->n_parts; ++part) cap += ct->size[part];
+    if (!cap) return BEAM_OK;
+    uint32_t *rows = (uint32_t *)malloc((size_t)cap * sizeof(uint32_t));
+    if (!rows) return BEAM_EALLOC("the occupied-row list");
+    uint32_t n = 0;
+    if (!beam_sparse_occupied_rows(ct, rows, cap, &n)) {
+        free(rows);
+        return BEAM_FAIL(BEAM_ERR_INVALID_ARG,
+                         "the count table cannot list its occupied rows, so "
+                         "the finalized payload cannot be built in "
+                         "destination order");
+    }
+    if (dir == BEAM_BWD)
+        for (uint32_t i = 0; i < n; ++i) {
+            const uint32_t d = rows[i] / m->n_ctx, c = rows[i] % m->n_ctx;
+            rows[i] = d * m->n_ctx + beam_ctx_reverse(c, m->order, m->n_alphabet);
+        }
+    qsort(rows, n, sizeof(uint32_t), cmp_row_u32);
+    *rows_out = rows; *n_out = n;
+    return BEAM_OK;
 }
 
-/*
- * `cnt`, when non-NULL, is the count table to read INSTEAD of the model's own.
- * Finalize passes a locally thawed one so that only a single expanded table is
- * alive at a time; see `beam_model_thaw_count_table` for why that matters.
- * NULL keeps the model's table, which is what a model whose counts are already
- * mutable wants.
- */
-static BeamError finalize_sparse_table(BeamModel *m, uint32_t dir,
-                                      bool reverse_wide,
+/* The count row behind a destination row: its source row and counts. */
+static const double *top_counts(const BeamModel *m, uint32_t dir,
+                                const BeamSparseRows *cnt, uint32_t dst_row,
+                                uint32_t *c_out) {
+    const uint32_t d = dst_row / m->n_ctx, j = dst_row % m->n_ctx;
+    const uint32_t c = dir == BEAM_BWD
+        ? beam_ctx_reverse(j, m->order, m->n_alphabet) : j;
+    const uint32_t src = d * m->n_ctx + c;
+    *c_out = c;
+    return cnt ? beam_sparse_row(cnt, src, beam_part_for_row(m, src))
+               : beam_cnt_row(m, dir, src);
+}
+
+static double row_total(const double *counts, uint32_t R) {
+    double t = 0.0;
+    for (uint32_t x = 0; x < R; ++x) t += counts[x];
+    return t;
+}
+
+/* One observed top row, blended with its level order-1 parent, as logs. */
+static void blend_top(const BeamModel *m, const HierScratch *h, uint32_t c,
+                      const double *counts, double tot, double *lp) {
+    const uint32_t R = m->n_residues;
+    const uint32_t k = m->order - 1u;
+    const double *par = h->prob[k] + (size_t)(c % m->lo_ctx[k]) * R;
+    const double a = m->cfg.alpha[m->order], log_a = log(a);
+    const double log_z = log(tot + a);
+    for (uint32_t x = 0; x < R; ++x)
+        lp[x] = prior_cell_log(counts[x], a, log_a, par[x], log_z);
+}
+
+static BeamError finalize_sparse_hier(BeamModel *st, uint32_t dir,
                                       const BeamSparseRows *cnt) {
-    const uint32_t nr = beam_count_n_rows(m);
-    BeamSparseRows *out = sparse_log_table(m, dir);
-    BeamError err = beam_sparse_init(out, nr, 1u, m->n_residues, false);
+    const uint32_t R = st->n_residues;
+    const uint32_t nr = beam_count_n_rows(st);
+    BeamError err = beam_sparse_init(&st->sp_lp[dir], nr, 1u, R, false);
+    for (uint32_t k = 0; k < st->order && err == BEAM_OK; ++k)
+        err = beam_sparse_init(&st->sp_lo[dir][k], st->max_len * st->lo_ctx[k],
+                               1u, R, false);
     if (err != BEAM_OK) return err;
 
-    /*
-     * Walk the occupied count rows, do not scan the dense index space.
-     *
-     * The obvious loop is `for (dst_row = 0; dst_row < nr; ++dst_row)` with a
-     * miss test inside, and it costs 7,390,278 row lookups per model at order
-     * 4 -- both directions, all three tables -- however little was observed.
-     * On a 100-sequence model that is seven million probes to find about four
-     * hundred rows, and it was 1.6 SECONDS of fixed cost on every strict
-     * build and every load. Count tables are mutable and therefore carry the
-     * slot -> row reverse map, so the occupied rows can simply be listed.
-     *
-     * The list is sorted by DESTINATION row because the finalized payload has
-     * to stay in the order the dynamic programs scan it; the backward table is
-     * where the two packings differ.
-     */
-    const BeamSparseRows *ct = cnt ? cnt : sparse_count_table_const(m, dir);
     uint32_t *rows = NULL, n_rows = 0;
-    if (m->cfg.sparse && ct && ct->row_ids && ct->size) {
-        uint64_t cap = 0;
-        for (uint32_t part = 0; part < ct->n_parts; ++part) cap += ct->size[part];
-        if (cap) {
-            rows = (uint32_t *)malloc((size_t)cap * sizeof(uint32_t));
-            if (!rows) return BEAM_EALLOC("the occupied-row list");
-            /* The listing is the table's business, not this file's: it is
-             * the only place that knows a mutable table carries the reverse
-             * map and a finalized one does not. */
-            if (!beam_sparse_occupied_rows(ct, rows, cap, &n_rows)) {
-                free(rows);
-                return BEAM_FAIL(BEAM_ERR_INVALID_ARG,
-                                 "the count table cannot list its occupied "
-                                 "rows, so the finalized payload cannot be "
-                                 "built in destination order");
-            }
-            if (reverse_wide)
-                for (uint32_t i = 0; i < n_rows; ++i) {
-                    const uint32_t src = rows[i];
-                    const uint32_t d = src / m->n_ctx;
-                    const uint32_t c = src % m->n_ctx;
-                    rows[i] = d * m->n_ctx
-                            + beam_ctx_reverse(c, m->order, m->n_alphabet);
-                }
-            qsort(rows, n_rows, sizeof(uint32_t), cmp_row_u32);
-        }
+    err = list_top_rows(st, dir, cnt, &rows, &n_rows);
+    if (err != BEAM_OK) return err;
+    if (n_rows) {
+        err = beam_sparse_reserve(&st->sp_lp[dir], 0u, n_rows);
+        if (err != BEAM_OK) { free(rows); return err; }
     }
+    HierScratch h;
+    err = hier_scratch_alloc(&h, st);
+    if (err != BEAM_OK) { free(rows); return err; }
 
-    /*
-     * The answer is already known: `n_rows` rows, listed and sorted above.
-     * Saying so means the fill below never grows -- no second payload to copy
-     * the first into, twenty-one times over on the foundation's wide table --
-     * and leaves no slack for the shrink at the end to reclaim.
-     *
-     * It is an upper bound rather than the exact count, because a row whose
-     * counts sum to zero is skipped below. That cannot happen on a model that
-     * was only ever observed into, but subtraction can produce one, so the
-     * shrink stays: it has nothing to do in the ordinary case and is still
-     * there for the case that has something.
-     */
-    if (rows && n_rows) {
-        const BeamError re = beam_sparse_reserve(out, 0u, n_rows);
-        if (re != BEAM_OK) { free(rows); return re; }
-    }
+    for (uint32_t a = 0; a < n_rows && err == BEAM_OK; ) {
+        const uint32_t d = rows[a] / st->n_ctx;
+        uint32_t b = a;
+        while (b < n_rows && rows[b] / st->n_ctx == d) ++b;
 
-    for (uint32_t idx = 0; idx < (rows ? n_rows : nr); ++idx) {
-        const uint32_t dst_row = rows ? rows[idx] : idx;
-        uint32_t src_row = dst_row;
-        if (reverse_wide) {
-            const uint32_t d = dst_row / m->n_ctx;
-            const uint32_t c = dst_row % m->n_ctx;
-            src_row = d * m->n_ctx + beam_ctx_reverse(c, m->order, m->n_alphabet);
+        hier_scratch_clear(&h, st);
+        for (uint32_t i = a; i < b; ++i) {
+            uint32_t c;
+            const double *counts = top_counts(st, dir, cnt, rows[i], &c);
+            if (counts && row_total(counts, R) > 0.0)
+                hier_accumulate(&h, st, c, counts);
         }
-        const double *counts = cnt
-            ? beam_sparse_row(cnt, src_row,
-                              beam_part_for_row(m, src_row))
-            : beam_cnt_row(m, dir, src_row);
-        if (!counts) continue;
-        double tot = 0.0;
-        for (uint32_t x = 0; x < m->n_residues; ++x) tot += counts[x];
-        if (!(tot > 0.0)) continue;
-        double *logp = beam_sparse_row_mut(out, dst_row, 0u, true);
-        if (!logp) return BEAM_EALLOC("a sparse probability row");
-        for (uint32_t x = 0; x < m->n_residues; ++x)
-            logp[x] = log(counts[x] / tot);
+        hier_solve(&h, st);
+        err = hier_emit_lower(&h, st, dir, d);
+        for (uint32_t i = a; i < b && err == BEAM_OK; ++i) {
+            uint32_t c;
+            const double *counts = top_counts(st, dir, cnt, rows[i], &c);
+            if (!counts) continue;
+            const double tot = row_total(counts, R);
+            if (!(tot > 0.0)) continue;
+            double *lp = beam_sparse_row_mut(&st->sp_lp[dir], rows[i], 0u, true);
+            if (!lp) { err = BEAM_EALLOC("a sparse probability row"); break; }
+            blend_top(st, &h, c, counts, tot, lp);
+        }
+        a = b;
     }
+    hier_scratch_free(&h, st->order);
     free(rows);
-    beam_sparse_shrink(out);
+    if (err != BEAM_OK) return err;
 
+    beam_sparse_shrink(&st->sp_lp[dir]);
+    for (uint32_t k = 0; k < st->order; ++k) {
+        beam_sparse_shrink(&st->sp_lo[dir][k]);
+        err = beam_sparse_compact_finalized(&st->sp_lo[dir][k],
+                                            st->max_len * st->lo_ctx[k],
+                                            false, NULL);
+        if (err != BEAM_OK) return err;
+    }
     /*
      * Compaction is `storage/compaction.c`: four transforms whose order is
-     * load-bearing, now in one place with the reasons beside them. It used to
-     * be four calls spread over seventy lines here, with the order held
-     * together by the prose between them.
+     * load-bearing. The lower levels above skip the plane transpose, which is
+     * laid out for the edge kernel's backward sweep over the TOP table only.
      */
-    return beam_sparse_compact_finalized(out, nr, dir == BEAM_BWD, NULL);
+    return beam_sparse_compact_finalized(&st->sp_lp[dir], nr, dir == BEAM_BWD,
+                                         NULL);
 }
 
-static BeamError finalize_sparse_direction(BeamModel *m, uint32_t dir) {
+static BeamError finalize_sparse_direction(BeamModel *st, uint32_t dir) {
     /*
-     * One expanded count table alive at a time.
-     *
-     * Only when the model arrives frozen -- a load, or a re-finalize after
-     * freezing. A model whose counts are already mutable has nothing to
-     * expand and takes the original path.
-     *
-     * `beam_config_ok` REFUSES sparse storage outside the closed world,
-     * because the open world's add-one gives mass to rows that were never
-     * observed and a sparse table has nowhere to put them. So a sparse model
-     * always satisfies this. The condition is still written out rather than
-     * assumed, because the config check guards construction and a file could
-     * carry a header this code would otherwise trust.
+     * One expanded count table alive at a time, when the model arrives
+     * frozen -- a load, or a re-finalize after freezing. A model whose counts
+     * are already mutable has nothing to expand.
      */
-    const bool lazy = m->cfg.sparse && m->counts_frozen;
-    if (lazy) {
+    if (st->counts_frozen) {
         BeamSparseRows local;
-        BeamError err = beam_model_thaw_count_table(m, dir, &local);
+        BeamError err = beam_model_thaw_count_table(st, dir, &local);
         if (err != BEAM_OK) return err;
-        err = finalize_sparse_table(m, dir, dir == BEAM_BWD, &local);
+        err = finalize_sparse_hier(st, dir, &local);
         beam_sparse_destroy(&local);
         return err;
     }
-    return finalize_sparse_table(m, dir, dir == BEAM_BWD, NULL);
+    return finalize_sparse_hier(st, dir, NULL);
+}
+
+/*
+ * The dense form: every one of `max_len * n_ctx` rows written, observed ones
+ * blended with their parent and the rest copied from their nearest observed
+ * ancestor. Bit-identical to what the sparse lookup resolves. The lower
+ * levels are kept as well, so both forms carry the same finalized state.
+ */
+static BeamError finalize_dense_direction(BeamModel *st, uint32_t dir) {
+    const uint32_t R = st->n_residues, nc = st->n_ctx;
+    BeamError err = BEAM_OK;
+    for (uint32_t k = 0; k < st->order && err == BEAM_OK; ++k)
+        err = beam_sparse_init(&st->sp_lo[dir][k], st->max_len * st->lo_ctx[k],
+                               1u, R, false);
+    if (err != BEAM_OK) return err;
+    HierScratch h;
+    err = hier_scratch_alloc(&h, st);
+    if (err != BEAM_OK) return err;
+
+    for (uint32_t d = 0; d < st->max_len && err == BEAM_OK; ++d) {
+        hier_scratch_clear(&h, st);
+        for (uint32_t c = 0; c < nc; ++c) {
+            const double *counts = beam_cnt_row(st, dir, d * nc + c);
+            if (row_total(counts, R) > 0.0) hier_accumulate(&h, st, c, counts);
+        }
+        hier_solve(&h, st);
+        err = hier_emit_lower(&h, st, dir, d);
+        for (uint32_t j = 0; j < nc && err == BEAM_OK; ++j) {
+            uint32_t c;
+            const double *counts = top_counts(st, dir, NULL, d * nc + j, &c);
+            double *lp = st->lp[dir] + ((size_t)d * nc + j) * R;
+            const double tot = row_total(counts, R);
+            if (tot > 0.0) { blend_top(st, &h, c, counts, tot, lp); continue; }
+            const double *anc = hier_ancestor(&h, st, c);
+            for (uint32_t x = 0; x < R; ++x)
+                lp[x] = anc ? anc[x] : st->base_row[x];
+        }
+    }
+    hier_scratch_free(&h, st->order);
+    if (err != BEAM_OK) return err;
+    for (uint32_t k = 0; k < st->order && err == BEAM_OK; ++k) {
+        beam_sparse_shrink(&st->sp_lo[dir][k]);
+        err = beam_sparse_compact_finalized(&st->sp_lo[dir][k],
+                                            st->max_len * st->lo_ctx[k],
+                                            false, NULL);
+    }
+    return err;
 }
 
 /**
@@ -269,25 +396,35 @@ static BeamError finalize_tables(BeamModel *st) {
                         "log-probability tables (%llu cells)",
                         (unsigned long long)beam_model_n_cells(st));
 
-    /* Length prior straight off the observed length distribution. */
+    /*
+     * Length prior: the same Dirichlet smoothing as the tables, centred on the
+     * even distribution over every length the model represents,
+     *
+     *     P(L) = (n_L + alpha_length / max_len) / (N + alpha_length),
+     *
+     * so a length the corpus never produced is improbable, not impossible.
+     */
     double tot = 0.0;
     for (uint32_t L = 0; L < st->n_len_slots; ++L) tot += st->cnt_length[L];
     if (!(tot > 0.0))
         return BEAM_FAIL(BEAM_ERR_EMPTY_INPUT,
                         "finalize: the length histogram is empty, so there is "
                         "nothing to build a length prior from");
-    for (uint32_t L = 0; L < st->n_len_slots; ++L) {
-        double p = st->cnt_length[L] / tot;
-        st->log_pi[L] = p > 0.0 ? log(p) : -INFINITY;
+    {
+        const double a = st->cfg.alpha_length;
+        const double even = a / (double)st->max_len;
+        st->log_pi[0] = -INFINITY;
+        for (uint32_t L = 1; L < st->n_len_slots; ++L)
+            st->log_pi[L] = log((st->cnt_length[L] + even) / (tot + a));
     }
 
-    /* Sparse tables necessarily omit dead rows; the general trim must inspect
-     * weights rather than assuming every trellis edge is live. */
-    st->tables_all_finite = !st->cfg.sparse;
+    /* Every cell of every level is positive: each is a blend with a parent
+     * whose cells are positive, down to the uniform row. */
+    st->tables_all_finite = true;
     for (uint32_t d = 0; d < BEAM_DIRS; ++d) {
         BeamError e = st->cfg.sparse
                    ? finalize_sparse_direction(st, d)
-                   : finalize_direction(st, d);
+                   : finalize_dense_direction(st, d);
         if (e != BEAM_OK)
             return BEAM_FAIL(e, "finalize: smoothing the %s tables failed",
                             d == BEAM_FWD ? "N-anchored" : "C-anchored");
@@ -432,6 +569,7 @@ static BeamError finalize_body(BeamModel *m) {
     for (uint32_t d = 0; d < BEAM_DIRS; ++d) {
         st.lp[d] = NULL;
         memset(&st.sp_lp[d], 0, sizeof(st.sp_lp[d]));
+        memset(st.sp_lo[d], 0, sizeof(st.sp_lo[d]));
     }
     st.log_pi = NULL; st.log_z = NULL; st.finalized = false;
 
@@ -443,6 +581,7 @@ static BeamError finalize_body(BeamModel *m) {
     for (uint32_t d = 0; d < BEAM_DIRS; ++d) {
         m->lp[d] = st.lp[d];
         m->sp_lp[d] = st.sp_lp[d];
+        memcpy(m->sp_lo[d], st.sp_lo[d], sizeof(st.sp_lo[d]));
     }
     m->log_pi = st.log_pi;
     m->log_z  = st.log_z;

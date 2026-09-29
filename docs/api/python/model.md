@@ -11,7 +11,8 @@ BeamModel(
     order=None,
     weights=(0.5, 0.5),
     max_length=None,
-    strict=True,
+    alpha=None,
+    alpha_length=None,
     sparse=None,
 )
 ```
@@ -26,8 +27,9 @@ BeamModel(
 | `order` | `int \| None` | Context order, from 2 up to the alphabet's ceiling: **4** for `aa`, **9** for `nt`. `None` takes the alphabet's default, 4 and 6 respectively. |
 | `weights` | `tuple` | Weight on the N-anchored and C-anchored readings. Both must be non-negative. |
 | `max_length` | `int \| None` | Longest sequence the model represents, **2 to 255**. `None` takes the alphabet's default: 27 for `aa`, 81 for `nt`, three bases to the residue. The floor is 2, not 1: a model of one residue has no settled position and no anchored one. |
-| `strict` | `bool` | Closed-world scoring, and the **default**. Removes the order-0 add-one, so the model holds only what the training sequences spell. `strict=False` selects the open world, where a Laplace add-one leaves every cell positive. |
-| `sparse` | `bool \| None` | Storage selection. `None` automatically uses sparse storage exactly when `strict` is true, which is the default; `False` forces dense storage. `True` in the open world is rejected. |
+| `alpha` | `float \| sequence \| None` | Strengths of the hierarchical prior, one per context level `0..order`, or one number for all. Each is finite and positive. Default 10 at every level. See [The hierarchical prior](#the-hierarchical-prior). |
+| `alpha_length` | `float \| None` | Strength of the length prior. Finite and positive; default 10. |
+| `sparse` | `bool \| None` | Storage. `None` or `True` stores only the rows something was observed at and resolves the rest through their parents; `False` materialises every row. The same model bit for bit; dense costs gigabytes at order 4. |
 
 ### Alphabets
 
@@ -71,12 +73,12 @@ Models of different alphabets cannot be combined: `add`, `subtract` and `posteri
     62 GB at order 9.
 
     Raise it with `BEAM.set_memory_budget(bytes)` if you have the memory, or
-    use the closed-world default, whose sparse storage is far smaller.
+    keep the sparse default, which stores only observed rows.
 
 !!! warning "The anchor weights should sum to 1, and are not forced to"
     The sum is a pure cross-length calibration knob. Off 1, `log W` scales with the length, which leaves *within-length* ranking untouched and wrecks *cross-length* comparison.
 
-    It is not refused, deliberately. `(1, 0)` and `(0, 1)` score one anchor's chain on its own, and that is the only way to separate a partition function below 1 into the two causes that can put it there: the two chains disagreeing, and the closed world leaking mass at rows it never observed. A refusal here would make the model's defining property unmeasurable.
+    It is not refused, deliberately. `(1, 0)` and `(0, 1)` score one anchor's chain on its own, and that is the only way to separate a partition function below 1 into the two causes that can put it there: the two chains disagreeing about a sequence. A refusal here would make the model's defining property unmeasurable.
 
 ### Configuration
 
@@ -89,26 +91,36 @@ Each direction is one abundance-counted table:
 
 Neither table is indexed by length and neither needs to be. The two depths at a position sum to `L-1`, so the pair determines the length exactly, at every position and every length. Length awareness lives in the *combination*; length pooling lives in the *estimates*, since each row is learned from every sequence that carried that context at that distance from that terminus, whatever its length.
 
-`strict=True` makes an unobserved transition genuinely impossible rather than
-merely improbable: the order-0 base is a raw MLE and zero probabilities are
-not replaced by a floor, so a strict model has exact observed-transition
-support. There is nothing to supply beside it: the backoff strengths that
-could once carry mass into an otherwise unobserved row went with the
-three-expert mixture, and `k`, `w_f` and `w_b` are the only free parameters
-the model has.
+### The hierarchical prior
 
-Sparse storage is a representation of that exact closed-world model, not a
-different estimator. It stores occupied 20-residue rows and preserves the
-same counts and probabilities as dense strict storage. The default
-`sparse=None` enables it whenever `strict=True`. `sparse=False` forces dense
-storage for equivalence checks and reproducibility. Explicit `sparse=True`
-with open-world scoring raises `ValueError`: the open world gives every row
-mass, including rows nothing was ever observed at, so omitting empty rows
-would change the model.
+Every row, `(depth, the order residues nearest the scored one)`, is the posterior mean of a Dirichlet centred on its **parent**, the same depth with one residue less of context:
 
-`model.config` returns the configuration actually built, including the
-resolved `strict` and `sparse` booleans and the alphabet's defaults for
-`order` and `max_length`. This is what to inspect after construction.
+```
+P_k(x) = ( n_k(x) + alpha[k] * P_{k-1}(x) ) / ( n_k + alpha[k] )
+```
+
+- `k`: the level, how many context residues the row keeps, `0..order`. Level 0 is the depth alone.
+- `n_k(x)`: how often `x` followed this level-`k` context at this depth; `n_k` its row total. These are the model's own counts summed over the residues level `k` drops, so nothing extra is stored.
+- `P_{k-1}(x)`: the parent's answer. Below level 0 it is the uniform `1/R`.
+- `alpha[k]`: how many pseudo-observations the parent is worth.
+
+Three consequences:
+
+- **Every sequence up to `max_length` is possible.** A row nothing was observed at is exactly its parent, so an unseen context predicts what its shorter context predicts: not impossible, and not uniform.
+- **Junk stays improbable.** An unseen context falls back through contexts that were seen, so residues rare at that position stay rare.
+- **The data wins where it exists.** A row's weight on its own counts is `n_k / (n_k + alpha[k])`: nothing when unobserved, nearly all of it after a few thousand observations.
+
+The length prior is the same rule over lengths, centred on the even distribution over `1..max_length`:
+
+```
+P(L) = ( n_L + alpha_length / max_length ) / ( N + alpha_length )
+```
+
+The strengths are fitted, not chosen: `BEAM.fit_alpha(sequences, abundances, **config)` maximises held-out likelihood and returns them, and `model.set_alpha(alpha, alpha_length)` re-applies new ones to a built model from its counts. Fitting on half of one donor's reads (Emerson Keck0001, order 4) gave strengths from about 14 at the top level to thousands at the lowest, and raised the held-out log-likelihood from -18.75 to -18.25 nats per read.
+
+Sparse storage keeps each level's observed rows; a lookup that misses walks to the nearest observed ancestor. Dense storage writes that ancestor into every unobserved slot. They are the same numbers.
+
+`model.config` returns the configuration actually built: `order`, `max_length`, `weights`, `alpha`, `alpha_length`, `sparse` and the alphabet.
 
 ### There is no pruning
 
@@ -175,6 +187,55 @@ Draws are **exactly** proportional to sequence probability, by walking the trell
 
 `n=0` returns an empty list; a negative `n` raises rather than reaching the C layer as a request for four billion draws.
 
+## Tempering
+
+```python
+tempered(t) -> BeamModel
+```
+
+A new model holding `P_t(s) = P(s)**t / sum_s P(s)**t`. `t > 1` concentrates the distribution on its likeliest sequences and `t < 1` flattens it toward the rare ones.
+
+The tempered law already drives [`surprisal_moments`](analytics.md#surprisal-moments), the spectrum and [`saddlepoint`](analytics.md), where it is a measure a sweep carries rather than a model. This makes it a model, so everything the ordinary one answers it answers too.
+
+```python
+hot = model.tempered(2.0)
+hot.entropy() < model.entropy()          # True: tempering concentrates
+hot.path_count() == model.path_count()   # True: the support does not move
+```
+
+`t` must be finite and strictly positive. At `t = 0` every finite log weight becomes zero and every `-inf` becomes NaN; a negative `t` turns an unspellable edge into the likeliest one. Both are refused by name rather than clamped.
+
+Three quantities move, and the third is the one worth stating:
+
+```
+tables   ->  t * tables
+Z_t(L)   =   the same forward sweep, on the scaled tables
+pi_t(L)  =   pi(L)**t * Z_t(L) / Z(L)**t,  normalised over L
+```
+
+`pi_t` is **not** `pi(L)**t` normalised. It picks up the within-length power sum, and getting that wrong still leaves a normalised distribution and plausible numbers. It is exactly the share [`length_moments`](analytics.md#length_moments) reports at `q = t`, and the test suite pins it against that.
+
+**Exact.** The result satisfies `log_pseq_t(s) == t * log_pseq(s) - log_mellin(t)` identically rather than to within a tolerance, and its whole Mellin transform follows from the original's:
+
+```
+log_mellin_t(q) == log_mellin(t*q) - q*log_mellin(t)
+```
+
+so the entropy is `log_mellin(t) - t * m'(t)` with `m'(t) = -E_t[-ln P]`, the mean surprisal under the very tilt being materialised.
+
+!!! warning "The result arrives with its counts released"
+    As after [`compact`](#persistence-and-memory), and for a reason that is not
+    about memory. A tempered model's distribution is not a function of its
+    counts, so `add`, `subtract`, `posterior` and `copy` would each silently
+    rebuild the UNTEMPERED tables and report a plausible wrong number. They
+    refuse instead.
+
+    It is also why tempering does not yet compose by chaining: `tempered` on a
+    tempered model is refused, not approximated. Carrying the exponent in the
+    configuration is what would lift that, and it belongs with the file format.
+
+`tempered` is non-destructive: the model it is called on is untouched, as with `merged` and `without`.
+
 ## Counts are additive
 
 ```python
@@ -188,7 +249,7 @@ foundation = BeamModel.from_file("foundation.beam")
 foundation.subtract(BeamModel(held_out_sequences, abundances=held_out_counts))
 ```
 
-Both models must share `order` and `max_length`. `strict` need not match: counts do not depend on it, and this model's own setting is what gets reapplied when it re-finalizes. `other` must be a *different* `BeamModel`; passing the model itself is refused, because the C layer aliases source and destination.
+Both models must share `order` and `max_length`. The prior's strengths need not match: counts do not depend on them, and this model's own are what gets reapplied when it re-finalizes. `other` must be a *different* `BeamModel`; passing the model itself is refused, because the C layer aliases source and destination.
 
 !!! warning "`n_observed` is not decremented by `subtract`"
     `add` adjusts `n_observed` and `n_skipped`; `subtract` does not. After a subtraction those two — and `len(model)` — count everything ever added rather than what is currently in the tables. **`total_weight` is adjusted on both sides and is the number to trust.**
@@ -281,7 +342,7 @@ An order-4 dense model over the full 27-residue range holds 210.0 million concep
 
 Dense storage at order 4 is close to the 4 GiB default memory budget, which counts the count tables and the finalized log tables together. A dense configuration that does not fit is refused at construction rather than when the tables are first written.
 
-A strict model uses sparse storage by default. Its resident size
+A model uses sparse storage by default. Its resident size
 tracks occupied rows rather than all 210.0 million cells; `n_cells` still
 reports the conceptual dense shape, while `n_nonzero_cells` reports actual
 occupancy and `memory_bytes` reports the representation's resident storage.
@@ -313,7 +374,7 @@ Which form a table gets is chosen per table at finalize, from its own
 occupancy and its own repetition, and `memory_bytes` reflects the choice. Per-repertoire models fall
 well under the threshold and are sealed; a corpus large enough to fill most of
 the row space -- 57.90% for the 927-million-sequence foundation -- keeps the
-direct directory, where it is faster. A one-sequence strict model therefore
+direct directory, where it is faster. A one-sequence model therefore
 uses 1.57 MiB, and the same after `compact()` -- at that size the sealed
 directory is nearly all of it and there are no counts worth releasing --
 rather than allocating the 3.13 GiB dense count-plus-probability payload. On a 197,000-sequence repertoire
@@ -341,7 +402,7 @@ Three facts are **stored in the file**, because they are not recoverable from th
 |---|---|
 | `created`, `created_unix` | when the model was first built — an ISO-8601 string and the raw epoch seconds. A loaded model reports when it was **built**, not when it was loaded. |
 | `beam_version`, `variant`, `finalized` | which code wrote it, and whether it is scoreable yet |
-| `config` | the build configuration as given, including `order`, `max_length`, `strict` and the alphabet |
+| `config` | the build configuration as given, including `order`, `max_length`, `alpha`, `alpha_length` and the alphabet |
 | `build` | `observe_seconds`, `finalize_seconds`, `total_seconds`, and the corpus as ingested: `n_observed`, `n_skipped`, `n_sequences`, `total_weight` |
 | `size` | `n_states`, `n_cells`, `n_nonzero_cells`, `occupancy`, `memory_bytes`, `compacted` |
 | `lengths` | one entry per observed length; see below |
@@ -360,7 +421,7 @@ For each length `L` the model observed:
 |---|---|
 | `share` | `pi(L)`, this length's share of the length prior. These sum to 1. |
 | `rows_possible` | `2 * Σ_{d<L} R**min(d, order)` — every (direction, depth, context) a length-`L` sequence can actually reach |
-| `rows_observed`, `row_coverage` | how many of those the corpus actually reached, and the fraction. `None` on a compacted open-world model — see below |
+| `rows_observed`, `row_coverage` | how many of those the corpus actually reached, and the fraction. `None` on a compacted model — see below |
 | `cells_possible`, `cells_observed`, `cell_coverage` | the same at the level of individual (context, residue) cells |
 | `log_partition` | `log Z(L)`, the Bhattacharyya coefficient between the two chains at this length |
 | `path_count`, `log10_spellable_fraction` | only with `support=True`: how many length-`L` sequences the model can spell at all, and that as a fraction of `n_residues**L` on a log scale |
@@ -371,11 +432,11 @@ The denominator is the **reachable** ceiling, not every context the alphabet can
 
 This is checked rather than argued: enumerate every sequence of a length over the whole alphabet and the cells the model holds *are* the reachable set, so `cells_possible` must equal `n_nonzero_cells` and coverage must be exactly 1. `test_the_possible_cell_count_is_what_brute_force_occupies` asserts that at lengths 2, 3 and 4, and fails if the cell addressing in `indexing.h` ever changes.
 
-These count **observations**, read from the model's counts, so `strict=True` and `strict=False` report the same coverage for the same corpus and `cells_observed` summed over the lengths equals `n_nonzero_cells`. Reading them off the finalized tables instead would agree in the closed world and saturate in the open one, where the Laplace add-one leaves every cell finite — a two-sequence model would report that it had discovered the entire dictionary.
+These count **observations**, read from the model's counts, so `cells_observed` summed over the lengths equals `n_nonzero_cells`. Reading them off the finalized tables instead would saturate: the prior leaves every cell positive, so a two-sequence model would report that it had discovered the entire dictionary.
 
 **Do not sum `cells_observed` or `cells_possible` over lengths.** A cell is addressed by `(direction, depth, context)` with no length in the address, so a depth-3 cell is read by every length from 4 up and a sum counts it once per length. On a five-length model the sum is 1,907,884 where the model holds 429,248. The union is the **longest** length's figure, which equals `n_nonzero_cells`.
 
-The one model that cannot answer is a **compacted open-world** one: `compact()` releases the counts, and the add-one has already overwritten the evidence in the tables, so the four coverage keys are `None`. A compacted **strict** model is unaffected, because an unobserved cell is `-inf` in its finalized tables and stays that way.
+A **compacted** model cannot answer: `compact()` releases the counts, and the prior has already blended the evidence into the tables, so the four coverage keys are `None`.
 
 `path_count` is a dynamic program per length rather than a lookup, which is why it is opt-in rather than always present.
 

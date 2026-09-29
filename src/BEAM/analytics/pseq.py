@@ -320,14 +320,12 @@ class PseqAnalysis:
     def diversity_under_edge_thresholds(self, thresholds: Any) -> dict:
         """Not applicable: BeamModel has no prunable edges.
 
-        In the open-world model, the Laplace add-one leaves every table cell
-        strictly positive, so an edge sweep would invent a model the smoothing
-        does not describe. A strict model already retains its exact
-        zero-probability boundary rather than an arbitrary threshold.
+        The hierarchical prior leaves every table cell strictly positive, so an
+        edge sweep would describe a cut the model does not make.
         :meth:`BeamModel.spectrum` and :meth:`atoms` answer where the mass and
-        sequences sit under either regime.
+        sequences sit.
         """
         raise NotImplementedError(
-            "BeamModel has no edge pruning: open-world support is fixed by its "
-            "smoother, while strict support already has an exact zero "
-            "boundary. See the docstring for what to use instead.")
+            "BeamModel has no edge pruning: every sequence up to max_length is "
+            "possible under its prior. See the docstring for what to use "
+            "instead.")

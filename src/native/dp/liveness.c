@@ -12,10 +12,9 @@
  * Live states of one length, discovered by walking rather than by scanning.
  *
  * `trim` above answers the same question in `S * R` work per layer, which is
- * 3.9M at order 4 no matter how little of the trellis is reachable. On a
- * per-repertoire strict model the widest layer holds a few thousand live
- * states out of 194,481, so almost all of that work is spent proving that
- * states nothing reaches are also states nothing can leave.
+ * 3.9M at order 4 no matter how little of the trellis is reachable. Under the
+ * hierarchical prior every reachable state is live, so the walk's value is in
+ * the early layers, where few states are reachable at all.
  *
  * TWO SETS, NOT ONE, and the distinction is load-bearing:
  *

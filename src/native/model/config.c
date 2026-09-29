@@ -27,26 +27,19 @@ void beam_model_config_default_for(BeamAlphabet alphabet,
      * re-tuning it for another alphabet needs a measurement of its own. */
     cfg->order           = a->default_order;
     cfg->max_length      = a->default_max_length;
-    /* The closed-world default, and it has to be expressed in full here.
-     *
-     * `strict` alone does not give it: strict removes the order-0 add-one and
-     * the probability floor, but hierarchical backoff still carries mass from
-     * shorter contexts, so a sequence the corpus never spelled can still be
-     * live. The closed world is strict AND every backoff strength at zero,
-     * which is also the exact regime sparse storage is valid in.
-     *
-     * The Python layer resolves these the same way (see _smoothing_defaults),
-     * and the two must agree: a caller reaching beam_model_config_default()
-     * directly and a caller writing BeamModel(seqs) are asking for the same
-     * model. They did not agree between 2026-08-27 and this commit, and the
-     * difference was silent -- both produced a model, with different support.
-     * Storage is the one thing that legitimately differs: this layer stays
-     * dense while the Python layer selects sparse, because a dense and a
-     * sparse strict model are bit-identical and a C caller may not want the
-     * sparse path. Support and probabilities are what must agree, and those
-     * are set by strict plus the backoff strengths, not by the layout. */
-    cfg->strict          = true;
-    cfg->sparse          = false;
+    /* Every level of the hierarchical prior starts at the same strength, and
+     * the length prior with it. These are starting values, not measurements:
+     * `beam.fit_alpha` fits them by held-out likelihood, which is the only
+     * thing that should set them for a real corpus. */
+    for (uint32_t k = 0; k <= BEAM_MAX_ORDER; ++k)
+        cfg->alpha[k]    = BEAM_DEFAULT_ALPHA;
+    cfg->alpha_length    = BEAM_DEFAULT_ALPHA_LENGTH;
+    /* Sparse is the default at every layer now. It used to be dense here and
+     * sparse in Python, because a dense and a sparse closed-world model were
+     * bit-identical and a C caller might not want the sparse path; a dense
+     * model under the hierarchical prior materialises every row there is,
+     * which is gigabytes at order 4, so it is no longer a neutral default. */
+    cfg->sparse          = true;
     cfg->weight_forward  = 0.5;
     cfg->weight_backward = 0.5;
 }
@@ -59,7 +52,7 @@ void beam_model_config_default_for(BeamAlphabet alphabet,
  * sum, the two weights. Every one of them printed with its value and its
  * permitted range, and none of them was necessarily the one that failed --
  * the kappas were not in the list at all, and neither was the rule that
- * sparse storage requires the closed world. Asking for `sparse` on a
+ * sparse storage then required the closed world. Asking for `sparse` on a
  * nucleotide model produced
  *
  *   invalid BEAM config for the nt alphabet: order=2 (need 2..9),
@@ -96,14 +89,17 @@ const char *beam_config_invalid_reason(const BeamModelConfig *c,
     if (!(c->weight_forward >= 0.0) || !(c->weight_backward >= 0.0))
         BEAM_CFG_WHY("anchor weights are %.17g/%.17g and neither may be "
                      "negative", c->weight_forward, c->weight_backward);
-    /* An omitted count row is a dead probability row only in the fully
-     * closed-world regime. The open world's add-one gives every row mass,
-     * including rows nothing was ever observed at, so accepting sparse
-     * storage there would silently change scores. */
-    if (c->sparse && !c->strict)
-        BEAM_CFG_WHY("sparse storage needs strict=true: an omitted count row "
-                     "is a dead probability row only in the closed world, and "
-                     "in the open world it would silently change scores");
+    /* A zero strength lets an unobserved residue reach probability zero at
+     * that level, which is the closed world returning through one row; a
+     * negative one is not a Dirichlet at all. */
+    for (uint32_t k = 0; k <= c->order && k <= BEAM_MAX_ORDER; ++k)
+        if (!(c->alpha[k] > 0.0) || !isfinite(c->alpha[k]))
+            BEAM_CFG_WHY("alpha[%u]=%.17g, and every prior strength up to the "
+                         "order must be finite and positive", (unsigned)k,
+                         c->alpha[k]);
+    if (!(c->alpha_length > 0.0) || !isfinite(c->alpha_length))
+        BEAM_CFG_WHY("alpha_length=%.17g, and the length prior's strength "
+                     "must be finite and positive", c->alpha_length);
     return NULL;
 #undef BEAM_CFG_WHY
 }

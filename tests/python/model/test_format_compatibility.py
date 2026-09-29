@@ -1,114 +1,59 @@
-"""Files written by older builds must be REFUSED, by name and with a reason.
+"""One file format: the one this build writes.
 
-Each `tests/fixtures/formatN_*.beam` was written by the last build that
-emitted format N, and `formatN.json` records what that build read back out of
-it. Nothing regenerates these: the moment a fixture is rewritten by the
-current build it stops being evidence about the past and starts being a
-recording of the present, which is the one thing a compatibility test must
-not be. They are kept for exactly that reason, and what they are now evidence
-OF is that this build declines to misread them.
-
-Formats 1 to 5 were written with three experts per direction and a CLAMPED
-depth index. They cannot be converted, and the reason is not effort: the clamp
-merged every depth at or beyond it, so which depth an observation came from
-was discarded when the model was trained. No table in such a file holds
-order-k context at exact depth, and no transformation recovers it.
-
-The danger this guards is not refusal, it is silence. An old file carries the
-same magic, the same header size and, before the bump, the same format number
-as a new one. Nothing would have rejected it; the payload extents would simply
-have been wrong, and the reader would have reported a checksum failure -- a
-corrupt-file diagnosis for a perfectly intact file. So the test is that the
-refusal happens, names the format, and says why.
+BEAM has not been released, so no file from an earlier development build is
+owed a reader. Such a file must still be REFUSED properly: named as an older
+format with the remedy, not reported as corruption or read at the wrong
+offsets. `tests/fixtures/format6_sparse.beam` is a real file from such a build
+and is kept for exactly that.
 """
-import json
+from __future__ import annotations
+
+import struct
 from pathlib import Path
 
+import numpy as np
 import pytest
 
-from BEAM import BeamModel
+from BEAM import BeamModel, ModelFileError
 
 FIXTURES = Path(__file__).resolve().parents[2] / "fixtures"
-
-LEGACY = {
-    f"{fmt}_{tag}": (f"{fmt}_{tag}.beam", int(fmt[-1]))
-    for fmt, tags in (("format3", ("sparse", "dense")),
-                      ("format4", ("sparse", "dense", "fractional")))
-    for tag in tags
-}
+SEQS = ["CASSLGQGAEQYF", "CASSPGTGELFF", "CASRDRGNTIYF", "CASSQETQYF"] * 3
 
 
-@pytest.mark.parametrize("case", sorted(LEGACY))
-def test_an_older_file_is_refused_and_says_why(case):
-    """Refused, naming the format and the reason, not merely failing."""
-    name, fmt = LEGACY[case]
-    with pytest.raises(Exception) as exc:
-        BeamModel.from_file(FIXTURES / name)
-    msg = str(exc.value)
-    assert f"format {fmt}" in msg, msg
-    assert "three experts" in msg, msg
-    assert "retrain" in msg.lower(), msg
+def test_an_older_development_file_is_refused_with_the_remedy():
+    with pytest.raises(ModelFileError) as info:
+        BeamModel.from_file(FIXTURES / "format6_sparse.beam")
+    msg = str(info.value)
+    assert "format 6" in msg and "format 8" in msg, msg
+    assert "Rebuild the model from its sequences" in msg, msg
+    assert "checksum" not in msg
 
 
-@pytest.mark.parametrize("case", sorted(LEGACY))
-def test_the_refusal_is_not_a_checksum_complaint(case):
-    """The fixtures are intact, and the reader must not say otherwise.
-
-    Before the format bump an old file would have been accepted, read with
-    the wrong extents and then failed its CRC, which blames the file for the
-    reader's mistake. Nothing in the message may suggest the bytes are bad.
-    """
-    name, _ = LEGACY[case]
-    with pytest.raises(Exception) as exc:
-        BeamModel.from_file(FIXTURES / name)
-    msg = str(exc.value).lower()
-    assert "checksum" not in msg, msg
-    assert "corrupt" not in msg, msg
+def test_the_format_word_decides_before_the_checksum(tmp_path):
+    """A current file with only its format word changed is refused as a
+    version, not as a checksum failure, because the format is read first."""
+    p = tmp_path / "m.beam"
+    BeamModel(SEQS).save(p)
+    raw = bytearray(p.read_bytes())
+    struct.pack_into("<I", raw, 4, 7)
+    p.write_bytes(bytes(raw))
+    with pytest.raises(ModelFileError, match="format 7"):
+        BeamModel.from_file(p)
 
 
-# ── Format 6: read, not refused ────────────────────────────────────────────
-#
-# Format 6 is the one older format this build accepts, and the reason is that
-# it is not an older MODEL. It is this model -- one table per direction, exact
-# depth -- written before provenance existed. The bytes provenance now uses
-# were `dead_coef[3]`, which format 6 wrote as three explicit zeros, so the
-# payload is identical and the only thing missing is a build time.
-#
-# `format6_sparse.beam` was written by 3806d4c, the last commit that emitted
-# format 6, from a worktree at that commit -- not by patching a format-7 file
-# with the current build, which would have made it a recording of the present
-# like every other fixture here warns against. `format6.json` is what THAT
-# build read back out of it.
-#
-# This exists because the refusal above was briefly widened to swallow format
-# 6, telling anyone holding one that their file came from "a build with three
-# experts per direction and a capped depth index" and that they had to
-# retrain. Every clause of that was false, and for a foundation-sized corpus
-# it is an expensive thing to be told over 24 zero bytes.
-
-def test_a_format_6_file_is_read_and_agrees_with_the_build_that_wrote_it():
-    rec = json.loads((FIXTURES / "format6.json").read_text())
-    m = BeamModel.from_file(FIXTURES / "format6_sparse.beam")
-
-    assert m.n_observed == rec["n_observed"]
-    assert m.n_sequences == rec["n_sequences"]
-    assert m.total_weight == rec["total_weight"]
-    assert m.n_states == rec["n_states"]
-    assert m.n_nonzero_cells == rec["n_nonzero_cells"]
-    assert [int(x) for x in m.observed_lengths] == rec["observed_lengths"]
-
-    # The scores are the point: an accepted format that read the payload at
-    # the wrong extents would still satisfy the counters above.
-    for s, want in rec["log_pseq"].items():
-        assert float(m.log_pseq(s)) == want, s
-    assert float(m.path_count()) == rec["path_count"]
-    assert float(m.entropy()) == rec["entropy"]
+def test_a_current_file_round_trips(tmp_path):
+    m = BeamModel(SEQS, abundances=range(1, len(SEQS) + 1), order=3,
+                  alpha=(1.0, 2.0, 3.0, 4.0), alpha_length=6.0)
+    p = tmp_path / "m.beam"
+    m.save(p)
+    back = BeamModel.from_file(p)
+    assert back.config == m.config
+    probe = SEQS + ["CASSWWWF", "Y"]
+    assert np.array_equal(back.log_pseq_batch(probe), m.log_pseq_batch(probe))
 
 
-def test_a_format_6_file_reports_its_build_time_as_unknown():
-    """Absent, not invented. A zero stamp rendered literally claims 1970."""
-    meta = BeamModel.from_file(FIXTURES / "format6_sparse.beam").metadata(
-        lengths=False)
-    assert meta["created"] is None
-    assert meta["created_unix"] is None
-    assert meta["build"]["observe_seconds"] == 0.0
+def test_not_a_model_file_says_so(tmp_path):
+    p = tmp_path / "x.beam"
+    p.write_bytes(b"not a beam model at all")
+    with pytest.raises(ModelFileError, match="not a BEAM model file"):
+        BeamModel.from_file(p)

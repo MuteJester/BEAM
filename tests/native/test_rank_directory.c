@@ -10,10 +10,18 @@
  * built on it would be wrong by a plausible-looking amount.
  *
  * So the test is exhaustive rather than sampled: every dense row of every
- * finalized table, before and after sealing, must give the same answer --
- * the same NULL, or the same pointer to the same twenty doubles. On the
- * models here that is several million comparisons, which is cheap next to
- * what a silent mismatch would cost.
+ * finalized table -- the top level of each direction and every lower level of
+ * the hierarchical prior -- before and after sealing, must give the same
+ * answer: held, with the same twenty doubles, or not held. A row a table does
+ * not hold is not a dead row any more; it resolves to its nearest held
+ * ancestor, which is exactly why a lower level answering for the wrong row
+ * would be as silent as the top level doing it. On the models here that is a
+ * quarter of a million rows, which is cheap next to what a silent mismatch
+ * would cost.
+ *
+ * The models are order 3. The rank form does not depend on the order, and
+ * under the prior every state of the trellis is live, so an order-4 donor's
+ * finalize costs about twenty times as much.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -42,10 +50,11 @@ static uint32_t rnd(uint32_t n) {
  * Two regimes, because finalize now chooses between them.
  *
  * `sparse_donor` looks like a per-repertoire model: an amino-acid row space
- * far larger than anything a few thousand sequences can fill, so finalize
- * seals it. `saturated` uses the four-letter alphabet over a short trellis,
- * where the row space is small enough that the corpus fills most of it and
- * finalize leaves the direct directory alone.
+ * far larger than anything a thousand sequences can fill -- about five
+ * thousand of its 111,132 forward top rows are held -- so finalize seals its
+ * top tables, while its small lower levels are well filled and stay direct.
+ * `saturated` spells four nucleotides over a short trellis, where every table
+ * holds more than one row in eight and finalize leaves every directory alone.
  *
  * Both are needed. The sealed one is what per-repertoire work will actually
  * run; the unsealed one is the only way to test the transition itself, since
@@ -84,22 +93,40 @@ static BeamModel *build_model(bool amino, uint32_t n_seqs, uint8_t order,
     return m;
 }
 
-/** A model finalize will have sealed. */
-static BeamModel *sparse_donor(void) { return build_model(true, 4000u, 4u, 12u); }
+/** A model finalize will have sealed, at least in part. */
+static BeamModel *sparse_donor(void) { return build_model(true, 1000u, 3u, 12u); }
 /** A model finalize will have left on the direct directory. */
 static BeamModel *saturated(void)    { return build_model(false, 20000u, 3u, 8u); }
 
-/** Every finalized table of the model, so no direction or kind is skipped. */
+/*
+ * Every finalized table of the model, so no direction or level is skipped:
+ * per direction the top table, then levels 0 .. order-1 of the prior. The
+ * lower levels are compacted by the same rule as the top one, and an
+ * unobserved top row is read from them.
+ */
+static uint32_t n_tables(const BeamModel *m) { return BEAM_DIRS * (m->order + 1u); }
 static BeamSparseRows *table_of(BeamModel *m, uint32_t idx) {
-    const uint32_t dir = idx / 3u, kind = idx % 3u;
-    if (kind == 0u) return &m->sp_lp[dir];
-    if (kind == 1u) return &m->sp_lp[dir];
-    return &m->sp_lp[dir];
+    const uint32_t dir = idx / (m->order + 1u), lvl = idx % (m->order + 1u);
+    return lvl == 0u ? &m->sp_lp[dir] : &m->sp_lo[dir][lvl - 1u];
 }
-static const char *name_of(uint32_t idx) {
-    static const char *n[6] = { "fwd wide", "fwd mid", "fwd len",
-                                "bwd wide", "bwd mid", "bwd len" };
-    return n[idx];
+static const char *name_of(const BeamModel *m, uint32_t idx) {
+    static char buf[32];
+    const uint32_t dir = idx / (m->order + 1u), lvl = idx % (m->order + 1u);
+    if (lvl == 0u) snprintf(buf, sizeof buf, "%s top", dir ? "bwd" : "fwd");
+    else snprintf(buf, sizeof buf, "%s level %u", dir ? "bwd" : "fwd", lvl - 1u);
+    return buf;
+}
+
+/**
+ * Dense rows across every table, from the shape alone: each level `k` has one
+ * row per depth and `k`-residue context, `max_len * A^k`, with `A` the
+ * context radix, and the top level is `k = order`.
+ */
+static uint64_t dense_rows_of(const BeamModel *m) {
+    uint64_t per_dir = 0, ctx = 1;
+    for (uint32_t k = 0; k <= m->order; ++k, ctx *= m->n_alphabet)
+        per_dir += (uint64_t)m->max_len * ctx;
+    return BEAM_DIRS * per_dir;
 }
 
 /** True when the threshold rule says this table should have been sealed. */
@@ -113,24 +140,24 @@ static bool should_be_sealed(const BeamSparseRows *t) {
  * Finalize applies the threshold rule to every table, one at a time.
  *
  * Per table, not per model, and the difference is visible rather than
- * theoretical: a four-thousand-sequence donor fills under one percent of the
- * wide row space and about a fifth of the mid one, so the same model comes out
- * with a rank directory on one table and a direct directory on another. That
- * is the intended behaviour -- each table's lookup branches on its own
- * pointer -- and this is where it is written down.
+ * theoretical: the thousand-sequence donor holds under five percent of its
+ * top rows and a third or more of every lower level's, so the same model
+ * comes out with a rank directory on its top tables and a direct directory
+ * below them. That is the intended behaviour -- each table's lookup branches
+ * on its own pointer -- and this is where it is written down.
  */
 static void test_finalize_picks_the_representation_per_table(void) {
     uint32_t sealed = 0, direct = 0;
     for (int which = 0; which < 2; ++which) {
         BeamModel *m = which ? saturated() : sparse_donor();
         ASSERT_MSG(m != NULL, "model did not build");
-        for (uint32_t t = 0; t < 6u; ++t) {
+        for (uint32_t t = 0; t < n_tables(m); ++t) {
             const BeamSparseRows *tab = table_of(m, t);
             const bool want = should_be_sealed(tab);
             const bool got  = (tab->rank != NULL);
             if (got != want || (got ? tab->index != NULL : tab->rank != NULL)) {
                 printf("FAIL: %s %s: %u/%u rows, sealed=%d wanted=%d\n",
-                       which ? "saturated" : "donor", name_of(t),
+                       which ? "saturated" : "donor", name_of(m, t),
                        tab->size ? tab->size[0] : 0u, tab->n_dense_rows,
                        (int)got, (int)want);
                 fail_count++; beam_model_destroy(m); return;
@@ -158,16 +185,18 @@ static void read_row(const BeamSparseRows *t, uint32_t row, uint32_t R,
 }
 
 static void test_sealing_changes_no_row(void) {
-    uint64_t rows_checked = 0, rows_present = 0;
-    uint32_t transitions = 0;
-    /* The donor supplies the row volume -- millions of them, most absent --
-     * and the saturated model supplies the tables that are still direct and
-     * can therefore be watched making the transition. */
+    uint64_t rows_checked = 0, rows_present = 0, rows_wanted = 0;
+    uint32_t transitions = 0, shrank = 0;
+    /* The donor supplies the row volume -- most of it not held, and sealed
+     * already -- and every table finalize left direct, the donor's lower
+     * levels and all of the saturated model's, can be watched making the
+     * transition. */
     for (int which = 0; which < 2; ++which) {
     BeamModel *m = which ? saturated() : sparse_donor();
     ASSERT_MSG(m != NULL, "model did not build");
+    rows_wanted += dense_rows_of(m);
 
-    for (uint32_t t = 0; t < 6u; ++t) {
+    for (uint32_t t = 0; t < n_tables(m); ++t) {
         BeamSparseRows *tab = table_of(m, t);
         const uint32_t n = tab->n_dense_rows;
 
@@ -190,24 +219,36 @@ static void test_sealing_changes_no_row(void) {
         const uint64_t bytes_before = beam_sparse_memory_bytes(tab);
         const BeamError e = beam_sparse_seal_rank(tab);
         if (e != BEAM_OK) {
-            printf("FAIL: %s did not seal (%d)\n", name_of(t), (int)e);
+            printf("FAIL: %s did not seal (%d)\n", name_of(m, t), (int)e);
             fail_count++; free(before); free(had); beam_model_destroy(m); return;
         }
         if (sealable) {
             transitions++;
             if (tab->index != NULL || tab->rank == NULL) {
                 printf("FAIL: %s stayed direct after a seal that should fire\n",
-                       name_of(t));
+                       name_of(m, t));
                 fail_count++; free(before); free(had); beam_model_destroy(m); return;
             }
-            if (beam_sparse_memory_bytes(tab) >= bytes_before) {
-                printf("FAIL: %s got no smaller (%llu -> %llu)\n", name_of(t),
+            /* The size changes by the directory swap and nothing else: four
+             * bytes per dense row out, one block per 256 rows in. That is a
+             * saving on any table past ten rows, and a few bytes more on the
+             * eight-row level 0 of a short model -- which is why finalize
+             * seals by occupancy and not unconditionally. */
+            const uint64_t direct = (uint64_t)n * sizeof(uint32_t);
+            const uint64_t ranked = (uint64_t)beam_rank_blocks(n)
+                                  * sizeof(BeamRankBlock);
+            const uint64_t after = beam_sparse_memory_bytes(tab);
+            if (after + direct != bytes_before + ranked) {
+                printf("FAIL: %s went from %llu to %llu bytes, not by the "
+                       "directory swap (%llu -> %llu)\n", name_of(m, t),
                        (unsigned long long)bytes_before,
-                       (unsigned long long)beam_sparse_memory_bytes(tab));
+                       (unsigned long long)after,
+                       (unsigned long long)direct, (unsigned long long)ranked);
                 fail_count++; free(before); free(had); beam_model_destroy(m); return;
             }
+            if (after < bytes_before) shrank++;
         } else if (tab->n_pool != 0u && tab->index != NULL && tab->rank != NULL) {
-            printf("FAIL: %s is both sealed and folded\n", name_of(t));
+            printf("FAIL: %s is both sealed and folded\n", name_of(m, t));
             fail_count++; free(before); free(had); beam_model_destroy(m); return;
         }
 
@@ -216,14 +257,14 @@ static void test_sealing_changes_no_row(void) {
             bool present = false;
             read_row(tab, row, R, now, &present);
             if (present != had[row]) {
-                printf("FAIL: %s row %u appeared or vanished\n", name_of(t), row);
+                printf("FAIL: %s row %u appeared or vanished\n", name_of(m, t), row);
                 fail_count++; free(before); free(had);
                 beam_model_destroy(m); return;
             }
             if (present
                 && memcmp(now, before + (size_t)row * R,
                           (size_t)R * sizeof(double)) != 0) {
-                printf("FAIL: %s row %u changed value\n", name_of(t), row);
+                printf("FAIL: %s row %u changed value\n", name_of(m, t), row);
                 fail_count++; free(before); free(had);
                 beam_model_destroy(m); return;
             }
@@ -235,10 +276,13 @@ static void test_sealing_changes_no_row(void) {
     beam_model_destroy(m);
     }
 
-    ASSERT_MSG(rows_checked > 1000000u, "far too few rows were compared");
-    ASSERT_MSG(rows_present > 0u, "no row was occupied: nothing was tested");
+    ASSERT_MSG(rows_checked == rows_wanted,
+               "not every dense row of every table was compared");
+    ASSERT_MSG(rows_present > 0u, "no row was held: nothing was tested");
     ASSERT_MSG(transitions > 0u,
                "every table was sealed already: the transition was not tested");
+    ASSERT_MSG(shrank > 0u, "no table the transition was watched on got "
+                            "smaller, so the saving itself was not tested");
     PASS();
 }
 
@@ -246,27 +290,41 @@ static void test_sealing_changes_no_row(void) {
  * Scores are unchanged by sealing.
  *
  * The row comparison above is the stronger statement, but it is about
- * pointers. This one is about the numbers a caller actually receives, and it
- * is what would catch a lookup that returned the right row through the wrong
- * arithmetic.
+ * directories. This one is about the numbers a caller actually receives, and
+ * it is what would catch a lookup that returned the right row through the
+ * wrong arithmetic.
+ *
+ * The probes are nucleotide strings, because the model is: a residue outside
+ * the alphabet scores -inf before any table is read, so an amino-acid probe
+ * would compare -inf with -inf and test nothing. Every one of them must score
+ * finitely. The ones holding `N`, which the corpus never spells, resolve
+ * through the lower levels, and the length-8 one, longer than anything in the
+ * corpus, reaches the uniform row at its last depth -- so the ancestor walk
+ * reads sealed tables too.
  */
+#define N_PROBE 8u
 static void test_scores_are_bit_identical_after_sealing(void) {
-    static const char *PROBE[8] = {
-        "CASSF", "CASSYW", "CAGSFK", "CGSSFP",
-        "CASSLNM", "CTSSFRQ", "CASSQEV", "CASSFGH",
+    static const char *PROBE[N_PROBE] = {
+        "ACGTACG", "TTGCA", "GATTACA", "CCCCCCCC",
+        "A", "GG", "ACGNTG", "NNNN",
     };
     BeamModel *m = saturated();
     ASSERT_MSG(m != NULL, "model did not build");
 
-    double before[8];
-    for (uint32_t k = 0; k < 8u; ++k)
+    double before[N_PROBE];
+    for (uint32_t k = 0; k < N_PROBE; ++k) {
         before[k] = beam_model_log_pseq(m, PROBE[k]);
+        if (!isfinite(before[k])) {
+            printf("FAIL: %s scored %.17g before sealing\n", PROBE[k], before[k]);
+            fail_count++; beam_model_destroy(m); return;
+        }
+    }
 
-    for (uint32_t t = 0; t < 6u; ++t)
+    for (uint32_t t = 0; t < n_tables(m); ++t)
         ASSERT_MSG(beam_sparse_seal_rank(table_of(m, t)) == BEAM_OK,
                    "a table did not seal");
 
-    for (uint32_t k = 0; k < 8u; ++k) {
+    for (uint32_t k = 0; k < N_PROBE; ++k) {
         const double now = beam_model_log_pseq(m, PROBE[k]);
         if (memcmp(&now, &before[k], sizeof now) != 0) {
             printf("FAIL: %s scored %.17g, was %.17g\n",
@@ -279,8 +337,9 @@ static void test_scores_are_bit_identical_after_sealing(void) {
 }
 
 /**
- * `beam_layer_max` reads the directory directly, so it has to keep working
- * when the directory is a bitmap.
+ * `beam_layer_max` builds the whole layer through the row lookup -- stored
+ * rows and ancestors alike, since under the prior either can carry the
+ * maximum -- so it has to keep working when every directory is a bitmap.
  */
 static void test_layer_max_is_unchanged_after_sealing(void) {
     BeamModel *m = saturated();
@@ -289,7 +348,7 @@ static void test_layer_max_is_unchanged_after_sealing(void) {
     /* Bounded by the MODEL's max_length, not by a literal. `beam_layer_max`
      * takes `row < n_dense_rows` as a caller guarantee and the finalized
      * lookup does not re-check it, so a longer length is undefined behaviour
-     * rather than a -inf: it indexes the length table past its end. */
+     * rather than a -inf: its depths run past the table's last one. */
     const uint32_t ML = m->max_len;
     double before[BEAM_MAX_LENGTH * BEAM_MAX_LENGTH];
     uint32_t n = 0, finite = 0;
@@ -299,9 +358,12 @@ static void test_layer_max_is_unchanged_after_sealing(void) {
             if (before[n] != -INFINITY) finite++;
             n++;
         }
-    ASSERT_MSG(finite > 0u, "every layer was -inf: nothing was tested");
+    /* Every cell of every table is finite under the prior, so every layer
+     * has a finite maximum; one that did not would mean the lookup lost a
+     * row before sealing was even involved. */
+    ASSERT_MSG(finite == n, "a layer had no finite edge");
 
-    for (uint32_t t = 0; t < 6u; ++t)
+    for (uint32_t t = 0; t < n_tables(m); ++t)
         ASSERT_MSG(beam_sparse_seal_rank(table_of(m, t)) == BEAM_OK,
                    "a table did not seal");
 
@@ -342,7 +404,7 @@ static void test_what_cannot_be_sealed_is_left_alone(void) {
     ASSERT_MSG(beam_sparse_memory_bytes(cnt) == cnt_bytes,
                "a mutable table changed size");
 
-    BeamSparseRows *lp = table_of(m, 0u);
+    BeamSparseRows *lp = &m->sp_lp[BEAM_FWD];
     ASSERT_MSG(beam_sparse_seal_rank(lp) == BEAM_OK, "first seal failed");
     const BeamRankBlock *first = lp->rank;
     const uint64_t sealed_bytes = beam_sparse_memory_bytes(lp);
@@ -370,7 +432,7 @@ static void test_a_table_numbered_out_of_order_is_refused(void) {
     /* Whichever table finalize left direct -- not table 0 by assumption,
      * because which tables clear the threshold depends on the corpus. */
     BeamSparseRows *lp = NULL;
-    for (uint32_t t = 0; t < 6u && !lp; ++t)
+    for (uint32_t t = 0; t < n_tables(m) && !lp; ++t)
         if (table_of(m, t)->index) lp = table_of(m, t);
     if (!lp) {
         beam_model_destroy(m);

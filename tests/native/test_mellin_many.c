@@ -10,16 +10,22 @@
  * orders, which is the cheaper design and the wrong one: it moves the last
  * bits of every order but one, and published figures quote those.
  *
- * Checked on both alphabets, both worlds and orders 2 to 6; at orders on
- * both sides of 1, at 0.999 and 1.001 where the tilt is nearly flat, and at
- * negative orders, where the layer maximum a sweep rescales by is taken from
- * the smallest weight instead of the largest. The open-world models run with
- * backoff off, where unobserved cells sit at ln(1e-300) and a negative order
- * is the case that once overflowed.
+ * Checked on both alphabets, sparse and dense storage and orders 2 to 6; at
+ * orders on both sides of 1, at 0.999 and 1.001 where the tilt is nearly
+ * flat, and at negative orders, where the layer maximum a sweep rescales by is
+ * taken from the smallest weight instead of the largest. Under the prior no
+ * cell is -inf, so a negative order weighs every string over the alphabet and
+ * is dominated by the least probable of them: at -2 the answer sits one to
+ * four hundred nats above zero, which is the case that once overflowed.
  *
  * Then what must NOT matter: which other orders share the call, the thread
  * count, and a budget small enough to split the orders into blocks or to run
  * one single-order sweep at a time.
+ *
+ * Every state of the trellis is live under the prior, so a sweep costs the
+ * full width of the trellis at every layer. The widest two fixtures -- aa
+ * order 4 and nt order 6 -- are held to the contract in the first test and
+ * left out of the schedule tests, whose paths do not depend on the width.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -43,7 +49,10 @@ static unsigned long cases_compared = 0;
 
 /* Generated rather than written out, so the models have many lengths and a
  * frontier worth sharing. A conserved head and tail and a random middle, the
- * shape the two anchors exist to pick up. */
+ * shape the two anchors exist to pick up. `lo..hi` are the lengths drawn; a
+ * fixture whose max_length is too short for the full head and tail gets a
+ * one-residue anchor at each end instead, since a longer sequence would be
+ * skipped at observe. */
 #define N_SEQ 400
 static char seq_buf[N_SEQ][48];
 static const char *seqs[N_SEQ];
@@ -54,12 +63,13 @@ static uint32_t lcg(uint64_t *s) {
     return (uint32_t)(*s >> 33);
 }
 
-static void make_corpus(BeamAlphabet a, uint64_t seed) {
-    const char *syms = a == BEAM_ALPHABET_NT ? "ACGT" : "ACDEFGHIKLMNPQRSTVWY";
-    const char *head = a == BEAM_ALPHABET_NT ? "TGT" : "CASS";
-    const char *tail = a == BEAM_ALPHABET_NT ? "TTC" : "EQYF";
-    const uint32_t lo = a == BEAM_ALPHABET_NT ? 10u : 8u;
-    const uint32_t hi = a == BEAM_ALPHABET_NT ? 22u : 15u;
+static void make_corpus(BeamAlphabet a, uint32_t lo, uint32_t hi,
+                        uint64_t seed) {
+    const bool nt = a == BEAM_ALPHABET_NT;
+    const bool short_anchor = lo < 8u;
+    const char *syms = nt ? "ACGT" : "ACDEFGHIKLMNPQRSTVWY";
+    const char *head = short_anchor ? (nt ? "T" : "C") : (nt ? "TGT" : "CASS");
+    const char *tail = short_anchor ? (nt ? "C" : "F") : (nt ? "TTC" : "EQYF");
     const uint32_t ns = (uint32_t)strlen(syms);
     uint64_t s = seed;
     for (uint32_t k = 0; k < N_SEQ; ++k) {
@@ -78,27 +88,34 @@ typedef struct {
     const char  *name;
     BeamAlphabet alphabet;
     uint32_t     order, max_length;
-    bool         strict;
+    uint32_t     lo, hi;              /* corpus lengths */
+    bool         sparse;
+    bool         wide;                /* contract test only; see the header */
 } Spec;
 
+/* Sparse is the default storage and dense the same model bit for bit, but
+ * the two reach a row by different code, so the cheap fixtures run in both.
+ * The wide ones are cut to short max_lengths that still reach layers of their
+ * full width: every state is live, and each length added is a full sweep of
+ * every order. */
 static const Spec SPECS[] = {
-    {"aa order 2 strict", BEAM_ALPHABET_AA, 2u, 16u, true},
-    {"aa order 3 strict", BEAM_ALPHABET_AA, 3u, 16u, true},
-    {"aa order 4 strict", BEAM_ALPHABET_AA, 4u, 16u, true},
-    {"aa order 2 open",   BEAM_ALPHABET_AA, 2u, 16u, false},
-    {"nt order 3 strict", BEAM_ALPHABET_NT, 3u, 24u, true},
-    {"nt order 6 strict", BEAM_ALPHABET_NT, 6u, 24u, true},
-    {"nt order 3 open",   BEAM_ALPHABET_NT, 3u, 24u, false},
+    {"aa order 2",       BEAM_ALPHABET_AA, 2u, 16u,  8u, 15u, true,  false},
+    {"aa order 3",       BEAM_ALPHABET_AA, 3u,  8u,  4u,  8u, true,  true},
+    {"aa order 4",       BEAM_ALPHABET_AA, 4u,  5u,  3u,  5u, true,  true},
+    {"aa order 2 dense", BEAM_ALPHABET_AA, 2u, 16u,  8u, 15u, false, false},
+    {"nt order 3",       BEAM_ALPHABET_NT, 3u, 24u, 10u, 22u, true,  false},
+    {"nt order 6",       BEAM_ALPHABET_NT, 6u, 12u, 10u, 12u, true,  true},
+    {"nt order 3 dense", BEAM_ALPHABET_NT, 3u, 24u, 10u, 22u, false, false},
 };
 #define N_SPECS (sizeof SPECS / sizeof *SPECS)
 
 static BeamModel *build(const Spec *sp) {
     BeamModelConfig c;
     beam_model_config_default_for(sp->alphabet, &c);
-    c.order = sp->order; c.max_length = sp->max_length; c.strict = sp->strict;
+    c.order = sp->order; c.max_length = sp->max_length; c.sparse = sp->sparse;
     BeamModel *m = beam_model_new(&c);
     if (!m) return NULL;
-    make_corpus(sp->alphabet, 0x5eedull + sp->order);
+    make_corpus(sp->alphabet, sp->lo, sp->hi, 0x5eedull + sp->order);
     if (beam_model_observe(m, seqs, wts, N_SEQ) != BEAM_OK
         || beam_model_finalize(m) != BEAM_OK) { beam_model_destroy(m); return NULL; }
     return m;
@@ -159,6 +176,7 @@ static void test_the_company_an_order_keeps_does_not_change_it(void) {
     /* Reversed, repeated, and one order per call. Each order's arithmetic is
      * its own, so none of these can move a bit. */
     for (size_t k = 0; k < N_SPECS; ++k) {
+        if (SPECS[k].wide) continue;
         BeamModel *m = build(&SPECS[k]);
         ASSERT_MSG(m, "a fixture failed to build");
         double want[NQ], rev_q[NQ], rev[NQ], dup_q[2 * NQ], dup[2 * NQ], one[NQ];
@@ -194,8 +212,17 @@ static void test_threads_and_budget_do_not_change_an_order(void) {
      * one thread, so the whole list fuses into one sweep at a time; a budget
      * that fits one sweep of three orders per thread, so the list splits into
      * blocks run concurrently; and a budget that fits exactly one sweep of one
-     * order, so every (length, order) pair runs alone. */
+     * order, so every (length, order) pair runs alone.
+     *
+     * The last runs on one thread. With one sweep at a time the outer team
+     * is a team of one, so each layer's own parallel loops open a nested team
+     * -- afresh, since nested teams are not pooled -- and on a loaded machine
+     * that thread churn took this test from seconds to ten minutes with all
+     * threads, and still to 45 s now and then with two. One thread takes the
+     * same path through the driver -- the width falls to one order, the
+     * concurrency to one sweep -- which is what this schedule is here for. */
     for (size_t k = 0; k < N_SPECS; ++k) {
+        if (SPECS[k].wide) continue;
         BeamModel *m = build(&SPECS[k]);
         ASSERT_MSG(m, "a fixture failed to build");
         const uint32_t S = beam_model_n_states(m), R = beam_model_n_residues(m);
@@ -211,7 +238,9 @@ static void test_threads_and_budget_do_not_change_an_order(void) {
                                      * beam_jet_fan_bytes(S, R, 3u));
         ok = ok && beam_model_log_mellin_many(m, QS, NQ, blocks) == BEAM_OK;
         beam_model_set_memory_budget(beam_jet_fan_bytes(S, R, 1u));
+        beam_model_set_threads(1);
         ok = ok && beam_model_log_mellin_many(m, QS, NQ, serial) == BEAM_OK;
+        beam_model_set_threads(0);
         beam_model_set_memory_budget(0);
 
         if (!ok) { beam_model_destroy(m); ASSERT_MSG(0, "a call failed"); }
@@ -226,12 +255,18 @@ static void test_threads_and_budget_do_not_change_an_order(void) {
 }
 
 static void test_it_refuses_only_where_one_order_would_not_fit(void) {
-    BeamModel *m = build(&SPECS[1]);
+    BeamModel *m = build(&SPECS[0]);
     ASSERT_MSG(m, "the fixture failed to build");
     const uint32_t S = beam_model_n_states(m), R = beam_model_n_residues(m);
     const uint64_t one = beam_jet_fan_bytes(S, R, 1u);
     double out[NQ], single = 0.0;
 
+    /* At exactly one sweep every (length, order) pair runs alone, which
+     * churns nested teams as the previous test explains, so the call that
+     * succeeds runs on one thread. The verdicts do not depend on the thread
+     * count: the width falls to one order either way, and whether that fits
+     * is the whole question. */
+    beam_model_set_threads(1);
     beam_model_set_memory_budget(one);
     const BeamError at = beam_model_log_mellin_many(m, QS, NQ, out);
     beam_model_set_memory_budget(one - 1u);
@@ -240,6 +275,7 @@ static void test_it_refuses_only_where_one_order_would_not_fit(void) {
     const BeamError tiny_many = beam_model_log_mellin_many(m, QS, NQ, out);
     const BeamError tiny_single = beam_model_log_mellin(m, 2.0, &single);
     beam_model_set_memory_budget(0);
+    beam_model_set_threads(0);
     beam_model_destroy(m);
 
     ASSERT_MSG(at == BEAM_OK, "a budget of exactly one single-order sweep refused");
@@ -269,7 +305,7 @@ static void test_the_calling_contract(void) {
     c.order = 2u; c.max_length = 12u;
     BeamModel *raw = beam_model_new(&c);
     ASSERT_MSG(raw, "could not create a model");
-    make_corpus(BEAM_ALPHABET_AA, 7u);
+    make_corpus(BEAM_ALPHABET_AA, 8u, 12u, 7u);
     const bool observed = beam_model_observe(raw, seqs, wts, N_SEQ) == BEAM_OK;
     const BeamError e = beam_model_log_mellin_many(raw, qs, 2, out);
     beam_model_destroy(raw);

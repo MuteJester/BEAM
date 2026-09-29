@@ -44,10 +44,14 @@ REDUCED = 64 << 20
 
 @pytest.fixture(scope="module")
 def model():
+    """max_length is the corpus's longest (12). Every length up to it is live
+    under the prior, and the moment drivers below run a whole Mellin pass
+    before they reach the refusal they are pinned to, fifty times over; two
+    lengths the corpus never had would add a third to each pass."""
     return BEAM.BeamModel(
         ["CASSLGGYEQYF", "CASSLGGTEQYF", "CASRLGGYEQYF", "CASSPGGYEQYF",
          "CASSLGGYEQF", "CASRLGGTEQF"],
-        order=3, max_length=14, strict=True)
+        order=3, max_length=12)
 
 
 def _refusing_calls(m):

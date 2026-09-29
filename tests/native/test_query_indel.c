@@ -16,9 +16,11 @@
  * other rather than each to itself.
  *
  * Finally the arithmetic, on a corpus built so the answer is orderable in
- * advance: three sequences differing only by which residue sits at one
- * position, weighted 100 to 10 to 1, so the posterior over the neighbourhood
- * has to rank them in that order and in those proportions.
+ * advance: four sequences differing only by which residue sits at one
+ * position, weighted 100, 10, 8 and 1, so the posterior over the
+ * neighbourhood has to rank them in that order and in the proportions the
+ * model gives them. Under the hierarchical prior every other neighbour is
+ * possible too, and each of the four has to outrank every one of them.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -38,13 +40,15 @@ static int pass_count = 0, fail_count = 0;
 #define R BEAM_AA_RESIDUES
 static const char *AA = "ACDEFGHIKLMNPQRSTVWY";
 
-static BeamModel *build(const char **seqs, const double *w, uint32_t n,
-                        uint8_t order, uint8_t max_length, bool open_world) {
+static BeamModel *build_weighted(const char **seqs, const double *w,
+                                 uint32_t n, uint8_t order, uint8_t max_length,
+                                 double anchor_weight) {
     BeamModelConfig cfg;
     beam_model_config_default(&cfg);
     cfg.order = order;
     cfg.max_length = max_length;
-    if (open_world) cfg.strict = 0;
+    if (anchor_weight > 0.0)
+        cfg.weight_forward = cfg.weight_backward = anchor_weight;
     BeamModel *m = beam_model_new(&cfg);
     if (!m) return NULL;
     if (beam_model_observe(m, seqs, w, n) != BEAM_OK
@@ -53,6 +57,12 @@ static BeamModel *build(const char **seqs, const double *w, uint32_t n,
         return NULL;
     }
     return m;
+}
+
+/* The default anchor weights, which is every model here but one. */
+static BeamModel *build(const char **seqs, const double *w, uint32_t n,
+                        uint8_t order, uint8_t max_length) {
+    return build_weighted(seqs, w, n, order, max_length, 0.0);
 }
 
 #define N_TRAIN 8
@@ -73,7 +83,7 @@ static const double DEEP_WEIGHT[N_DEEP] = {50, 30, 20, 15, 12, 25, 18, 7};
 /* ── Deduplication, against brute force ──────────────────────── */
 
 static void test_insertion_neighbours_are_the_distinct_strings(void) {
-    BeamModel *m = build(TRAIN, WEIGHT, N_TRAIN, 3u, 8u, true);
+    BeamModel *m = build(TRAIN, WEIGHT, N_TRAIN, 3u, 8u);
     ASSERT_MSG(m != NULL, "model built");
     const char *src = "CASSF";
     const uint32_t L = 5u;
@@ -121,7 +131,7 @@ static void test_insertion_neighbours_are_the_distinct_strings(void) {
 }
 
 static void test_each_neighbour_is_attributed_to_its_leftmost_gap(void) {
-    BeamModel *m = build(TRAIN, WEIGHT, N_TRAIN, 3u, 8u, true);
+    BeamModel *m = build(TRAIN, WEIGHT, N_TRAIN, 3u, 8u);
     ASSERT_MSG(m != NULL, "model built");
     const char *src = "CAAAF";        /* a run of three, so aliases abound */
     const uint32_t L = 5u;
@@ -161,7 +171,7 @@ static void test_each_neighbour_is_attributed_to_its_leftmost_gap(void) {
 }
 
 static void test_deletion_neighbours_collapse_runs(void) {
-    BeamModel *m = build(TRAIN, WEIGHT, N_TRAIN, 3u, 8u, true);
+    BeamModel *m = build(TRAIN, WEIGHT, N_TRAIN, 3u, 8u);
     ASSERT_MSG(m != NULL, "model built");
     BeamNeighbourhood nb;
     /* CAAAF: dropping any of the three A's leaves CAAF, so the five
@@ -183,7 +193,7 @@ static void test_deletion_neighbours_collapse_runs(void) {
 }
 
 static void test_inserting_then_deleting_returns_the_source(void) {
-    BeamModel *m = build(TRAIN, WEIGHT, N_TRAIN, 3u, 8u, true);
+    BeamModel *m = build(TRAIN, WEIGHT, N_TRAIN, 3u, 8u);
     ASSERT_MSG(m != NULL, "model built");
     const char *src = "CASSF";
     BeamNeighbourhood ins;
@@ -213,7 +223,7 @@ static void test_inserting_then_deleting_returns_the_source(void) {
 /* ── The arithmetic ──────────────────────────────────────────── */
 
 static void test_the_odds_are_the_scores_they_claim_to_be(void) {
-    BeamModel *m = build(TRAIN, WEIGHT, N_TRAIN, 3u, 8u, true);
+    BeamModel *m = build(TRAIN, WEIGHT, N_TRAIN, 3u, 8u);
     ASSERT_MSG(m != NULL, "model built");
     const char *src = "CASSF";
     const double ls = beam_model_log_pseq(m, src);
@@ -228,6 +238,9 @@ static void test_the_odds_are_the_scores_they_claim_to_be(void) {
         const double want = beam_model_log_pseq(m, s) - ls;
         ASSERT_MSG(nb.log_odds[k] == want,
                    "the odds are exactly the difference of the two scores");
+        /* Six residues is within max_length, and under the prior every
+         * string of such a length has mass, whatever its residues. */
+        ASSERT_MSG(isfinite(nb.log_odds[k]), "and every neighbour has odds");
         sum += nb.posterior[k];
         if (nb.log_odds[k] > best) best = nb.log_odds[k];
     }
@@ -236,11 +249,9 @@ static void test_the_odds_are_the_scores_they_claim_to_be(void) {
     /* And it is the softmax of the odds: the source term is common to every
      * entry, so it cancels and the posterior does not depend on it. */
     double z = 0.0;
-    for (uint32_t k = 0; k < nb.n; ++k)
-        if (isfinite(nb.log_odds[k])) z += exp(nb.log_odds[k] - best);
+    for (uint32_t k = 0; k < nb.n; ++k) z += exp(nb.log_odds[k] - best);
     for (uint32_t k = 0; k < nb.n; ++k) {
-        const double want = isfinite(nb.log_odds[k])
-                          ? exp(nb.log_odds[k] - best) / z : 0.0;
+        const double want = exp(nb.log_odds[k] - best) / z;
         ASSERT_MSG(fabs(nb.posterior[k] - want) < 1e-12,
                    "the posterior is the softmax of the odds");
     }
@@ -251,46 +262,60 @@ static void test_the_odds_are_the_scores_they_claim_to_be(void) {
 
 static void test_the_posterior_ranks_the_insertions_the_corpus_prefers(void) {
     /*
-     * The corpus contains CASSAF, CASSYF and CASSGF at 100, 10 and 1, and
-     * nothing else of that length reachable from CASSF by one insertion. The
+     * The corpus contains CASSAF, CASSYF, CASSLF and CASSGF at 100, 10, 8
+     * and 1, and no other string one insertion away from CASSF. The
      * neighbourhood must rank them in that order, and their posteriors must
      * stand in the same ratios as the probabilities the model gives them.
      */
-    BeamModel *m = build(TRAIN, WEIGHT, N_TRAIN, 3u, 8u, false);
-    ASSERT_MSG(m != NULL, "closed-world model built");
+    BeamModel *m = build(TRAIN, WEIGHT, N_TRAIN, 3u, 8u);
+    ASSERT_MSG(m != NULL, "model built");
     BeamNeighbourhood nb;
     ASSERT_MSG(beam_query_insertions(m, "CASSF", &nb) == BEAM_OK, "insertions");
 
-    double p_a = -1.0, p_y = -1.0, p_g = -1.0;
+    double p_a = -1.0, p_y = -1.0, p_l = -1.0, p_g = -1.0;
+    double best_unspelled = 0.0;
     uint32_t live = 0u;
     for (uint32_t k = 0; k < nb.n; ++k) {
         const char *s = nb.sequences + (size_t)k * (nb.length + 1u);
         if (nb.posterior[k] > 0.0) live++;
         if (strcmp(s, "CASSAF") == 0) p_a = nb.posterior[k];
-        if (strcmp(s, "CASSYF") == 0) p_y = nb.posterior[k];
-        if (strcmp(s, "CASSGF") == 0) p_g = nb.posterior[k];
+        else if (strcmp(s, "CASSYF") == 0) p_y = nb.posterior[k];
+        else if (strcmp(s, "CASSLF") == 0) p_l = nb.posterior[k];
+        else if (strcmp(s, "CASSGF") == 0) p_g = nb.posterior[k];
+        else if (nb.posterior[k] > best_unspelled)
+            best_unspelled = nb.posterior[k];
     }
-    ASSERT_MSG(p_a > 0.0 && p_y > 0.0 && p_g > 0.0, "all three were found");
-    ASSERT_MSG(p_a > p_y && p_y > p_g,
+    ASSERT_MSG(p_a > 0.0 && p_y > 0.0 && p_l > 0.0 && p_g > 0.0,
+               "all four were found");
+    ASSERT_MSG(p_a > p_y && p_y > p_l && p_l > p_g,
                "the posterior ranks them as the corpus weights them");
     /* The ratio must be the model's own, not merely the right order. */
     const double ra = exp(beam_model_log_pseq(m, "CASSAF"));
     const double ry = exp(beam_model_log_pseq(m, "CASSYF"));
     ASSERT_MSG(fabs(p_a / p_y - ra / ry) < 1e-9,
                "and in the proportions the model assigns them");
-    ASSERT_MSG(live < nb.n,
-               "while the insertions the closed world cannot spell carry no "
-               "mass at all");
+    /*
+     * The prior gives every other insertion mass as well -- an unseen context
+     * predicts what its shorter context predicts -- but only as much as the
+     * shorter contexts lend it. A single observation still outranks any one
+     * of them: CASSGF, seen once, holds about twenty times the best unseen
+     * neighbour (CASSFF) on this corpus.
+     */
+    ASSERT_MSG(live == nb.n, "every insertion now carries some mass");
+    ASSERT_MSG(p_g > best_unspelled,
+               "yet each one the corpus spells outranks every one it does not");
     beam_query_neighbourhood_free(&nb);
     beam_model_destroy(m);
     PASS();
 }
 
 static void test_an_impossible_neighbourhood_still_reports_its_odds(void) {
-    BeamModel *m = build(TRAIN, WEIGHT, N_TRAIN, 3u, 6u, false);
+    BeamModel *m = build(TRAIN, WEIGHT, N_TRAIN, 3u, 6u);
     ASSERT_MSG(m != NULL, "model built");
     /* max_length 6, so inserting into a length-6 sequence leaves nothing the
-     * model can produce. Every neighbour is impossible, which is an answer. */
+     * model can produce. Under the prior every length from 1 to max_length
+     * has mass, so one past it is the only way left for a whole neighbourhood
+     * to be impossible. Every neighbour is, which is an answer. */
     BeamNeighbourhood nb;
     ASSERT_MSG(beam_query_insertions(m, "CASSAF", &nb) == BEAM_OK,
                "asking is not an error");
@@ -315,17 +340,23 @@ static void test_an_impossible_neighbourhood_still_reports_its_odds(void) {
 }
 
 static void test_the_posterior_survives_a_neighbourhood_that_underflows(void) {
-    BeamModel *m = build(DEEP, DEEP_WEIGHT, N_DEEP, 3u, 14u, true);
-    ASSERT_MSG(m != NULL, "open-world model built");
-
     /*
-     * A sequence of tryptophans is producible in an open world and sits about
-     * 6,900 nats below the mode, so every one of its neighbours is around
-     * exp(-7250) -- which is exactly zero in a double. Exponentiating the
-     * scores directly would therefore give a total of zero and a posterior of
-     * all zeros, for a distribution that is perfectly well defined. Only
-     * subtracting the maximum first recovers it.
+     * A sequence of tryptophans is producible under the prior, but only just:
+     * the corpus never spells W, so every residue of it is paid for at the
+     * price the depth-only level lends an unseen residue. At the default
+     * anchor weights that puts its neighbours near -68 nats, which exp()
+     * still represents. Scaling BOTH anchor weights by the same factor
+     * multiplies every log weight by it and leaves the ranking within a
+     * length untouched, so at 10 each -- twenty times the default -- the
+     * same neighbourhood sits more than a thousand nats down, where exp() is
+     * exactly zero in a double.
+     *
+     * Exponentiating the scores directly would then give a total of zero and
+     * a posterior of all zeros, for a distribution that is perfectly well
+     * defined. Only subtracting the maximum first recovers it.
      */
+    BeamModel *m = build_weighted(DEEP, DEEP_WEIGHT, N_DEEP, 3u, 14u, 10.0);
+    ASSERT_MSG(m != NULL, "model built");
     const char *src = "WWWWWWWWWW";
     ASSERT_MSG(isfinite(beam_model_log_pseq(m, src)),
                "the source is producible, if barely");
@@ -342,25 +373,11 @@ static void test_the_posterior_survives_a_neighbourhood_that_underflows(void) {
         sum += nb.posterior[k];
         if (nb.posterior[k] > 0.0) positive++;
     }
-    /*
-     * It used to be asserted that every neighbour scores below -700, where
-     * exp() underflows. That is no longer reachable, for the reason recorded
-     * in test_query_moments: the old open world could floor a cell that
-     * normalised to nothing at 1e-300, worth about -690 nats on its own, and
-     * the Laplace add-one that replaced the backoff hierarchy bottoms out at
-     * 1/(n + R) instead. Measured here: the best neighbour is -33.7.
-     *
-     * The machinery still has to hold the posterior together over a
-     * neighbourhood far below the mode, which is what remains asserted.
-     */
-    ASSERT_MSG(best < -25.0, "every neighbour is far below the mode");
-    /* exp(best) was exactly zero when best was below -745. At -33.7 it is
-     * about 2e-15 instead: still far too small to normalise a softmax
-     * against without losing every digit, but no longer a literal zero. The
-     * claim is restated as what the number actually is. */
-    ASSERT_MSG(exp(best) < 1e-12,
-               "so exponentiating a score directly leaves nothing a naive "
-               "softmax could normalise against");
+    ASSERT_MSG(best < -745.0,
+               "every neighbour is below where exp() underflows");
+    ASSERT_MSG(exp(best) == 0.0,
+               "so exponentiating even the best score directly gives exactly "
+               "zero, which no naive softmax can normalise against");
     ASSERT_MSG(fabs(sum - 1.0) < 1e-12,
                "yet the posterior is still a distribution");
     ASSERT_MSG(positive > nb.n / 2u,
@@ -395,7 +412,7 @@ static void test_case_folded_input_does_not_multiply_the_neighbours(void) {
     BeamModelConfig cfg;
     beam_model_config_default(&cfg);
     cfg.alphabet = BEAM_ALPHABET_NT;
-    cfg.order = 2; cfg.max_length = 8; cfg.strict = 0;
+    cfg.order = 2; cfg.max_length = 8;
     BeamModel *m = beam_model_new(&cfg);
     ASSERT_MSG(m != NULL, "nucleotide model built");
     ASSERT_MSG(beam_model_observe(m, seqs, w, 4u) == BEAM_OK, "observed");
@@ -447,7 +464,7 @@ static void test_a_character_outside_the_alphabet_is_malformed_input(void) {
      * cannot happen". The two are different answers and the header promises
      * to distinguish them.
      */
-    BeamModel *m = build(TRAIN, WEIGHT, N_TRAIN, 3u, 8u, true);
+    BeamModel *m = build(TRAIN, WEIGHT, N_TRAIN, 3u, 8u);
     ASSERT_MSG(m != NULL, "model built");
     BeamNeighbourhood nb = {0};
     ASSERT_MSG(beam_query_insertions(m, "CA?SF", &nb)
@@ -472,7 +489,7 @@ static void test_multiplicity_accounts_for_every_edit_exactly_once(void) {
      * The check that cannot be fudged: the multiplicities must sum to the
      * number of candidate operations, since they partition them.
      */
-    BeamModel *m = build(TRAIN, WEIGHT, N_TRAIN, 3u, 8u, true);
+    BeamModel *m = build(TRAIN, WEIGHT, N_TRAIN, 3u, 8u);
     ASSERT_MSG(m != NULL, "model built");
 
     BeamNeighbourhood nb = {0};
@@ -509,26 +526,35 @@ static void test_multiplicity_accounts_for_every_edit_exactly_once(void) {
 /* ── Refusals ────────────────────────────────────────────────── */
 
 static void test_neighbourhoods_at_the_short_extreme(void) {
-    /* Insertions from one residue and deletions down to one were untested;
-     * both are legal and both were correct, which is worth pinning. */
-    BeamModel *m = build(TRAIN, WEIGHT, N_TRAIN, 3u, 8u, true);
+    /*
+     * Insertions from one residue and deletions down to one were untested;
+     * both are legal and both were correct, which is worth pinning. The
+     * corpus spells nothing of one or two residues, but under the prior every
+     * length up to max_length has mass, so both are answered rather than
+     * refused as a ratio to nothing.
+     */
+    BeamModel *m = build(TRAIN, WEIGHT, N_TRAIN, 3u, 8u);
     ASSERT_MSG(m != NULL, "model built");
     BeamNeighbourhood nb = {0};
 
-    if (beam_query_insertions(m, "C", &nb) == BEAM_OK) {
-        ASSERT_MSG(nb.length == 2u, "one residue becomes two");
-        ASSERT_MSG(nb.n == 2u * R - 1u,
-                   "two gaps by R residues, less the one alias");
-        double s = 0.0;
-        for (uint32_t k = 0; k < nb.n; ++k) s += nb.posterior[k];
-        ASSERT_MSG(fabs(s - 1.0) < 1e-12, "and is still a distribution");
-        beam_query_neighbourhood_free(&nb);
-    }
-    if (beam_query_deletions(m, "CA", &nb) == BEAM_OK) {
-        ASSERT_MSG(nb.length == 1u, "two residues become one");
-        ASSERT_MSG(nb.n == 2u, "and both single residues are distinct");
-        beam_query_neighbourhood_free(&nb);
-    }
+    ASSERT_MSG(beam_query_insertions(m, "C", &nb) == BEAM_OK,
+               "a one-residue source is scored");
+    ASSERT_MSG(nb.length == 2u, "one residue becomes two");
+    ASSERT_MSG(nb.n == 2u * R - 1u,
+               "two gaps by R residues, less the one alias");
+    double s = 0.0;
+    for (uint32_t k = 0; k < nb.n; ++k) s += nb.posterior[k];
+    ASSERT_MSG(fabs(s - 1.0) < 1e-12, "and is still a distribution");
+    beam_query_neighbourhood_free(&nb);
+
+    ASSERT_MSG(beam_query_deletions(m, "CA", &nb) == BEAM_OK,
+               "deleting down to one residue is scored too");
+    ASSERT_MSG(nb.length == 1u, "two residues become one");
+    ASSERT_MSG(nb.n == 2u, "and both single residues are distinct");
+    ASSERT_MSG(nb.length_producible && isfinite(nb.log_odds[0])
+               && isfinite(nb.log_odds[1]),
+               "and both have odds, the corpus never having spelled them");
+    beam_query_neighbourhood_free(&nb);
     beam_model_destroy(m);
     PASS();
 }
@@ -540,7 +566,7 @@ static void test_a_source_at_the_length_ceiling_is_handled(void) {
      * boundary, so loosening the bound by one would have been an unguarded
      * stack overflow rather than a failing test.
      */
-    BeamModel *m = build(TRAIN, WEIGHT, N_TRAIN, 3u, 8u, true);
+    BeamModel *m = build(TRAIN, WEIGHT, N_TRAIN, 3u, 8u);
     ASSERT_MSG(m != NULL, "model built");
     char *at = (char *)malloc(BEAM_MAX_LENGTH_CEILING + 2u);
     ASSERT_MSG(at != NULL, "alloc");
@@ -563,15 +589,26 @@ static void test_a_source_at_the_length_ceiling_is_handled(void) {
 }
 
 static void test_a_source_the_model_cannot_score_is_refused(void) {
-    BeamModel *m = build(TRAIN, WEIGHT, N_TRAIN, 3u, 8u, false);
+    BeamModel *m = build(TRAIN, WEIGHT, N_TRAIN, 3u, 8u);
     ASSERT_MSG(m != NULL, "model built");
     BeamNeighbourhood nb;
 
-    ASSERT_MSG(beam_query_insertions(m, "WWWWW", &nb) == BEAM_ERR_NO_LIVE_PATHS,
+    /*
+     * Under the prior a string of residues the corpus never spells is
+     * improbable, not impossible, so it is a source like any other. What has
+     * probability zero is a length past max_length: nine residues here.
+     */
+    ASSERT_MSG(beam_query_insertions(m, "WWWWW", &nb) == BEAM_OK,
+               "an unseen but producible source is scored");
+    beam_query_neighbourhood_free(&nb);
+    const char *too_long = "CASSLGEQY";
+    ASSERT_MSG(beam_query_insertions(m, too_long, &nb) == BEAM_ERR_NO_LIVE_PATHS,
                "odds against a sequence of probability zero are a ratio to "
                "nothing");
     ASSERT_MSG(strstr(beam_error_message(), "ratio to nothing") != NULL,
                "and the message says so");
+    ASSERT_MSG(beam_query_deletions(m, too_long, &nb) == BEAM_ERR_NO_LIVE_PATHS,
+               "the same for deletions, however short the neighbours");
     ASSERT_MSG(beam_query_insertions(m, "", &nb)
                == BEAM_ERR_PARAM_OUT_OF_RANGE, "an empty source is refused");
     ASSERT_MSG(beam_query_deletions(m, "C", &nb)
@@ -588,7 +625,7 @@ static void test_a_source_the_model_cannot_score_is_refused(void) {
      */
     BeamNeighbourhood wild;
     memset(&wild, 0xA5, sizeof(wild));
-    ASSERT_MSG(beam_query_insertions(m, "WWWWW", &wild)
+    ASSERT_MSG(beam_query_insertions(m, too_long, &wild)
                == BEAM_ERR_NO_LIVE_PATHS, "refused");
     ASSERT_MSG(wild.n == 0u && wild.sequences == NULL,
                "and the output was emptied first");

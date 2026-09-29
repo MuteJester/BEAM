@@ -13,9 +13,9 @@ class Logo:
     position can actually spell.
 
     Attributes:
-        probability: ``(length, n_residues)``. Rows sum to 1. A residue the
-            model cannot spell here is exactly 0 -- not floored, because in a
-            strict model that zero is information.
+        probability: ``(length, n_residues)``. Rows sum to 1. Under the
+            hierarchical prior no residue is exactly 0; one the corpus never
+            put here is small, not absent.
         height_bits, height_nats: ``(length, n_residues)``, the stack heights
             a logo is drawn from. Bits is the axis every logo tool assumes.
             The two are the same numbers scaled by ``ln 2``.

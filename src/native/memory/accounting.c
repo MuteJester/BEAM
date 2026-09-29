@@ -22,8 +22,25 @@
 #include "beam/internal.h"
 #include "beam/memory.h"
 
+static uint64_t table_bytes(const BeamModel *m);
+
+/* The hierarchical prior's lower levels, held in either storage form. */
+static uint64_t lower_level_bytes(const BeamModel *m) {
+    uint64_t n = 0;
+    if (!m->finalized) return 0;
+    for (uint32_t d = 0; d < BEAM_DIRS; ++d)
+        for (uint32_t k = 0; k < m->order; ++k)
+            n += beam_sparse_memory_bytes(&m->sp_lo[d][k]);
+    return n;
+}
+
 uint64_t beam_model_memory_bytes(const BeamModel *m) {
     if (!m) return 0;
+    return table_bytes(m) + lower_level_bytes(m);
+}
+
+/* The top tables and the counts, in whichever storage form the model uses. */
+static uint64_t table_bytes(const BeamModel *m) {
     if (m->cfg.sparse) {
         uint64_t n = 0;
         for (uint32_t d = 0; d < BEAM_DIRS; ++d) {

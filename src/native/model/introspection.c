@@ -200,36 +200,16 @@ BeamError beam_model_depth_occupancy(const BeamModel *m,
      * discovered 100% of the dictionary, and the same report carried
      * `n_nonzero_cells = 30` beside `cells_observed = 176400`.
      *
-     * A compacted model has no counts. For a STRICT one the finalized tables
-     * still answer exactly -- an unobserved cell is -inf and stays -inf -- so
-     * that case is served from them and the figure survives `compact()`. For
-     * an open-world one the smoothing has overwritten the evidence and the
-     * counts that held it are gone, so there is no answer to give and this
-     * says so rather than returning the saturated one.
+     * A compacted model has no counts, and under the hierarchical prior
+     * every finalized cell is positive, so the tables cannot say which cells
+     * the corpus reached. There is no answer to give, and this says so rather
+     * than returning a saturated one.
      */
-    if (m->compacted) {
-        if (!m->cfg.strict)
-            return BEAM_ECOMPACTED(
-                "an open-world model's add-one leaves every finalized cell "
-                "finite, so which cells the corpus actually reached is known "
-                "only to the counts, and compact() released them");
-        for (uint32_t d = 0; d < BEAM_DIRS; ++d) {
-            for (uint32_t depth = 0; depth < W; ++depth) {
-                uint64_t nr = 0, ncell = 0;
-                for (uint32_t c = 0; c < nc; ++c) {
-                    const BeamLogRow r = beam_lp_row(m, d, depth, c);
-                    if (!r.present) continue;
-                    uint32_t live = 0;
-                    for (uint32_t x = 0; x < R; ++x)
-                        if (beam_log_cell(&r, x) != -INFINITY) live++;
-                    if (live) { nr++; ncell += live; }
-                }
-                rows[d * W + depth] = nr;
-                cells[d * W + depth] = ncell;
-            }
-        }
-        return BEAM_OK;
-    }
+    if (m->compacted)
+        return BEAM_ECOMPACTED(
+            "every finalized cell is positive under the hierarchical prior, "
+            "so which cells the corpus actually reached is known only to the "
+            "counts, and compact() released them");
 
     const uint32_t n_rows = beam_count_n_rows(m);
     for (uint32_t d = 0; d < BEAM_DIRS; ++d) {

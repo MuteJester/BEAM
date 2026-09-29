@@ -63,9 +63,12 @@ def test_spectra_by_length_rows_are_bit_identical(small):
                               bins=ANALYSIS_BINS, spacing=spacing)
         assert np.array_equal(W[L], solo["weights"])
     # Lengths the model does not generate are left at zero, not garbage.
+    # Under the prior that is length 0 alone: every length up to max_length
+    # is generated, the ones the corpus never had included.
     for L in range(W.shape[0]):
         if L not in small.observed_lengths:
             assert not W[L].any()
+    assert not W[0].any() and W[1:].any(axis=1).all()
     # And the rows sum to the pooled spectrum, which is what one shared grid
     # is for.
     pooled = small.spectrum(measure="generated", bins=ANALYSIS_BINS,

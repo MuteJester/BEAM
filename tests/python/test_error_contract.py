@@ -17,16 +17,15 @@ WHAT IS PINNED, AND WHY IT IS PINNED PER ENTRY POINT
 
 Not per error code. One code does not imply one class, and a table that
 assumed it would would reintroduce exactly the bug above. `BEAM_ERR_NO_LIVE_PATHS`
-reaches Python three different ways:
-
-    positional_marginals(clamp=...)   ValueError          (the binding intercepts)
-    BeamQuery.marginals(...)          ImpossibleCondition (the facade narrows)
-    log_clamp_probability(...)        no exception at all, -inf
-
-All three are deliberate, all three are observable, and a restructure that
-routes every code through one table would change two of them. So the unit
-pinned here is (entry point -> class), and the special cases below pin the
-disagreements explicitly so they cannot be "tidied up" by accident.
+is the standing example: the binding intercepts it as a ValueError for
+`positional_marginals(clamp=...)`, the query facade narrows it to
+ImpossibleCondition, and `log_clamp_probability` returns -inf instead of
+raising. Under the hierarchical prior every clamp of a length up to max_length
+keeps some mass, so no Python call reaches that code any more and its three
+routes are no longer pinned here; the classes a restructure could still move
+are. So the unit pinned here is (entry point -> class), and the special cases
+below pin the remaining disagreements explicitly so they cannot be "tidied
+up" by accident.
 
 Every trigger was derived by running it, not by reading the switch.
 """
@@ -44,13 +43,14 @@ from BEAM import _cbeam as _c
 SEQS = ["CASSLF", "CASSQF", "CASRLF", "CTTGWF", "CASSLG", "CASSQG"]
 
 #: Arguments to the raw `_cbeam.new`, which yields an UNFINALIZED model --
-#: the only way to reach the not-built guards from Python.
-NEW_ARGS = (2, 8, (0.5, 0.5), True, True, "aa")
+#: the only way to reach the not-built guards from Python. The fourth and
+#: fifth are the prior's strengths: one per level 0..order, then the length's.
+NEW_ARGS = (2, 8, (0.5, 0.5), (10.0, 10.0, 10.0), 10.0, True, "aa")
 
 
 @pytest.fixture(scope="module")
 def model():
-    return BEAM.BeamModel(SEQS, order=2, max_length=8, strict=True)
+    return BEAM.BeamModel(SEQS, order=2, max_length=8)
 
 
 @pytest.fixture(scope="module")
@@ -91,7 +91,7 @@ def _damaged(saved, tmp_path, name, offset, data=None, truncate=None):
 
 CONTRACT = [
     ("build over budget",
-     lambda m, s, t: BEAM.BeamModel(SEQS, order=2, max_length=8, strict=True),
+     lambda m, s, t: BEAM.BeamModel(SEQS, order=2, max_length=8),
      MemoryError, "memory budget", True),
     ("load over budget",
      lambda m, s, t: _c.load(s),
@@ -140,7 +140,7 @@ CONTRACT = [
     ("load an unknown format",
      lambda m, s, t: _c.load(_damaged(s, t, "ver.beam", 4,
                                       struct.pack("<I", 99))),
-     OSError, "does not read", False),
+     OSError, "reads only format", False),
     ("load a non-model file",
      lambda m, s, t: _c.load(_damaged(s, t, "magic.beam", 0, b"ZZZZ")),
      OSError, "not a BEAM model file", False),
@@ -178,28 +178,6 @@ def test_the_observed_exception_class_is_unchanged(
 
 
 # ── The disagreements, pinned so they cannot be tidied away ────────────────
-
-def test_one_error_code_reaches_python_three_different_ways(model, tmp_path):
-    """NO_LIVE_PATHS is a ValueError, an ImpossibleCondition, and a value.
-
-    All three are deliberate. A code-to-class table that assumed one code means
-    one class would change two of them, which is precisely how the IO_CORRUPT
-    regression happened. If a restructure makes these agree, that has to be a
-    decision someone took, not a side effect -- so it fails here first.
-    """
-    with pytest.raises(ValueError) as a:          # the binding intercepts
-        model.positional_marginals(6, clamp={0: "W"})
-    assert "cannot produce" in str(a.value)
-
-    q = BEAM.BeamQuery(model)
-    from BEAM.query.errors import ImpossibleCondition
-    with pytest.raises(ImpossibleCondition):      # the facade narrows
-        q.marginals(q.condition(6).at(0, "W"))
-
-    # ...and the same condition asked as a probability is an ANSWER, not a
-    # failure: P of an impossible event is zero. This must not start raising.
-    assert model.log_clamp_probability(6, {0: "W"}) == float("-inf")
-
 
 def test_the_query_facade_narrows_builtins_to_its_own_classes(model):
     """`BeamQuery` returns subclasses of the built-ins, not the built-ins.

@@ -30,18 +30,25 @@ def test_log_mellin_at_one_is_zero(model):
 
 
 def test_log_mellin_matches_brute_force():
-    """Against an exhaustive sum over every length-3 and length-4 sequence."""
+    """Against an exhaustive sum over every sequence the model can produce.
+
+    That is every string over the whole alphabet up to max_length, so the
+    space is nucleotide and short (19,530 strings); q = 0 then counts them
+    all, and q = 1 checks that they carry all the mass."""
     import itertools
-    seqs, abund = make_corpus(n=400, seed=5, lo=3, hi=4)
-    m = BeamModel(seqs, abundances=abund, order=2, max_length=6)
+    rng = random.Random(5)
+    seqs = ["TG" + "".join(rng.choice("ACGT") for _ in range(rng.randint(0, 3)))
+            + "C" for _ in range(400)]
+    abund = [rng.randint(1, 40) for _ in seqs]
+    m = BeamModel(seqs, abundances=abund, alphabet="nt", order=3, max_length=6)
+    every = ["".join(t) for L in range(1, 7)
+             for t in itertools.product("ACGTN", repeat=L)]
+    lp = np.asarray(m.log_pseq_batch(every), dtype=np.float64)
+    assert np.isfinite(lp).all(), "the prior leaves no string impossible"
     for q in (0.0, 0.5, 1.0, 2.0):
-        total = 0.0
-        for L in (3, 4):
-            for t in itertools.product(AA, repeat=L):
-                lp = m.log_pseq("".join(t))
-                if math.isfinite(lp):
-                    total += math.exp(q * lp)
-        assert m.log_mellin(q) == pytest.approx(math.log(total), rel=1e-9), q
+        total = float(np.exp(q * lp).sum())
+        assert m.log_mellin(q) == pytest.approx(math.log(total), rel=1e-9,
+                                                abs=1e-12), q
 
 
 def test_hill_number_matches_mellin(model):

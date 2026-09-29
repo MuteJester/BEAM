@@ -95,13 +95,10 @@ class Oracle:
         self.len_of = np.asarray(idx)
         self.logp = np.asarray(model.log_pseq_batch(seqs), dtype=float)
         self.p = np.exp(self.logp)
-        # Membership of the support is a statement about the LOG probability.
-        # In the open world with backoff off a sequence can sit at -2760 nats,
-        # which is finite and real and underflows `exp` to exactly zero; using
-        # `p > 0` there counts a smaller support than the model has, and then
-        # disagrees with `path_count` and `log_mellin(0)` about the size of it.
-        # Writing this reference produced three separate versions of that
-        # mistake before it found anything about the library.
+        # Membership of the support is a statement about the LOG probability:
+        # a sequence can sit far enough out that `exp` underflows to zero while
+        # it is still in the support, and `p > 0` would then count a smaller
+        # support than `path_count` and `log_mellin(0)` report.
         self.live = np.isfinite(self.logp)
         self.total = float(self.p.sum())
 
@@ -149,24 +146,24 @@ def tier1(report):
                      for _ in range(400)})
     ab = [1.0 + (i % 13) for i in range(len(corpus))]
 
-    # Six configurations: three orders against both worlds.
+    # Six configurations: three orders, each under the default prior and under
+    # one whose strengths differ by five orders of magnitude between levels,
+    # so a level that borrows almost everything from its parent and one that
+    # borrows almost nothing are both in the grid.
     #
-    # A seventh stood here, tagged "no-backoff", to put a badly conditioned
-    # model in the grid: with the backoff hierarchy off, unobserved cells sat
-    # at `ln(1e-300)` and a layer's weights spanned 690 nats, which is the
-    # spread the tilted sweeps once got wrong. Both halves of that are gone.
-    # The hierarchy went with the three-expert mixture, the open world is a
-    # Laplace add-one with no floor to stretch the spread, and -- because the
-    # keyword that once switched it off no longer exists -- the seventh config
-    # had silently become a bit-for-bit copy of the sixth, measuring thirty
-    # quantities twice under a name for a regime nothing was testing.
-    configs = [(o, s) for o in (2, 3, 4) for s in (False, True)]
+    # The support is every string up to max_length, so the oracle enumerates
+    # every length 1..4 -- 168,420 sequences -- rather than the observed ones.
+    uneven = {2: (0.01, 50.0, 3.0), 3: (0.01, 50.0, 3.0, 400.0),
+              4: (0.01, 50.0, 3.0, 400.0, 0.2)}
+    configs = [(o, a) for o in (2, 3, 4) for a in ("default", "uneven")]
 
-    def one(order, strict):
+    def one(order, prior):
+        alpha = None if prior == "default" else uneven[order]
         m = BEAM.BeamModel(corpus, abundances=ab, order=order,
-                           max_length=4, strict=strict)
-        o = Oracle(m, AA, (3, 4))
-        tag = f"aa order {order} {'strict' if strict else 'open'}"
+                           max_length=4, alpha=alpha,
+                           alpha_length=None if alpha is None else 0.5)
+        o = Oracle(m, AA, (1, 2, 3, 4))
+        tag = f"aa order {order} {prior} prior"
 
         report(f"{tag}: normalisation", o.total, 1.0)
         report(f"{tag}: entropy", m.entropy(), o.entropy())
@@ -237,8 +234,9 @@ def tier1(report):
                    float((w * (s - k1) ** 2).sum()),
                    rel=1e-9 if abs(t) <= 1.0 else 1e-6)
 
-        # Ties are genuine in a strict world, so compare the multiset of
-        # scores rather than the order, which the tie-break may permute.
+        # Ties are genuine (sequences built only of unobserved contexts share
+        # their ancestors' rows), so compare the multiset of scores rather than
+        # the order, which the tie-break may permute.
         got = sorted(v for _, v in m.top_k_sequences(20))
         want = sorted(o.logp[o.live])[-20:]
         report(f"{tag}: top_k scores", got, want)
@@ -295,11 +293,11 @@ def tier1(report):
     # aborting the tier would hide 279 other quantities behind the first
     # one, which is the difference between a gate that localises a defect
     # and one that only says something is wrong.
-    for order, strict in configs:
+    for order, prior in configs:
         try:
-            one(order, strict)
+            one(order, prior)
         except Exception as exc:                  # noqa: BLE001
-            tag = f"aa order {order} {'strict' if strict else 'open'}"
+            tag = f"aa order {order} {prior} prior"
             report(f"{tag}: raised {type(exc).__name__}: {exc}",
                    float("nan"), 0.0)
 
@@ -309,8 +307,7 @@ def tier2(report):
     rng = np.random.default_rng(7)
     corpus = sorted({"".join(rng.choice(list("ACGT"), size=int(rng.integers(4, 6))))
                      for _ in range(300)})
-    m = BEAM.BeamModel(corpus, alphabet="nt", order=2, max_length=5,
-                       strict=False)
+    m = BEAM.BeamModel(corpus, alphabet="nt", order=2, max_length=5)
     o = Oracle(m, NT, (5,))
     q = BEAM.BeamQuery(m)
     seqs, cp = o.at(5)

@@ -2,8 +2,11 @@
 
 Where a quantity can be checked against brute force it is, and the nucleotide
 alphabet is used for that on purpose -- 5**5 is 3,125 sequences and walkable in
-Python, where 20**5 is not. The identities are checked on amino acids, where
-they are not enumerable but are still required to hold.
+Python, where 20**5 is not. Every one of them is in the support: the prior
+gives every string over the alphabet up to max_length a positive probability,
+so a brute-force sum has to walk the whole length-5 space, not just what the
+corpus spelled. The identities are checked on amino acids, where they are not
+enumerable but are still required to hold.
 """
 from __future__ import annotations
 
@@ -29,20 +32,31 @@ def nt_model():
     seqs = ["ACGT", "ACGA", "TCGT",
             "ACGTA", "ACGTT", "AGGTA", "ACCTA", "ACGAA", "TCGTA", "ACGTG",
             "ACGTAC", "ACGTTA", "AGGTAC", "ACGTAA"]
-    return BeamModel(seqs, alphabet="nt", order=2, max_length=8, strict=False)
+    return BeamModel(seqs, alphabet="nt", order=2, max_length=8)
 
 
 @pytest.fixture(scope="module")
 def aa_model():
+    """Order 2 and max_length 11, the one length every test here queries.
+
+    The identities below hold at any order, and every length-11 context is now
+    live, so the trellis is the full 20**order contexts per layer rather than
+    the handful this corpus spells. At order 3 a single pair joint is a
+    twenty-sweep job over ~4M edges each, and the information matrix is 221 of
+    them; order 2 checks the same identities in seconds."""
     import random
     random.seed(11)
     seqs = ["CASS" + "".join(random.choice("LGQPV") for _ in range(4)) + "QYF"
             for _ in range(500)]
-    return BeamModel(seqs, order=3)
+    return BeamModel(seqs, order=2, max_length=11)
 
 
 def _support(model, length, alphabet=NT):
-    """Every sequence of `length` with non-zero probability, and its mass."""
+    """Every sequence of `length`, and its mass conditional on the length.
+
+    That is every string over the alphabet: the prior leaves none at zero. The
+    zero filter stays so that a string wrongly scored ``-inf`` drops out of the
+    sums and shows up as a mismatch rather than as a crash."""
     out = {}
     for combo in itertools.product(alphabet, repeat=length):
         s = "".join(combo)
@@ -256,13 +270,22 @@ def test_multiplicity_recovers_the_per_edit_convention(nt_model):
 
 
 def test_a_neighbourhood_says_when_the_length_prior_rules_it_out(nt_model):
-    """All-zero posteriors have two causes and they need telling apart."""
+    """All-zero posteriors need telling apart from a real answer.
+
+    The length prior gives every length up to max_length some mass, including
+    ones the corpus never produced, so the only length it rules out is one past
+    max_length. Inserting into a max_length string is that case.
+    """
     q = BeamQuery(nt_model)
     good = q.insertions("ACGTA")            # length 6 is producible
     assert good[0]["length_producible"] is True
     assert sum(r["posterior"] for r in good) == pytest.approx(1.0, abs=EXACT)
 
-    edge = q.insertions("ACGTAC")           # length 7 is not
+    unseen = q.insertions("ACGTACG")        # length 8: no corpus string, but
+    assert unseen[0]["length_producible"] is True       # the prior covers it
+    assert sum(r["posterior"] for r in unseen) == pytest.approx(1.0, abs=EXACT)
+
+    edge = q.insertions("ACGTACGT")         # length 9 > max_length=8
     assert edge, "the neighbourhood is still enumerated"
     assert all(r["posterior"] == 0.0 for r in edge)
     assert edge[0]["length_producible"] is False, \
@@ -355,7 +378,7 @@ def test_a_condition_that_pins_a_position_is_told_by_that_position(nt_model):
         "knowing position 0 settles the condition entirely"
     # The rest say far less, and what they do say DECAYS with distance,
     # because a pinned residue reaches its neighbours only through the
-    # context window. Measured here: 0.042, 0.029, 0.007, 0.002.
+    # context window. Measured here: 0.019, 0.0043, 0.00047, 0.000035.
     #
     # This used to be asserted as a flat "< 0.01". That held while the
     # per-position term was a geometric blend of an order-4, an order-3 and

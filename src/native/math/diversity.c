@@ -61,28 +61,12 @@ static BeamError tilted_log_z(const BeamModel *m, uint32_t len, double alpha,
 
     for (uint32_t i = 0; i < len; ++i) {
         double wmax = -INFINITY;
-        /* The frontier shortcut is only sound where the layer maximum can be
-         * had without building the whole layer, and `beam_layer_weights_live`
-         * documents that a caller asking for `out_max` does not qualify: its
-         * fused maximum scans only the rows it built. Taking the max over the
-         * reached set alone changes the per-layer rescale and therefore the
-         * last bits, which is exactly what happened here -- the open-world
-         * Hill numbers moved at every order, because in the open world a
-         * state can carry the layer maximum and still be unreachable.
-         *
-         * On a sparse table `beam_layer_max` walks the occupied rows and is
-         * cheap, and its answer IS the maximum over all states: a missing row
-         * reads -inf and cannot win a maximum. On a dense table it would have
-         * to build the layer anyway, so there the original full build stays,
-         * unchanged and trivially identical. Sparse is the closed-world
-         * default and is what the per-repertoire work uses. */
-        if (m->cfg.sparse) {
-            wmax = beam_layer_max(m, i, len);
-            beam_reached_mask(L, i, S, alive);
-            beam_layer_weights_live(m, i, len, w, NULL, alive);
-        } else {
-            beam_layer_weights(m, i, len, w, &wmax);
-        }
+        /* The whole layer, and its fused maximum over every state. There
+         * used to be a frontier shortcut for sparse tables, sound because a
+         * missing row read -inf and could not carry the maximum; under the
+         * hierarchical prior no row is missing, so the maximum needs every
+         * state and the full build is the one that computes it. */
+        beam_layer_weights(m, i, len, w, &wmax);
         if (wmax == -INFINITY) goto dead;
         const double amax = beam_tilted_layer_max(w, cur, S, R, alpha,
                                                   wmax);
@@ -204,28 +188,12 @@ static BeamError expected_raw(const BeamModel *m, uint32_t len, double *out) {
 
     for (uint32_t i = 0; i < len; ++i) {
         double wmax = -INFINITY;
-        /* The frontier shortcut is only sound where the layer maximum can be
-         * had without building the whole layer, and `beam_layer_weights_live`
-         * documents that a caller asking for `out_max` does not qualify: its
-         * fused maximum scans only the rows it built. Taking the max over the
-         * reached set alone changes the per-layer rescale and therefore the
-         * last bits, which is exactly what happened here -- the open-world
-         * Hill numbers moved at every order, because in the open world a
-         * state can carry the layer maximum and still be unreachable.
-         *
-         * On a sparse table `beam_layer_max` walks the occupied rows and is
-         * cheap, and its answer IS the maximum over all states: a missing row
-         * reads -inf and cannot win a maximum. On a dense table it would have
-         * to build the layer anyway, so there the original full build stays,
-         * unchanged and trivially identical. Sparse is the closed-world
-         * default and is what the per-repertoire work uses. */
-        if (m->cfg.sparse) {
-            wmax = beam_layer_max(m, i, len);
-            beam_reached_mask(L, i, S, alive);
-            beam_layer_weights_live(m, i, len, w, NULL, alive);
-        } else {
-            beam_layer_weights(m, i, len, w, &wmax);
-        }
+        /* The whole layer, and its fused maximum over every state. There
+         * used to be a frontier shortcut for sparse tables, sound because a
+         * missing row read -inf and could not carry the maximum; under the
+         * hierarchical prior no row is missing, so the maximum needs every
+         * state and the full build is the one that computes it. */
+        beam_layer_weights(m, i, len, w, &wmax);
         if (wmax == -INFINITY) { *out = 0.0; goto out; }
 
         /* Accumulate by TARGET rather than by source. The scatter

@@ -30,9 +30,10 @@ def _logsumexp(values: np.ndarray, axis: int | None = None) -> Any:
 
     numpy's own reduction is not usable here: shifting by the maximum gives
     ``-inf - -inf`` when every term is ``-inf``, and NaN is exactly the wrong
-    answer for a sequence no member spells. The whole closed world rests on
-    ``-inf`` meaning "probability zero" all the way to the caller, so the
-    all-dead case is short-circuited rather than computed.
+    answer for a sequence no member can represent (a length past
+    ``max_length``, a character outside the alphabet). ``-inf`` means
+    "probability zero" all the way to the caller, so the all-dead case is
+    short-circuited rather than computed.
     """
     values = np.asarray(values, dtype=np.float64)
     mx = np.max(values, axis=axis, keepdims=True)

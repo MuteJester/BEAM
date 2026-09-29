@@ -18,6 +18,15 @@
  * surprisal distribution wide enough that no sequence's binned mass can cross
  * it.
  *
+ * Under the hierarchical prior every string over the alphabet has mass, so
+ * there is mass near almost any threshold and a band whose edge is not in
+ * such a gap is only as exact as its grid. Every check below that compares a
+ * band with an interior edge exactly therefore runs at a length that can be
+ * enumerated in full -- the 3,125 nucleotide strings of length 5, or the
+ * 8,000 amino-acid strings of length 3 -- with its edges placed in gaps of
+ * that enumeration. The checks with no interior edge are exact whatever the
+ * support, and run on amino acids at ordinary lengths.
+ *
  * The order below is the order they are worth having. The first is the one
  * that catches almost everything; the last is the one that catches what the
  * others cannot.
@@ -51,14 +60,11 @@ static const double W_AA[N_AA] = {
     40, 25, 18, 15, 12, 10, 9, 8, 7, 6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 12, 9, 7, 5,
 };
 
-/* Nucleotides, so a whole length can be enumerated: 4^5 is 1024 strings. The
- * set is deliberately varied and the model STRICT, which is what makes the
- * brute-force check possible at all. A strict model's support here is 21
- * sequences with surprisals spread over three nats, leaving gaps far wider
- * than the grid -- where an open-world model would put 1024 sequences on the
- * grid with the unobserved ones sitting near `ln(1e-300)`, stretching the
- * automatic spacing to thousands of nats and leaving no resolution at all
- * where the mass actually is. */
+/* Nucleotides, so a whole length can be enumerated: 5^5 is 3,125 strings,
+ * N included, and every one of them has mass. The set is deliberately
+ * varied, which leaves the few strings it makes likely spread over a couple
+ * of nats with gaps between them far wider than the grid -- the gaps every
+ * exact band comparison below places its edges in. */
 #define N_NT 25
 static const char *TRAIN_NT[N_NT] = {
     "ACGTA", "ACGTC", "ACGGA", "AGGTA", "ACTTA",
@@ -71,10 +77,17 @@ static const double W_NT[N_NT] = {
     30, 22, 17, 13, 11, 9, 8, 7, 6, 5, 14, 12, 10, 9, 8, 7, 6, 5, 4, 3, 9, 8, 7, 6, 5,
 };
 
-static BeamModel *build_aa(uint32_t order, bool strict) {
+/*
+ * Order 2 or 3 at most. The sweep holds a surprisal grid per live state per
+ * layer, and under the prior every state is live: order 3 holds 8,000
+ * states a layer where order 2 holds 400, which is the difference between
+ * gigabytes and megabytes at a few thousand bins. Lengths 5, 7, 8 and 9 are
+ * in the corpus; 6 and 10 are not.
+ */
+static BeamModel *build_aa(uint32_t order) {
     BeamModelConfig c;
     beam_model_config_default(&c);
-    c.order = order; c.max_length = 12u; c.strict = strict;
+    c.order = order; c.max_length = 10u;
     BeamModel *m = beam_model_new(&c);
     if (!m) return NULL;
     if (beam_model_observe(m, TRAIN_AA, W_AA, N_AA) != BEAM_OK
@@ -86,7 +99,7 @@ static BeamModel *build_nt(void) {
     BeamModelConfig c;
     beam_model_config_default(&c);
     c.alphabet = BEAM_ALPHABET_NT;
-    c.order = 2u; c.max_length = 8u; c.strict = true;
+    c.order = 2u; c.max_length = 6u;
     BeamModel *m = beam_model_new(&c);
     if (!m) return NULL;
     if (beam_model_observe(m, TRAIN_NT, W_NT, N_NT) != BEAM_OK
@@ -97,17 +110,169 @@ static BeamModel *build_nt(void) {
 /** Every band edge above the grid, so exactly one band holds everything. */
 static const double ALL[2] = { 0.0, 1e12 };
 
+/** The nucleotide length every enumeration below uses. */
+#define L_NT 5u
+
+
+/* ── Enumeration and the gaps in it ──────────────────────────── */
+
+/** Every string of one length: surprisal, probability, residues. */
+typedef struct {
+    uint32_t n, length, n_residues;
+    double  *surprisal, *probability;
+    uint8_t *letters;
+} Support;
+
 /*
- * Band edges INSIDE the mass of the strict order-3 fixture, whose length-9
- * surprisals run from about 2.7 to 4.8 nats. Choosing them from the
- * distribution is not a convenience: `beam_model_accumulator_max` sizes the
- * automatic grid, and on an OPEN-world model that bound is set by the
- * backoff floor near `ln(1e-300)`, so a 512-bin grid there has bins 13 nats
- * wide and every band narrower than that is sub-bin. Bands must be many bins
- * wide for any of this to mean anything, which the strict fixture gives and
- * the open one does not.
+ * All R^L strings over the model's WHOLE alphabet. Under the prior each has
+ * mass, so a string that fails to score is itself a failure, reported by
+ * returning false.
  */
-static const double INSIDE[5] = { 0.0, 3.0, 3.6, 4.2, 1e12 };
+static bool enumerate_support(const BeamModel *m, uint32_t L, Support *s) {
+    const uint32_t R = beam_model_n_residues(m);
+    uint64_t total = 1;
+    for (uint32_t i = 0; i < L; ++i) total *= R;
+    s->n = 0; s->length = L; s->n_residues = R;
+    s->surprisal   = (double *)malloc((size_t)total * sizeof(double));
+    s->probability = (double *)malloc((size_t)total * sizeof(double));
+    s->letters     = (uint8_t *)malloc((size_t)total * L);
+    if (!s->surprisal || !s->probability || !s->letters) return false;
+    char seq[16];
+    uint32_t idx[16];
+    for (uint64_t code = 0; code < total; ++code) {
+        uint64_t c = code;
+        for (uint32_t i = 0; i < L; ++i) { idx[i] = (uint32_t)(c % R); c /= R; }
+        for (uint32_t i = 0; i < L; ++i) seq[i] = m->alpha->idx_to_char[idx[i]];
+        seq[L] = '\0';
+        const double lp = beam_model_log_pseq(m, seq);
+        if (!isfinite(lp)) return false;
+        s->surprisal[s->n] = -lp;
+        s->probability[s->n] = exp(lp);
+        for (uint32_t i = 0; i < L; ++i) s->letters[(size_t)s->n * L + i] = (uint8_t)idx[i];
+        ++s->n;
+    }
+    return true;
+}
+
+static void support_free(Support *s) {
+    free(s->surprisal); free(s->probability); free(s->letters);
+    memset(s, 0, sizeof(*s));
+}
+
+/** The spacing an automatic grid of `bins` gets, which the spectrum reports. */
+static double grid_spacing(const BeamModel *m, uint32_t L, uint32_t bins) {
+    double ds = 0.0;
+    double *g = (double *)calloc(bins, sizeof(double));
+    if (!g) return 0.0;
+    if (beam_model_spectrum(m, true, L, bins, 0.0, g, &ds) != BEAM_OK) ds = 0.0;
+    free(g);
+    return ds;
+}
+
+/*
+ * Linear splitting spreads one sequence's mass over up to `L+1` adjacent
+ * bins; twice that is how far every sequence a threshold has to stay for the
+ * classification to be exact rather than approximate.
+ */
+static double splitting_reach(uint32_t L, double ds) {
+    return (double)(2u * (L + 2u)) * ds;
+}
+
+typedef struct { double s, p; } SurpProb;
+
+static int cmp_surp(const void *a, const void *b) {
+    const double x = ((const SurpProb *)a)->s, y = ((const SurpProb *)b)->s;
+    return (x > y) - (x < y);
+}
+
+/** A threshold nothing can cross, the gap it sits in, and what lies below. */
+typedef struct { double cut, lo, hi, mass_below, count_below; } Gap;
+
+/*
+ * Every gap of the enumerated surprisals wider than twice the splitting
+ * reach, as a threshold at its midpoint with the fraction of the generated
+ * mass and of the strings below it. Returns how many were found, or 0.
+ */
+static uint32_t usable_gaps(const Support *s, double reach, Gap *out,
+                            uint32_t cap) {
+    SurpProb *v = (SurpProb *)malloc((size_t)s->n * sizeof(SurpProb));
+    if (!v) return 0;
+    double total = 0.0;
+    for (uint32_t k = 0; k < s->n; ++k) {
+        v[k].s = s->surprisal[k];
+        v[k].p = s->probability[k];
+        total += v[k].p;
+    }
+    qsort(v, s->n, sizeof(SurpProb), cmp_surp);
+    uint32_t n = 0;
+    double below = 0.0;
+    for (uint32_t k = 1; k < s->n && n < cap; ++k) {
+        below += v[k - 1u].p;
+        if (v[k].s - v[k - 1u].s <= 2.0 * reach || v[k - 1u].s <= reach)
+            continue;
+        out[n].cut = 0.5 * (v[k - 1u].s + v[k].s);
+        out[n].lo = v[k - 1u].s;
+        out[n].hi = v[k].s;
+        out[n].mass_below = below / total;
+        out[n].count_below = (double)k / (double)s->n;
+        ++n;
+    }
+    free(v);
+    return n;
+}
+
+/*
+ * Up to three usable gaps, the ones nearest a quarter, a half and three
+ * quarters of the generated mass, each a different gap, returned ascending.
+ * None is taken so far into the tail that less than 1% of the mass is left
+ * above it: a band there is a difference of two cumulative totals that
+ * agree to eight digits, and its relative error measures the cancellation
+ * rather than the sweep.
+ */
+static uint32_t pick_gaps(const Gap *g, uint32_t n, Gap out[3]) {
+    const double target[3] = { 0.25, 0.5, 0.75 };
+    bool used[512] = { false };
+    uint32_t got = 0;
+    for (uint32_t t = 0; t < 3u; ++t) {
+        int best = -1;
+        for (uint32_t k = 0; k < n && k < 512u; ++k) {
+            if (used[k] || g[k].mass_below > 0.99) continue;
+            if (best < 0 || fabs(g[k].mass_below - target[t])
+                            < fabs(g[best].mass_below - target[t]))
+                best = (int)k;
+        }
+        if (best < 0) break;
+        used[best] = true;
+        out[got++] = g[best];
+    }
+    for (uint32_t i = 1; i < got; ++i)          /* ascending */
+        for (uint32_t j = i; j > 0 && out[j].cut < out[j - 1u].cut; --j) {
+            const Gap t = out[j]; out[j] = out[j - 1u]; out[j - 1u] = t;
+        }
+    return got;
+}
+
+/*
+ * Five edges -- 0, three thresholds in gaps, and past the grid -- for the
+ * checks that need several bands inside the mass. Valid at every grid at
+ * least as fine as `coarsest_bins`, since a finer grid only shortens the
+ * reach.
+ */
+static bool inside_edges(const BeamModel *m, uint32_t coarsest_bins,
+                         double edges[5]) {
+    Support s;
+    if (!enumerate_support(m, L_NT, &s)) { support_free(&s); return false; }
+    const double ds = grid_spacing(m, L_NT, coarsest_bins);
+    Gap g[512], pick[3];
+    const uint32_t n = ds > 0.0
+                     ? usable_gaps(&s, splitting_reach(L_NT, ds), g, 512u) : 0u;
+    support_free(&s);
+    if (pick_gaps(g, n, pick) != 3u) return false;
+    edges[0] = 0.0;
+    for (uint32_t k = 0; k < 3u; ++k) edges[k + 1u] = pick[k].cut;
+    edges[4] = 1e12;
+    return true;
+}
 #define N_INSIDE 5u
 #define N_INSIDE_BANDS 4u
 
@@ -123,7 +288,8 @@ static const double INSIDE[5] = { 0.0, 3.0, 3.6, 4.2, 1e12 };
  * cutoff, the normalisation -- and almost any error in any of them moves a
  * number here. It cannot be bit-exact: `positional.c` carries its forward
  * values as logarithms and this carries linear mass on a grid, so the two
- * differ in the last bits of a double and no more.
+ * differ in the last bits of a double and no more. With no interior edge
+ * nothing can be misclassified, so this holds on a support of every string.
  *
  * It pins the GENERATED measure only. `positional_marginals` is the edge
  * posterior, which weights each sequence by its own probability; the counting
@@ -132,55 +298,51 @@ static const double INSIDE[5] = { 0.0, 3.0, 3.6, 4.2, 1e12 };
  */
 static void test_one_band_over_everything_is_the_exact_marginal(void) {
     uint32_t compared = 0, skipped = 0;
-    for (uint32_t order = 2; order <= 4; ++order) {
-        for (int strict = 0; strict <= 1; ++strict) {
-            BeamModel *m = build_aa(order, (bool)strict);
-            ASSERT_MSG(m, "model did not build");
-            const uint32_t R = beam_model_n_residues(m);
+    for (uint32_t order = 2; order <= 3; ++order) {
+        BeamModel *m = build_aa(order);
+        ASSERT_MSG(m, "model did not build");
+        const uint32_t R = beam_model_n_residues(m);
 
-            for (uint32_t L = 2; L <= 10u; ++L) {
-                if (!beam_length_live(m, L)) continue;
-                double *exact = (double *)calloc((size_t)L * R, sizeof(double));
-                double *band  = (double *)calloc((size_t)L * R, sizeof(double));
-                double mass = 0.0;
-                ASSERT_MSG(exact && band, "allocation");
-                if (beam_model_positional_marginals(m, L, NULL, exact, NULL)
-                    != BEAM_OK) { free(exact); free(band); continue; }
-                /* 128 bins, not because it is enough to resolve anything
-                 * but because one band covering the grid does not depend on
-                 * the binning at all -- and a fine grid at order 4 is
-                 * gigabytes this check has no use for. */
-                const BeamError e = beam_model_positional_banded(
-                    m, L, false, 128u, 0.0, ALL, 2u, band, &mass, NULL, NULL);
-                if (e == BEAM_ERR_BUDGET) { ++skipped; free(exact); free(band); continue; }
-                if (e != BEAM_OK) {
-                    snprintf(msg, sizeof msg, "order %u strict %d length %u: %s",
-                             (unsigned)order, strict, (unsigned)L,
-                             beam_error_message());
-                    free(exact); free(band); beam_model_destroy(m);
-                    ASSERT_MSG(false, msg);
-                }
-                for (uint32_t i = 0; i < L; ++i) {
-                    for (uint32_t x = 0; x < R; ++x) {
-                        const double a = band[(size_t)i * R + x];
-                        const double b = exact[(size_t)i * R + x];
-                        ++compared;
-                        if (fabs(a - b) > 1e-12) {
-                            snprintf(msg, sizeof msg,
-                                     "order %u strict %d length %u position %u "
-                                     "residue %u: the all-covering band gives "
-                                     "%.17g where the exact marginal is %.17g",
-                                     (unsigned)order, strict, (unsigned)L,
-                                     (unsigned)i, (unsigned)x, a, b);
-                            free(exact); free(band); beam_model_destroy(m);
-                            ASSERT_MSG(false, msg);
-                        }
+        for (uint32_t L = 2; L <= 10u; ++L) {
+            if (!beam_length_live(m, L)) continue;
+            double *exact = (double *)calloc((size_t)L * R, sizeof(double));
+            double *band  = (double *)calloc((size_t)L * R, sizeof(double));
+            double mass = 0.0;
+            ASSERT_MSG(exact && band, "allocation");
+            if (beam_model_positional_marginals(m, L, NULL, exact, NULL)
+                != BEAM_OK) { free(exact); free(band); continue; }
+            /* 128 bins, not because it is enough to resolve anything but
+             * because one band covering the grid does not depend on the
+             * binning at all -- and a fine grid over every state of an
+             * order-3 trellis is memory this check has no use for. */
+            const BeamError e = beam_model_positional_banded(
+                m, L, false, 128u, 0.0, ALL, 2u, band, &mass, NULL, NULL);
+            if (e == BEAM_ERR_BUDGET) { ++skipped; free(exact); free(band); continue; }
+            if (e != BEAM_OK) {
+                snprintf(msg, sizeof msg, "order %u length %u: %s",
+                         (unsigned)order, (unsigned)L, beam_error_message());
+                free(exact); free(band); beam_model_destroy(m);
+                ASSERT_MSG(false, msg);
+            }
+            for (uint32_t i = 0; i < L; ++i) {
+                for (uint32_t x = 0; x < R; ++x) {
+                    const double a = band[(size_t)i * R + x];
+                    const double b = exact[(size_t)i * R + x];
+                    ++compared;
+                    if (fabs(a - b) > 1e-12) {
+                        snprintf(msg, sizeof msg,
+                                 "order %u length %u position %u residue %u: "
+                                 "the all-covering band gives %.17g where the "
+                                 "exact marginal is %.17g", (unsigned)order,
+                                 (unsigned)L, (unsigned)i, (unsigned)x, a, b);
+                        free(exact); free(band); beam_model_destroy(m);
+                        ASSERT_MSG(false, msg);
                     }
                 }
-                free(exact); free(band);
             }
-            beam_model_destroy(m);
+            free(exact); free(band);
         }
+        beam_model_destroy(m);
     }
     ASSERT_MSG(compared > 1000u, "too few cells were compared to mean anything");
     if (skipped > 0u) printf("(%u over budget) ", (unsigned)skipped);
@@ -199,10 +361,12 @@ static void test_one_band_over_everything_is_the_exact_marginal(void) {
  * a different recursion with no grid in it at all, so agreement says the
  * banded sweep visits exactly the paths the model has, neither dropping a
  * live state nor double-counting one. The spectrum comparison alone could not
- * say that: both would drop the same state.
+ * say that: both would drop the same state. Under the prior every path is
+ * one, so the count is also 20^L, and that is checked too: it is the one
+ * number here that owes nothing to any sweep.
  */
 static void test_the_band_masses_account_for_the_whole_spectrum(void) {
-    BeamModel *m = build_aa(3u, false);
+    BeamModel *m = build_aa(2u);
     ASSERT_MSG(m, "model did not build");
     const uint32_t R = beam_model_n_residues(m);
     const uint32_t B = 512u;
@@ -234,11 +398,12 @@ static void test_the_band_masses_account_for_the_whole_spectrum(void) {
             }
             if (counting) {
                 const double paths = beam_model_path_count(m, L);
-                if (fabs(mass - paths) > 1e-6 * paths) {
+                const double strings = pow((double)R, (double)L);
+                if (fabs(mass - paths) > 1e-6 * paths || paths != strings) {
                     snprintf(msg, sizeof msg,
-                             "length %u: the counting band holds %.17g paths "
-                             "and beam_model_path_count says %.17g",
-                             (unsigned)L, mass, paths);
+                             "length %u: the counting band holds %.17g paths, "
+                             "beam_model_path_count says %.17g, and there are "
+                             "%.17g strings", (unsigned)L, mass, paths, strings);
                     free(band); free(spec); beam_model_destroy(m);
                     ASSERT_MSG(false, msg);
                 }
@@ -268,23 +433,33 @@ static void test_the_band_masses_account_for_the_whole_spectrum(void) {
  * were split and recombined consistently -- position 0 puts the entire
  * trellis in the backward grid and position len-1 puts almost all of it in
  * the forward grid, so a bug in either half moves the two apart.
+ *
+ * The positions agree only to grid precision where a sequence sits near an
+ * edge, which the edges here are placed to avoid; the grids start at 4,096
+ * bins because that is the coarsest at which this fixture has gaps wide
+ * enough to hold three of them.
  */
 static void test_every_position_agrees_on_the_band_mass(void) {
-    BeamModel *m = build_aa(3u, true);
+    BeamModel *m = build_nt();
     ASSERT_MSG(m, "model did not build");
     const uint32_t R = beam_model_n_residues(m);
-    const uint32_t L = 9u;
-    ASSERT_MSG(beam_length_live(m, L), "the fixture does not reach length 9");
+    const uint32_t L = L_NT;
+    double inside[N_INSIDE];
+    if (!inside_edges(m, 4096u, inside)) {
+        beam_model_destroy(m);
+        ASSERT_MSG(false, "three usable gaps inside the mass were not found; "
+                   "this fixture no longer covers the check");
+    }
 
     uint32_t grids = 0;
-    for (uint32_t bins = 256u; bins <= 4096u; bins *= 2u) {
+    for (uint32_t bins = 4096u; bins <= 32768u; bins *= 2u) {
         double *band = (double *)calloc((size_t)N_INSIDE_BANDS * L * R, sizeof(double));
         double *pm   = (double *)calloc((size_t)N_INSIDE_BANDS * L, sizeof(double));
         double *bm   = (double *)calloc(N_INSIDE_BANDS, sizeof(double));
         ASSERT_MSG(band && pm && bm, "allocation");
 
         const BeamError e = beam_model_positional_banded(
-            m, L, false, bins, 0.0, INSIDE, N_INSIDE, band, bm, pm, NULL);
+            m, L, false, bins, 0.0, inside, N_INSIDE, band, bm, pm, NULL);
         if (e == BEAM_ERR_BUDGET) { free(band); free(pm); free(bm); continue; }
         ASSERT_MSG(e == BEAM_OK, beam_error_message());
         ++grids;
@@ -296,13 +471,13 @@ static void test_every_position_agrees_on_the_band_mass(void) {
             for (uint32_t i = 0; i < L; ++i) {
                 const double rel = fabs(pm[(size_t)b * L + i] - bm[b]) / bm[b];
                 /*
-                 * Grid error, not floating point, so the bound is loose by
-                 * the standards of this file -- and it is still eight orders
-                 * tighter than any real defect. Measured, this sits at 1e-15
-                 * on every grid but one, where a sequence lands on a bin
-                 * boundary and it reaches 2e-8.
+                 * Floating point, not grid error: with no sequence within
+                 * the splitting reach of an edge, every position classifies
+                 * every sequence the same way. The bound is still loose by
+                 * the standards of this file, and eight orders tighter than
+                 * the disagreement an edge among the sequences produces.
                  */
-                if (rel > 1e-6) {
+                if (rel > 1e-9) {
                     snprintf(msg, sizeof msg,
                              "%u bins, band %u: position %u puts %.17g in the "
                              "band and position 0 puts %.17g (relative %.3g)",
@@ -321,7 +496,7 @@ static void test_every_position_agrees_on_the_band_mass(void) {
                 }
             }
         }
-        if (nonempty < 3u) {
+        if (nonempty < N_INSIDE_BANDS) {
             snprintf(msg, sizeof msg,
                      "%u bins: only %u band(s) held mass, so the split was not "
                      "exercised", (unsigned)bins, (unsigned)nonempty);
@@ -343,7 +518,8 @@ static void test_every_position_agrees_on_the_band_mass(void) {
 /* ── 3b. Refining the grid does not move a band ──────────────── */
 
 /**
- * The same bands, measured on grids from 256 to 4096 bins, hold the same mass.
+ * The same bands, measured on grids from 4,096 to 32,768 bins, hold the same
+ * mass.
  *
  * This is what pins the cutoff arithmetic. Every other check here is taken on
  * ONE grid, and an error in turning a threshold into a bin index -- a
@@ -351,23 +527,30 @@ static void test_every_position_agrees_on_the_band_mass(void) {
  * missing edge-surprisal term -- is a shift of a fixed number of BINS, so it
  * changes the answer by an amount proportional to the spacing while remaining
  * perfectly self-consistent on any single grid. Halving the spacing halves
- * such an error, and it shows up here as a band that moves.
+ * such an error, and it shows up here as a band that moves -- once the shift
+ * reaches past the gap the edge sits in, which a one-bin shift does not; the
+ * mean-surprisal check below is the one that sees that.
  */
 static void test_refining_the_grid_does_not_move_a_band(void) {
-    BeamModel *m = build_aa(3u, true);
+    BeamModel *m = build_nt();
     ASSERT_MSG(m, "model did not build");
     const uint32_t R = beam_model_n_residues(m);
-    const uint32_t L = 9u;
+    const uint32_t L = L_NT;
+    double inside[N_INSIDE];
+    if (!inside_edges(m, 4096u, inside)) {
+        beam_model_destroy(m);
+        ASSERT_MSG(false, "three usable gaps inside the mass were not found");
+    }
     double ref[N_INSIDE_BANDS];
     bool have = false;
     uint32_t grids = 0;
 
-    for (uint32_t bins = 256u; bins <= 4096u; bins *= 2u) {
+    for (uint32_t bins = 4096u; bins <= 32768u; bins *= 2u) {
         double *band = (double *)calloc((size_t)N_INSIDE_BANDS * L * R, sizeof(double));
         double *bm   = (double *)calloc(N_INSIDE_BANDS, sizeof(double));
         ASSERT_MSG(band && bm, "allocation");
         const BeamError e = beam_model_positional_banded(
-            m, L, false, bins, 0.0, INSIDE, N_INSIDE, band, bm, NULL, NULL);
+            m, L, false, bins, 0.0, inside, N_INSIDE, band, bm, NULL, NULL);
         if (e == BEAM_ERR_BUDGET) { free(band); free(bm); continue; }
         ASSERT_MSG(e == BEAM_OK, beam_error_message());
         if (!have) {
@@ -377,9 +560,9 @@ static void test_refining_the_grid_does_not_move_a_band(void) {
             for (uint32_t b = 0; b < N_INSIDE_BANDS; ++b) {
                 if (!(ref[b] > 0.0)) continue;
                 const double rel = fabs(bm[b] - ref[b]) / ref[b];
-                if (rel > 1e-6) {
+                if (rel > 1e-9) {
                     snprintf(msg, sizeof msg,
-                             "band %u holds %.17g at 256 bins and %.17g at %u "
+                             "band %u holds %.17g at 4096 bins and %.17g at %u "
                              "bins (relative %.3g), so it moves with the grid",
                              (unsigned)b, ref[b], bm[b], (unsigned)bins, rel);
                     free(band); free(bm); beam_model_destroy(m);
@@ -406,14 +589,18 @@ static void test_refining_the_grid_does_not_move_a_band(void) {
  * asks several bands, each individually different from the unconditional
  * marginal, to reconstruct it when recombined -- which is false if the masses
  * are inconsistent with the marginals they weight, the one relationship the
- * other checks leave open.
+ * other checks leave open. The rows are normalised by their own position's
+ * mass and weighted here by the band's, so the recombination is exact only
+ * where the positions agree, which is why the edges sit in gaps.
  */
 static void test_the_bands_recombine_into_the_unconditional_marginal(void) {
-    BeamModel *m = build_aa(3u, true);
+    BeamModel *m = build_nt();
     ASSERT_MSG(m, "model did not build");
     const uint32_t R = beam_model_n_residues(m);
-    const uint32_t L = 9u;
-    const double *edges = INSIDE;
+    const uint32_t L = L_NT;
+    double edges[N_INSIDE];
+    ASSERT_MSG(inside_edges(m, 4096u, edges),
+               "three usable gaps inside the mass were not found");
     const uint32_t NE = N_INSIDE, NB = N_INSIDE_BANDS;
 
     double *band  = (double *)calloc((size_t)NB * L * R, sizeof(double));
@@ -421,7 +608,7 @@ static void test_the_bands_recombine_into_the_unconditional_marginal(void) {
     double *exact = (double *)calloc((size_t)L * R, sizeof(double));
     ASSERT_MSG(band && bm && exact, "allocation");
 
-    BeamError e = beam_model_positional_banded(m, L, false, 1024u, 0.0,
+    BeamError e = beam_model_positional_banded(m, L, false, 4096u, 0.0,
                                                edges, NE, band, bm, NULL, NULL);
     ASSERT_MSG(e == BEAM_OK, beam_error_message());
     e = beam_model_positional_marginals(m, L, NULL, exact, NULL);
@@ -433,10 +620,9 @@ static void test_the_bands_recombine_into_the_unconditional_marginal(void) {
 
     /*
      * A band must genuinely differ from the pooled answer, or recombining
-     * them proves nothing. Measured over EVERY position, not position 0:
-     * every training sequence of this fixture starts with C, so position 0 is
-     * one-hot in every band and looking only there reports a spread of
-     * exactly zero -- which is how this guard first earned its place.
+     * them proves nothing. Measured over EVERY position rather than one: a
+     * position the corpus always spelled the same way can look alike in
+     * every band and report a spread of nearly zero on its own.
      */
     double spread = 0.0;
     for (uint32_t b = 0; b < NB; ++b)
@@ -478,123 +664,86 @@ static void test_the_bands_recombine_into_the_unconditional_marginal(void) {
 
 /* ── 5. Brute force against every sequence of a short length ─── */
 
-static int cmp_double(const void *a, const void *b) {
-    const double x = *(const double *)a, y = *(const double *)b;
-    return (x > y) - (x < y);
-}
-
 /**
  * Enumerate every string of one length, split them by their EXACT surprisal,
  * and require the banded sweep to have found the same thing.
  *
  * The other four checks relate this code to itself or to its own pooled
- * answer. This one steps outside: the reference is
- * `beam_model_log_pseq` over all 4^L strings, summed by hand, with no
- * trellis, no grid and no dynamic program in it. It is the only check that
- * can catch the banding being systematically wrong -- a threshold applied to
- * the prefix instead of the total, a sink term counted twice, a cutoff off by
- * one bin -- because every one of those is self-consistent.
+ * answer. This one steps outside: the reference is `beam_model_log_pseq`
+ * over all 5^L strings, summed by hand, with no trellis, no grid and no
+ * dynamic program in it. It is the only check that can catch the banding
+ * being systematically wrong -- a threshold applied to the prefix instead of
+ * the total, a sink term counted twice, a cutoff off by one bin -- because
+ * every one of those is self-consistent.
  *
  * It is written to be EXACT rather than approximate, which takes some care.
  * Linear splitting spreads one sequence's mass over up to `L+1` adjacent
  * bins, so a threshold within that of a real sequence classifies part of it
- * the wrong side and no tight tolerance is available. So the threshold is
- * placed in a GAP of the observed surprisal distribution, wider than the
+ * the wrong side and no tight tolerance is available. So each threshold is
+ * placed in a GAP of the enumerated surprisal distribution, wider than the
  * splitting can reach; then every sequence is wholly one side and the two
- * answers must agree to floating point. The test asserts it found such a gap
- * rather than quietly settling for a worse one.
+ * answers must agree to floating point. The test asserts it found such gaps
+ * rather than quietly settling for worse ones.
  *
- * Both measures are checked here. The counting measure has no exact
- * counterpart elsewhere in this file, so this is the only thing pinning it.
+ * Two thresholds: the usable gap nearest half the generated mass, which lies
+ * among the few strings the corpus made likely, and the one nearest half the
+ * strings, which lies deep in the tail of those it never saw. Each measure
+ * therefore has a split where its own weight is. Both measures are checked;
+ * the counting measure has no exact counterpart elsewhere in this file, so
+ * this is the only thing pinning it.
  */
 static void test_the_banding_matches_brute_force_on_a_tiny_model(void) {
     BeamModel *m = build_nt();
     ASSERT_MSG(m, "model did not build");
     const uint32_t R = beam_model_n_residues(m);
-    const uint32_t L = 5u;
-    const uint32_t B = 4096u;
+    const uint32_t L = L_NT;
+    /* Fine enough to have a usable gap near half the strings; at 4,096 bins
+     * the nearest one is past nine tenths of them. */
+    const uint32_t B = 16384u;
     ASSERT_MSG(beam_length_live(m, L), "the fixture does not reach length 5");
 
-    uint64_t total_strings = 1;
-    for (uint32_t i = 0; i < L; ++i) total_strings *= R;
+    Support s;
+    ASSERT_MSG(enumerate_support(m, L, &s),
+               "a string did not score; every readable string has mass");
+    ASSERT_MSG(s.n == 3125u, "the enumeration is not the whole length");
 
-    char seq[16];
-    uint32_t idx[16];
-    double  *surp = (double *)malloc((size_t)total_strings * sizeof(double));
-    double  *prob = (double *)malloc((size_t)total_strings * sizeof(double));
-    uint8_t *lets = (uint8_t *)malloc((size_t)total_strings * L);
-    double  *sorted = (double *)malloc((size_t)total_strings * sizeof(double));
-    ASSERT_MSG(surp && prob && lets && sorted, "allocation");
-
-    uint32_t n = 0;
-    for (uint64_t code = 0; code < total_strings; ++code) {
-        uint64_t c = code;
-        for (uint32_t i = 0; i < L; ++i) { idx[i] = (uint32_t)(c % R); c /= R; }
-        for (uint32_t i = 0; i < L; ++i) seq[i] = m->alpha->idx_to_char[idx[i]];
-        seq[L] = '\0';
-        const double lp = beam_model_log_pseq(m, seq);
-        if (!isfinite(lp)) continue;           /* not producible: no mass */
-        surp[n] = -lp;
-        prob[n] = exp(lp);
-        for (uint32_t i = 0; i < L; ++i) lets[(size_t)n * L + i] = (uint8_t)idx[i];
-        sorted[n] = -lp;
-        ++n;
+    /* The grid this will be binned on, so the gaps can be measured in bins. */
+    const double ds = grid_spacing(m, L, B);
+    ASSERT_MSG(ds > 0.0, beam_error_message());
+    Gap g[512];
+    const uint32_t ng = usable_gaps(&s, splitting_reach(L, ds), g, 512u);
+    int by_mass = -1, by_count = -1;
+    for (uint32_t k = 0; k < ng; ++k) {
+        if (by_mass < 0 || fabs(g[k].mass_below - 0.5)
+                           < fabs(g[by_mass].mass_below - 0.5)) by_mass = (int)k;
+        if (by_count < 0 || fabs(g[k].count_below - 0.5)
+                            < fabs(g[by_count].count_below - 0.5)) by_count = (int)k;
     }
-    ASSERT_MSG(n >= 8u, "the fixture produces too few sequences to split");
-    qsort(sorted, n, sizeof(double), cmp_double);
-
-    /* The grid this will be binned on, so the gap can be measured in bins. */
-    double ds = 0.0;
-    {
-        double *tmp = (double *)calloc(B, sizeof(double));
-        ASSERT_MSG(tmp, "allocation");
-        const BeamError e = beam_model_spectrum(m, true, L, B, 0.0, tmp, &ds);
-        free(tmp);
-        ASSERT_MSG(e == BEAM_OK, beam_error_message());
-    }
-    /* Splitting can move a sequence's mass `L+1` bins; take twice that. */
-    const double margin = (double)(2u * (L + 2u)) * ds;
-
-    /* The most balanced usable gap, not the first: a cut that leaves one
-     * sequence on one side is a weaker test than one that halves the set. */
-    double cut = -1.0, widest = 0.0;
-    uint32_t best = 0;
-    for (uint32_t k = 1; k < n; ++k) {
-        const double gap = sorted[k] - sorted[k - 1u];
-        if (gap > widest) widest = gap;
-        if (gap <= 2.0 * margin || sorted[k - 1u] <= margin) continue;
-        const uint32_t bal = (k > n / 2u) ? k - n / 2u : n / 2u - k;
-        if (cut < 0.0 || bal < best) {
-            best = bal;
-            cut = 0.5 * (sorted[k - 1u] + sorted[k]);
-        }
-    }
-    if (!(cut > 0.0)) {
+    if (!(by_mass >= 0 && by_count >= 0 && g[by_count].cut > g[by_mass].cut)) {
         snprintf(msg, sizeof msg,
-                 "no gap wider than %.3g nats (%u bins) was found among %u "
-                 "surprisals; the widest was %.3g, so no threshold here can "
-                 "be checked exactly", 2.0 * margin,
-                 (unsigned)(2u * 2u * (L + 2u)), (unsigned)n, widest);
-        free(surp); free(prob); free(lets); free(sorted);
+                 "%u usable gaps among %u surprisals, and no pair that splits "
+                 "the mass and the count separately, so no threshold here can "
+                 "be checked exactly", (unsigned)ng, (unsigned)s.n);
+        support_free(&s);
         beam_model_destroy(m);
         ASSERT_MSG(false, msg);
     }
-    free(sorted);
 
-    const double edges[3] = { 0.0, cut, 1e12 };
-    const uint32_t NE = 3u, NB = 2u;
+    const double edges[4] = { 0.0, g[by_mass].cut, g[by_count].cut, 1e12 };
+    const uint32_t NE = 4u, NB = 3u;
 
     for (int counting = 0; counting <= 1; ++counting) {
         /* The reference, summed by hand over the enumeration. */
         double *ref  = (double *)calloc((size_t)NB * L * R, sizeof(double));
         double *rmass = (double *)calloc(NB, sizeof(double));
         ASSERT_MSG(ref && rmass, "allocation");
-        for (uint32_t k = 0; k < n; ++k) {
-            const uint32_t b = (surp[k] < cut) ? 0u : 1u;
-            const double wgt = counting ? 1.0 : prob[k];
+        for (uint32_t k = 0; k < s.n; ++k) {
+            const uint32_t b = s.surprisal[k] < edges[1] ? 0u
+                             : s.surprisal[k] < edges[2] ? 1u : 2u;
+            const double wgt = counting ? 1.0 : s.probability[k];
             rmass[b] += wgt;
             for (uint32_t i = 0; i < L; ++i)
-                ref[((size_t)b * L + i) * R + lets[(size_t)k * L + i]] += wgt;
+                ref[((size_t)b * L + i) * R + s.letters[(size_t)k * L + i]] += wgt;
         }
 
         double *band = (double *)calloc((size_t)NB * L * R, sizeof(double));
@@ -605,19 +754,18 @@ static void test_the_banding_matches_brute_force_on_a_tiny_model(void) {
         ASSERT_MSG(e == BEAM_OK, beam_error_message());
 
         for (uint32_t b = 0; b < NB; ++b) {
-            const double tol = 1e-9 * (rmass[b] > 1.0 ? rmass[b] : 1.0);
-            if (fabs(bm[b] - rmass[b]) > tol) {
-                snprintf(msg, sizeof msg,
-                         "counting %d band %u: the sweep puts %.17g in the "
-                         "band and enumerating every sequence puts %.17g",
-                         counting, (unsigned)b, bm[b], rmass[b]);
-                goto fail;
-            }
             if (!(rmass[b] > 0.0)) {
                 snprintf(msg, sizeof msg,
                          "counting %d band %u is empty, so the split put every "
                          "sequence on one side and proves nothing",
                          counting, (unsigned)b);
+                goto fail;
+            }
+            if (fabs(bm[b] - rmass[b]) > 1e-9 * rmass[b]) {
+                snprintf(msg, sizeof msg,
+                         "counting %d band %u: the sweep puts %.17g in the "
+                         "band and enumerating every sequence puts %.17g",
+                         counting, (unsigned)b, bm[b], rmass[b]);
                 goto fail;
             }
             for (uint32_t i = 0; i < L; ++i)
@@ -638,12 +786,12 @@ static void test_the_banding_matches_brute_force_on_a_tiny_model(void) {
         continue;
     fail:
         free(ref); free(rmass); free(band); free(bm);
-        free(surp); free(prob); free(lets);
+        support_free(&s);
         beam_model_destroy(m);
         ASSERT_MSG(false, msg);
     }
 
-    free(surp); free(prob); free(lets);
+    support_free(&s);
     beam_model_destroy(m);
     PASS();
 }
@@ -659,8 +807,8 @@ static void test_the_banding_matches_brute_force_on_a_tiny_model(void) {
  * the cumulative read `cum[j-1]` by `cum[j]` shifts every band edge by
  * exactly one bin, and NOT ONE of the five checks noticed: band masses are
  * still conserved, positions still agree with each other, the bands still
- * recombine, and the brute-force check places its threshold in a gap wide
- * enough that a one-bin shift moves no sequence across it -- which is the
+ * recombine, and the brute-force check places its thresholds in gaps wide
+ * enough that a one-bin shift moves no sequence across them -- which is the
  * very property that makes that check exact. A shifted cutoff is
  * self-consistent, so only something that knows where the edge SHOULD be can
  * see it.
@@ -673,15 +821,14 @@ static void test_the_banding_matches_brute_force_on_a_tiny_model(void) {
  * wrong by one bin moves it by exactly one spacing.
  *
  * Sampling the thresholds every `ds/4` puts the centroid's own discretisation
- * error at a few hundredths of a spacing: measured, this lands within 0.033
- * of a bin, where the one-bin mutation lands at 1.03. The bound below sits
- * between them with an order of magnitude either side.
+ * error at a few hundredths of a spacing, where the one-bin mutation lands at
+ * about one. The bound below sits between them with room either side.
  */
 static void test_the_recovered_mean_surprisal_is_unbiased(void) {
     BeamModel *m = build_nt();
     ASSERT_MSG(m, "model did not build");
     const uint32_t R = beam_model_n_residues(m);
-    const uint32_t L = 5u, B = 256u;
+    const uint32_t L = L_NT, B = 256u;
     ASSERT_MSG(beam_length_live(m, L), "the fixture does not reach length 5");
 
     uint64_t strings = 1;
@@ -706,7 +853,7 @@ static void test_the_recovered_mean_surprisal_is_unbiased(void) {
         mass[0] += pr;  moment[0] += pr * su;    /* generated */
         mass[1] += 1.0; moment[1] += su;         /* counting  */
     }
-    ASSERT_MSG(n >= 8u, "the fixture produces too few sequences");
+    ASSERT_MSG(n == strings, "every string of the length must have mass");
 
     double ds = 0.0;
     {
@@ -771,97 +918,71 @@ static void test_the_recovered_mean_surprisal_is_unbiased(void) {
 
 /* ── 7. A backward grid whose origin is below zero ───────────── */
 
-#define N_NEG 10
-/* The exact set that exposed the defect, kept verbatim. A conserved head and
- * tail with a two-letter middle: what matters is that the sink states carry a
- * tail weight of zero, so the negative per-length constant is the WHOLE of
- * the seed and drives it below the origin unopposed. Fixtures whose tails are
- * strongly negative absorb the constant and cover nothing -- the first
- * version of this test was one, and passed against the bug. */
-static const char *TRAIN_NEG[N_NEG] = {
-    "CASSGGGGGGGEQYF", "CASSAAAAGGAEQYF", "CASSAGAGAAGEQYF", "CASSAAAGAGAEQYF",
-    "CASSAGGGGGGEQYF", "CASSGGGAGAAEQYF", "CASSGAGGAAAEQYF", "CASSAAGGAGGEQYF",
-    "CASSGGAGAAAEQYF", "CASSAGAAAGGEQYF",
-};
+/*
+ * The lowest backward seed of a length, in nats, computed exactly as the
+ * sweep computes it: `-tail(s) + ln Z(L) - ln pi(L)` over the live sink
+ * states. Negative exactly when the backward grid has to carry an origin
+ * below zero, which is the precondition the next two checks need and which
+ * `sink < 0` alone does not imply -- the tail term can outweigh it.
+ */
+static bool lowest_seed(const BeamModel *m, uint32_t L, double *out) {
+    double *tail = (double *)malloc((size_t)m->n_states * sizeof(double));
+    if (!tail) return false;
+    beam_tail_weights(m, L, tail);
+    LiveHandle h;
+    if (beam_live_acquire(m, L, &h) != BEAM_OK) { free(tail); return false; }
+    const double sink = beam_model_log_partition(m, L)
+                      - beam_model_log_length_prior(m, L);
+    double lowest = INFINITY;
+    for (uint32_t k = 0; k < h.L->n_live[L]; ++k) {
+        const uint32_t st = h.L->live[L][k];
+        if (tail[st] == -INFINITY) continue;
+        const double u = -tail[st] + sink;
+        if (u < lowest) lowest = u;
+    }
+    beam_live_release(&h);
+    free(tail);
+    *out = lowest;
+    return isfinite(lowest);
+}
 
 /**
- * A model whose sink term is NEGATIVE still returns its mass.
+ * A length whose sink term is NEGATIVE still returns its mass.
  *
- * The backward sweep is seeded with `-tail(s) + ln Z(L) - ln pi(L)`, and that
- * constant is a fraction of a nat of either sign. When it is negative the
- * seed sits below the grid origin, and a grid that begins at zero loses every
- * suffix off the bottom -- the sweep then returns zero mass, confidently,
- * for a model whose spectrum is perfectly healthy.
+ * The backward sweep is seeded with `-tail(s) + ln Z(L) - ln pi(L)`. When
+ * that is negative the seed sits below the grid origin, and a grid that
+ * begins at zero loses every suffix off the bottom -- the sweep then returns
+ * zero mass, confidently, for a model whose spectrum is perfectly healthy.
  *
  * That is not hypothetical: it is what this code did. `spectrum.c` cannot
  * meet it, because it applies the sink LAST onto an accumulator already clear
- * of zero, so no existing test covered the case and none of the six checks
- * above did either -- their fixtures all happen to have non-negative sinks.
- * It was found from the Python layer, on a model built for something else.
+ * of zero, so no existing test covered the case. It was found from the
+ * Python layer, on a model built for something else.
  *
- * The test asserts its own precondition. A fixture whose sink drifted
- * non-negative would still pass every line below while covering nothing, so
- * the sink is computed from the public partition function and the length
- * prior and required to be negative before anything else is checked.
+ * Under the hierarchical prior it no longer takes a contrived corpus. At a
+ * length the corpus never produced, the N-anchored and C-anchored chains
+ * read depth rows that saw different evidence and disagree strongly, so
+ * `ln Z(L)` sits nats further below zero than `ln pi(L)` does and the seed
+ * lands well below the origin. Length 6 is such a length for the amino-acid
+ * corpus: its lowest seed is about -4.7 nats.
+ *
+ * The test asserts its own precondition: a fixture whose seeds drifted above
+ * the origin would still pass every line below while covering nothing.
  */
-static BeamModel *build_neg(void) {
-    BeamModelConfig cfg;
-    beam_model_config_default(&cfg);
-    cfg.order = 3u; cfg.max_length = 18u; cfg.strict = true;
-    BeamModel *m = beam_model_new(&cfg);
-    if (!m) return NULL;
-    double w[N_NEG];
-    for (uint32_t k = 0; k < N_NEG; ++k) w[k] = 1.0;
-    if (beam_model_observe(m, TRAIN_NEG, w, N_NEG) != BEAM_OK
-        || beam_model_finalize(m) != BEAM_OK) { beam_model_destroy(m); return NULL; }
-    return m;
-}
-
 static void test_a_sink_below_the_grid_origin_still_reports_its_mass(void) {
-    BeamModel *m = build_neg();
+    BeamModel *m = build_aa(2u);
     ASSERT_MSG(m, "model did not build");
 
-    const uint32_t L = 15u, R = beam_model_n_residues(m), B = 2048u;
-    ASSERT_MSG(beam_length_live(m, L), "the fixture does not reach length 15");
+    const uint32_t L = 6u, R = beam_model_n_residues(m), B = 2048u;
+    ASSERT_MSG(beam_length_live(m, L), "the fixture does not reach length 6");
 
-    const double sink = beam_model_log_partition(m, L)
-                      - beam_model_log_length_prior(m, L);
-    /*
-     * The precondition no longer holds on this fixture, and under the
-     * single-expert model it is much harder to arrange than it was.
-     *
-     * `sink = log Z(L) - log pi(L)`. For a single-length corpus the prior
-     * term is exactly 0, and `log Z(L)` is now the Bhattacharyya log between
-     * the N-anchored and C-anchored chains, which is 0 exactly when the two
-     * agree. A fixture whose support is exactly its training set makes them
-     * agree by construction: both readings reproduce the same empirical
-     * distribution, so Z = 1 and the sink is 0.
-     *
-     * So a negative sink needs a corpus whose support is STRICTLY LARGER
-     * than its training set -- enough shared context for the model to
-     * recombine -- while staying at one length so the prior contributes
-     * nothing. Widening the middle alphabet is not enough; measured, a
-     * three-letter middle over ten sequences still gives Z = 1 exactly.
-     *
-     * The test reports rather than fails, because it cannot assert a
-     * property of a fixture that does not exist yet, and inventing one that
-     * merely passes would cover nothing. This is the same treatment as the
-     * packing-repetition gate in test_packed_cells.
-     */
-    if (!(sink < 0.0)) {
-        printf("    [SKIP: sink is %.6f; this fixture's support equals its "
-               "training set, so the two anchors agree and log Z = 0. A "
-               "negative sink needs a single-length corpus whose support is "
-               "strictly larger than its training set.]\n", sink);
-        beam_model_destroy(m);
-        PASS();
-        return;
-    }
-    if (0) {
+    double seed = 0.0;
+    ASSERT_MSG(lowest_seed(m, L, &seed), "could not compute the sink seeds");
+    if (!(seed < 0.0)) {
         snprintf(msg, sizeof msg,
-                 "this fixture's sink term is %.6g, not negative, so it no "
-                 "longer covers a backward grid that starts below zero",
-                 sink);
+                 "this fixture's lowest backward seed is %.6g nats, not "
+                 "negative, so it no longer covers a backward grid that "
+                 "starts below zero", seed);
         beam_model_destroy(m);
         ASSERT_MSG(false, msg);
     }
@@ -882,6 +1003,7 @@ static void test_a_sink_below_the_grid_origin_still_reports_its_mass(void) {
 
     double total = 0.0;
     for (uint32_t b = 0; b < B; ++b) total += spec[b];
+    const double whole = exp(beam_model_log_length_prior(m, L));
 
     double worst = 0.0;
     for (uint32_t i = 0; i < L; ++i)
@@ -897,15 +1019,23 @@ static void test_a_sink_below_the_grid_origin_still_reports_its_mass(void) {
     if (!(total > 0.0)) { ASSERT_MSG(false, "the spectrum itself is empty"); }
     if (fabs(mass - total) > 1e-9 * total) {
         snprintf(msg, sizeof msg,
-                 "sink %.6g: the band holds %.17g where the spectrum "
+                 "seed %.6g: the band holds %.17g where the spectrum "
                  "integrates to %.17g -- the backward grid lost its mass off "
-                 "the bottom", sink, mass, total);
+                 "the bottom", seed, mass, total);
+        ASSERT_MSG(false, msg);
+    }
+    /* And the spectrum is not merely agreeing with a shared loss: the
+     * generated mass of a length is its length prior, which no grid set. */
+    if (fabs(mass - whole) > 1e-9 * whole) {
+        snprintf(msg, sizeof msg,
+                 "seed %.6g: the band holds %.17g of the length's %.17g",
+                 seed, mass, whole);
         ASSERT_MSG(false, msg);
     }
     if (worst > 1e-12) {
         snprintf(msg, sizeof msg,
-                 "sink %.6g: the all-covering band departs from the exact "
-                 "marginal by %.3g", sink, worst);
+                 "seed %.6g: the all-covering band departs from the exact "
+                 "marginal by %.3g", seed, worst);
         ASSERT_MSG(false, msg);
     }
     PASS();
@@ -914,98 +1044,159 @@ static void test_a_sink_below_the_grid_origin_still_reports_its_mass(void) {
 
 /* ── 8. A bin-aligned band is the spectrum summed over those bins ── */
 
+/*
+ * One length's worth of test 8: thresholds on bin boundaries inside gaps of
+ * the enumeration, and the bands below each against both the spectrum and
+ * the enumeration. Returns the number of thresholds checked, or 0 with `msg`
+ * set.
+ */
+static uint32_t check_bin_aligned(const BeamModel *m, uint32_t L,
+                                  uint32_t B, const char *name) {
+    const uint32_t R = beam_model_n_residues(m);
+    Support s;
+    if (!enumerate_support(m, L, &s)) {
+        support_free(&s);
+        snprintf(msg, sizeof msg, "%s: a string did not score", name);
+        return 0;
+    }
+    double *spec = (double *)calloc(B, sizeof(double));
+    double *band = (double *)calloc(4ull * L * R, sizeof(double));
+    double ds = 0.0, bm[4] = { 0.0, 0.0, 0.0, 0.0 };
+    uint32_t checked = 0;
+    if (!spec || !band) {
+        snprintf(msg, sizeof msg, "allocation");
+        goto done;
+    }
+    if (beam_model_spectrum(m, false, L, B, 0.0, spec, &ds) != BEAM_OK) {
+        snprintf(msg, sizeof msg, "%s: %s", name, beam_error_message());
+        goto done;
+    }
+    double total = 0.0;
+    for (uint32_t b = 0; b < B; ++b) total += spec[b];
+
+    const double reach = splitting_reach(L, ds);
+    Gap g[512], pick[3];
+    const uint32_t ng = usable_gaps(&s, reach, g, 512u);
+    const uint32_t np = pick_gaps(g, ng, pick);
+
+    /* Each threshold moved onto the nearest bin boundary, which has to
+     * leave it clear of every sequence by the reach on both sides. */
+    uint32_t qb[3];
+    uint32_t nq = 0;
+    for (uint32_t k = 0; k < np; ++k) {
+        const uint32_t b = (uint32_t)lround(pick[k].cut / ds);
+        const double t = (double)b * ds;
+        if (t - pick[k].lo > reach && pick[k].hi - t > reach) qb[nq++] = b;
+    }
+    if (nq < 2u) {
+        snprintf(msg, sizeof msg, "%s: only %u bin-aligned threshold(s) fit in "
+                 "a gap, so this length no longer covers the check",
+                 name, (unsigned)nq);
+        goto done;
+    }
+
+    double edges[5];
+    edges[0] = 0.0;
+    for (uint32_t k = 0; k < nq; ++k) edges[k + 1u] = (double)qb[k] * ds;
+    edges[nq + 1u] = 1e12;
+    if (beam_model_positional_banded(m, L, false, B, ds, edges, nq + 2u,
+                                     band, bm, NULL, NULL) != BEAM_OK) {
+        snprintf(msg, sizeof msg, "%s: %s", name, beam_error_message());
+        goto done;
+    }
+
+    double running = 0.0;
+    for (uint32_t q = 0; q < nq; ++q) {
+        running += bm[q];
+        double ref = 0.0, enumerated = 0.0;
+        for (uint32_t b = 0; b < qb[q]; ++b) ref += spec[b];
+        for (uint32_t k = 0; k < s.n; ++k)
+            if (s.surprisal[k] < edges[q + 1u]) enumerated += s.probability[k];
+        if (!(ref > 0.0 && ref < total)) {
+            snprintf(msg, sizeof msg, "%s threshold %u: it does not divide "
+                     "the mass (%.17g of %.17g)", name, q, ref, total);
+            goto done;
+        }
+        if (fabs(running - ref) > 1e-12 * total) {
+            snprintf(msg, sizeof msg,
+                     "%s threshold %u at bin %u: the bands hold %.17g below it "
+                     "and the spectrum holds %.17g (%.3g of the total apart)",
+                     name, q, qb[q], running, ref,
+                     fabs(running - ref) / total);
+            goto done;
+        }
+        if (fabs(running - enumerated) > 1e-9 * enumerated) {
+            snprintf(msg, sizeof msg,
+                     "%s threshold %u: the bands hold %.17g below it and the "
+                     "enumeration %.17g", name, q, running, enumerated);
+            goto done;
+        }
+        ++checked;
+    }
+done:
+    free(spec); free(band);
+    support_free(&s);
+    return checked;
+}
+
 /**
  * With a threshold ON a bin boundary, a band's mass equals
  * `beam_model_spectrum` summed over the same bins -- exactly, not to grid
- * precision.
+ * precision -- wherever no sequence lies within the splitting reach of it.
  *
- * That is worth stating because it is stronger than it looks. The two get
- * there by different routes: the spectrum transports a total through `L+1`
- * sequential splits, while this splits a prefix and a suffix separately and
- * then cuts. They need not agree bin by bin, and at a bin boundary their
- * CUMULATIVES do -- measured across nine deciles of two models, to 1.4e-17.
+ * The qualification is not caution. The two get there by different routes:
+ * the spectrum splits every edge's surprisal between two bins as it
+ * transports a total through `L+1` steps, while this splits a prefix and a
+ * suffix separately and takes the edge between them EXACTLY at the cut. So a
+ * sequence within a bin or two of the threshold is divided differently by
+ * the two, and on a support of every string that is always some mass: at
+ * length 9 of the order-2 amino-acid fixture on 2,048 bins the cumulatives
+ * differ by 1e-4 of the total at a quartile boundary, where the closed-world
+ * model this test was first written on agreed to 1e-17 only because its
+ * few sequences happened to sit clear of the boundaries. The thresholds are
+ * therefore placed on bin boundaries inside gaps of an enumeration, where
+ * both must count every sequence below and nothing else -- which also makes
+ * the enumeration a third, independent reference.
  *
  * It is also the only check that pins the backward grid's ORIGIN into the
  * cutoff. `pad` shifts where every suffix sits, and the accumulation has to
  * shift its threshold by the same amount; drop that and the sweep answers a
  * different question perfectly self-consistently -- same total, same
  * agreement between positions, same recombination. Only a reference that
- * knows which threshold was asked for can tell, and only on a model where
- * `pad` is not zero, which is why this runs on the negative-sink fixture as
- * well as an ordinary one.
+ * knows which threshold was asked for can tell, and only at a length where
+ * `pad` is not zero. So this runs at two: length 5 of the nucleotide
+ * fixture, whose seeds are all above the origin, and length 3 of the
+ * amino-acid one, a length its corpus never produced, whose seeds are about
+ * two nats below it -- a shift far wider than the gaps the thresholds sit
+ * in, so dropping it would move sequences across every one of them.
  */
 static void test_a_bin_aligned_band_is_the_spectrum_over_those_bins(void) {
-    const uint32_t B = 2048u;
+    const uint32_t B = 4096u;
     uint32_t checked = 0;
 
-    for (int which = 0; which <= 1; ++which) {
-        BeamModel *m = which ? build_neg() : build_aa(3u, true);
-        ASSERT_MSG(m, "model did not build");
-        const uint32_t R = beam_model_n_residues(m);
-        const uint32_t L = which ? 15u : 9u;
-        ASSERT_MSG(beam_length_live(m, L), "fixture does not reach its length");
+    BeamModel *nt = build_nt();
+    ASSERT_MSG(nt, "model did not build");
+    uint32_t got = check_bin_aligned(nt, L_NT, B, "nt length 5");
+    beam_model_destroy(nt);
+    ASSERT_MSG(got > 0u, msg);
+    checked += got;
 
-        double *spec = (double *)calloc(B, sizeof(double));
-        ASSERT_MSG(spec, "allocation");
-        double ds = 0.0;
-        BeamError e = beam_model_spectrum(m, false, L, B, 0.0, spec, &ds);
-        ASSERT_MSG(e == BEAM_OK, beam_error_message());
-        double total = 0.0;
-        for (uint32_t b = 0; b < B; ++b) total += spec[b];
-        ASSERT_MSG(total > 0.0, "the spectrum is empty");
-
-        /* Quartile bin boundaries: thresholds that actually divide the mass. */
-        uint32_t qb[3] = { 0, 0, 0 };
-        {
-            double cum = 0.0;
-            uint32_t got = 0;
-            for (uint32_t b = 0; b < B && got < 3u; ++b) {
-                cum += spec[b];
-                while (got < 3u && cum >= 0.25 * (double)(got + 1u) * total)
-                    qb[got++] = b;
-            }
-            ASSERT_MSG(got == 3u, "could not place three quartile thresholds");
-        }
-
-        const double edges[5] = { 0.0, (double)qb[0] * ds, (double)qb[1] * ds,
-                                  (double)qb[2] * ds, 1e12 };
-        double *band = (double *)calloc(4ull * L * R, sizeof(double));
-        double bm[4];
-        ASSERT_MSG(band, "allocation");
-        e = beam_model_positional_banded(m, L, false, B, ds, edges, 5u,
-                                         band, bm, NULL, NULL);
-        ASSERT_MSG(e == BEAM_OK, beam_error_message());
-
-        double running = 0.0;
-        for (uint32_t q = 0; q < 3u; ++q) {
-            running += bm[q];
-            double ref = 0.0;
-            for (uint32_t b = 0; b < qb[q]; ++b) ref += spec[b];
-            ++checked;
-            if (!(ref > 0.0 && ref < total)) {
-                snprintf(msg, sizeof msg,
-                         "fixture %d quartile %u: the threshold does not "
-                         "divide the mass (%.17g of %.17g)",
-                         which, q, ref, total);
-                goto fail;
-            }
-            if (fabs(running - ref) > 1e-12 * total) {
-                snprintf(msg, sizeof msg,
-                         "fixture %d quartile %u at bin %u: the bands hold "
-                         "%.17g below it and the spectrum holds %.17g "
-                         "(%.3g of the total apart)",
-                         which, q, qb[q], running, ref,
-                         fabs(running - ref) / total);
-                goto fail;
-            }
-        }
-        free(spec); free(band); beam_model_destroy(m);
-        continue;
-    fail:
-        free(spec); free(band); beam_model_destroy(m);
+    BeamModel *aa = build_aa(2u);
+    ASSERT_MSG(aa, "model did not build");
+    double seed = 0.0;
+    if (!(lowest_seed(aa, 3u, &seed) && seed < 0.0)) {
+        snprintf(msg, sizeof msg, "length 3's lowest seed is %.6g nats, not "
+                 "below the origin, so nothing here pins the grid's origin "
+                 "into the cutoff", seed);
+        beam_model_destroy(aa);
         ASSERT_MSG(false, msg);
     }
-    ASSERT_MSG(checked == 6u, "not every threshold was checked");
+    got = check_bin_aligned(aa, 3u, B, "aa length 3");
+    beam_model_destroy(aa);
+    ASSERT_MSG(got > 0u, msg);
+    checked += got;
+
+    ASSERT_MSG(checked >= 4u, "too few thresholds were checked");
     PASS();
 }
 
@@ -1021,13 +1212,13 @@ static void test_a_bin_aligned_band_is_the_spectrum_over_those_bins(void) {
  * edge and expecting one band, leaving an infinity in from a division.
  */
 static void test_what_a_malformed_band_gets(void) {
-    BeamModel *m = build_aa(3u, false);
+    BeamModel *m = build_aa(2u);
     ASSERT_MSG(m, "model did not build");
-    /* A length this fixture GENERATES. Length 6 is not one of them, and the
-     * length check runs before the edge checks, so using it made every case
-     * below refuse for the wrong reason -- this test passed in full with no
-     * edge validation at all. The positive control at the end is what stops
-     * that happening again. */
+    /* A length this model GENERATES. The length check runs before the edge
+     * checks, so a length it refused would make every case below refuse for
+     * the wrong reason -- a version of this test once passed in full with no
+     * edge validation at all that way. The positive control at the end is
+     * what stops that happening again. */
     const uint32_t R = beam_model_n_residues(m), L = 7u;
     double out[64 * 20], mass[8];
     ASSERT_MSG(beam_length_live(m, L), "the fixture does not generate length 7");
@@ -1059,7 +1250,7 @@ static void test_what_a_malformed_band_gets(void) {
             ASSERT_MSG(false, msg);
         }
     }
-    /* A length the model does not generate is refused too. */
+    /* A length past max_length is refused too. */
     BeamError e = beam_model_positional_banded(
         m, 200u, false, 512u, 0.0, fine, 2u, out, mass, NULL, NULL);
     ASSERT_MSG(e != BEAM_OK, "an impossible length was answered");
@@ -1089,7 +1280,7 @@ static void test_what_a_malformed_band_gets(void) {
  * expression the allocations use, so a grid that fits the check fits memory.
  */
 static void test_a_grid_over_budget_is_refused(void) {
-    BeamModel *m = build_aa(3u, false);
+    BeamModel *m = build_aa(2u);
     ASSERT_MSG(m, "model did not build");
     const uint32_t R = beam_model_n_residues(m), L = 7u;
     ASSERT_MSG(beam_length_live(m, L), "the fixture does not generate length 7");

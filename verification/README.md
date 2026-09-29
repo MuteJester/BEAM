@@ -47,7 +47,7 @@ it went wrong both times.
 ## Running the gate
 
 ```bash
-make clean && make test          # 66 C tests
+make clean && make test          # 331 C tests
 .venv/bin/python -m pytest tests -q     # Python suite
 .venv/bin/python verification/check.py    # the contract below
 ```
@@ -61,10 +61,10 @@ make clean && make test          # 66 C tests
 | Python public API | a moved default, a renamed keyword, a method that stopped being public |
 | pytest inventory | a test that stopped being collected -- a subset of a passing suite also passes |
 | C test inventory | the same for `RUN_TEST` cases |
-| numeric | 78 quantities, order 2/3/4 x open/strict, as hex floats |
+| numeric | 78 quantities, order 2/3/4 x default/uneven prior, as hex floats |
 | saved-model bytes | the sha256 of a written model |
 | thread independence | results at 1, 4 and 16 threads |
-| exact | 280 quantities against brute-force enumeration |
+| exact | 351 quantities against brute-force enumeration of the whole support |
 
 Every row above `exact` pins REPRODUCIBILITY: each quantity is compared with a
 recording of ITSELF, so a quantity that has been wrong since the day it was

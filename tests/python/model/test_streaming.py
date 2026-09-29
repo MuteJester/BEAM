@@ -39,6 +39,27 @@ def test_builder_is_byte_identical_to_a_one_shot_build(corpus):
     assert streamed.n_skipped == one.n_skipped
 
 
+def test_builder_carries_the_prior_strengths(corpus):
+    """The strengths are configuration, so a streamed build must be handed
+    them as a one-shot build is. The counts alone would agree either way; a
+    strength dropped on the builder's path shows only in the scores, most of
+    all in the unobserved rows that are nothing but prior."""
+    seqs, abund = corpus
+    prior = dict(alpha=(0.5, 3.0, 40.0), alpha_length=2.0)
+    one = BeamModel(seqs, abundances=abund, order=2, max_length=20, **prior)
+    b = BeamModel.builder(order=2, max_length=20, **prior)
+    b.observe(seqs, abund)
+    streamed = b.build()
+
+    assert streamed.config == one.config
+    probe = seqs[:50] + ["CASSWWWWF", "YYYY", "C"]
+    assert np.array_equal(streamed.log_pseq_batch(probe),
+                          one.log_pseq_batch(probe))
+    default = BeamModel(seqs, abundances=abund, order=2, max_length=20)
+    assert not np.array_equal(streamed.log_pseq_batch(probe),
+                              default.log_pseq_batch(probe))
+
+
 def test_builder_snapshot_is_independent_of_later_batches(corpus):
     """A convergence curve measures a snapshot and keeps ingesting. If the
     snapshot shared the builder's counts, every earlier checkpoint would

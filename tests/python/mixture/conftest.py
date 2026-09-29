@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import pytest
 
-from _tiny import POOL_A, POOL_B, support, tiny_model
+from _tiny import FAR_ALPHA, POOL_A, POOL_B, support, tiny_model
 
 
 @pytest.fixture(scope="module")
@@ -28,14 +28,18 @@ def tiny_c():
 
 @pytest.fixture(scope="module")
 def far_a():
-    """Built over POOL_A only, so it shares no sequence with `far_b`."""
-    return tiny_model(11, letters=POOL_A)
+    """Built over POOL_A only, with a weak prior.
+
+    It still spells every string `far_b` does -- every model spells every
+    string now -- but the mass the two share is far below double precision.
+    """
+    return tiny_model(11, letters=POOL_A, alpha=FAR_ALPHA)
 
 
 @pytest.fixture(scope="module")
 def far_b():
-    """Built over POOL_B only. Disjoint from `far_a` by construction."""
-    return tiny_model(12, letters=POOL_B)
+    """Built over POOL_B only. Shares almost nothing with `far_a`."""
+    return tiny_model(12, letters=POOL_B, alpha=FAR_ALPHA)
 
 
 @pytest.fixture(scope="module")
@@ -51,3 +55,13 @@ def sup_b(tiny_b):
 @pytest.fixture(scope="module")
 def sup_c(tiny_c):
     return support(tiny_c)
+
+
+@pytest.fixture(scope="module")
+def sup_far_a(far_a):
+    return support(far_a)
+
+
+@pytest.fixture(scope="module")
+def sup_far_b(far_b):
+    return support(far_b)

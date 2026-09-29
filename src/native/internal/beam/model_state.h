@@ -50,8 +50,6 @@ int beam_threads(void);
 #define BEAM_FWD    0u   /* N-anchored: indexes by distance from the front */
 #define BEAM_BWD    1u   /* C-anchored: indexes by distance from the back  */
 
-/** Floor applied before taking a log, matching the reference implementation. */
-#define BEAM_PROB_FLOOR 1e-300
 
 typedef struct BeamLiveCache BeamLiveCache;
 
@@ -118,6 +116,25 @@ struct BeamModel_ {
     BeamSparseRows sp_lp[BEAM_DIRS];
 
     /**
+     * The hierarchical prior's lower levels, finalized: `sp_lo[dir][k]` holds
+     * the level-k rows something was observed at, for k = 0..order-1, as log
+     * probabilities. The top level is `sp_lp`/`lp` above.
+     *
+     * A level-k row is addressed `depth * lo_ctx[k] + ctx_k`, with `ctx_k`
+     * packed the way that direction's FINALIZED top table is: most-distant-
+     * first forward, so the parent is `ctx_k % lo_ctx[k-1]`; nearest-first
+     * backward, so the parent is `ctx_k / radix`. A row absent here is
+     * exactly its parent, which is what `beam_lp_row` resolves; below level 0
+     * is the uniform row, `base_log` in every cell.
+     *
+     * Populated in both storage modes, because a dense top table is built
+     * from them; only the sparse lookup reads them afterwards.
+     */
+    BeamSparseRows sp_lo[BEAM_DIRS][BEAM_MAX_ORDER];
+    uint32_t lo_ctx[BEAM_MAX_ORDER + 1];   /* radix^k; lo_ctx[order] = n_ctx */
+    double   base_row[BEAM_MAX_RESIDUES];  /* log(1/R) each, tempered in place */
+
+    /**
      * Counts after observation stopped, or empty structs when they are still
      * mutable. Exactly one of these and `sp_cnt_*` holds the counts at any
      * moment; `counts_frozen` says which.
@@ -141,18 +158,9 @@ struct BeamModel_ {
     bool     compacted;
 
     /**
-     * True when no cell of any finalized table is -inf.
-     *
-     * Hierarchical backoff leaves every cell positive unless a kappa is zero,
-     * so this holds on every model the defaults produce. It is measured, not
-     * assumed: `beam_to_log_inplace` reports whether it had to floor anything.
-     *
-     * What it buys is the live-state trim (`trim_frontier` in `dp/liveness.c`). With no
-     * dead cell there is no dead edge, so liveness is a property of the
-     * trellis rather than of the weights and the whole pass collapses to a
-     * reachability sweep — no edge weights, no table reads. That halves
-     * `path_count`, `topology` and the spectrum, each of which otherwise
-     * builds every layer's weights twice.
+     * True when no cell of any finalized table is -inf, which under the
+     * hierarchical prior is always: every cell is a blend with a parent whose
+     * cells are positive, down to the uniform row.
      */
     bool     tables_all_finite;
 
