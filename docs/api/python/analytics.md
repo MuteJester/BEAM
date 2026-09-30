@@ -16,6 +16,13 @@ log_pseq_batch(sequences) -> np.ndarray
 ```
 Vectorised form, parallel where OpenMP is available. Same `-inf` convention.
 
+### log_pseq_arrow
+
+```python
+log_pseq_arrow(array) -> np.ndarray
+```
+`log_pseq_batch` for a pyarrow `string` or `large_string` column, a slice of one, or a `ChunkedArray`. It reads the column's offsets and bytes directly, so no Python string is made per sequence and no Python float per score. Every score is bit-identical to `log_pseq_batch` on the same sequences. A null is not a sequence and scores `NaN`.
+
 ### pseq
 
 ```python
@@ -43,7 +50,7 @@ log_pseq_parquet(path, *, column=None, batch_size=1_000_000,
                  out=None, dtype=np.float64) -> np.ndarray
 ```
 
-`log_pseq_chunks` is the primitive: it scores an arbitrary iterable and yields one array per chunk, never holding more than `chunk_size` sequences. The other two are it, pointed at a file.
+`log_pseq_chunks` is the primitive: it scores an arbitrary iterable and yields one array per chunk, never holding more than `chunk_size` sequences. `log_pseq_file` is it, pointed at a delimited file. `log_pseq_parquet` streams the file the same way but scores each batch with `log_pseq_arrow`, straight from its buffers.
 
 `out` takes a preallocated array or `numpy` memmap and fills it in place, which is the pattern a corpus-scale scan wants:
 

@@ -67,6 +67,7 @@ PyObject *py_log_partition(PyObject *self, PyObject *arg);
 PyObject *py_log_partition_by_layer(PyObject *self, PyObject *args);
 PyObject *py_log_pseq(PyObject *self, PyObject *args);
 PyObject *py_log_pseq_batch(PyObject *self, PyObject *args);
+PyObject *py_log_pseq_packed(PyObject *self, PyObject *args);
 PyObject *py_memory_budget(PyObject *self, PyObject *arg);
 PyObject *py_mixture_check_shape(PyObject *self, PyObject *arg);
 PyObject *py_mixture_inner_product(PyObject *self, PyObject *args);

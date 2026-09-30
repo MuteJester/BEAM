@@ -166,6 +166,7 @@ class BeamModel:
   def log_partition(self, length: 'int') -> 'float'
   def log_partition_by_layer(self, length: 'int') -> 'np.ndarray'
   def log_pseq(self, sequence: 'str') -> 'float'
+  def log_pseq_arrow(self, array: 'Any') -> 'np.ndarray'
   def log_pseq_batch(self, sequences: 'Sequence[str]') -> 'np.ndarray'
   def log_pseq_by_position(self, sequence: 'str') -> 'np.ndarray'
   def log_pseq_chunks(self, sequences: 'Iterable[str]', *, chunk_size: 'int' = 1000000)

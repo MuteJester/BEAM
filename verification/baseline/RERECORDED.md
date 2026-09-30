@@ -1951,3 +1951,30 @@ sample's expected Shannon entropy H - S(N) and so its Hill D1 exact -- and
 The gate passed on everything else before recording, `exact.py` at 411
 quantities, worst 5.8% of its tolerance. The full suite: 917 passed, 2
 skipped.
+
+# Why the baselines moved for scoring straight from Arrow buffers
+
+Re-recorded 2026-09-30, tag `prepacked`. Scoring a parquet column spent most
+of its time making a Python string per sequence and a Python float per score.
+`beam_model_log_pseq_packed` scores sequences packed end to end in one buffer
+-- a string column's bytes and offsets, as Arrow holds them -- and
+`BeamModel.log_pseq_arrow` hands it a pyarrow column directly;
+`log_pseq_parquet` now uses it. Every score is bit-identical to
+`log_pseq_batch`. Nothing that existed moved.
+
+    cbeam_methods.txt      +1 -0  log_pseq_packed                 (by hand)
+    c_public_symbols.txt   +1 -0  beam_model_log_pseq_packed      (by hand)
+    c_symbols.txt          +2 -0  the above, and beam_encode_n,
+                                  the length-bounded encoder      (by hand)
+    python_api.txt         +1 -0  BeamModel.log_pseq_arrow
+    pytest_cases.txt       +6 -0  io/test_arrow_scoring.py: bit-identity on
+                                  string and large_string columns, a slice
+                                  starting mid-buffer, a chunked column,
+                                  nulls as NaN, log_pseq_parquet
+    c_cases.txt            +1 -0  test_packed_matches_scalar_and_refuses_bad_offsets
+    numeric.json           unchanged (re-written by the recorder, byte-identical)
+    threads.json           unchanged (likewise)
+
+The gate passed on everything else before recording and on everything after,
+`exact.py` at 411 quantities, worst 5.8% of its tolerance. The full suites:
+Python 923 passed, 2 skipped; C 338 passed.

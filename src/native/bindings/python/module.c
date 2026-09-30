@@ -63,6 +63,7 @@ static PyMethodDef module_methods[] = {
     {"temper",             py_temper,                      METH_VARARGS, NULL},
     {"log_pseq",           py_log_pseq,                      METH_VARARGS, NULL},
     {"log_pseq_batch",     py_log_pseq_batch,                METH_VARARGS, NULL},
+    {"log_pseq_packed",    py_log_pseq_packed,               METH_VARARGS, NULL},
     {"explain",            py_explain,                       METH_VARARGS, NULL},
     {"log_partition",      py_log_partition,                 METH_VARARGS, NULL},
     {"log_partition_by_layer", py_log_partition_by_layer,  METH_VARARGS, NULL},

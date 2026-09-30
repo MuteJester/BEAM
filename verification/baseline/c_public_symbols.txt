@@ -47,6 +47,7 @@ beam_model_log_partition
 beam_model_log_partition_by_layer
 beam_model_log_pseq
 beam_model_log_pseq_batch
+beam_model_log_pseq_packed
 beam_model_memory_budget
 beam_model_memory_bytes
 beam_model_n_cells

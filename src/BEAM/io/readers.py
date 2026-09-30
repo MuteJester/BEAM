@@ -95,6 +95,21 @@ def _open_parquet_for_streaming(pq, path):
         return pq.ParquetFile(path)
 
 
+def _iter_parquet_column(path, column, batch_size):
+    """Yield one parquet column as pyarrow arrays, batch by batch, streamed
+    like `_iter_parquet` -- for scoring, which reads the Arrow buffers
+    directly and never needs a Python string per row."""
+    try:
+        import pyarrow.parquet as pq
+    except ImportError:                                  # pragma: no cover
+        raise ImportError("reading parquet needs pyarrow; `pip install pyarrow`") from None
+    if batch_size < 1:
+        raise ValueError(f"batch_size must be positive, got {batch_size}")
+    pf = _open_parquet_for_streaming(pq, os.fspath(path))
+    for batch in pf.iter_batches(batch_size=batch_size, columns=[column]):
+        yield batch.column(column)
+
+
 def _iter_parquet(path, sequence_column, abundance_column, batch_size):
     """Yield ``(sequences, abundances_or_None)`` chunks from a parquet file."""
     try:

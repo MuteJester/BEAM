@@ -30,6 +30,7 @@ log_partition
 log_partition_by_layer
 log_pseq
 log_pseq_batch
+log_pseq_packed
 memory_budget
 memory_bytes
 mixture_check_shape

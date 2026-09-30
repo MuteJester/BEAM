@@ -1712,6 +1712,55 @@ static void test_batch_matches_scalar(void) {
     PASS();
 }
 
+/* The packed form is log_pseq on each span of one buffer: bit for bit, for
+ * the sequences it can read and the ones it cannot, and a NUL byte inside a
+ * span makes it unreadable instead of ending it. Offsets outside the buffer
+ * or running backwards are refused before a byte is read. */
+static void test_packed_matches_scalar_and_refuses_bad_offsets(void) {
+    BeamModel *m = build(3, 12);
+    ASSERT_MSG(m != NULL, "build");
+    const char *extra[] = {"", "CASSLGEQYFAAA", "CASSXF", "cassf", "C"};
+    enum { NE = 5 };
+    char data[4096];
+    int64_t off[N_TRAIN + NE + 2];
+    const char *seqs[N_TRAIN + NE];
+    uint64_t n = 0, at = 0;
+    off[0] = 0;
+    for (uint32_t i = 0; i < N_TRAIN + NE; i++) {
+        const char *s = i < N_TRAIN ? TRAIN[i] : extra[i - N_TRAIN];
+        const size_t k = strlen(s);
+        memcpy(data + at, s, k);
+        at += k;
+        seqs[n] = s;
+        off[++n] = (int64_t)at;
+    }
+    /* one more span with a NUL inside it: "CAS\0SF" */
+    memcpy(data + at, "CAS\0SF", 6);
+    at += 6;
+    off[n + 1] = (int64_t)at;
+    double out[N_TRAIN + NE + 1];
+    ASSERT_MSG(beam_model_log_pseq_packed(m, data, at, off, n + 1, out) == BEAM_OK,
+               "packed");
+    for (uint64_t i = 0; i < n; i++) {
+        const double want = beam_model_log_pseq(m, seqs[i]);
+        ASSERT_MSG(memcmp(&out[i], &want, sizeof want) == 0,
+                   "packed must match scalar to the bit");
+    }
+    ASSERT_MSG(out[n] == -INFINITY, "a NUL inside a span makes it unreadable");
+
+    int64_t bad[3] = {0, 8, 4};
+    ASSERT_MSG(beam_model_log_pseq_packed(m, data, at, bad, 2, out)
+               == BEAM_ERR_PARAM_OUT_OF_RANGE, "decreasing offsets are refused");
+    int64_t past[2] = {0, (int64_t)at + 1};
+    ASSERT_MSG(beam_model_log_pseq_packed(m, data, at, past, 1, out)
+               == BEAM_ERR_PARAM_OUT_OF_RANGE, "a span past the data is refused");
+    int64_t neg[2] = {-1, 3};
+    ASSERT_MSG(beam_model_log_pseq_packed(m, data, at, neg, 1, out)
+               == BEAM_ERR_PARAM_OUT_OF_RANGE, "a negative offset is refused");
+    beam_model_destroy(m);
+    PASS();
+}
+
 static void test_explain_reconstructs_the_score(void) {
     BeamModel *m = build(3, 12);
     ASSERT_MSG(m != NULL, "build");
@@ -3234,6 +3283,7 @@ int main(void) {
     RUN_TEST(test_c_anchor_penalises_a_bad_terminus);
     RUN_TEST(test_rejects_unusable_sequences);
     RUN_TEST(test_batch_matches_scalar);
+    RUN_TEST(test_packed_matches_scalar_and_refuses_bad_offsets);
     RUN_TEST(test_explain_reconstructs_the_score);
 
     RUN_TEST(test_partition_normalises);

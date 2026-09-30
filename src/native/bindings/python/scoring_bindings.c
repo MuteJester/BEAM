@@ -60,6 +60,69 @@ PyObject *py_log_pseq_batch(PyObject *self, PyObject *args) {
     PyMem_Free(out);
     return list;
 }
+/* log_pseq_packed(capsule, data, offsets, out): data any bytes-like buffer
+ * (or None when every sequence is empty), offsets C-contiguous int64 with
+ * n + 1 entries, out a writable float64 array of n. Scores in place, without
+ * the GIL. */
+PyObject *py_log_pseq_packed(PyObject *self, PyObject *args) {
+    (void)self;
+    PyObject *cap, *data_obj, *off_obj, *out_obj;
+    if (!PyArg_ParseTuple(args, "OOOO", &cap, &data_obj, &off_obj, &out_obj))
+        return NULL;
+    BeamModel *m = edge_from_capsule(cap);
+    if (!m) return NULL;
+
+    Py_buffer data = {0}, off, out;
+    int have_data = 0;
+    if (data_obj != Py_None) {
+        if (PyObject_GetBuffer(data_obj, &data, PyBUF_SIMPLE) != 0) {
+            PyErr_Clear();
+            PyErr_SetString(PyExc_TypeError, "data must be a bytes-like buffer");
+            return NULL;
+        }
+        have_data = 1;
+    }
+    if (PyObject_GetBuffer(off_obj, &off, PyBUF_C_CONTIGUOUS | PyBUF_FORMAT) != 0) {
+        PyErr_Clear();
+        if (have_data) PyBuffer_Release(&data);
+        PyErr_SetString(PyExc_TypeError, "offsets must be a C-contiguous int64 array");
+        return NULL;
+    }
+    if (off.itemsize != 8 || !off.format ||
+        (strcmp(off.format, "q") != 0 && strcmp(off.format, "l") != 0) ||
+        off.len < 8) {
+        PyBuffer_Release(&off);
+        if (have_data) PyBuffer_Release(&data);
+        PyErr_SetString(PyExc_TypeError,
+                        "offsets must be int64 with at least one entry");
+        return NULL;
+    }
+    if (!get_f64_buffer(out_obj, &out, 1, "out")) {
+        PyBuffer_Release(&off);
+        if (have_data) PyBuffer_Release(&data);
+        return NULL;
+    }
+    const uint64_t n = (uint64_t)(off.len / 8) - 1u;
+    if ((uint64_t)f64_buffer_count(&out) != n) {
+        PyBuffer_Release(&out); PyBuffer_Release(&off);
+        if (have_data) PyBuffer_Release(&data);
+        PyErr_Format(PyExc_ValueError, "out holds %zd scores, offsets describe %llu",
+                     f64_buffer_count(&out), (unsigned long long)n);
+        return NULL;
+    }
+
+    BeamError err;
+    Py_BEGIN_ALLOW_THREADS
+    err = beam_model_log_pseq_packed(m, have_data ? (const char *)data.buf : NULL,
+                                     have_data ? (uint64_t)data.len : 0u,
+                                     (const int64_t *)off.buf, n, (double *)out.buf);
+    Py_END_ALLOW_THREADS
+    PyBuffer_Release(&out); PyBuffer_Release(&off);
+    if (have_data) PyBuffer_Release(&data);
+    if (err != BEAM_OK) return set_beam_error(err);
+    Py_RETURN_NONE;
+}
+
 PyObject *py_explain(PyObject *self, PyObject *args) {
     (void)self;
     PyObject *cap; const char *seq;

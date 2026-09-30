@@ -58,16 +58,54 @@ double beam_raw_log_weight(const BeamModel *m, const uint8_t *s,
     return total;
 }
 
+/* ln P of an encoded sequence: the one scoring path every entry point uses. */
+static double log_pseq_encoded(const BeamModel *m, const uint8_t *buf,
+                               uint32_t len) {
+    if (!isfinite(m->log_pi[len]) || !isfinite(m->log_z[len])) return -INFINITY;
+    const double raw = beam_raw_log_weight(m, buf, len);
+    if (raw == -INFINITY) return -INFINITY;
+    return raw + m->log_pi[len] - m->log_z[len];
+}
+
 double beam_model_log_pseq(const BeamModel *m, const char *seq) {
     if (!m || !m->finalized || !seq) return -INFINITY;
     uint8_t buf[BEAM_MAX_LENGTH_CEILING];
     uint32_t len = 0;
     if (!beam_encode(m, seq, buf, &len)) return -INFINITY;
-    if (!isfinite(m->log_pi[len]) || !isfinite(m->log_z[len])) return -INFINITY;
+    return log_pseq_encoded(m, buf, len);
+}
 
-    const double raw = beam_raw_log_weight(m, buf, len);
-    if (raw == -INFINITY) return -INFINITY;
-    return raw + m->log_pi[len] - m->log_z[len];
+BeamError beam_model_log_pseq_packed(const BeamModel *m, const char *data,
+                                     uint64_t data_len, const int64_t *offsets,
+                                     uint64_t n, double *out) {
+    if (!m || !offsets || (!out && n) || (!data && data_len))
+        return BEAM_ENULL(!m ? "model" : (!offsets ? "offsets"
+                          : (!out ? "output buffer" : "data")));
+    if (!m->finalized) return BEAM_ENOTBUILT();
+    /* The offsets are checked before any is used: a sequence outside the
+     * buffer would be read, not refused. */
+    if (offsets[0] < 0 || (uint64_t)offsets[n] > data_len)
+        return BEAM_FAIL(BEAM_ERR_PARAM_OUT_OF_RANGE,
+                         "%s: offsets run from %lld to %lld, outside the %llu "
+                         "bytes of data", __func__, (long long)offsets[0],
+                         (long long)offsets[n], (unsigned long long)data_len);
+    for (uint64_t i = 0; i < n; ++i)
+        if (offsets[i + 1] < offsets[i])
+            return BEAM_FAIL(BEAM_ERR_PARAM_OUT_OF_RANGE,
+                             "%s: offsets decrease at %llu (%lld then %lld)",
+                             __func__, (unsigned long long)i,
+                             (long long)offsets[i], (long long)offsets[i + 1]);
+#ifdef _OPENMP
+    #pragma omp parallel for schedule(static) num_threads(beam_threads())
+#endif
+    for (int64_t i = 0; i < (int64_t)n; ++i) {
+        uint8_t buf[BEAM_MAX_LENGTH_CEILING];
+        uint32_t len = 0;
+        const size_t k = (size_t)(offsets[i + 1] - offsets[i]);
+        out[i] = beam_encode_n(m, data + offsets[i], k, buf, &len)
+                     ? log_pseq_encoded(m, buf, len) : -INFINITY;
+    }
+    return BEAM_OK;
 }
 
 BeamError beam_model_log_pseq_batch(const BeamModel *m,

@@ -283,6 +283,12 @@ tests/python/insights/test_logo.py::test_the_unconditional_set_has_no_grid_at_al
 tests/python/insights/test_logo.py::test_two_conditions_at_once_are_refused[kw0]
 tests/python/insights/test_logo.py::test_two_conditions_at_once_are_refused[kw1]
 tests/python/insights/test_logo.py::test_two_conditions_at_once_are_refused[kw2]
+tests/python/io/test_arrow_scoring.py::test_a_chunked_column
+tests/python/io/test_arrow_scoring.py::test_a_slice_that_starts_mid_buffer
+tests/python/io/test_arrow_scoring.py::test_bit_identical_to_the_string_path[kind0]
+tests/python/io/test_arrow_scoring.py::test_bit_identical_to_the_string_path[kind1]
+tests/python/io/test_arrow_scoring.py::test_log_pseq_parquet_is_the_string_path_over_the_column
+tests/python/io/test_arrow_scoring.py::test_nulls_score_nan
 tests/python/io/test_parquet_streaming.py::test_streaming_and_eager_reads_return_the_same_rows
 tests/python/io/test_parquet_streaming.py::test_the_eager_reader_does_grow_with_the_file
 tests/python/io/test_parquet_streaming.py::test_the_memory_a_read_holds_does_not_grow_with_the_file

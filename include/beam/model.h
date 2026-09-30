@@ -539,6 +539,22 @@ BeamError beam_model_log_pseq_batch(const BeamModel *m,
                                        double *out);
 
 /**
+ * `beam_model_log_pseq` for `n` sequences packed end to end, as a string
+ * column arrives from Arrow or parquet: sequence `i` is the bytes
+ * `data[offsets[i] .. offsets[i+1])`, which need not be NUL-terminated.
+ * `offsets` has `n + 1` entries. Parallelised when the build has OpenMP.
+ *
+ * Each score is bit-identical to `beam_model_log_pseq` on the same bytes as
+ * a C string; a NUL byte inside a sequence makes it unreadable (-INFINITY)
+ * rather than ending it. Offsets that decrease, start below 0 or end past
+ * `data_len` are refused with BEAM_ERR_PARAM_OUT_OF_RANGE before any byte is
+ * read.
+ */
+BeamError beam_model_log_pseq_packed(const BeamModel *m, const char *data,
+                                     uint64_t data_len, const int64_t *offsets,
+                                     uint64_t n, double *out);
+
+/**
  * Per-residue decomposition of a score, for inspection and for figures.
  *
  * Writes `L` entries into each non-NULL output array, where `L` is the

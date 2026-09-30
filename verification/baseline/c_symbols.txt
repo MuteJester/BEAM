@@ -17,6 +17,7 @@ beam_crc32c
 beam_crc32c_software
 beam_crc32c_update
 beam_encode
+beam_encode_n
 beam_error_message
 beam_fb_advance
 beam_fb_alloc
@@ -94,6 +95,7 @@ beam_model_log_partition
 beam_model_log_partition_by_layer
 beam_model_log_pseq
 beam_model_log_pseq_batch
+beam_model_log_pseq_packed
 beam_model_memory_budget
 beam_model_memory_bytes
 beam_model_n_cells

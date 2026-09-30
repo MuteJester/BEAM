@@ -25,7 +25,7 @@ from ..constants import (BEAM_ALPHABET, BEAM_MAX_LENGTH,
 from . import alphabets
 from .validation import _check_int, _is_scalar_arg
 from .config import _config_args, _config_args_from_dict
-from ..io.readers import _column, _iter_delimited, _iter_parquet
+from ..io.readers import _column, _iter_delimited, _iter_parquet, _iter_parquet_column
 from ..math.saddlepoint import _normal_pdf, _normal_cdf
 from ..runtime import effective_threads, memory_budget, set_threads, threads
 
@@ -891,6 +891,40 @@ class BeamModel:
         return np.asarray(_c.log_pseq_batch(self._g, list(sequences)),
                           dtype=np.float64)
 
+    def log_pseq_arrow(self, array: Any) -> np.ndarray:
+        """:meth:`log_pseq_batch` for a pyarrow string column, read straight
+        from its buffers.
+
+        Takes a ``string`` or ``large_string`` array, a slice of one, or a
+        ``ChunkedArray``. No Python string is made per sequence and no Python
+        float per score, which is where scoring a large column spent most of
+        its time. Every score is bit-identical to :meth:`log_pseq_batch` on
+        the same sequences. A null is not a sequence and scores NaN.
+        """
+        import pyarrow as pa
+        if isinstance(array, pa.ChunkedArray):
+            parts = [self.log_pseq_arrow(c) for c in array.chunks]
+            return np.concatenate(parts) if parts else np.empty(0, dtype=np.float64)
+        if pa.types.is_string(array.type):
+            off_t = np.int32
+        elif pa.types.is_large_string(array.type):
+            off_t = np.int64
+        else:
+            raise TypeError(f"log_pseq_arrow needs a string column, got {array.type}")
+        n = len(array)
+        out = np.empty(n, dtype=np.float64)
+        if n == 0:
+            return out
+        _, offsets_buf, data_buf = array.buffers()
+        # A slice keeps the parent's buffers and starts `array.offset` into
+        # its offsets; the offsets stay absolute positions in the data.
+        offsets = np.frombuffer(offsets_buf, dtype=off_t)[
+            array.offset:array.offset + n + 1].astype(np.int64)
+        _c.log_pseq_packed(self._g, data_buf, offsets, out)
+        if array.null_count:
+            out[~array.is_valid().to_numpy(zero_copy_only=False)] = np.nan
+        return out
+
     def pseq(self, sequence, *, log: bool = False):
         """Sequence probability, for one sequence or many.
 
@@ -990,9 +1024,11 @@ class BeamModel:
             dtype: Element type when ``out`` is ``None``.
         """
         column = _default_column(column, {"alphabet": self.alphabet})
+        # Straight from the Arrow buffers (log_pseq_arrow): the same scores
+        # as log_pseq_batch, without a Python string per row.
         return self._collect(
-            (self.log_pseq_batch(chunk)
-             for chunk, _ in _iter_parquet(path, column, None, batch_size)),
+            (self.log_pseq_arrow(chunk)
+             for chunk in _iter_parquet_column(path, column, batch_size)),
             out, dtype)
 
     @staticmethod
