@@ -47,7 +47,9 @@ rigorous bound, from four terms:
   be, never by the value itself, which the error may have inflated.
 
 A value that could not be brought within the requested tolerance is returned
-with the bound it has, never silently.
+with the bound it has, never silently. Every quantity here is non-negative, so
+one no contour resolves at all is returned as 0 with relative bound 1, which
+is true of any non-negative number, and marked "unresolved".
 
 What this does NOT replace: counts of sequences in a RANGE of probability --
 the spectrum's histograms. Those are threshold counts; see
@@ -55,8 +57,12 @@ the spectrum's histograms. Those are threshold counts; see
 """
 from __future__ import annotations
 
+import contextlib
 import math
+import os
+import tempfile
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 from scipy.special import gammaln, loggamma, polygamma
@@ -141,6 +147,45 @@ def _log_ratio(w: float, z: np.ndarray) -> np.ndarray:
     return out
 
 
+def _log_ratio_matrix(w: np.ndarray, z: np.ndarray) -> np.ndarray:
+    """_log_ratio for many w at once: shape (len(z), len(w)).
+
+    The Taylor series where w >= _TAYLOR_W and |z| <= 0.3 w, the direct
+    difference elsewhere (small w, or far out on the line where only a
+    magnitude is wanted and the series would not converge).
+    """
+    w = np.asarray(w, dtype=float)
+    z = np.asarray(z, dtype=np.complex128)
+    Z = z[:, None]
+    out = np.zeros((z.size, w.size), dtype=np.complex128)
+    direct = (w[None, :] < _TAYLOR_W) | (np.abs(Z) > 0.3 * w[None, :])
+    tay_cols = ~np.all(direct, axis=0)
+    if np.any(tay_cols):
+        wt = w[tay_cols]
+        ks = np.arange(90)
+        with np.errstate(all="ignore"):
+            pg = polygamma(ks[:, None], wt[None, :])
+        pg = np.where(np.isfinite(pg), pg, 0.0)
+        acc = np.zeros((z.size, wt.size), dtype=np.complex128)
+        zp = Z.copy()
+        fact = 1.0
+        with np.errstate(all="ignore"):
+            for k in range(90):
+                fact *= (k + 1)
+                term = -pg[k][None, :] * zp / fact
+                acc += term
+                ok = ~direct[:, tay_cols]
+                if not np.any(ok) or np.nanmax(np.abs(term[ok])) <= 1e-19 * max(
+                        1.0, float(np.nanmax(np.abs(acc[ok])))):
+                    break
+                zp = zp * Z
+        out[:, tay_cols] = acc
+    if np.any(direct):
+        rows, cols = np.nonzero(direct)
+        out[rows, cols] = gammaln(w[cols]) - loggamma(w[cols] + z[rows])
+    return out
+
+
 def _log_ratio_diff(w1: float, w2: float, z: np.ndarray) -> np.ndarray:
     """_log_ratio(w1, z) - _log_ratio(w2, z), accurate when w1 is close to w2.
 
@@ -176,6 +221,22 @@ def _log_ratio_diff(w1: float, w2: float, z: np.ndarray) -> np.ndarray:
             break
         zp = zp * z
     return out
+
+
+@contextlib.contextmanager
+def _locked(path: Path):
+    """An exclusive lock beside `path`, where the platform has one."""
+    try:
+        import fcntl
+    except ImportError:          # no advisory locks: merging still helps
+        yield
+        return
+    with open(f"{path}.lock", "a") as fh:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fh, fcntl.LOCK_UN)
 
 
 def _check_depth(n, name="n") -> float:
@@ -227,6 +288,39 @@ class ExactOccupancy:
             self._real[q] = float(self._m.log_mellin(q))
         return self._real[q]
 
+    #: Orders the planning estimates minimise over. Multiples of the 0.02 the
+    #: planner snaps q to, so the lines it plans reuse these real power sums.
+    _Q_EST = np.round(np.linspace(0.0, 1.0, 11), 2)
+
+    def _log_mgrid(self) -> np.ndarray:
+        miss = [q for q in self._Q_EST if float(q) not in self._real]
+        if miss:
+            for q, v in zip(miss, self._m.log_mellin_many(np.array(miss))):
+                self._real[float(q)] = float(v)
+        return np.array([self._real[float(q)] for q in self._Q_EST])
+
+    def _estimate(self, kind: str, ns: np.ndarray) -> np.ndarray:
+        """A PLANNING estimate of R(n) or U(n): the Chernoff upper bound over
+        the grid of real orders, divided by 10.
+
+        1 - (1-p)^n <= (n p)^q, and p (1-p)^(n-1) <= p^q ((1-q)/(e(n-1)))^(1-q),
+        for every q in [0, 1]; minimising over q bounds the sum. Measured, the
+        bound sits 1 to 15 times above the truth, so a tenth of it is within
+        about an order of magnitude either way -- against the endpoints
+        min(n, D0) or min(1, D0/n), up to 1e6 above it on the foundation.
+        Only the planner reads this; it never enters a value or a bound.
+        """
+        lm = self._log_mgrid()[None, :]
+        q = self._Q_EST[None, :]
+        n = np.asarray(ns, dtype=float)[:, None]
+        if kind == "richness":
+            b = lm + q * np.log(np.maximum(n, 1e-300))
+        else:
+            with np.errstate(divide="ignore", invalid="ignore"):
+                b = lm + (1.0 - q) * np.log((1.0 - q) / (math.e * np.maximum(n - 1.0, 1e-300)))
+            b = np.where(q == 1.0, lm, b)
+        return np.exp(np.min(b, axis=1)) / 10.0
+
     def _line(self, q: float, h: float, T: float) -> _Line:
         """A line with this q, step no coarser than h and reach at least T.
 
@@ -250,6 +344,60 @@ class ExactOccupancy:
         ln = _Line(q=q, h=h, t=h * np.arange(n), log_m=np.asarray(log_m))
         self._lines.append(ln)
         return ln
+
+    def _fingerprint(self) -> np.ndarray:
+        """Exact quantities that identify the model: ln M at a few real
+        orders and the config's max_length and order."""
+        qs = np.array([0.0, 0.37, 1.73, 3.0])
+        return np.concatenate([np.asarray(self._m.log_mellin_many(qs), dtype=float),
+                               [self._max_len, float(self._m.config["order"])]])
+
+    def save_lines(self, path) -> None:
+        """Write the computed lines to `path` (npz), with the model's
+        fingerprint, for `load_lines` in a later process.
+
+        Lines already in the file are MERGED in first, under a lock, and the
+        file is replaced atomically: processes sharing one file each add what
+        they computed and lose nothing another saved, and a reader never sees
+        half a file. A file holding another model's lines is refused.
+        """
+        path = Path(path)
+        with _locked(path):
+            if path.exists():
+                self.load_lines(path)
+            arrays = {"fingerprint": self._fingerprint(),
+                      "meta": np.array([[ln.q, ln.h, ln.t.size] for ln in self._lines]
+                                       ).reshape(-1, 3)}
+            for k, ln in enumerate(self._lines):
+                arrays[f"logm_{k}"] = ln.log_m
+            fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name, suffix=".tmp")
+            try:
+                with os.fdopen(fd, "wb") as fh:
+                    np.savez(fh, **arrays)
+                os.replace(tmp, path)
+            except BaseException:
+                with contextlib.suppress(FileNotFoundError):
+                    os.unlink(tmp)
+                raise
+
+    def load_lines(self, path) -> None:
+        """Add the lines in `path` to this object's cache; of two lines with
+        the same q and step, the longer is kept. Refuses a file written for a
+        different model: a line is M on this model's support."""
+        z = np.load(path)
+        if not np.array_equal(z["fingerprint"], self._fingerprint()):
+            raise ValueError(f"{path} holds lines of a different model")
+        for k, (q, h, n) in enumerate(z["meta"]):
+            n = int(n)
+            same = [ln for ln in self._lines if ln.q == q and ln.h == h]
+            if same and same[0].t.size >= n:
+                continue
+            new = _Line(q=float(q), h=float(h), t=float(h) * np.arange(n),
+                        log_m=np.asarray(z[f"logm_{k}"]))
+            if same:
+                self._lines[self._lines.index(same[0])] = new
+            else:
+                self._lines.append(new)
 
     # ── the contour engine ──────────────────────────────────────
 
@@ -453,10 +601,6 @@ class ExactOccupancy:
         return series if series is not None and series.bound < contour.bound \
             else contour
 
-    def richness_many(self, ns) -> list[BoundedValue]:
-        """`richness` at every depth in `ns`, sharing lines between them."""
-        return [self.richness(n) for n in ns]
-
     def richness_difference(self, n1: float, n2: float) -> BoundedValue:
         """R(n1) - R(n2) as one integral, keeping the digits R(n1) and R(n2)
         share: sum_s (1-P)^{n2} - (1-P)^{n1}."""
@@ -636,6 +780,331 @@ class ExactOccupancy:
         guess = float(np.sum(counts * uniq)) * min(T, d0) / w * 0.3
         return self._solve(kernel, kernel_abs, -1.0, amp_left, amp_right, 1.0,
                            T, guess, label="cohort integral")
+
+    # ── the batch engine ────────────────────────────────────────
+
+    _CHUNK = 1024
+
+    def _integrate_many(self, ln, kmat, kabs_mat, sign, amp_left, amp_right,
+                        rate_right, n_scale, idx, extra=None):
+        """`_integrate` for many parameters at once: (values, abs bounds)."""
+        z = -ln.q + 1j * ln.t
+        w = np.full(ln.t.size, 2.0)
+        w[0] = 1.0
+        D = _TWO_PI / ln.h
+        xl = math.exp(-ln.q * D)
+        xr = math.exp(-(rate_right - ln.q) * D)
+        m_real = math.exp(self._log_mreal(ln.q))
+        dphase = (self._max_len + ln.t * self.s_max)[:, None]
+        Mv = np.exp(ln.log_m)[:, None]
+        vals = np.empty(idx.size)
+        bnds = np.empty(idx.size)
+        for lo in range(0, idx.size, self._CHUNK):
+            sub = idx[lo:lo + self._CHUNK]
+            K = kmat(z, sub)
+            I = K * Mv
+            vals[lo:lo + sub.size] = sign * (ln.h / _TWO_PI) * (w @ I.real)
+            kphase = 1.0 + ln.t[:, None] * np.log(np.maximum(n_scale[sub], 1.0))[None, :]
+            if extra is not None:
+                kphase = kphase + extra(ln, sub)
+            floor = EPS * (ln.h / _TWO_PI) * (
+                w @ (np.abs(I) * kphase + np.abs(K) * m_real * dphase))
+            tail = self._kernel_tail_many(kabs_mat, ln.q, float(ln.t[-1]), sub)
+            alias = amp_left[sub] * xl / (1 - xl) + amp_right[sub] * xr / (1 - xr)
+            bnds[lo:lo + sub.size] = 1.01 * alias + floor + 2.0 * m_real * tail / _TWO_PI
+        return vals, bnds
+
+    @staticmethod
+    def _kernel_tail_many(kabs_mat, q, T, idx):
+        """`_kernel_tail` for many parameters: an upper bound per column."""
+        ts = T * np.geomspace(1.0, 1e8, 481)
+        with np.errstate(all="ignore"):
+            vals = np.asarray(kabs_mat(-q + 1j * ts, idx), dtype=float)
+        vals = np.where(np.isfinite(vals), vals, np.inf)
+        env = np.maximum.accumulate(vals[::-1], axis=0)[::-1]
+        upper = np.sum(env[:-1] * np.diff(ts)[:, None], axis=0)
+        with np.errstate(all="ignore"):
+            a = np.log10(np.maximum(env[-61], 1e-300) / np.maximum(env[-1], 1e-300))
+            closing = env[-1] * ts[-1] / (a - 1.0)
+        return np.where(env[-1] == 0.0, upper,
+                        np.where(a > 1.0, upper + closing, np.inf))
+
+    def _solve_many(self, kmat, kabs_mat, sign, amp_left, amp_right,
+                    rate_right, n_scale, guess, idx, extra=None, label="contour"):
+        """Values and relative bounds for the parameters `idx`, designing and
+        computing lines only for those that cached lines do not serve."""
+        P = idx.size
+        best_v = np.full(P, np.nan)
+        best_r = np.full(P, np.inf)
+        best_l = [None] * P
+
+        def rel(v, b):
+            with np.errstate(all="ignore"):
+                return np.where(np.abs(v) > b, b / (np.abs(v) - b), np.inf)
+
+        def take(ln, pos):
+            v, b = self._integrate_many(ln, kmat, kabs_mat, sign, amp_left,
+                                        amp_right, rate_right, n_scale,
+                                        idx[pos], extra)
+            r = rel(v, b)
+            better = r < best_r[pos]
+            best_v[pos[better]] = v[better]
+            best_r[pos[better]] = r[better]
+            for j in pos[better]:
+                best_l[j] = ln
+
+        allpos = np.arange(P)
+        for ln in list(self._lines):
+            take(ln, allpos)
+        # GREEDY, ONE LINE AT A TIME. A line serves a whole band of parameters,
+        # so it is designed for ONE unresolved parameter -- the smallest scale
+        # left -- computed, and then every unresolved parameter is evaluated on
+        # it before the next is designed. Designing every parameter first and
+        # computing a line per distinct design builds many lines where one
+        # would do. A parameter its own line did not serve is redesigned with
+        # a stricter target, at most four times.
+        tries = np.zeros(P, dtype=int)
+        order = np.argsort(np.log(np.maximum(n_scale[idx], 1e-300)), kind="stable")
+        while True:
+            open_ = order[(best_r[order] > self.rel_tol) & (tries[order] < 4)]
+            if open_.size == 0:
+                break
+            j = int(open_[0])
+            i = idx[j]
+            strict = 0.1 ** max(tries[j] - 1, 0)
+            tries[j] += 1
+            est = abs(best_v[j]) if np.isfinite(best_r[j]) else guess[i]
+            q, h = self._design_qh(est, amp_left[i], amp_right[i], rate_right, strict)
+            T = self._design_T_many(kabs_mat, q, idx[[j]], np.array([est]), strict)
+            ln = self._line(q, h, T)
+            pending = np.nonzero(best_r > self.rel_tol)[0]
+            take(ln, pending)
+        out = []
+        for j in range(P):
+            ln = best_l[j]
+            if ln is None:
+                # no line resolved it: 0 is within 100% of any non-negative number
+                out.append(BoundedValue(0.0, 1.0, f"{label} unresolved"))
+                continue
+            m = f"{label} q={ln.q:g} h={ln.h:.4g}"
+            out.append(BoundedValue(float(best_v[j]), float(best_r[j]), m))
+        return out
+
+    def _design_qh(self, value_est, amp_left, amp_right, rate_right, strict):
+        target = max(self.rel_tol * 0.05 * strict, 1e-16) * max(value_est, 1e-300)
+        L = max(math.log(amp_left / target), 1.0)
+        Rr = max(math.log(max(amp_right, 1e-300) / target), 1.0)
+        a = rate_right
+        q = a * L / (L + Rr)
+        q = min(max(round(q / 0.02) * 0.02, 0.02), min(a - 0.02, 0.98))
+        D = 1.35 * max(L / q, Rr / (a - q))
+        k = math.ceil(math.log((_TWO_PI / D) / 0.12) / math.log(0.92))
+        return q, 0.12 * 0.92 ** max(k, 0)
+
+    def _design_T_many(self, kabs_mat, q, params, est, strict):
+        """The reach that brings every parameter's tail below its target."""
+        targets = np.maximum(self.rel_tol * 0.05 * strict, 1e-16) * np.maximum(est, 1e-300)
+        Ts = np.arange(8.0, 200.0 + 1e-9, 4.0)
+        with np.errstate(all="ignore"):
+            mags = np.asarray(kabs_mat(-q + 1j * Ts, params), dtype=float)
+        mags = mags * math.exp(self._log_mreal(q))
+        ok = mags < targets[None, :]
+        first = np.where(ok.any(axis=0), ok.argmax(axis=0), Ts.size - 1)
+        return float(Ts[int(first.max())])
+
+    # ── batch quantities ───────────────────────────────────────
+
+    def richness_many(self, ns) -> list[BoundedValue]:
+        """`richness` at every depth in `ns`, the contour depths as one batch
+        per line, and lines shared between them."""
+        ns = np.array([_check_depth(n) for n in np.asarray(ns, dtype=float).ravel()])
+        out: list = [None] * ns.size
+        d0 = math.exp(self.log_d0)
+        todo = []
+        for i, n in enumerate(ns):
+            if n == 0.0:
+                out[i] = BoundedValue(0.0, 0.0, "exact")
+            elif n * self.p_min > 800.0:
+                out[i] = BoundedValue(d0, math.exp(-n * self.p_min), "saturated")
+            else:
+                if self._series_ok(n):
+                    v, b = self._richness_series(n)
+                    sv = BoundedValue(v, self._rel(v, b), "series")
+                    if sv.bound <= self.rel_tol:
+                        out[i] = sv
+                        continue
+                    out[i] = sv
+                todo.append(i)
+        if todo:
+            idx = np.array(todo)
+            w_all = ns + 1.0
+
+            def kmat(z, sub):
+                return np.exp(loggamma(z)[:, None] + _log_ratio_matrix(w_all[sub], z))
+
+            def kabs_mat(z, sub):
+                return np.abs(kmat(z, sub))
+
+            def extra(ln, sub):
+                ws = w_all[sub]
+                if np.all(ws >= _TAYLOR_W):
+                    return 0.0
+                zz = (-ln.q + 1j * ln.t)[:, None]
+                ex = gammaln(ws)[None, :] + np.abs(loggamma(ws[None, :] + zz))
+                return np.where(ws[None, :] < _TAYLOR_W, ex, 0.0)
+
+            guess = np.zeros(ns.size)
+            guess[idx] = self._estimate("richness", ns[idx])
+            res = self._solve_many(kmat, kabs_mat, -1.0, np.full(ns.size, d0),
+                                   ns.copy(), 1.0, ns, guess, idx, extra=extra)
+            for i, v in zip(todo, res):
+                if out[i] is None or v.bound < out[i].bound:
+                    out[i] = v
+        return out
+
+    def novelty_many(self, ns) -> list[BoundedValue]:
+        """U(n) = sum_s P (1 - P)^(n-1), the chance that draw n is a sequence
+        not drawn before, at every n >= 1 in `ns`.
+
+        Its own Mellin kernel, Gamma(z+1) Gamma(n) / Gamma(n+1+z), rather than
+        R(n) - R(n-1): nothing is subtracted.
+        """
+        ns = np.array([_check_depth(n) for n in np.asarray(ns, dtype=float).ravel()])
+        if np.any(ns < 1.0):
+            raise ValueError("novelty needs n >= 1")
+        out: list = [None] * ns.size
+        d0 = math.exp(self.log_d0)
+        todo = []
+        K = self._K_SERIES
+        for i, n in enumerate(ns):
+            if (n - 1.0) * self.p_min - self._log_mk[0] > 746.0:
+                # U(n) <= M(1) e^{-(n-1) p_min}, below the smallest double
+                out[i] = BoundedValue(0.0, 1.0, "underflow")
+                continue
+            if self._series_ok(n - 1.0) and n - 1.0 <= K - 1:
+                # sum_k (-1)^k C(n-1, k) M(k+1)
+                logc, sgn, stop = self._binom_coeffs(n - 1.0, K - 1)
+                k = np.arange(K)
+                alt = np.where(k % 2 == 0, 1.0, -1.0)
+                with np.errstate(invalid="ignore"):
+                    terms = alt * sgn * np.exp(logc + self._log_mk[:K])
+                terms = np.where(np.isfinite(terms), terms, 0.0)
+                v = float(np.sum(terms))
+                b = 16 * EPS * float(np.sum(np.abs(terms))) + (
+                    0.0 if stop is not None else 2.0 * abs(float(terms[-1])))
+                sv = BoundedValue(v, self._rel(v, b), "series")
+                out[i] = sv
+                if sv.bound <= self.rel_tol:
+                    continue
+            todo.append(i)
+        if todo:
+            idx = np.array(todo)
+
+            def kmat(z, sub):
+                return np.exp(loggamma(z + 1.0)[:, None]
+                              + _log_ratio_matrix(ns[sub], z + 1.0))
+
+            def kabs_mat(z, sub):
+                return np.abs(kmat(z, sub))
+
+            def extra(ln, sub):
+                ws = ns[sub]
+                if np.all(ws >= _TAYLOR_W):
+                    return 0.0
+                zz = (-ln.q + 1.0 + 1j * ln.t)[:, None]
+                ex = gammaln(ws)[None, :] + np.abs(loggamma(ws[None, :] + zz))
+                return np.where(ws[None, :] < _TAYLOR_W, ex, 0.0)
+
+            amp_left = d0 * np.minimum(1.0, 1.0 / np.maximum(ns, 1.0))
+            guess = np.zeros(ns.size)
+            guess[idx] = self._estimate("novelty", ns[idx])
+            res = self._solve_many(kmat, kabs_mat, 1.0, amp_left,
+                                   np.ones(ns.size), 1.0, ns, guess, idx,
+                                   extra=extra, label="contour")
+            for i, v in zip(todo, res):
+                if out[i] is None or v.bound < out[i].bound:
+                    out[i] = v
+        return out
+
+    def private_at_depth(self, depths, *, total_depth: float) -> dict:
+        """Per repertoire of a cohort of total depth T: "distinct", R(d_i), and
+        "private", R(T) - R(T - d_i), the expected number of its sequences no
+        other member carries -- as lists of BoundedValues, in input order.
+
+        The private counts are one batch per line through the node-only
+        coefficients of `private`; the distinct counts are `richness_many`.
+        """
+        d = np.asarray(depths, dtype=float).ravel()
+        if d.size == 0 or not np.all(np.isfinite(d)) or np.any(d < 0):
+            raise ValueError("depths must be finite, non-negative and non-empty")
+        T = _check_depth(total_depth, "total_depth")
+        if np.any(d > T):
+            raise ValueError("a depth exceeds the cohort total")
+        uniq, inv = np.unique(d, return_inverse=True)
+        distinct_u = self.richness_many(uniq)
+        w = T + 1.0
+        private_u: list = [None] * uniq.size
+        fast = (w >= _TAYLOR_W) & (uniq <= 0.25 * w) & (uniq > 0) \
+            & (not self._series_ok(T))
+        for i in np.nonzero(~fast)[0]:
+            private_u[i] = self.richness_difference(T, T - float(uniq[i])) \
+                if uniq[i] > 0 else BoundedValue(0.0, 0.0, "exact")
+        fi = np.nonzero(fast)[0]
+        if fi.size:
+            dd = uniq[fi]
+            mmax = 1
+            while mmax < 60 and (dd.max() / w) ** mmax / mmax > 1e-19:
+                mmax += 1
+            pg = _polygammas(w, mmax + 100)
+            powers = np.stack([(-dd) ** m / math.factorial(m)
+                               for m in range(1, mmax + 1)])
+            d0 = math.exp(self.log_d0)
+            ecache: dict = {}
+
+            def e_coeffs(z):
+                key = (z.size, float(z[0].real), float(z[-1].imag))
+                if key in ecache:
+                    return ecache[key]
+                out = np.zeros((mmax, z.size), dtype=np.complex128)
+                for m in range(1, mmax + 1):
+                    acc = np.zeros(z.size, dtype=np.complex128)
+                    zk = np.ones_like(z)
+                    kf = 1.0
+                    for k in range(1, 100):
+                        zk = zk * z
+                        kf *= k
+                        term = pg[m - 1 + k] * zk / kf
+                        acc += term
+                        if np.max(np.abs(term)) <= 1e-19 * max(1e-300, float(np.max(np.abs(acc)))):
+                            break
+                    out[m - 1] = -acc
+                ecache[key] = out
+                return out
+
+            def kmat(z, sub):
+                if np.max(np.abs(z)) > 0.3 * w:
+                    return kabs_mat(z, sub).astype(np.complex128)
+                E = e_coeffs(z)
+                base = np.exp(loggamma(z) + _log_ratio(w, z))
+                return -base[:, None] * np.expm1(E.T @ powers[:, sub])
+
+            grow = w / (w - dd)
+
+            def kabs_mat(z, sub):
+                b = np.abs(np.exp(loggamma(z) + _log_ratio(w, z)))
+                return b[:, None] * (1.0 + grow[sub])[None, :]
+
+            amp_left = d0 * np.minimum(1.0, np.maximum(dd, 1.0) / (w - dd))
+            amp_right = np.maximum(dd, 1.0)
+            guess = dd * min(T, d0) / w * 0.3
+            res = self._solve_many(kmat, kabs_mat, -1.0, amp_left, amp_right,
+                                   1.0, np.full(dd.size, T), guess,
+                                   np.arange(dd.size), label="cohort")
+            for k, i in enumerate(fi):
+                private_u[i] = res[k]
+        return {"depth": d.tolist(),
+                "distinct": [distinct_u[i] for i in inv],
+                "private": [private_u[i] for i in inv]}
 
     def equal_depth_cohort(self, depth: float, n_repertoires: float) -> dict:
         """N repertoires of one depth: {"seen", "private"}, where

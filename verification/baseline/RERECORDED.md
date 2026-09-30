@@ -1888,3 +1888,26 @@ orders and the vertical line, each against the enumerated sum as
 M / M(Re q)), worst 5.8% of its tolerance. The per-edge `exp` of
 `log_mellin_complex` was made shared across orders with an equal real part
 and shift, and held bit-identical to the build before it on 44 orders.
+
+# Why the test inventory moved for batched exact occupancy
+
+Re-recorded 2026-09-30, tag `prebatch`. `ExactOccupancy` gained batch
+methods, persisted contour lines and a planner that builds one line at a time;
+no C changed, so only the test inventory moved.
+
+    pytest_cases.txt      +20 -0  analytics/test_exact_occupancy.py, ten tests
+                                  on both alphabets: novelty (and its underflow
+                                  and unresolved cases), private_at_depth, the
+                                  vectorised richness, the line round trip,
+                                  merging saves, the longer of two lines, the
+                                  refusal of another model's file, and a batch
+                                  building no more lines than one depth at a
+                                  time
+    python_api.txt         unchanged (re-written by the recorder, byte-identical)
+    c_cases.txt            unchanged (likewise)
+    numeric.json           unchanged (likewise)
+    threads.json           unchanged (likewise)
+
+The gate passed on everything else before recording, `exact.py` at 411
+quantities, worst 5.8% of its tolerance. The full suite: 899 passed, 1
+skipped.

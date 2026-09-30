@@ -423,6 +423,12 @@ eo.frequency(n, j)               # E[sequences drawn exactly j times], j >= 1
 eo.sharing(d1, d2)               # E[sequences in both of two repertoires]
 eo.private(depths)               # E[sequences seen by exactly one repertoire]
 eo.equal_depth_cohort(depth, N)  # {"seen", "private"} for N equal repertoires
+
+eo.richness_many(ns)             # R at many depths, one batch per line
+eo.novelty_many(ns)              # U(n) = sum_s P (1-P)**(n-1), n >= 1
+eo.private_at_depth(depths, total_depth=T)
+                                 # per repertoire: R(d_i) and R(T) - R(T - d_i)
+eo.save_lines(path); eo.load_lines(path)   # reuse lines across processes
 ```
 
 The `atoms` family above, computed **exactly** rather than on a grid. Every method returns a `BoundedValue`, which is `value` together with `bound`, a rigorous relative error: `|value - truth| <= bound * |truth|`. `float(v)` raises so that the bound cannot be dropped by accident.
@@ -441,7 +447,13 @@ The `atoms` family above, computed **exactly** rather than on a grid. Every meth
 | kernel rounding | carried in the phase `t ln n`, which reaches thousands of radians. |
 | DP rounding | exact relative to `M(Re q)`, the sum of the moduli, not to `|M|`. |
 
-The relative form divides by `|value| - bound`, never by the value itself. Lines are designed from those terms per depth range, computed on demand and cached; `eo.lines` lists them.
+The relative form divides by `|value| - bound`, never by the value itself. Lines are designed from those terms, computed on demand and cached; `eo.lines` lists them. A batch plans one line at a time: each is designed for the smallest depth still unresolved, and every pending depth is tried on it before the next is planned, so one line serves the whole band it can. `save_lines` writes them with a fingerprint of the model's power sums, and `load_lines` refuses a file made by any other model.
+
+**When the tolerance is out of reach**, the value comes back with the bound it has, never silently:
+
+- `method` "underflow": `U(n)` past `(n-1) p_min = 746` is below the smallest double. The value is 0 and its bound is 1.
+- `method` "... unresolved": no line could resolve the value. Every quantity here is non-negative, so 0 with bound 1 is still true.
+- Deep in saturation (`n p_min` well above 1), `U(n)` is exponentially small and its bounds grow. The foundation does not reach this below `n = 1e100`.
 
 **Measured.**
 

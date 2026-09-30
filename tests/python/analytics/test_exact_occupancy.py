@@ -193,6 +193,128 @@ def test_an_extended_line_matches_a_computed_one(case):
     assert d.max() <= 1e-13
 
 
+def test_novelty(case):
+    """U(n) = sum_s P (1-P)^(n-1): the chance draw n is a new sequence."""
+    m, p, eo = case
+    ns = [1.0, 2.0, 50.0, 1e3, 1e6, 1e9]
+    for n, v in zip(ns, eo.novelty_many(ns)):
+        exact = float(np.sum(p * _miss(p, n - 1)))
+        _held(v, exact, tol=1e-9)
+
+
+def test_novelty_below_the_smallest_double_is_zero_and_says_so(case):
+    """Past (n-1) p_min = 745 every term of U(n) is below the smallest double:
+    the value is 0, its relative error is exactly 1, and the bound says so."""
+    m, p, eo = case
+    for n in (800.0 / eo.p_min, 1e300):
+        v = eo.novelty_many([n])[0]
+        assert (v.value, v.bound, v.method) == (0.0, 1.0, "underflow")
+        assert np.sum(p * _miss(p, n - 1)) <= np.exp(np.longdouble(-745))
+
+
+def test_novelty_short_of_its_tolerance_still_tells_the_truth(case):
+    """Deep in saturation U(n) is exponentially small and a contour cannot
+    resolve it to rel_tol; whatever bound it reports must still hold."""
+    m, p, eo = case
+    for n in (3.0 / eo.p_min, 30.0 / eo.p_min, 300.0 / eo.p_min):
+        v = eo.novelty_many([n])[0]
+        assert np.isfinite(v.value) and v.bound > 0
+        _held(v, float(np.sum(p * _miss(p, n - 1))), tol=math.inf)
+
+
+def test_richness_many_is_vectorised_and_agrees_with_one_at_a_time(case):
+    m, p, eo = case
+    ns = np.unique(np.round(np.geomspace(150.0, 1e9, 300)))
+    many = eo.richness_many(ns)
+    for n, v in zip(ns[::37], many[::37]):
+        one = eo.richness(float(n))
+        assert v.value == pytest.approx(one.value, rel=max(v.bound, one.bound) * 2 + 1e-15)
+    for n, v in zip(ns, many):
+        _held(v, float(np.sum(_seen(p, n))))
+
+
+def test_private_at_depth(case):
+    """Per repertoire: R(d_i) and R(T) - R(T - d_i), for many depths."""
+    m, p, eo = case
+    rng = np.random.default_rng(7)
+    depths = rng.integers(100, 100_000, size=400).astype(float)
+    T = float(depths.sum())
+    out = eo.private_at_depth(depths, total_depth=T)
+    for i in range(0, depths.size, 40):
+        d = depths[i]
+        _held(out["distinct"][i], float(np.sum(_seen(p, d))))
+        _held(out["private"][i], float(np.sum(_seen(p, d) * _miss(p, T - d))), tol=1e-9)
+
+
+def test_lines_survive_a_round_trip_and_refuse_another_model(case, tmp_path):
+    """Lines are expensive; a file of them serves a later process, and only
+    for the model that made them."""
+    m, p, eo = case
+    eo.richness_many([1e3, 1e6, 1e9])
+    path = tmp_path / "lines.npz"
+    eo.save_lines(path)
+    fresh = ExactOccupancy(m, rel_tol=1e-10)
+    fresh.load_lines(path)
+    assert fresh.lines == eo.lines
+    a = eo.richness(1e6)
+    b = fresh.richness(1e6)
+    assert a.value == b.value and a.bound == b.bound
+    other, _ = _enumerated("nt" if m.alphabet == "aa" else "aa")
+    with pytest.raises(ValueError):
+        ExactOccupancy(other, rel_tol=1e-10).load_lines(path)
+
+
+def test_a_batch_builds_no_more_lines_than_one_depth_at_a_time(case):
+    """Lines are the whole cost. Asked for many depths at once, the planner
+    must not build a line per depth range that one line would have served."""
+    m, p, eo = case
+    ns = np.geomspace(1e3, 1e15, 121)
+    batch = ExactOccupancy(m, rel_tol=1e-10)
+    batch.richness_many(ns)
+    one = ExactOccupancy(m, rel_tol=1e-10)
+    for n in ns:
+        one.richness_many([n])
+    assert len(batch.lines) <= len(one.lines)
+    assert sum(x[2] for x in batch.lines) <= sum(x[2] for x in one.lines)
+
+
+def test_saving_keeps_the_lines_another_process_saved(case, tmp_path):
+    """Two processes on one model each save what they computed to the same
+    file; the file ends up with both, not with whichever saved last."""
+    m, p, eo = case
+    path = tmp_path / "lines.npz"
+    a = ExactOccupancy(m, rel_tol=1e-10)
+    b = ExactOccupancy(m, rel_tol=1e-10)
+    a._line(0.5, 0.1, 10.0)
+    b._line(0.3, 0.08, 12.0)
+    a.save_lines(path)
+    b.save_lines(path)
+    later = ExactOccupancy(m, rel_tol=1e-10)
+    later.load_lines(path)
+    assert sorted(later.lines) == sorted(a.lines + [(0.3, 0.08, 151)])
+
+
+def test_loading_a_longer_line_replaces_the_shorter(case, tmp_path):
+    m, p, eo = case
+    path = tmp_path / "lines.npz"
+    short = ExactOccupancy(m, rel_tol=1e-10)
+    short._line(0.5, 0.1, 10.0)
+    long = ExactOccupancy(m, rel_tol=1e-10)
+    long._line(0.5, 0.1, 20.0)
+    long.save_lines(path)
+    short.load_lines(path)
+    assert short.lines == [(0.5, 0.1, 201)]
+
+
+def test_saving_over_another_models_lines_refuses(case, tmp_path):
+    m, p, eo = case
+    path = tmp_path / "lines.npz"
+    ExactOccupancy(m, rel_tol=1e-10).save_lines(path)
+    other, _ = _enumerated("nt" if m.alphabet == "aa" else "aa")
+    with pytest.raises(ValueError):
+        ExactOccupancy(other, rel_tol=1e-10).save_lines(path)
+
+
 def test_rejects_bad_depths(case):
     m, p, eo = case
     for bad in (-1.0, math.nan, math.inf):
