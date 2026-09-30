@@ -929,7 +929,9 @@ class ExactOccupancy:
 
     def _integrate_many(self, ln, kmat, kabs_mat, sign, amp_left, amp_right,
                         rate_right, n_scale, idx, extra=None, alias_fn=None):
-        """`_integrate` for many parameters at once: (values, abs bounds).
+        """`_integrate` for many parameters at once: (values, abs bounds,
+        abs rounding floors) -- the floor being the part of the bound that
+        rounding sets, which no finer or longer line removes.
 
         `alias_fn(ln, sub, D)`, where given, is the quantity's own aliasing
         bound for the parameters `sub`; otherwise it is the two geometric
@@ -946,6 +948,7 @@ class ExactOccupancy:
         Mv = np.exp(ln.log_m)[:, None]
         vals = np.empty(idx.size)
         bnds = np.empty(idx.size)
+        flrs = np.empty(idx.size)
         for lo in range(0, idx.size, self._CHUNK):
             sub = idx[lo:lo + self._CHUNK]
             K = kmat(z, sub)
@@ -962,7 +965,8 @@ class ExactOccupancy:
             else:
                 alias = amp_left[sub] * xl / (1 - xl) + amp_right[sub] * xr / (1 - xr)
             bnds[lo:lo + sub.size] = 1.01 * alias + floor + 2.0 * m_real * tail / _TWO_PI
-        return vals, bnds
+            flrs[lo:lo + sub.size] = floor
+        return vals, bnds, flrs
 
     @staticmethod
     def _kernel_tail_many(kabs_mat, q, T, idx):
@@ -993,6 +997,7 @@ class ExactOccupancy:
         P = idx.size
         best_v = np.full(P, np.nan)
         best_r = np.full(P, np.inf)
+        best_f = np.full(P, np.inf)          # the best line's rounding floor, relative
         best_l = [None] * P
 
         def rel(v, b):
@@ -1000,13 +1005,14 @@ class ExactOccupancy:
                 return np.where(np.abs(v) > b, b / (np.abs(v) - b), np.inf)
 
         def take(ln, pos):
-            v, b = self._integrate_many(ln, kmat, kabs_mat, sign, amp_left,
-                                        amp_right, rate_right, n_scale,
-                                        idx[pos], extra, alias_fn)
+            v, b, fl = self._integrate_many(ln, kmat, kabs_mat, sign, amp_left,
+                                            amp_right, rate_right, n_scale,
+                                            idx[pos], extra, alias_fn)
             r = rel(v, b)
             better = r < best_r[pos]
             best_v[pos[better]] = v[better]
             best_r[pos[better]] = r[better]
+            best_f[pos[better]] = rel(v, fl)[better]
             for j in pos[better]:
                 best_l[j] = ln
 
@@ -1035,13 +1041,27 @@ class ExactOccupancy:
         # own new line did not improve its bound tenfold is finished, and
         # after _FUTILE_LINES new lines in a row that resolved nothing the
         # batch stops. What is left is returned with the bound it has.
+        #
+        # And before any line is built for a parameter: if its best line's
+        # ROUNDING floor already exceeds its tolerance, the value is smaller
+        # than the rounding of the sum that forms it, and a finer or longer
+        # line only repeats that. It keeps the bound it has (on the
+        # foundation this was 9.5 minutes of lines resolving nothing).
         futile = 0
+        skipped = 0
         while futile < self._FUTILE_LINES:
             open_ = order[unresolved()[order] & (tries[order] < 4)]
             if open_.size == 0:
                 break
             j = int(open_[0])
             i = idx[j]
+            if np.isfinite(best_r[j]):
+                with np.errstate(divide="ignore", invalid="ignore"):
+                    tol_j = self.rel_tol * max(1.0, abs_floor / max(abs(best_v[j]), 1e-300))
+                if best_f[j] > 0.5 * tol_j:
+                    tries[j] = 4
+                    skipped += 1
+                    continue
             strict = 0.1 ** max(tries[j] - 1, 0)
             tries[j] += 1
             before = best_r[j]
@@ -1061,6 +1081,10 @@ class ExactOccupancy:
                 futile = futile + 1 if left == pending.size else 0
                 if unresolved()[j] and not best_r[j] < 0.1 * before:
                     tries[j] = 4
+        if skipped:
+            _log.info("%d %s values are below the rounding floor of the lines "
+                      "that serve them; returned with the bounds they have",
+                      skipped, label)
         if futile >= self._FUTILE_LINES:
             _log.info("stopped: %d new lines in a row resolved no %s value; %d "
                       "returned with the bounds they have", futile, label,

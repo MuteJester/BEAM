@@ -2029,3 +2029,24 @@ readers from before today never read the word, so both directions still load.
 
 The gate passed on everything else before recording, `exact.py` at 411
 quantities. Full suites: Python 927 passed, 2 skipped; C 338 passed.
+
+# Why the test inventory moved for skipping lines below the rounding floor
+
+Re-recorded 2026-09-30, tag `prefloor`. The foundation's discovery curve
+spent 9.5 of its 12 minutes on three lines for U(n) at its 71 deepest depths
+that resolved nothing: those values are smaller than the rounding of the
+contour sum that forms them, and a finer or longer line repeats that. The
+engine now reports each value's rounding floor apart from its bound, and the
+planner builds no line for a value whose best floor already exceeds its
+tolerance; it keeps the bound it has. No C changed.
+
+    pytest_cases.txt       +4 -0  a value below its rounding floor builds no
+                                  new line (with lines present), and a fresh
+                                  batch of them at most one; both alphabets
+    python_api.txt         unchanged (re-written by the recorder, byte-identical)
+    c_cases.txt            unchanged (likewise)
+    numeric.json           unchanged (likewise)
+    threads.json           unchanged (likewise)
+
+The gate passed on everything else before recording, `exact.py` at 411
+quantities. The full suite: 931 passed, 2 skipped.
