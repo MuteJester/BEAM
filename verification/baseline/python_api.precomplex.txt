@@ -1,0 +1,1234 @@
+__all__: ['AlphaFit', 'Atoms', 'Attribution', 'BeamError', 'BeamModel', 'BeamQuery', 'BeamTypeError', 'BeamValueError', 'BetaDiversity', 'BudgetExceeded', 'Builder', 'Calibration', 'Condition', 'DepthMatchedProfiles', 'EntropyBounds', 'EntropyEstimate', 'Histogram', 'ImpossibleCondition', 'IncompatibleMembers', 'InternalError', 'InvalidSequence', 'Mixture', 'MixtureError', 'MixtureTooLarge', 'ModelFileError', 'ModelMismatch', 'NoLivePaths', 'NotFinalized', 'OutOfMemory', 'PairLikelihood', 'Piece', 'PseqAnalysis', 'PublicnessModel', 'QueryError', 'QueryTooLarge', 'RepertoireLikelihood', 'ResamplingBand', 'ScaleIndex', 'SupportSize', 'UnsupportedOrder', 'UnsupportedQuery', 'attribute', 'depth_matched_hill_profiles', 'effective_threads', 'file_provenance_span', 'fit_alpha', 'memory_budget', 'pair_likelihood', 'repertoire_likelihood', 'set_memory_budget', 'set_threads', 'threads']
+__version__: 0.1.0
+class AlphaFit:
+  def __delattr__(self, name)
+  def __dir__(self, /)
+  def __eq__(self, value, /)
+  def __format__(self, format_spec, /)
+  def __ge__(self, value, /)
+  def __getattribute__(self, name, /)
+  def __getstate__(self, /)
+  def __gt__(self, value, /)
+  def __hash__(self, /)
+  def __init__(self, alpha: 'tuple', alpha_length: 'float', held_out_log_lik: 'float', default_log_lik: 'float', split: 'str', fraction: 'float | None', seed: 'int | None', n_evaluations: 'int') -> None
+  def __init_subclass__(?)
+  def __le__(self, value, /)
+  def __lt__(self, value, /)
+  def __ne__(self, value, /)
+  def __new__(*args, **kwargs)
+  def __reduce__(self, /)
+  def __reduce_ex__(self, protocol, /)
+  def __repr__(self) -> 'str'
+  def __setattr__(self, name, value)
+  def __sizeof__(self, /)
+  def __str__(self, /)
+  def __subclasshook__(?)
+class Atoms:
+  def __delattr__(self, name, /)
+  def __dir__(self, /)
+  def __eq__(self, value, /)
+  def __format__(self, format_spec, /)
+  def __ge__(self, value, /)
+  def __getattribute__(self, name, /)
+  def __getstate__(self, /)
+  def __gt__(self, value, /)
+  def __hash__(self, /)
+  def __init__(self, *, probabilities, multiplicities, surprisal, grid_spacing, length=None)
+  def __init_subclass__(?)
+  def __le__(self, value, /)
+  def __len__(self) -> 'int'
+  def __lt__(self, value, /)
+  def __ne__(self, value, /)
+  def __new__(*args, **kwargs)
+  def __reduce__(self, /)
+  def __reduce_ex__(self, protocol, /)
+  def __repr__(self) -> 'str'
+  def __setattr__(self, name, value, /)
+  def __sizeof__(self, /)
+  def __str__(self, /)
+  def __subclasshook__(?)
+  def as_arrays(self) -> 'tuple[np.ndarray, np.ndarray]'
+  def coverage(self, n: 'float') -> 'float'
+  def discovery_curve(self, draw_counts: 'Iterable[float]') -> 'dict[str, np.ndarray]'
+  def expected_frequency(self, n: 'int', r: 'int') -> 'float'
+  def expected_richness(self, n: 'float') -> 'float'
+  property mass
+  def novelty(self, n: 'float') -> 'float'
+  property support_size
+class Attribution:
+  def __delattr__(self, name, /)
+  def __dir__(self, /)
+  def __eq__(self, value, /)
+  def __format__(self, format_spec, /)
+  def __ge__(self, value, /)
+  def __getattribute__(self, name, /)
+  def __getstate__(self, /)
+  def __gt__(self, value, /)
+  def __hash__(self, /)
+  def __init__(self, *, sequence, residue, gap, site, gap_site, bracket, spellable)
+  def __init_subclass__(?)
+  def __le__(self, value, /)
+  def __lt__(self, value, /)
+  def __ne__(self, value, /)
+  def __new__(*args, **kwargs)
+  def __reduce__(self, /)
+  def __reduce_ex__(self, protocol, /)
+  def __repr__(self) -> 'str'
+  def __setattr__(self, name, value, /)
+  def __sizeof__(self, /)
+  def __str__(self, /)
+  def __subclasshook__(?)
+class BeamError:
+  def __delattr__(self, name, /)
+  def __dir__(self, /)
+  def __eq__(self, value, /)
+  def __format__(self, format_spec, /)
+  def __ge__(self, value, /)
+  def __getattribute__(self, name, /)
+  def __getstate__(self, /)
+  def __gt__(self, value, /)
+  def __hash__(self, /)
+  def __init__(self, /, *args, **kwargs)
+  def __init_subclass__(?)
+  def __le__(self, value, /)
+  def __lt__(self, value, /)
+  def __ne__(self, value, /)
+  def __new__(*args, **kwargs)
+  def __reduce__(?)
+  def __reduce_ex__(self, protocol, /)
+  def __repr__(self, /)
+  def __setattr__(self, name, value, /)
+  def __setstate__(?)
+  def __sizeof__(self, /)
+  def __str__(self, /)
+  def __subclasshook__(?)
+  def add_note(?)
+  def with_traceback(?)
+class BeamModel:
+  def __contains__(self, sequence: 'str') -> 'bool'
+  def __delattr__(self, name, /)
+  def __dir__(self, /)
+  def __eq__(self, value, /)
+  def __format__(self, format_spec, /)
+  def __ge__(self, value, /)
+  def __getattribute__(self, name, /)
+  def __getstate__(self, /)
+  def __gt__(self, value, /)
+  def __hash__(self, /)
+  def __init__(self, sequences: 'Iterable[str]', *, abundances: 'Iterable[float] | None' = None, alphabet: 'str' = 'aa', order: 'int | None' = None, weights: 'tuple[float, float]' = (0.5, 0.5), max_length: 'int | None' = None, alpha: 'float | Iterable[float] | None' = None, alpha_length: 'float | None' = None, sparse: 'bool | None' = None) -> 'None'
+  def __init_subclass__(?)
+  def __le__(self, value, /)
+  def __len__(self) -> 'int'
+  def __lt__(self, value, /)
+  def __ne__(self, value, /)
+  def __new__(*args, **kwargs)
+  def __reduce__(self, /)
+  def __reduce_ex__(self, protocol, /)
+  def __repr__(self) -> 'str'
+  def __setattr__(self, name, value, /)
+  def __sizeof__(self, /)
+  def __str__(self, /)
+  def __subclasshook__(?)
+  def accumulator_max(self) -> 'float'
+  def add(self, other: 'BeamModel') -> 'None'
+  property alphabet
+  def calibrate(self, *, bins: 'int' = 512) -> 'Calibration'
+  def cgf(self, t: 'float') -> 'float'
+  def cgf_jet(self, t: 'float') -> 'dict[str, float]'
+  def compact(self) -> 'None'
+  property config
+  def copy(self) -> 'BeamModel'
+  def diversity_profile(self) -> 'dict[str, float]'
+  def drop_caches(self) -> 'None'
+  def dynamic_range(self, *, base: 'float' = 10.0) -> 'float'
+  def effective_diversity(self) -> 'float'
+  property effective_threads
+  def entropy(self, *, base: 'float' = 2.718281828459045) -> 'float'
+  def expected_counts(self, *, length: 'int | None' = None) -> 'dict[str, Any]'
+  def explain(self, sequence: 'str') -> 'dict[str, Any]'
+  def hill_curve(self, orders: 'Iterable[float] | None' = None) -> 'dict[str, np.ndarray]'
+  def hill_number(self, alpha: 'float') -> 'float'
+  def hill_numbers(self, orders: 'Iterable[float]') -> 'np.ndarray'
+  def hill_profile(self, orders: 'Iterable[float]') -> 'np.ndarray'
+  property insights
+  property is_dag
+  property length_distribution
+  def length_marginals(self) -> 'dict[str, np.ndarray]'
+  def length_moments(self, *, q: 'float' = 1.0, order: 'int' = 4) -> 'dict[str, Any]'
+  def length_pmf(self) -> 'np.ndarray'
+  property live_cache_bytes
+  def log_clamp_probability(self, length: 'int', clamp: 'dict') -> 'float'
+  def log_length_prior(self, length: 'int') -> 'float'
+  def log_mellin(self, q: 'float') -> 'float'
+  def log_mellin_many(self, orders: 'Iterable[float]') -> 'np.ndarray'
+  def log_partition(self, length: 'int') -> 'float'
+  def log_partition_by_layer(self, length: 'int') -> 'np.ndarray'
+  def log_pseq(self, sequence: 'str') -> 'float'
+  def log_pseq_batch(self, sequences: 'Sequence[str]') -> 'np.ndarray'
+  def log_pseq_by_position(self, sequence: 'str') -> 'np.ndarray'
+  def log_pseq_chunks(self, sequences: 'Iterable[str]', *, chunk_size: 'int' = 1000000)
+  def log_pseq_file(self, path: 'str | os.PathLike', *, sep: 'str' = '\t', column: 'int' = 0, has_header: 'bool' = False, chunk_size: 'int' = 1000000, out: 'Any' = None, dtype: 'Any' = <class 'numpy.float64'>) -> 'np.ndarray'
+  def log_pseq_parquet(self, path: 'str | os.PathLike', *, column: 'str | None' = None, batch_size: 'int' = 1000000, out: 'Any' = None, dtype: 'Any' = <class 'numpy.float64'>) -> 'np.ndarray'
+  property memory_bytes
+  def merged(self, other: 'BeamModel') -> 'BeamModel'
+  def metadata(self, *, lengths: 'bool' = True, support: 'bool' = False) -> 'dict[str, Any]'
+  property n_cells
+  property n_nonzero_cells
+  property n_observed
+  property n_residues
+  property n_sequences
+  property n_skipped
+  property n_states
+  property observed_lengths
+  def path_count(self, length: 'int | None' = None) -> 'float'
+  def pgen_diagnostics(self) -> 'dict[str, Any]'
+  def positional_banded(self, length: 'int', edges, *, counting: 'bool' = False, bins: 'int' = 512, spacing: 'float' = 0.0) -> 'BandedMarginals'
+  def positional_marginals(self, length: 'int', *, clamp: 'dict | None' = None) -> 'np.ndarray'
+  def posterior(self, prior: 'BeamModel', kappa: 'float' = 100.0) -> 'None'
+  def power_sum(self, q: 'float') -> 'float'
+  def pseq(self, sequence, *, log: 'bool' = False)
+  def pseq_analysis(self) -> 'PseqAnalysis'
+  def saddlepoint(self, x, *, tol: 'float' = 1e-09, max_iter: 'int' = 80) -> 'dict'
+  def sample(self, n: 'int', *, length: 'int | None' = None, seed: 'int | None' = None) -> 'list[str]'
+  def save(self, path: 'str | os.PathLike') -> 'None'
+  def scale_score(self, sequence, calibration: 'Calibration', *, method: 'str' = 'pvalue')
+  def set_alpha(self, alpha: 'float | Iterable[float] | None' = None, alpha_length: 'float | None' = None) -> 'None'
+  def simulate(self, n: 'int', *, length: 'int | None' = None, seed: 'int | None' = None) -> 'SimulationResult'
+  def spectra_by_length(self, *, measure: 'str' = 'generated', max_length: 'int | None' = None, bins: 'int' = 1024, spacing: 'float | None' = None) -> 'dict[str, Any]'
+  def spectrum(self, *, measure: 'str' = 'generated', length: 'int | None' = None, bins: 'int' = 1024, spacing: 'float | None' = None) -> 'dict[str, Any]'
+  def spectrum_pair(self, *, length: 'int | None' = None, bins: 'int' = 1024, spacing: 'float | None' = None) -> 'dict[str, Any]'
+  def subtract(self, other: 'BeamModel') -> 'None'
+  def surprisal_by_depth(self, *, q: 'float' = 1.0) -> 'dict[str, Any]'
+  def surprisal_cdf(self, x) -> 'np.ndarray'
+  def surprisal_cumulants(self, *, q: 'float' = 1.0, order: 'int' = 4) -> 'np.ndarray'
+  def surprisal_distribution(self) -> 'dict[str, np.ndarray]'
+  def surprisal_moments(self, *, q: 'float' = 1.0, order: 'int' = 4) -> 'np.ndarray'
+  def surprisal_pdf(self, x) -> 'np.ndarray'
+  def surprisal_range(self) -> 'tuple[float, float]'
+  def surprisal_stats(self, *, q: 'float' = 1.0) -> 'dict[str, float]'
+  def tempered(self, t: 'float') -> 'BeamModel'
+  property threads
+  def top_k_sequences(self, k: 'int' = 20, *, length: 'int | None' = None) -> 'list[tuple[str, float]]'
+  def topology(self, length: 'int') -> 'dict[str, Any]'
+  property total_weight
+  property variant
+  def with_prior(self, prior: 'BeamModel', kappa: 'float' = 100.0) -> 'BeamModel'
+  def without(self, other: 'Any', *, abundances: 'Iterable[float] | None' = None) -> 'BeamModel'
+class BeamQuery:
+  def __delattr__(self, name, /)
+  def __dir__(self, /)
+  def __eq__(self, value, /)
+  def __format__(self, format_spec, /)
+  def __ge__(self, value, /)
+  def __getattribute__(self, name, /)
+  def __getstate__(self, /)
+  def __gt__(self, value, /)
+  def __hash__(self, /)
+  def __init__(self, model) -> 'None'
+  def __init_subclass__(?)
+  def __le__(self, value, /)
+  def __lt__(self, value, /)
+  def __ne__(self, value, /)
+  def __new__(*args, **kwargs)
+  def __reduce__(self, /)
+  def __reduce_ex__(self, protocol, /)
+  def __repr__(self) -> 'str'
+  def __setattr__(self, name, value, /)
+  def __sizeof__(self, /)
+  def __str__(self, /)
+  def __subclasshook__(?)
+  def condition(self, length: 'int') -> 'Condition'
+  def conditional_entropy(self, cond: 'Condition', i: 'int', j: 'int') -> 'float'
+  def cost(self, cond: 'Condition', *, whole_matrix: 'bool' = False) -> 'dict'
+  def deletions(self, sequence: 'str') -> 'list[dict]'
+  def entropy(self, cond: 'Condition') -> 'float'
+  def expect(self, table, cond: 'Condition') -> 'tuple[float, float]'
+  def expect_count(self, residues: 'Iterable[str]', cond: 'Condition') -> 'tuple[float, float]'
+  def insertions(self, sequence: 'str') -> 'list[dict]'
+  def log_partition(self, cond: 'Condition') -> 'float'
+  def log_probability(self, cond: 'Condition') -> 'float'
+  def marginals(self, cond: 'Condition') -> 'np.ndarray'
+  property model
+  def mutual_information(self, cond: 'Condition') -> 'np.ndarray'
+  def pair_joint(self, cond: 'Condition', i: 'int', j: 'int') -> 'np.ndarray'
+  def position_divergence(self, cond: 'Condition') -> 'np.ndarray'
+  def position_entropy(self, cond: 'Condition') -> 'np.ndarray'
+  def position_information(self, cond: 'Condition') -> 'np.ndarray'
+  def probability(self, cond: 'Condition') -> 'float'
+  def surprisal_variance(self, cond: 'Condition') -> 'float'
+  def total_correlation(self, cond: 'Condition') -> 'float'
+class BeamTypeError:
+  def __delattr__(self, name, /)
+  def __dir__(self, /)
+  def __eq__(self, value, /)
+  def __format__(self, format_spec, /)
+  def __ge__(self, value, /)
+  def __getattribute__(self, name, /)
+  def __getstate__(self, /)
+  def __gt__(self, value, /)
+  def __hash__(self, /)
+  def __init__(self, /, *args, **kwargs)
+  def __init_subclass__(?)
+  def __le__(self, value, /)
+  def __lt__(self, value, /)
+  def __ne__(self, value, /)
+  def __new__(*args, **kwargs)
+  def __reduce__(?)
+  def __reduce_ex__(self, protocol, /)
+  def __repr__(self, /)
+  def __setattr__(self, name, value, /)
+  def __setstate__(?)
+  def __sizeof__(self, /)
+  def __str__(self, /)
+  def __subclasshook__(?)
+  def add_note(?)
+  def with_traceback(?)
+class BeamValueError:
+  def __delattr__(self, name, /)
+  def __dir__(self, /)
+  def __eq__(self, value, /)
+  def __format__(self, format_spec, /)
+  def __ge__(self, value, /)
+  def __getattribute__(self, name, /)
+  def __getstate__(self, /)
+  def __gt__(self, value, /)
+  def __hash__(self, /)
+  def __init__(self, /, *args, **kwargs)
+  def __init_subclass__(?)
+  def __le__(self, value, /)
+  def __lt__(self, value, /)
+  def __ne__(self, value, /)
+  def __new__(*args, **kwargs)
+  def __reduce__(?)
+  def __reduce_ex__(self, protocol, /)
+  def __repr__(self, /)
+  def __setattr__(self, name, value, /)
+  def __setstate__(?)
+  def __sizeof__(self, /)
+  def __str__(self, /)
+  def __subclasshook__(?)
+  def add_note(?)
+  def with_traceback(?)
+class BetaDiversity:
+  def __delattr__(self, name)
+  def __dir__(self, /)
+  def __eq__(self, other)
+  def __format__(self, format_spec, /)
+  def __ge__(self, value, /)
+  def __getattribute__(self, name, /)
+  def __getstate__(self, /)
+  def __gt__(self, value, /)
+  def __hash__(self)
+  def __init__(self, order: 'float', gamma: 'float | None', alpha: 'float', beta: 'float | None', lower: 'float', upper: 'float', exact: 'bool', estimate: 'float | None' = None, stderr: 'float | None' = None) -> None
+  def __init_subclass__(?)
+  def __le__(self, value, /)
+  def __lt__(self, value, /)
+  def __ne__(self, value, /)
+  def __new__(*args, **kwargs)
+  def __reduce__(self, /)
+  def __reduce_ex__(self, protocol, /)
+  def __repr__(self)
+  def __setattr__(self, name, value)
+  def __sizeof__(self, /)
+  def __str__(self, /)
+  def __subclasshook__(?)
+class BudgetExceeded:
+  def __delattr__(self, name, /)
+  def __dir__(self, /)
+  def __eq__(self, value, /)
+  def __format__(self, format_spec, /)
+  def __ge__(self, value, /)
+  def __getattribute__(self, name, /)
+  def __getstate__(self, /)
+  def __gt__(self, value, /)
+  def __hash__(self, /)
+  def __init__(self, /, *args, **kwargs)
+  def __init_subclass__(?)
+  def __le__(self, value, /)
+  def __lt__(self, value, /)
+  def __ne__(self, value, /)
+  def __new__(*args, **kwargs)
+  def __reduce__(?)
+  def __reduce_ex__(self, protocol, /)
+  def __repr__(self, /)
+  def __setattr__(self, name, value, /)
+  def __setstate__(?)
+  def __sizeof__(self, /)
+  def __str__(self, /)
+  def __subclasshook__(?)
+  def add_note(?)
+  def with_traceback(?)
+class Builder:
+  def __delattr__(self, name, /)
+  def __dir__(self, /)
+  def __eq__(self, value, /)
+  def __format__(self, format_spec, /)
+  def __ge__(self, value, /)
+  def __getattribute__(self, name, /)
+  def __getstate__(self, /)
+  def __gt__(self, value, /)
+  def __hash__(self, /)
+  def __init__(self, *, alphabet: 'str' = 'aa', order: 'int | None' = None, weights: 'tuple[float, float]' = (0.5, 0.5), max_length: 'int | None' = None, alpha: 'float | Iterable[float] | None' = None, alpha_length: 'float | None' = None, sparse: 'bool | None' = None) -> 'None'
+  def __init_subclass__(?)
+  def __le__(self, value, /)
+  def __lt__(self, value, /)
+  def __ne__(self, value, /)
+  def __new__(*args, **kwargs)
+  def __reduce__(self, /)
+  def __reduce_ex__(self, protocol, /)
+  def __repr__(self) -> 'str'
+  def __setattr__(self, name, value, /)
+  def __sizeof__(self, /)
+  def __str__(self, /)
+  def __subclasshook__(?)
+  def build(self) -> 'BeamModel'
+  property memory_bytes
+  property n_nonzero_cells
+  property n_observed
+  property n_skipped
+  def observe(self, sequences: 'Iterable[str]', abundances: 'Iterable[float] | None' = None) -> 'Builder'
+  def snapshot(self) -> 'BeamModel'
+  property total_weight
+class Calibration:
+  def __delattr__(self, name, /)
+  def __dir__(self, /)
+  def __eq__(self, value, /)
+  def __format__(self, format_spec, /)
+  def __ge__(self, value, /)
+  def __getattribute__(self, name, /)
+  def __getstate__(self, /)
+  def __gt__(self, value, /)
+  def __hash__(self, /)
+  def __init__(self, *, surprisal, spacing, survival, prior=None)
+  def __init_subclass__(?)
+  def __le__(self, value, /)
+  def __lt__(self, value, /)
+  def __ne__(self, value, /)
+  def __new__(*args, **kwargs)
+  def __reduce__(self, /)
+  def __reduce_ex__(self, protocol, /)
+  def __repr__(self) -> 'str'
+  def __setattr__(self, name, value, /)
+  def __sizeof__(self, /)
+  def __str__(self, /)
+  def __subclasshook__(?)
+  def iqr(self, length: 'int | None' = None) -> 'float'
+  property lengths
+  def median(self, length: 'int | None' = None) -> 'float'
+  property pooled_survival
+  def pvalue(self, length: 'int', surprisal) -> 'float | np.ndarray'
+  def quantile(self, length: 'int | None', probability)
+  property resolution_floor
+  def scale(self, length: 'int', surprisal, *, method: 'str' = 'pvalue')
+class Condition:
+  def __and__(self, other: "'Condition'") -> "'Condition'"
+  def __delattr__(self, name, /)
+  def __dir__(self, /)
+  def __eq__(self, value, /)
+  def __format__(self, format_spec, /)
+  def __ge__(self, value, /)
+  def __getattribute__(self, name, /)
+  def __getstate__(self, /)
+  def __gt__(self, value, /)
+  def __hash__(self, /)
+  def __init__(self, length: 'int', alphabet: 'str' = 'aa') -> 'None'
+  def __init_subclass__(?)
+  def __invert__(self) -> "'Condition'"
+  def __le__(self, value, /)
+  def __lt__(self, value, /)
+  def __ne__(self, value, /)
+  def __new__(*args, **kwargs)
+  def __or__(self, other: "'Condition'") -> "'Condition'"
+  def __reduce__(self, /)
+  def __reduce_ex__(self, protocol, /)
+  def __repr__(self) -> 'str'
+  def __setattr__(self, name, value, /)
+  def __sizeof__(self, /)
+  def __str__(self, /)
+  def __subclasshook__(?)
+  property alphabet
+  def at(self, position: 'int', residue: 'str') -> "'Condition'"
+  def contains(self, motif: 'str') -> "'Condition'"
+  def count(self, residues: 'Iterable[str]', lo: 'int', hi: 'int') -> "'Condition'"
+  def exclude(self, position: 'int', residues: 'Iterable[str] | str') -> "'Condition'"
+  property is_free
+  property length
+  property needs_product
+  def oneof(self, position: 'int', residues: 'Iterable[str]') -> "'Condition'"
+  def pattern(self) -> 'str'
+  def run(self, start: 'int', residues: 'str') -> "'Condition'"
+class DepthMatchedProfiles:
+  def __delattr__(self, name)
+  def __dir__(self, /)
+  def __eq__(self, value, /)
+  def __format__(self, format_spec, /)
+  def __ge__(self, value, /)
+  def __getattribute__(self, name, /)
+  def __getstate__(self, /)
+  def __gt__(self, value, /)
+  def __hash__(self, /)
+  def __init__(self, orders: 'np.ndarray', depth: 'int', weighting: 'str', n_bootstraps: 'int', seed: 'int', profiles: 'np.ndarray', n_distinct_drawn: 'np.ndarray', n_templates: 'np.ndarray', n_distinct: 'np.ndarray', config: 'Mapping[str, Any]') -> None
+  def __init_subclass__(?)
+  def __le__(self, value, /)
+  def __lt__(self, value, /)
+  def __ne__(self, value, /)
+  def __new__(*args, **kwargs)
+  def __post_init__(self) -> 'None'
+  def __reduce__(self, /)
+  def __reduce_ex__(self, protocol, /)
+  def __repr__(self) -> 'str'
+  def __setattr__(self, name, value)
+  def __sizeof__(self, /)
+  def __str__(self, /)
+  def __subclasshook__(?)
+  property n_orders
+  property n_repertoires
+  def resampling_band(self, lo: 'float' = 5.0, hi: 'float' = 95.0) -> 'ResamplingBand'
+class EntropyBounds:
+  def __delattr__(self, name)
+  def __dir__(self, /)
+  def __eq__(self, other)
+  def __format__(self, format_spec, /)
+  def __ge__(self, value, /)
+  def __getattribute__(self, name, /)
+  def __getstate__(self, /)
+  def __gt__(self, value, /)
+  def __hash__(self)
+  def __init__(self, lower: 'float', upper: 'float', weight_entropy: 'float', exact: 'bool' = True) -> None
+  def __init_subclass__(?)
+  def __le__(self, value, /)
+  def __lt__(self, value, /)
+  def __ne__(self, value, /)
+  def __new__(*args, **kwargs)
+  def __reduce__(self, /)
+  def __reduce_ex__(self, protocol, /)
+  def __repr__(self)
+  def __setattr__(self, name, value)
+  def __sizeof__(self, /)
+  def __str__(self, /)
+  def __subclasshook__(?)
+  def brackets(self, value: 'float') -> 'bool'
+  property width
+class EntropyEstimate:
+  def __delattr__(self, name)
+  def __dir__(self, /)
+  def __eq__(self, other)
+  def __format__(self, format_spec, /)
+  def __ge__(self, value, /)
+  def __getattribute__(self, name, /)
+  def __getstate__(self, /)
+  def __gt__(self, value, /)
+  def __hash__(self)
+  def __init__(self, value: 'float', stderr: 'float', n_samples: 'int', seed: 'int | None', bounds: 'EntropyBounds', exact: 'bool' = False) -> None
+  def __init_subclass__(?)
+  def __le__(self, value, /)
+  def __lt__(self, value, /)
+  def __ne__(self, value, /)
+  def __new__(*args, **kwargs)
+  def __reduce__(self, /)
+  def __reduce_ex__(self, protocol, /)
+  def __repr__(self)
+  def __setattr__(self, name, value)
+  def __sizeof__(self, /)
+  def __str__(self, /)
+  def __subclasshook__(?)
+  property diversity
+class Histogram:
+  def __delattr__(self, name, /)
+  def __dir__(self, /)
+  def __eq__(self, value, /)
+  def __format__(self, format_spec, /)
+  def __ge__(self, value, /)
+  def __getattribute__(self, name, /)
+  def __getstate__(self, /)
+  def __gt__(self, value, /)
+  def __hash__(self, /)
+  def __init__(self, *, surprisal, weights, measure, q, grid_spacing, max_rounding_error, true_max_surprisal, length=None)
+  def __init_subclass__(?)
+  def __le__(self, value, /)
+  def __lt__(self, value, /)
+  def __ne__(self, value, /)
+  def __new__(*args, **kwargs)
+  def __reduce__(self, /)
+  def __reduce_ex__(self, protocol, /)
+  def __repr__(self) -> 'str'
+  def __setattr__(self, name, value, /)
+  def __sizeof__(self, /)
+  def __str__(self, /)
+  def __subclasshook__(?)
+  def cdf(self, x)
+  property mean
+  property normalized_weights
+  def pdf(self, x)
+  def quantile(self, probability)
+  property std
+  property total_mass
+  property variance
+class ImpossibleCondition:
+  def __delattr__(self, name, /)
+  def __dir__(self, /)
+  def __eq__(self, value, /)
+  def __format__(self, format_spec, /)
+  def __ge__(self, value, /)
+  def __getattribute__(self, name, /)
+  def __getstate__(self, /)
+  def __gt__(self, value, /)
+  def __hash__(self, /)
+  def __init__(self, /, *args, **kwargs)
+  def __init_subclass__(?)
+  def __le__(self, value, /)
+  def __lt__(self, value, /)
+  def __ne__(self, value, /)
+  def __new__(*args, **kwargs)
+  def __reduce__(?)
+  def __reduce_ex__(self, protocol, /)
+  def __repr__(self, /)
+  def __setattr__(self, name, value, /)
+  def __setstate__(?)
+  def __sizeof__(self, /)
+  def __str__(self, /)
+  def __subclasshook__(?)
+  def add_note(?)
+  def with_traceback(?)
+class IncompatibleMembers:
+  def __delattr__(self, name, /)
+  def __dir__(self, /)
+  def __eq__(self, value, /)
+  def __format__(self, format_spec, /)
+  def __ge__(self, value, /)
+  def __getattribute__(self, name, /)
+  def __getstate__(self, /)
+  def __gt__(self, value, /)
+  def __hash__(self, /)
+  def __init__(self, /, *args, **kwargs)
+  def __init_subclass__(?)
+  def __le__(self, value, /)
+  def __lt__(self, value, /)
+  def __ne__(self, value, /)
+  def __new__(*args, **kwargs)
+  def __reduce__(?)
+  def __reduce_ex__(self, protocol, /)
+  def __repr__(self, /)
+  def __setattr__(self, name, value, /)
+  def __setstate__(?)
+  def __sizeof__(self, /)
+  def __str__(self, /)
+  def __subclasshook__(?)
+  def add_note(?)
+  def with_traceback(?)
+class InternalError:
+  def __delattr__(self, name, /)
+  def __dir__(self, /)
+  def __eq__(self, value, /)
+  def __format__(self, format_spec, /)
+  def __ge__(self, value, /)
+  def __getattribute__(self, name, /)
+  def __getstate__(self, /)
+  def __gt__(self, value, /)
+  def __hash__(self, /)
+  def __init__(self, /, *args, **kwargs)
+  def __init_subclass__(?)
+  def __le__(self, value, /)
+  def __lt__(self, value, /)
+  def __ne__(self, value, /)
+  def __new__(*args, **kwargs)
+  def __reduce__(?)
+  def __reduce_ex__(self, protocol, /)
+  def __repr__(self, /)
+  def __setattr__(self, name, value, /)
+  def __setstate__(?)
+  def __sizeof__(self, /)
+  def __str__(self, /)
+  def __subclasshook__(?)
+  def add_note(?)
+  def with_traceback(?)
+class InvalidSequence:
+  def __delattr__(self, name, /)
+  def __dir__(self, /)
+  def __eq__(self, value, /)
+  def __format__(self, format_spec, /)
+  def __ge__(self, value, /)
+  def __getattribute__(self, name, /)
+  def __getstate__(self, /)
+  def __gt__(self, value, /)
+  def __hash__(self, /)
+  def __init__(self, /, *args, **kwargs)
+  def __init_subclass__(?)
+  def __le__(self, value, /)
+  def __lt__(self, value, /)
+  def __ne__(self, value, /)
+  def __new__(*args, **kwargs)
+  def __reduce__(?)
+  def __reduce_ex__(self, protocol, /)
+  def __repr__(self, /)
+  def __setattr__(self, name, value, /)
+  def __setstate__(?)
+  def __sizeof__(self, /)
+  def __str__(self, /)
+  def __subclasshook__(?)
+  def add_note(?)
+  def with_traceback(?)
+class Mixture:
+  def __delattr__(self, name, /)
+  def __dir__(self, /)
+  def __eq__(self, value, /)
+  def __format__(self, format_spec, /)
+  def __ge__(self, value, /)
+  def __getattribute__(self, name, /)
+  def __getstate__(self, /)
+  def __gt__(self, value, /)
+  def __hash__(self, /)
+  def __init__(self, models: 'Sequence[Any]', weights: 'Iterable[float] | None' = None) -> 'None'
+  def __init_subclass__(?)
+  def __le__(self, value, /)
+  def __len__(self) -> 'int'
+  def __lt__(self, value, /)
+  def __ne__(self, value, /)
+  def __new__(*args, **kwargs)
+  def __reduce__(self, /)
+  def __reduce_ex__(self, protocol, /)
+  def __repr__(self) -> 'str'
+  def __setattr__(self, name, value, /)
+  def __sizeof__(self, /)
+  def __str__(self, /)
+  def __subclasshook__(?)
+  def alpha_diversity(self, q: 'float') -> 'float'
+  def beta_diversity(self, q: 'float', *, samples: 'int' = 0, seed: 'int | None' = None) -> 'BetaDiversity'
+  property config
+  def entropy_bounds(self) -> 'EntropyBounds'
+  def entropy_estimate(self, n: 'int' = 10000, seed: 'int | None' = None) -> 'EntropyEstimate'
+  def gram_matrix(self) -> 'np.ndarray'
+  def hill_number(self, q: 'float') -> 'float'
+  def hill_numbers(self, orders: 'Iterable[float]') -> 'np.ndarray'
+  def inner_product(self, *members: 'int') -> 'float'
+  property length_distribution
+  def log_gram_matrix(self) -> 'np.ndarray'
+  def log_inner_product(self, *members: 'int') -> 'float'
+  def log_power_sum(self, q: 'float') -> 'float'
+  def log_pseq(self, sequence: 'str') -> 'float'
+  def log_pseq_batch(self, sequences: 'Sequence[str]') -> 'np.ndarray'
+  property max_length
+  def member_weights(self, length: 'int') -> 'np.ndarray'
+  property members
+  property n_members
+  property observed_lengths
+  def pseq(self, sequence, *, log: 'bool' = False)
+  def sample(self, n: 'int', *, seed: 'int | None' = None) -> 'list[str]'
+  def support_size(self, *, exact: 'bool' = True, cap: 'int' = 0) -> 'SupportSize'
+  property weights
+class MixtureError:
+  def __delattr__(self, name, /)
+  def __dir__(self, /)
+  def __eq__(self, value, /)
+  def __format__(self, format_spec, /)
+  def __ge__(self, value, /)
+  def __getattribute__(self, name, /)
+  def __getstate__(self, /)
+  def __gt__(self, value, /)
+  def __hash__(self, /)
+  def __init__(self, /, *args, **kwargs)
+  def __init_subclass__(?)
+  def __le__(self, value, /)
+  def __lt__(self, value, /)
+  def __ne__(self, value, /)
+  def __new__(*args, **kwargs)
+  def __reduce__(?)
+  def __reduce_ex__(self, protocol, /)
+  def __repr__(self, /)
+  def __setattr__(self, name, value, /)
+  def __setstate__(?)
+  def __sizeof__(self, /)
+  def __str__(self, /)
+  def __subclasshook__(?)
+  def add_note(?)
+  def with_traceback(?)
+class MixtureTooLarge:
+  def __delattr__(self, name, /)
+  def __dir__(self, /)
+  def __eq__(self, value, /)
+  def __format__(self, format_spec, /)
+  def __ge__(self, value, /)
+  def __getattribute__(self, name, /)
+  def __getstate__(self, /)
+  def __gt__(self, value, /)
+  def __hash__(self, /)
+  def __init__(self, /, *args, **kwargs)
+  def __init_subclass__(?)
+  def __le__(self, value, /)
+  def __lt__(self, value, /)
+  def __ne__(self, value, /)
+  def __new__(*args, **kwargs)
+  def __reduce__(?)
+  def __reduce_ex__(self, protocol, /)
+  def __repr__(self, /)
+  def __setattr__(self, name, value, /)
+  def __setstate__(?)
+  def __sizeof__(self, /)
+  def __str__(self, /)
+  def __subclasshook__(?)
+  def add_note(?)
+  def with_traceback(?)
+class ModelFileError:
+  def __delattr__(self, name, /)
+  def __dir__(self, /)
+  def __eq__(self, value, /)
+  def __format__(self, format_spec, /)
+  def __ge__(self, value, /)
+  def __getattribute__(self, name, /)
+  def __getstate__(self, /)
+  def __gt__(self, value, /)
+  def __hash__(self, /)
+  def __init__(self, /, *args, **kwargs)
+  def __init_subclass__(?)
+  def __le__(self, value, /)
+  def __lt__(self, value, /)
+  def __ne__(self, value, /)
+  def __new__(*args, **kwargs)
+  def __reduce__(?)
+  def __reduce_ex__(self, protocol, /)
+  def __repr__(self, /)
+  def __setattr__(self, name, value, /)
+  def __setstate__(?)
+  def __sizeof__(self, /)
+  def __str__(self, /)
+  def __subclasshook__(?)
+  def add_note(?)
+  def with_traceback(?)
+class ModelMismatch:
+  def __delattr__(self, name, /)
+  def __dir__(self, /)
+  def __eq__(self, value, /)
+  def __format__(self, format_spec, /)
+  def __ge__(self, value, /)
+  def __getattribute__(self, name, /)
+  def __getstate__(self, /)
+  def __gt__(self, value, /)
+  def __hash__(self, /)
+  def __init__(self, /, *args, **kwargs)
+  def __init_subclass__(?)
+  def __le__(self, value, /)
+  def __lt__(self, value, /)
+  def __ne__(self, value, /)
+  def __new__(*args, **kwargs)
+  def __reduce__(?)
+  def __reduce_ex__(self, protocol, /)
+  def __repr__(self, /)
+  def __setattr__(self, name, value, /)
+  def __setstate__(?)
+  def __sizeof__(self, /)
+  def __str__(self, /)
+  def __subclasshook__(?)
+  def add_note(?)
+  def with_traceback(?)
+class NoLivePaths:
+  def __delattr__(self, name, /)
+  def __dir__(self, /)
+  def __eq__(self, value, /)
+  def __format__(self, format_spec, /)
+  def __ge__(self, value, /)
+  def __getattribute__(self, name, /)
+  def __getstate__(self, /)
+  def __gt__(self, value, /)
+  def __hash__(self, /)
+  def __init__(self, /, *args, **kwargs)
+  def __init_subclass__(?)
+  def __le__(self, value, /)
+  def __lt__(self, value, /)
+  def __ne__(self, value, /)
+  def __new__(*args, **kwargs)
+  def __reduce__(?)
+  def __reduce_ex__(self, protocol, /)
+  def __repr__(self, /)
+  def __setattr__(self, name, value, /)
+  def __setstate__(?)
+  def __sizeof__(self, /)
+  def __str__(self, /)
+  def __subclasshook__(?)
+  def add_note(?)
+  def with_traceback(?)
+class NotFinalized:
+  def __delattr__(self, name, /)
+  def __dir__(self, /)
+  def __eq__(self, value, /)
+  def __format__(self, format_spec, /)
+  def __ge__(self, value, /)
+  def __getattribute__(self, name, /)
+  def __getstate__(self, /)
+  def __gt__(self, value, /)
+  def __hash__(self, /)
+  def __init__(self, /, *args, **kwargs)
+  def __init_subclass__(?)
+  def __le__(self, value, /)
+  def __lt__(self, value, /)
+  def __ne__(self, value, /)
+  def __new__(*args, **kwargs)
+  def __reduce__(?)
+  def __reduce_ex__(self, protocol, /)
+  def __repr__(self, /)
+  def __setattr__(self, name, value, /)
+  def __setstate__(?)
+  def __sizeof__(self, /)
+  def __str__(self, /)
+  def __subclasshook__(?)
+  def add_note(?)
+  def with_traceback(?)
+class OutOfMemory:
+  def __delattr__(self, name, /)
+  def __dir__(self, /)
+  def __eq__(self, value, /)
+  def __format__(self, format_spec, /)
+  def __ge__(self, value, /)
+  def __getattribute__(self, name, /)
+  def __getstate__(self, /)
+  def __gt__(self, value, /)
+  def __hash__(self, /)
+  def __init__(self, /, *args, **kwargs)
+  def __init_subclass__(?)
+  def __le__(self, value, /)
+  def __lt__(self, value, /)
+  def __ne__(self, value, /)
+  def __new__(*args, **kwargs)
+  def __reduce__(?)
+  def __reduce_ex__(self, protocol, /)
+  def __repr__(self, /)
+  def __setattr__(self, name, value, /)
+  def __setstate__(?)
+  def __sizeof__(self, /)
+  def __str__(self, /)
+  def __subclasshook__(?)
+  def add_note(?)
+  def with_traceback(?)
+class PairLikelihood:
+  def __delattr__(self, name)
+  def __dir__(self, /)
+  def __eq__(self, value, /)
+  def __format__(self, format_spec, /)
+  def __ge__(self, value, /)
+  def __getattribute__(self, name, /)
+  def __getstate__(self, /)
+  def __gt__(self, value, /)
+  def __hash__(self, /)
+  def __init__(self, log_likelihood: 'float', poissonized_log_likelihood: 'float', log_prob_total_reads: 'float', pieces: 'tuple', n_reads: 'tuple', n_unique: 'tuple', n_unspellable: 'tuple', n_shared: 'int', shared_counts_log_prob: 'float', private_counts_log_prob: 'float', model_mass: 'float', bins: 'int | None', profile_edges: 'tuple') -> None
+  def __init_subclass__(?)
+  def __le__(self, value, /)
+  def __lt__(self, value, /)
+  def __ne__(self, value, /)
+  def __new__(*args, **kwargs)
+  def __reduce__(self, /)
+  def __reduce_ex__(self, protocol, /)
+  def __repr__(self) -> 'str'
+  def __setattr__(self, name, value)
+  def __sizeof__(self, /)
+  def __str__(self, /)
+  def __subclasshook__(?)
+  def piece(self, name: 'str') -> 'Piece'
+class Piece:
+  def __delattr__(self, name)
+  def __dir__(self, /)
+  def __eq__(self, value, /)
+  def __format__(self, format_spec, /)
+  def __ge__(self, value, /)
+  def __getattribute__(self, name, /)
+  def __getstate__(self, /)
+  def __gt__(self, value, /)
+  def __hash__(self, /)
+  def __init__(self, name: 'str', question: 'str', log_prob: 'float', exact: 'bool', method: 'str', error: 'float', observed: 'np.ndarray', expected: 'np.ndarray') -> None
+  def __init_subclass__(?)
+  def __le__(self, value, /)
+  def __lt__(self, value, /)
+  def __ne__(self, value, /)
+  def __new__(*args, **kwargs)
+  def __post_init__(self)
+  def __reduce__(self, /)
+  def __reduce_ex__(self, protocol, /)
+  def __repr__(self) -> 'str'
+  def __setattr__(self, name, value)
+  def __sizeof__(self, /)
+  def __str__(self, /)
+  def __subclasshook__(?)
+class PseqAnalysis:
+  def __delattr__(self, name, /)
+  def __dir__(self, /)
+  def __eq__(self, value, /)
+  def __format__(self, format_spec, /)
+  def __ge__(self, value, /)
+  def __getattribute__(self, name, /)
+  def __getstate__(self, /)
+  def __gt__(self, value, /)
+  def __hash__(self, /)
+  def __init__(self, model: 'BeamModel')
+  def __init_subclass__(?)
+  def __le__(self, value, /)
+  def __lt__(self, value, /)
+  def __ne__(self, value, /)
+  def __new__(*args, **kwargs)
+  def __reduce__(self, /)
+  def __reduce_ex__(self, protocol, /)
+  def __repr__(self) -> 'str'
+  def __setattr__(self, name, value, /)
+  def __sizeof__(self, /)
+  def __str__(self, /)
+  def __subclasshook__(?)
+  def atoms(self, bins: 'int' = 2048, *, length: 'int | None' = None) -> 'Atoms'
+  def cgf(self, t: 'float') -> 'float'
+  def derivatives(self, q: 'float', order: 'int' = 4) -> 'np.ndarray'
+  def discovery_curve(self, draw_counts: 'Iterable[float]', *, bins: 'int' = 2048) -> 'dict[str, np.ndarray]'
+  def diversity_under_edge_thresholds(self, thresholds: 'Any') -> 'dict'
+  def expected_richness(self, n: 'float', *, bins: 'int' = 2048) -> 'float'
+  def grid_spacing(self, bins: 'int') -> 'float'
+  def histogram(self, bins: 'int' = 2048, *, measure: 'str' = 'generated', length: 'int | None' = None) -> 'Histogram'
+  def histogram_pair(self, bins: 'int' = 2048) -> 'dict[str, Histogram]'
+  def histograms_by_length(self, bins: 'int' = 2048, *, measure: 'str' = 'generated', max_length: 'int | None' = None) -> 'dict[int, Histogram]'
+  def length_derivatives(self, q: 'float', order: 'int' = 0) -> 'dict[int, np.ndarray]'
+  def length_marginals(self) -> 'dict[int, dict[str, float]]'
+  def length_profile(self) -> 'dict[int, dict[str, float]]'
+  def log_mellin(self, q: 'float') -> 'float'
+  def mellin(self, q: 'float') -> 'float'
+  def moments(self, order: 'int' = 4) -> 'dict[str, float]'
+  def novelty(self, n: 'float', *, bins: 'int' = 2048) -> 'float'
+  property true_max_surprisal
+  property true_min_surprisal
+class PublicnessModel:
+  def __delattr__(self, name, /)
+  def __dir__(self, /)
+  def __eq__(self, value, /)
+  def __format__(self, format_spec, /)
+  def __ge__(self, value, /)
+  def __getattribute__(self, name, /)
+  def __getstate__(self, /)
+  def __gt__(self, value, /)
+  def __hash__(self, /)
+  def __init__(self, depths: 'Any', *, depth_bins: 'int' = 64, k_fft: 'int | None' = None, tail_sigma: 'float' = 40.0, tail_floor: 'float' = 256.0, mass_tol: 'float' = 1e-09) -> 'None'
+  def __init_subclass__(?)
+  def __le__(self, value, /)
+  def __lt__(self, value, /)
+  def __ne__(self, value, /)
+  def __new__(*args, **kwargs)
+  def __reduce__(self, /)
+  def __reduce_ex__(self, protocol, /)
+  def __repr__(self) -> 'str'
+  def __setattr__(self, name, value, /)
+  def __sizeof__(self, /)
+  def __str__(self, /)
+  def __subclasshook__(?)
+  def bin_mass(self, p: 'float', edges: 'Any') -> 'np.ndarray'
+  def depth_groups(self) -> 'tuple[np.ndarray, np.ndarray]'
+  property depth_spread
+  def expected_counts(self, probabilities: 'Any', multiplicities: 'Any', *, levels: 'Any' = None) -> 'dict[str, Any]'
+  def expected_counts_by_group(self, probabilities: 'Any', multiplicities: 'Any', groups: 'Any', *, n_groups: 'int | None' = None, levels: 'Any' = None) -> 'dict[str, Any]'
+  property k_fft
+  def moments(self, p: 'Any') -> 'tuple[Any, Any]'
+  property n_depth_groups
+  property n_repertoires
+  def pmf(self, p: 'float') -> 'np.ndarray'
+class QueryError:
+  def __delattr__(self, name, /)
+  def __dir__(self, /)
+  def __eq__(self, value, /)
+  def __format__(self, format_spec, /)
+  def __ge__(self, value, /)
+  def __getattribute__(self, name, /)
+  def __getstate__(self, /)
+  def __gt__(self, value, /)
+  def __hash__(self, /)
+  def __init__(self, /, *args, **kwargs)
+  def __init_subclass__(?)
+  def __le__(self, value, /)
+  def __lt__(self, value, /)
+  def __ne__(self, value, /)
+  def __new__(*args, **kwargs)
+  def __reduce__(?)
+  def __reduce_ex__(self, protocol, /)
+  def __repr__(self, /)
+  def __setattr__(self, name, value, /)
+  def __setstate__(?)
+  def __sizeof__(self, /)
+  def __str__(self, /)
+  def __subclasshook__(?)
+  def add_note(?)
+  def with_traceback(?)
+class QueryTooLarge:
+  def __delattr__(self, name, /)
+  def __dir__(self, /)
+  def __eq__(self, value, /)
+  def __format__(self, format_spec, /)
+  def __ge__(self, value, /)
+  def __getattribute__(self, name, /)
+  def __getstate__(self, /)
+  def __gt__(self, value, /)
+  def __hash__(self, /)
+  def __init__(self, /, *args, **kwargs)
+  def __init_subclass__(?)
+  def __le__(self, value, /)
+  def __lt__(self, value, /)
+  def __ne__(self, value, /)
+  def __new__(*args, **kwargs)
+  def __reduce__(?)
+  def __reduce_ex__(self, protocol, /)
+  def __repr__(self, /)
+  def __setattr__(self, name, value, /)
+  def __setstate__(?)
+  def __sizeof__(self, /)
+  def __str__(self, /)
+  def __subclasshook__(?)
+  def add_note(?)
+  def with_traceback(?)
+class RepertoireLikelihood:
+  def __delattr__(self, name)
+  def __dir__(self, /)
+  def __eq__(self, value, /)
+  def __format__(self, format_spec, /)
+  def __ge__(self, value, /)
+  def __getattribute__(self, name, /)
+  def __getstate__(self, /)
+  def __gt__(self, value, /)
+  def __hash__(self, /)
+  def __init__(self, log_likelihood: 'float', poissonized_log_likelihood: 'float', log_prob_total_reads: 'float', pieces: 'tuple', n_reads: 'int', n_unique: 'int', n_unspellable: 'int', model_mass: 'float', bins: 'int | None', profile_edges: 'tuple') -> None
+  def __init_subclass__(?)
+  def __le__(self, value, /)
+  def __lt__(self, value, /)
+  def __ne__(self, value, /)
+  def __new__(*args, **kwargs)
+  def __reduce__(self, /)
+  def __reduce_ex__(self, protocol, /)
+  def __repr__(self) -> 'str'
+  def __setattr__(self, name, value)
+  def __sizeof__(self, /)
+  def __str__(self, /)
+  def __subclasshook__(?)
+  def piece(self, name: 'str') -> 'Piece'
+class ResamplingBand:
+  def __delattr__(self, name)
+  def __dir__(self, /)
+  def __eq__(self, value, /)
+  def __format__(self, format_spec, /)
+  def __ge__(self, value, /)
+  def __getattribute__(self, name, /)
+  def __getstate__(self, /)
+  def __gt__(self, value, /)
+  def __hash__(self, /)
+  def __init__(self, orders: 'np.ndarray', lo: 'float', hi: 'float', lower: 'np.ndarray', median: 'np.ndarray', upper: 'np.ndarray', n_bootstraps: 'int', depth: 'int') -> None
+  def __init_subclass__(?)
+  def __le__(self, value, /)
+  def __lt__(self, value, /)
+  def __ne__(self, value, /)
+  def __new__(*args, **kwargs)
+  def __reduce__(self, /)
+  def __reduce_ex__(self, protocol, /)
+  def __repr__(self) -> 'str'
+  def __setattr__(self, name, value)
+  def __sizeof__(self, /)
+  def __str__(self, /)
+  def __subclasshook__(?)
+class ScaleIndex:
+  def __delattr__(self, name, /)
+  def __dir__(self, /)
+  def __eq__(self, value, /)
+  def __format__(self, format_spec, /)
+  def __ge__(self, value, /)
+  def __getattribute__(self, name, /)
+  def __getstate__(self, /)
+  def __gt__(self, value, /)
+  def __hash__(self, /)
+  def __init__(self, *, calibration, n_sim, seed, x, lam, t)
+  def __init_subclass__(?)
+  def __le__(self, value, /)
+  def __lt__(self, value, /)
+  def __ne__(self, value, /)
+  def __new__(*args, **kwargs)
+  def __reduce__(self, /)
+  def __reduce_ex__(self, protocol, /)
+  def __repr__(self) -> 'str'
+  def __setattr__(self, name, value, /)
+  def __sizeof__(self, /)
+  def __str__(self, /)
+  def __subclasshook__(?)
+  def channels(self, model, sequences) -> 'dict'
+  property lengths
+  def score(self, model, sequences)
+class SupportSize:
+  def __delattr__(self, name)
+  def __dir__(self, /)
+  def __eq__(self, other)
+  def __format__(self, format_spec, /)
+  def __ge__(self, value, /)
+  def __getattribute__(self, name, /)
+  def __getstate__(self, /)
+  def __gt__(self, value, /)
+  def __hash__(self)
+  def __init__(self, value: 'float | None', lower: 'float', upper: 'float', exact: 'bool', peak_states: 'int' = 0) -> None
+  def __init_subclass__(?)
+  def __le__(self, value, /)
+  def __lt__(self, value, /)
+  def __ne__(self, value, /)
+  def __new__(*args, **kwargs)
+  def __reduce__(self, /)
+  def __reduce_ex__(self, protocol, /)
+  def __repr__(self)
+  def __setattr__(self, name, value)
+  def __sizeof__(self, /)
+  def __str__(self, /)
+  def __subclasshook__(?)
+class UnsupportedOrder:
+  def __delattr__(self, name, /)
+  def __dir__(self, /)
+  def __eq__(self, value, /)
+  def __format__(self, format_spec, /)
+  def __ge__(self, value, /)
+  def __getattribute__(self, name, /)
+  def __getstate__(self, /)
+  def __gt__(self, value, /)
+  def __hash__(self, /)
+  def __init__(self, /, *args, **kwargs)
+  def __init_subclass__(?)
+  def __le__(self, value, /)
+  def __lt__(self, value, /)
+  def __ne__(self, value, /)
+  def __new__(*args, **kwargs)
+  def __reduce__(?)
+  def __reduce_ex__(self, protocol, /)
+  def __repr__(self, /)
+  def __setattr__(self, name, value, /)
+  def __setstate__(?)
+  def __sizeof__(self, /)
+  def __str__(self, /)
+  def __subclasshook__(?)
+  def add_note(?)
+  def with_traceback(?)
+class UnsupportedQuery:
+  def __delattr__(self, name, /)
+  def __dir__(self, /)
+  def __eq__(self, value, /)
+  def __format__(self, format_spec, /)
+  def __ge__(self, value, /)
+  def __getattribute__(self, name, /)
+  def __getstate__(self, /)
+  def __gt__(self, value, /)
+  def __hash__(self, /)
+  def __init__(self, /, *args, **kwargs)
+  def __init_subclass__(?)
+  def __le__(self, value, /)
+  def __lt__(self, value, /)
+  def __ne__(self, value, /)
+  def __new__(*args, **kwargs)
+  def __reduce__(?)
+  def __reduce_ex__(self, protocol, /)
+  def __repr__(self, /)
+  def __setattr__(self, name, value, /)
+  def __setstate__(?)
+  def __sizeof__(self, /)
+  def __str__(self, /)
+  def __subclasshook__(?)
+  def add_note(?)
+  def with_traceback(?)
+def attribute(model, sequence) -> 'Attribution'
+def depth_matched_hill_profiles(repertoires: 'Sequence[Sequence[str]]', abundances: 'Sequence[Sequence[float]] | None' = None, *, n_bootstraps: 'int' = 20, orders: 'Iterable[float] | None' = None, seed: 'int | None' = None, weighting: 'str' = 'abundance', n_workers: 'int | None' = None, **config: 'Any') -> 'DepthMatchedProfiles'
+def effective_threads() -> 'int'
+def file_provenance_span() -> 'tuple[int, int]'
+def fit_alpha(sequences: 'Iterable[str]', abundances: 'Iterable[float] | None' = None, *, held_out: 'tuple | None' = None, fraction: 'float' = 0.5, seed: 'int' = 0, bounds: 'tuple[float, float]' = (0.001, 1000000000000.0), sweeps: 'int' = 2, tol: 'float' = 0.05, **config) -> 'AlphaFit'
+def memory_budget() -> 'int'
+def pair_likelihood(model, sequences_1: 'Sequence[str]', counts_1: 'Iterable', sequences_2: 'Sequence[str]', counts_2: 'Iterable', *, bins: 'int' = 2048, profile_edges: 'Sequence[int]' = (1, 2, 3, 4, 5, 6, 11, 101), atoms=None) -> 'PairLikelihood'
+def repertoire_likelihood(model, sequences: 'Sequence[str]', counts: 'Iterable', *, bins: 'int' = 2048, profile_edges: 'Sequence[int]' = (1, 2, 3, 4, 5, 6, 11, 101), atoms=None) -> 'RepertoireLikelihood'
+def set_memory_budget(nbytes: 'int') -> 'None'
+def set_threads(n: 'int') -> 'None'
+def threads() -> 'int'

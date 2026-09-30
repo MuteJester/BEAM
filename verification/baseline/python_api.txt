@@ -160,6 +160,8 @@ class BeamModel:
   def log_clamp_probability(self, length: 'int', clamp: 'dict') -> 'float'
   def log_length_prior(self, length: 'int') -> 'float'
   def log_mellin(self, q: 'float') -> 'float'
+  def log_mellin_complex(self, orders: 'Iterable[complex]') -> 'np.ndarray'
+  def log_mellin_line(self, re: 'float', im_start: 'float', im_step: 'float', n: 'int') -> 'np.ndarray'
   def log_mellin_many(self, orders: 'Iterable[float]') -> 'np.ndarray'
   def log_partition(self, length: 'int') -> 'float'
   def log_partition_by_layer(self, length: 'int') -> 'np.ndarray'

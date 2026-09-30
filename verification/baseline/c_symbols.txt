@@ -87,6 +87,8 @@ beam_model_live_cache_bytes
 beam_model_load
 beam_model_log_length_prior
 beam_model_log_mellin
+beam_model_log_mellin_complex
+beam_model_log_mellin_line
 beam_model_log_mellin_many
 beam_model_log_partition
 beam_model_log_partition_by_layer
@@ -211,6 +213,8 @@ beam_surprisal_range_at
 beam_tail_weights
 beam_threads
 jet_sweep
+jet_sweep_cfan
 jet_sweep_fan
+jet_sweep_line
 publicness_check_groups
 publicness_check_probability

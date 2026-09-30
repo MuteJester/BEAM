@@ -1862,3 +1862,29 @@ nothing else did.
 `exact.py` passed before recording (351 quantities, worst 4.0%). The estimate
 itself is checked in `test_hierarchical_prior.py` against the evidence
 recomputed in plain Python with `math.lgamma`, level by level.
+
+# Why the baselines moved for complex Mellin orders
+
+Re-recorded 2026-09-30, tag `precomplex`. The power sum M(q) = sum_s P(s)^q is
+now computed at COMPLEX q, and a module computes occupancy quantities exactly
+from it, so the public surface grew and nothing that existed moved.
+
+    cbeam_methods.txt      +2 -0  log_mellin_complex, log_mellin_line
+    c_public_symbols.txt   +2 -0  beam_model_log_mellin_complex,
+                                  beam_model_log_mellin_line
+    c_symbols.txt          +4 -0  the two above, and the internal sweeps
+                                  jet_sweep_cfan and jet_sweep_line
+    python_api.txt         +2 -0  BeamModel.log_mellin_complex,
+                                  BeamModel.log_mellin_line
+    pytest_cases.txt      +58 -0  test_mellin_complex.py (19),
+                                  test_mellin_line.py (13),
+                                  analytics/test_exact_occupancy.py (26)
+    c_cases.txt            +6 -0  tests/native/test_mellin_complex.c
+    numeric.json           unchanged (re-written by the recorder, byte-identical)
+    threads.json           unchanged (likewise)
+
+`exact.py` passed before recording, now at 411 quantities (+60: complex
+orders and the vertical line, each against the enumerated sum as
+M / M(Re q)), worst 5.8% of its tolerance. The per-edge `exp` of
+`log_mellin_complex` was made shared across orders with an equal real part
+and shift, and held bit-identical to the build before it on 44 orders.
