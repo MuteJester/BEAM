@@ -445,3 +445,18 @@ def test_poisson_richness(case):
     ns = [0.5, 3.0, 1e2, 1e4, 1e6]
     for n, v in zip(ns, eo.poisson_richness_many(ns)):
         _held(v, float(np.sum(-np.expm1(-np.longdouble(n) * p))))
+
+
+def test_a_value_no_line_can_resolve_stops_the_planner(case):
+    """Where most of the mass lies far above 1/n, U(n) is tiny (1e-36 on the
+    nucleotide model here) and no line resolves it to rel_tol. The planner
+    must stop -- returning each value with the bound it has -- rather than
+    build line after line that resolves nothing (3-4 minutes each on the
+    foundation). Every bound it returns must still hold."""
+    m, p, eo = case
+    fresh = ExactOccupancy(m, rel_tol=1e-10)
+    ns = np.geomspace(1e-3 / eo.p_min, 1e-1 / eo.p_min, 12)
+    out = fresh.novelty_many(ns)
+    for n, v in zip(ns, out):
+        _held(v, float(np.sum(p * _miss(p, n - 1))), tol=math.inf)
+    assert len(fresh.lines) <= 4, fresh.lines

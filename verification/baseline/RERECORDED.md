@@ -1978,3 +1978,23 @@ of its time making a Python string per sequence and a Python float per score.
 The gate passed on everything else before recording and on everything after,
 `exact.py` at 411 quantities, worst 5.8% of its tolerance. The full suites:
 Python 923 passed, 2 skipped; C 338 passed.
+
+# Why the test inventory moved for a planner that knows when to stop
+
+Re-recorded 2026-09-30, tag `prefutile`. On the foundation, U(n) at n ~ 1e70
+and beyond is too small for any contour line to resolve to rel_tol, and the
+planner kept building finer lines that resolved nothing -- six of 3-4
+minutes each before the step was stopped. A parameter whose own new line does
+not improve its bound tenfold is now finished, and a batch stops after three
+new lines in a row resolve nothing; what is left is returned with the bound
+it has. No C changed.
+
+    pytest_cases.txt       +2 -0  test_a_value_no_line_can_resolve_stops_the_planner,
+                                  both alphabets
+    python_api.txt         unchanged (re-written by the recorder, byte-identical)
+    c_cases.txt            unchanged (likewise)
+    numeric.json           unchanged (likewise)
+    threads.json           unchanged (likewise)
+
+The gate passed on everything else before recording, `exact.py` at 411
+quantities. The full suite: 925 passed, 2 skipped.

@@ -924,6 +924,8 @@ class ExactOccupancy:
     # ── the batch engine ────────────────────────────────────────
 
     _CHUNK = 1024
+    #: New lines in a row that resolve nothing before a batch stops planning.
+    _FUTILE_LINES = 3
 
     def _integrate_many(self, ln, kmat, kabs_mat, sign, amp_left, amp_right,
                         rate_right, n_scale, idx, extra=None, alias_fn=None):
@@ -1027,7 +1029,14 @@ class ExactOccupancy:
                     1.0, abs_floor / np.maximum(np.abs(best_v), 1e-300))
             return ~(best_r <= np.where(np.isfinite(best_v), tol, self.rel_tol))
 
-        while True:
+        # WHEN TO STOP. A value can be out of any line's reach -- smaller than
+        # the rounding of the sum that forms it -- and then every finer line
+        # only costs time (minutes each on a foundation). So a parameter whose
+        # own new line did not improve its bound tenfold is finished, and
+        # after _FUTILE_LINES new lines in a row that resolved nothing the
+        # batch stops. What is left is returned with the bound it has.
+        futile = 0
+        while futile < self._FUTILE_LINES:
             open_ = order[unresolved()[order] & (tries[order] < 4)]
             if open_.size == 0:
                 break
@@ -1035,6 +1044,7 @@ class ExactOccupancy:
             i = idx[j]
             strict = 0.1 ** max(tries[j] - 1, 0)
             tries[j] += 1
+            before = best_r[j]
             est = abs(best_v[j]) if np.isfinite(best_r[j]) else guess[i]
             est = max(est, abs_floor)
             q, h = self._design_qh(est, amp_left[i], amp_right[i], rate_right, strict)
@@ -1048,6 +1058,13 @@ class ExactOccupancy:
                 _log.info("line q=%g h=%.4g: %s, %d orders in %.1fs; resolved "
                           "%d of %d pending %s values", q, h, cost[0], cost[1],
                           cost[2], pending.size - left, pending.size, label)
+                futile = futile + 1 if left == pending.size else 0
+                if unresolved()[j] and not best_r[j] < 0.1 * before:
+                    tries[j] = 4
+        if futile >= self._FUTILE_LINES:
+            _log.info("stopped: %d new lines in a row resolved no %s value; %d "
+                      "returned with the bounds they have", futile, label,
+                      int(np.count_nonzero(unresolved())))
         out = []
         for j in range(P):
             ln = best_l[j]
