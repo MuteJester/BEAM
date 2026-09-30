@@ -58,9 +58,11 @@ the spectrum's histograms. Those are threshold counts; see
 from __future__ import annotations
 
 import contextlib
+import logging
 import math
 import os
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -68,6 +70,10 @@ import numpy as np
 from scipy.special import gammaln, loggamma, polygamma
 
 __all__ = ["BoundedValue", "ExactOccupancy"]
+
+#: One INFO record per contour line computed or extended: its cost, and how
+#: many of the values waiting on it it resolved.
+_log = logging.getLogger(__name__)
 
 EPS = float(np.finfo(float).eps)
 #: Below this argument the log-gamma ratio is taken directly; above it, as a
@@ -267,6 +273,7 @@ class ExactOccupancy:
         self.rel_tol = float(rel_tol)
         self._lines: list[_Line] = []
         self._real: dict[float, float] = {}
+        self._last_cost = None           # (kind, orders, seconds) of the last line built
         self.log_d0 = float(model.log_mellin(0.0))
         lo, hi = model.surprisal_range()
         self.p_max = math.exp(-lo)
@@ -328,9 +335,11 @@ class ExactOccupancy:
         EXTENDED -- only the missing nodes are computed and appended -- rather
         than recomputed from the start.
         """
+        self._last_cost = None
         for ln in self._lines:
             if ln.q == q and ln.h <= h * (1 + 1e-12) and ln.t[-1] >= T:
                 return ln
+        t0 = time.perf_counter()
         for ln in self._lines:
             if ln.q == q and ln.h == h:
                 k0 = ln.t.size
@@ -338,11 +347,13 @@ class ExactOccupancy:
                 more = self._m.log_mellin_line(q, -h * k0, -h, n - k0)
                 ln.log_m = np.concatenate([ln.log_m, np.asarray(more)])
                 ln.t = h * np.arange(n)
+                self._last_cost = ("extended", n - k0, time.perf_counter() - t0)
                 return ln
         n = int(math.ceil(T / h)) + 1
         log_m = self._m.log_mellin_line(q, 0.0, -h, n)
         ln = _Line(q=q, h=h, t=h * np.arange(n), log_m=np.asarray(log_m))
         self._lines.append(ln)
+        self._last_cost = ("new", n, time.perf_counter() - t0)
         return ln
 
     def _fingerprint(self) -> np.ndarray:
@@ -877,8 +888,14 @@ class ExactOccupancy:
             q, h = self._design_qh(est, amp_left[i], amp_right[i], rate_right, strict)
             T = self._design_T_many(kabs_mat, q, idx[[j]], np.array([est]), strict)
             ln = self._line(q, h, T)
+            cost = self._last_cost
             pending = np.nonzero(best_r > self.rel_tol)[0]
             take(ln, pending)
+            if cost is not None:
+                left = int(np.count_nonzero(best_r[pending] > self.rel_tol))
+                _log.info("line q=%g h=%.4g: %s, %d orders in %.1fs; resolved "
+                          "%d of %d pending %s values", q, h, cost[0], cost[1],
+                          cost[2], pending.size - left, pending.size, label)
         out = []
         for j in range(P):
             ln = best_l[j]

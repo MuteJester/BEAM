@@ -34,6 +34,8 @@ tests/python/analytics/test_exact_occupancy.py::test_bounded_value_does_not_pass
 tests/python/analytics/test_exact_occupancy.py::test_bounded_value_does_not_pass_for_a_float[nt]
 tests/python/analytics/test_exact_occupancy.py::test_equal_depth_cohort[aa]
 tests/python/analytics/test_exact_occupancy.py::test_equal_depth_cohort[nt]
+tests/python/analytics/test_exact_occupancy.py::test_every_line_computed_is_logged[aa]
+tests/python/analytics/test_exact_occupancy.py::test_every_line_computed_is_logged[nt]
 tests/python/analytics/test_exact_occupancy.py::test_frequencies_add_up_to_richness[aa]
 tests/python/analytics/test_exact_occupancy.py::test_frequencies_add_up_to_richness[nt]
 tests/python/analytics/test_exact_occupancy.py::test_frequency[aa]

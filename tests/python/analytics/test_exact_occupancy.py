@@ -278,6 +278,19 @@ def test_a_batch_builds_no_more_lines_than_one_depth_at_a_time(case):
     assert sum(x[2] for x in batch.lines) <= sum(x[2] for x in one.lines)
 
 
+def test_every_line_computed_is_logged(case, caplog):
+    """A line is minutes on a large model; each one says what it cost and
+    what it resolved, so a long batch can be followed."""
+    import logging
+    m, p, eo = case
+    fresh = ExactOccupancy(m, rel_tol=1e-10)
+    with caplog.at_level(logging.INFO, logger="BEAM.analytics.exact_occupancy"):
+        fresh.richness_many(np.geomspace(1e3, 1e9, 20))
+    msgs = [r.getMessage() for r in caplog.records]
+    assert len([x for x in msgs if x.startswith("line ")]) == len(fresh.lines)
+    assert all("orders" in x and "resolved" in x for x in msgs if x.startswith("line "))
+
+
 def test_saving_keeps_the_lines_another_process_saved(case, tmp_path):
     """Two processes on one model each save what they computed to the same
     file; the file ends up with both, not with whichever saved last."""

@@ -1911,3 +1911,21 @@ no C changed, so only the test inventory moved.
 The gate passed on everything else before recording, `exact.py` at 411
 quantities, worst 5.8% of its tolerance. The full suite: 899 passed, 1
 skipped.
+
+# Why the test inventory moved for logged contour lines
+
+Re-recorded 2026-09-30, tag `preline4`. `ExactOccupancy` logs one INFO
+record per contour line it computes or extends -- its cost and how many of
+the values waiting on it it resolved -- so a long batch can be followed.
+
+    pytest_cases.txt       +2 -0  test_every_line_computed_is_logged, both
+                                  alphabets
+    python_api.txt         unchanged (re-written by the recorder, byte-identical)
+    c_cases.txt            unchanged (likewise)
+    numeric.json           unchanged (likewise)
+    threads.json           unchanged (likewise)
+
+Recorded with the four-orders-at-a-time line sweep of the next commit already
+built, which moved none of these: `numeric`, `thread independence` and
+`exact.py` (411 quantities, worst 5.8% of its tolerance, as before) passed
+unchanged. The full suite: 901 passed, 1 skipped; the C suite 337 passed.
