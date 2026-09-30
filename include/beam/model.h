@@ -747,6 +747,55 @@ BeamError beam_model_log_mellin_many(const BeamModel *m, const double *qs,
                                      size_t nq, double *out);
 
 /**
+ * `ln sum_s P(s)^q` at COMPLEX orders `q = q_re[i] + i q_im[i]`: `out_re[i]`
+ * is `ln |M(q)|` and `out_im[i]` is `arg M(q)` in `(-pi, pi]`.
+ *
+ * `P(s)^q` factors along the sequence at any q, so this is an exact DP at
+ * every point of the complex plane. On a vertical line it is what a
+ * Mellin-Barnes integral needs: `sum_s f(P(s))` for f with a Mellin transform
+ * -- expected richness, occupancy counts, pairwise sharing -- is a 1-D
+ * contour integral of it, with no binned spectrum.
+ *
+ * Exact to rounding in the moduli. Where the phases of different sequences
+ * cancel, `|M(q)|` sits below `M(q_re)` and the relative error of the result
+ * grows by that ratio; that is arithmetic, not approximation.
+ *
+ * Deterministic as `beam_model_log_mellin_many` is: the same bits for an order
+ * whatever the thread count, budget, or company. At a real order the result
+ * agrees with `beam_model_log_mellin` to rounding (not bit for bit: the
+ * phase is carried). Budgeted like the many-order form, with each mass plane
+ * twice as wide. Non-finite orders are refused with BEAM_ERR_PARAM_OUT_OF_RANGE.
+ *
+ * `nq = 0` succeeds and writes nothing; the pointers may then be NULL.
+ */
+BeamError beam_model_log_mellin_complex(const BeamModel *m, const double *q_re,
+                                        const double *q_im, size_t nq,
+                                        double *out_re, double *out_im);
+
+/**
+ * `beam_model_log_mellin_complex` along one vertical line: the orders
+ * `re + i (im0 + k dim)`, `k = 0 .. nq-1`, which is how a Mellin-Barnes
+ * contour is sampled.
+ *
+ * Faster than the general form by what the line shares. Every order has the
+ * same real part, so each edge's modulus factor is taken once for all of
+ * them. Each order's rotation is the previous order's times a fixed factor,
+ * taken directly every 32 orders, so one cosine and one sine per edge replace
+ * one per edge per order.
+ *
+ * Agrees with `beam_model_log_mellin_complex` to rounding, not to the bit:
+ * the rotation is the same number reached by different operations. Order k's
+ * bits depend on the line and on k alone -- not on nq, the thread count, or
+ * the memory budget.
+ *
+ * `nq = 0` succeeds and writes nothing. Non-finite `re`, `im0` or `dim` are
+ * refused with BEAM_ERR_PARAM_OUT_OF_RANGE.
+ */
+BeamError beam_model_log_mellin_line(const BeamModel *m, double re, double im0,
+                                     double dim, size_t nq, double *out_re,
+                                     double *out_im);
+
+/**
  * Raw moments of the surprisal `-ln P(s)` under the `q`-tilted distribution
  * `P_q(s) proportional to P(s)^q`.
  *

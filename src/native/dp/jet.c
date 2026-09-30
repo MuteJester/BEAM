@@ -476,3 +476,505 @@ done:
     beam_live_release(&h);
     return BEAM_OK;
 }
+
+
+/* ── Complex tilts ───────────────────────────────────────────── */
+
+/**
+ * `jet_sweep_fan` at COMPLEX tilts `q = q_re + i q_im`: the per-length
+ * `ln sum over paths of exp(q * raw)`, returned as its modulus in log form
+ * and its phase, `out_log_mod[j * out_stride]` and `out_phase[j * out_stride]`.
+ *
+ * WHY. `P(s)^q` factors along the path at ANY q, so the power sum
+ * `M(q) = sum_s P(s)^q` is an exact DP everywhere in the complex plane, and on
+ * a vertical line it is what a Mellin-Barnes integral needs: expected
+ * richness, occupancy counts and pairwise sharing are 1-D contour integrals of
+ * M, with no spectrum and no grid.
+ *
+ * THE SAME SWEEP AS `jet_sweep_fan`, with the mass planes complex. Each edge
+ * multiplies by `exp(q_re * w - qmax) * exp(i q_im * w)`: the modulus is the
+ * real tilt's, so `qmax` -- the per-layer shift that keeps it in range -- is
+ * taken from `q_re` exactly as there, and the phase rides in the complex
+ * accumulator, which needs no range control. Each layer is rescaled by its
+ * largest component magnitude, `max(|re|, |im|)`, which is within a factor
+ * sqrt(2) of the largest modulus and costs no square root.
+ *
+ * WHAT THE PHASES COST. Paths with different `raw` arrive with different
+ * phases and cancel, so `|M(q)|` can sit far below `M(q_re)`, the sum of the
+ * moduli. The arithmetic is exact to rounding in the moduli; relative to
+ * `|M(q)|` it loses what the cancellation takes. A caller integrating along a
+ * line is exposed to it only where the integrand is small.
+ *
+ * DETERMINISM is kept as in `jet_sweep_fan`: every sum is taken by one thread
+ * in ascending source order, maxima are exact in any order, and each tilt's
+ * sequence of operations does not depend on the others, so a tilt computed
+ * alone and in company gives the same bits.
+ */
+BeamError jet_sweep_cfan(const BeamModel *m, uint32_t len, const double *q_re,
+                         const double *q_im, uint32_t nq, double *out_log_mod,
+                         double *out_phase, size_t out_stride) {
+    const uint32_t A = m->n_alphabet;
+    const uint32_t R = m->n_residues;
+    const uint32_t S = m->n_states;
+    const uint32_t SK = m->state_shift;
+    const uint32_t W = nq;
+
+    for (uint32_t j = 0; j < W; ++j) {
+        out_log_mod[(size_t)j * out_stride] = -INFINITY;
+        out_phase[(size_t)j * out_stride] = 0.0;
+    }
+    if (W == 0u) return BEAM_OK;
+
+    BEAM_BUDGET_OR_REFUSE("a complex tilted sweep", len,
+                          beam_jet_cfan_bytes(S, R, W));
+
+    double  *w     = (double *)malloc((size_t)S * R * sizeof(double));
+    double  *tail  = (double *)malloc((size_t)S * sizeof(double));
+    /* re and im interleaved per tilt: [state][tilt][2] */
+    double  *cur   = (double *)calloc((size_t)S * W * 2u, sizeof(double));
+    double  *next  = (double *)calloc((size_t)S * W * 2u, sizeof(double));
+    uint8_t *alive = (uint8_t *)malloc(S);
+    double   *pt  = (double *)malloc((size_t)W * 8u * sizeof(double));
+    uint32_t *act = (uint32_t *)malloc((size_t)W * sizeof(uint32_t));
+    LiveHandle h;
+    if (!w || !tail || !cur || !next || !alive || !pt || !act
+        || beam_live_acquire(m, len, &h) != BEAM_OK) {
+        free(w); free(tail); free(cur); free(next); free(alive);
+        free(pt); free(act);
+        return BEAM_EALLOC("the complex tilted-sweep buffers");
+    }
+    const BeamLive *L = h.L;
+    double *scale = pt;
+    double *qmax  = pt + 1u * W;
+    double *hi    = pt + 2u * W;
+    double *lo    = pt + 3u * W;
+    double *nmax  = pt + 4u * W;
+    double *tmax  = pt + 5u * W;
+    double *fre   = pt + 6u * W;
+    double *fim   = pt + 7u * W;
+    const size_t W2 = (size_t)W * 2u;
+
+    uint32_t nact = W;
+    for (uint32_t j = 0; j < W; ++j) {
+        act[j] = j;
+        scale[j] = 0.0;
+        cur[(size_t)(S - 1) * W2 + 2u * j] = 1.0;   /* start state, real 1 */
+    }
+
+    for (uint32_t i = 0; i < len; ++i) {
+        beam_reached_mask(L, i, S, alive);
+        beam_layer_weights_live(m, i, len, w, NULL, alive);
+
+        for (uint32_t b = 0; b < nact; ++b) {
+            hi[act[b]] = -INFINITY;
+            lo[act[b]] = INFINITY;
+        }
+        const uint32_t  nr = L->n_reached[i];
+        const uint32_t *rv = L->reached[i];
+#ifdef _OPENMP
+        #pragma omp parallel for schedule(static) reduction(max:hi[:W]) \
+                reduction(min:lo[:W]) num_threads(beam_threads())
+#endif
+        for (int64_t k = 0; k < (int64_t)nr; ++k) {
+            const uint32_t s = rv[k];
+            const double *row = w + (size_t)s * R;
+            const double *c = cur + (size_t)s * W2;
+            double rmax = -INFINITY, rmin = INFINITY;
+            for (uint32_t x = 0; x < R; ++x) {
+                if (row[x] > rmax) rmax = row[x];
+                if (row[x] != -INFINITY && row[x] < rmin) rmin = row[x];
+            }
+            for (uint32_t b = 0; b < nact; ++b) {
+                const uint32_t j = act[b];
+                if (c[2u * j] == 0.0 && c[2u * j + 1u] == 0.0) continue;
+                if (rmax > hi[j]) hi[j] = rmax;
+                if (rmin < lo[j]) lo[j] = rmin;
+            }
+        }
+        uint32_t keep = 0;
+        for (uint32_t b = 0; b < nact; ++b) {
+            const uint32_t j = act[b];
+            if (hi[j] == -INFINITY) continue;
+            const double qm = q_re[j] >= 0.0 ? q_re[j] * hi[j]
+                            : (lo[j] == INFINITY ? -INFINITY : q_re[j] * lo[j]);
+            if (qm == -INFINITY) continue;
+            qmax[j] = qm;
+            act[keep++] = j;
+        }
+        nact = keep;
+        if (nact == 0u) goto done;
+
+        const uint32_t  nt  = L->n_reached[i + 1];
+        const uint32_t *tgt = L->reached[i + 1];
+        for (uint32_t b = 0; b < nact; ++b) nmax[act[b]] = 0.0;
+#ifdef _OPENMP
+        #pragma omp parallel for schedule(static) reduction(max:nmax[:W]) \
+                num_threads(beam_threads())
+#endif
+        for (int64_t k = 0; k < (int64_t)nt; ++k) {
+            const uint32_t t = tgt[k];
+            const uint32_t x = t % A;
+            if (x >= R) continue;
+            const uint32_t rest = t / A;
+            double *nx = next + (size_t)t * W2;
+            for (uint32_t a = 0; a < A; ++a) {
+                const uint32_t src = a * SK + rest;
+                if (!alive[src]) continue;
+                const double wv = w[(size_t)src * R + x];
+                if (wv == -INFINITY) continue;
+                const double *c = cur + (size_t)src * W2;
+                /* Orders that share a real part share their layer shift, and
+                 * then `exp(q_re * w - qmax)` is the same number computed from
+                 * the same inputs: it is taken once per edge and reused. The
+                 * bits are exactly those of computing it per order. */
+                double last_re = NAN, last_qm = NAN, mag_c = 0.0;
+                for (uint32_t b = 0; b < nact; ++b) {
+                    const uint32_t j = act[b];
+                    const double cr = c[2u * j], ci = c[2u * j + 1u];
+                    if (cr == 0.0 && ci == 0.0) continue;
+                    if (!(q_re[j] == last_re && qmax[j] == last_qm)) {
+                        last_re = q_re[j]; last_qm = qmax[j];
+                        mag_c = exp(q_re[j] * wv - qmax[j]);
+                    }
+                    const double mag = mag_c;
+                    const double ang = q_im[j] * wv;
+                    const double er = mag * cos(ang), ei = mag * sin(ang);
+                    nx[2u * j]      += er * cr - ei * ci;
+                    nx[2u * j + 1u] += er * ci + ei * cr;
+                }
+            }
+            for (uint32_t b = 0; b < nact; ++b) {
+                const uint32_t j = act[b];
+                const double v = fmax(fabs(nx[2u * j]), fabs(nx[2u * j + 1u]));
+                if (v > nmax[j]) nmax[j] = v;
+            }
+        }
+        keep = 0;
+        for (uint32_t b = 0; b < nact; ++b) {
+            const uint32_t j = act[b];
+            scale[j] += qmax[j];
+            if (!(nmax[j] > 0.0)) continue;
+            act[keep++] = j;
+        }
+        nact = keep;
+        if (nact == 0u) goto done;
+#ifdef _OPENMP
+        #pragma omp parallel for schedule(static) num_threads(beam_threads())
+#endif
+        for (int64_t k = 0; k < (int64_t)nt; ++k) {
+            double *nx = next + (size_t)tgt[k] * W2;
+            for (uint32_t b = 0; b < nact; ++b) {
+                const uint32_t j = act[b];
+                nx[2u * j]      = beam_rescale(nx[2u * j], nmax[j]);
+                nx[2u * j + 1u] = beam_rescale(nx[2u * j + 1u], nmax[j]);
+            }
+        }
+        for (uint32_t b = 0; b < nact; ++b)
+            scale[act[b]] += log(nmax[act[b]]);
+
+        for (uint32_t k = 0; k < nr; ++k)
+            memset(cur + (size_t)rv[k] * W2, 0, W2 * sizeof(double));
+        double *tmp = cur; cur = next; next = tmp;
+    }
+
+    /* Sink: one more edge whose weight is the tail. */
+    beam_tail_weights(m, len, tail);
+    {
+        const uint32_t  ns = L->n_reached[len];
+        const uint32_t *sv = L->reached[len];
+        for (uint32_t b = 0; b < nact; ++b) {
+            tmax[act[b]] = -INFINITY;
+            fre[act[b]] = 0.0;
+            fim[act[b]] = 0.0;
+        }
+        for (uint32_t k = 0; k < ns; ++k) {
+            const uint32_t s = sv[k];
+            const double tv = tail[s];
+            if (tv == -INFINITY) continue;
+            const double *c = cur + (size_t)s * W2;
+            for (uint32_t b = 0; b < nact; ++b) {
+                const uint32_t j = act[b];
+                if (c[2u * j] == 0.0 && c[2u * j + 1u] == 0.0) continue;
+                if (q_re[j] * tv > tmax[j]) tmax[j] = q_re[j] * tv;
+            }
+        }
+        for (uint32_t k = 0; k < ns; ++k) {
+            const uint32_t s = sv[k];
+            const double tv = tail[s];
+            if (tv == -INFINITY) continue;
+            const double *c = cur + (size_t)s * W2;
+            double last_re = NAN, last_tm = NAN, mag_c = 0.0;
+            for (uint32_t b = 0; b < nact; ++b) {
+                const uint32_t j = act[b];
+                const double cr = c[2u * j], ci = c[2u * j + 1u];
+                if ((cr == 0.0 && ci == 0.0) || tmax[j] == -INFINITY) continue;
+                if (!(q_re[j] == last_re && tmax[j] == last_tm)) {
+                    last_re = q_re[j]; last_tm = tmax[j];
+                    mag_c = exp(q_re[j] * tv - tmax[j]);
+                }
+                const double mag = mag_c;
+                const double ang = q_im[j] * tv;
+                const double er = mag * cos(ang), ei = mag * sin(ang);
+                fre[j] += er * cr - ei * ci;
+                fim[j] += er * ci + ei * cr;
+            }
+        }
+        for (uint32_t b = 0; b < nact; ++b) {
+            const uint32_t j = act[b];
+            if (tmax[j] == -INFINITY) continue;
+            const double mod = hypot(fre[j], fim[j]);
+            if (!(mod > 0.0)) continue;
+            out_log_mod[(size_t)j * out_stride] = scale[j] + tmax[j] + log(mod);
+            out_phase[(size_t)j * out_stride] = atan2(fim[j], fre[j]);
+        }
+    }
+
+done:
+    free(w); free(tail); free(cur); free(next); free(alive);
+    free(pt); free(act);
+    beam_live_release(&h);
+    return BEAM_OK;
+}
+
+
+/* ── A vertical line of complex tilts ────────────────────────── */
+
+/**
+ * `jet_sweep_cfan` for the orders `re + i (im0 + g dim)`, `g = k0 .. k0+nq-1`:
+ * a stretch of one vertical line, which is the contour a Mellin-Barnes
+ * integral runs along. Output as `jet_sweep_cfan`'s, one entry per order.
+ *
+ * WHAT THE LINE SHARES. Every order has the same real part, so the layer shift
+ * and each edge's modulus `exp(re * w - qmax)` are one number for all of them,
+ * taken once per edge. The shift comes from the REACHED states' weights,
+ * which do not depend on any order, rather than from each order's mass as in
+ * `jet_sweep_cfan`; on a reached state the two coincide.
+ *
+ * WHAT THE LINE RECURS. Order g's rotation `exp(i (im0 + g dim) w)` is order
+ * g-1's times `exp(i dim w)`: one complex multiply where the reference takes a
+ * cosine and a sine. It is taken DIRECTLY at every g that is a multiple of
+ * BEAM_LINE_BLOCK, so the chain is at most that long and its rounding stays
+ * at a few ulp; a stretch starting between anchors rebuilds its first rotation
+ * from the anchor below with the same multiplies, in the same order.
+ *
+ * WHY THAT MATTERS: an order's value depends on the line and on g alone --
+ * not on k0, nq, the thread count or the budget, all of which only decide
+ * which stretch it is computed in. It agrees with `jet_sweep_cfan` to
+ * rounding, not to the bit: the rotation is the same number reached by a
+ * different sequence of operations.
+ */
+#define BEAM_LINE_BLOCK 32u
+
+BeamError jet_sweep_line(const BeamModel *m, uint32_t len, double re,
+                         double im0, double dim, uint64_t k0, uint32_t nq,
+                         double *out_log_mod, double *out_phase,
+                         size_t out_stride) {
+    const uint32_t A = m->n_alphabet;
+    const uint32_t R = m->n_residues;
+    const uint32_t S = m->n_states;
+    const uint32_t SK = m->state_shift;
+    const uint32_t W = nq;
+
+    for (uint32_t j = 0; j < W; ++j) {
+        out_log_mod[(size_t)j * out_stride] = -INFINITY;
+        out_phase[(size_t)j * out_stride] = 0.0;
+    }
+    if (W == 0u) return BEAM_OK;
+
+    BEAM_BUDGET_OR_REFUSE("a complex tilted line sweep", len,
+                          beam_jet_cfan_bytes(S, R, W));
+
+    double  *w     = (double *)malloc((size_t)S * R * sizeof(double));
+    double  *tail  = (double *)malloc((size_t)S * sizeof(double));
+    double  *cur   = (double *)calloc((size_t)S * W * 2u, sizeof(double));
+    double  *next  = (double *)calloc((size_t)S * W * 2u, sizeof(double));
+    uint8_t *alive = (uint8_t *)malloc(S);
+    double  *pt    = (double *)malloc((size_t)W * 4u * sizeof(double));
+    uint8_t *dead  = (uint8_t *)calloc(W, 1);
+    LiveHandle h;
+    if (!w || !tail || !cur || !next || !alive || !pt || !dead
+        || beam_live_acquire(m, len, &h) != BEAM_OK) {
+        free(w); free(tail); free(cur); free(next); free(alive);
+        free(pt); free(dead);
+        return BEAM_EALLOC("the complex line-sweep buffers");
+    }
+    const BeamLive *L = h.L;
+    double *scale = pt;
+    double *nmax  = pt + 1u * W;
+    double *fre   = pt + 2u * W;
+    double *fim   = pt + 3u * W;
+    const size_t W2 = (size_t)W * 2u;
+    uint32_t nalive = W;
+
+    for (uint32_t j = 0; j < W; ++j) {
+        scale[j] = 0.0;
+        cur[(size_t)(S - 1) * W2 + 2u * j] = 1.0;
+    }
+
+    /* The rotation of order k0 (the stretch's first) for weight v: direct at
+     * the anchor at or below k0, then the recurrence up to k0 -- the same
+     * operations a stretch starting at the anchor performs. */
+#define LINE_FIRST_ROT(v, rr, ri) do {                                        \
+        const uint64_t anc_ = k0 - k0 % BEAM_LINE_BLOCK;                       \
+        const double a_ = (im0 + (double)anc_ * dim) * (v);                    \
+        rr = cos(a_); ri = sin(a_);                                            \
+        if (anc_ != k0) {                                                      \
+            const double dr_ = cos(dim * (v)), di_ = sin(dim * (v));           \
+            for (uint64_t g_ = anc_ + 1u; g_ <= k0; ++g_) {                    \
+                const double t_ = rr * dr_ - ri * di_;                         \
+                ri = rr * di_ + ri * dr_; rr = t_;                             \
+            }                                                                  \
+        }                                                                      \
+    } while (0)
+
+    for (uint32_t i = 0; i < len; ++i) {
+        beam_reached_mask(L, i, S, alive);
+        beam_layer_weights_live(m, i, len, w, NULL, alive);
+
+        double hi = -INFINITY, lo = INFINITY;
+        const uint32_t  nr = L->n_reached[i];
+        const uint32_t *rv = L->reached[i];
+#ifdef _OPENMP
+        #pragma omp parallel for schedule(static) reduction(max:hi) \
+                reduction(min:lo) num_threads(beam_threads())
+#endif
+        for (int64_t k = 0; k < (int64_t)nr; ++k) {
+            const double *row = w + (size_t)rv[k] * R;
+            for (uint32_t x = 0; x < R; ++x) {
+                if (row[x] > hi) hi = row[x];
+                if (row[x] != -INFINITY && row[x] < lo) lo = row[x];
+            }
+        }
+        if (hi == -INFINITY) goto done;
+        const double qmax = re >= 0.0 ? re * hi
+                          : (lo == INFINITY ? -INFINITY : re * lo);
+        if (qmax == -INFINITY) goto done;
+
+        const uint32_t  nt  = L->n_reached[i + 1];
+        const uint32_t *tgt = L->reached[i + 1];
+        for (uint32_t j = 0; j < W; ++j) nmax[j] = 0.0;
+#ifdef _OPENMP
+        #pragma omp parallel for schedule(static) reduction(max:nmax[:W]) \
+                num_threads(beam_threads())
+#endif
+        for (int64_t k = 0; k < (int64_t)nt; ++k) {
+            const uint32_t t = tgt[k];
+            const uint32_t x = t % A;
+            if (x >= R) continue;
+            const uint32_t rest = t / A;
+            double *nx = next + (size_t)t * W2;
+            for (uint32_t a = 0; a < A; ++a) {
+                const uint32_t src = a * SK + rest;
+                if (!alive[src]) continue;
+                const double wv = w[(size_t)src * R + x];
+                if (wv == -INFINITY) continue;
+                const double *c = cur + (size_t)src * W2;
+                const double mag = exp(re * wv - qmax);
+                const double dr = cos(dim * wv), di = sin(dim * wv);
+                double rr, ri;
+                LINE_FIRST_ROT(wv, rr, ri);
+                for (uint32_t j = 0; j < W; ++j) {
+                    if (j) {
+                        if ((k0 + j) % BEAM_LINE_BLOCK == 0u) {
+                            const double ang = (im0 + (double)(k0 + j) * dim) * wv;
+                            rr = cos(ang); ri = sin(ang);
+                        } else {
+                            const double tr = rr * dr - ri * di;
+                            ri = rr * di + ri * dr; rr = tr;
+                        }
+                    }
+                    if (dead[j]) continue;
+                    const double cr = c[2u * j], ci = c[2u * j + 1u];
+                    if (cr == 0.0 && ci == 0.0) continue;
+                    const double er = mag * rr, ei = mag * ri;
+                    nx[2u * j]      += er * cr - ei * ci;
+                    nx[2u * j + 1u] += er * ci + ei * cr;
+                }
+            }
+            for (uint32_t j = 0; j < W; ++j) {
+                if (dead[j]) continue;
+                const double v = fmax(fabs(nx[2u * j]), fabs(nx[2u * j + 1u]));
+                if (v > nmax[j]) nmax[j] = v;
+            }
+        }
+        for (uint32_t j = 0; j < W; ++j) {
+            if (dead[j]) continue;
+            scale[j] += qmax;
+            if (!(nmax[j] > 0.0)) { dead[j] = 1; --nalive; }
+        }
+        if (nalive == 0u) goto done;
+#ifdef _OPENMP
+        #pragma omp parallel for schedule(static) num_threads(beam_threads())
+#endif
+        for (int64_t k = 0; k < (int64_t)nt; ++k) {
+            double *nx = next + (size_t)tgt[k] * W2;
+            for (uint32_t j = 0; j < W; ++j) {
+                if (dead[j]) continue;
+                nx[2u * j]      = beam_rescale(nx[2u * j], nmax[j]);
+                nx[2u * j + 1u] = beam_rescale(nx[2u * j + 1u], nmax[j]);
+            }
+        }
+        for (uint32_t j = 0; j < W; ++j)
+            if (!dead[j]) scale[j] += log(nmax[j]);
+
+        for (uint32_t k = 0; k < nr; ++k)
+            memset(cur + (size_t)rv[k] * W2, 0, W2 * sizeof(double));
+        double *tmp = cur; cur = next; next = tmp;
+    }
+
+    /* Sink: one more edge whose weight is the tail, with the shift taken over
+     * the reached end states, again independent of every order. */
+    beam_tail_weights(m, len, tail);
+    {
+        const uint32_t  ns = L->n_reached[len];
+        const uint32_t *sv = L->reached[len];
+        double tmax = -INFINITY;
+        for (uint32_t k = 0; k < ns; ++k) {
+            const double tv = tail[sv[k]];
+            if (tv != -INFINITY && re * tv > tmax) tmax = re * tv;
+        }
+        if (tmax == -INFINITY) goto done;
+        for (uint32_t j = 0; j < W; ++j) { fre[j] = 0.0; fim[j] = 0.0; }
+        for (uint32_t k = 0; k < ns; ++k) {
+            const uint32_t s = sv[k];
+            const double tv = tail[s];
+            if (tv == -INFINITY) continue;
+            const double *c = cur + (size_t)s * W2;
+            const double mag = exp(re * tv - tmax);
+            const double dr = cos(dim * tv), di = sin(dim * tv);
+            double rr, ri;
+            LINE_FIRST_ROT(tv, rr, ri);
+            for (uint32_t j = 0; j < W; ++j) {
+                if (j) {
+                    if ((k0 + j) % BEAM_LINE_BLOCK == 0u) {
+                        const double ang = (im0 + (double)(k0 + j) * dim) * tv;
+                        rr = cos(ang); ri = sin(ang);
+                    } else {
+                        const double tr = rr * dr - ri * di;
+                        ri = rr * di + ri * dr; rr = tr;
+                    }
+                }
+                if (dead[j]) continue;
+                const double cr = c[2u * j], ci = c[2u * j + 1u];
+                if (cr == 0.0 && ci == 0.0) continue;
+                const double er = mag * rr, ei = mag * ri;
+                fre[j] += er * cr - ei * ci;
+                fim[j] += er * ci + ei * cr;
+            }
+        }
+        for (uint32_t j = 0; j < W; ++j) {
+            if (dead[j]) continue;
+            const double mod = hypot(fre[j], fim[j]);
+            if (!(mod > 0.0)) continue;
+            out_log_mod[(size_t)j * out_stride] = scale[j] + tmax + log(mod);
+            out_phase[(size_t)j * out_stride] = atan2(fim[j], fre[j]);
+        }
+    }
+#undef LINE_FIRST_ROT
+
+done:
+    free(w); free(tail); free(cur); free(next); free(alive);
+    free(pt); free(dead);
+    beam_live_release(&h);
+    return BEAM_OK;
+}

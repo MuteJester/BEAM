@@ -238,3 +238,223 @@ BeamError beam_model_log_mellin_many(const BeamModel *m, const double *qs,
     free(terms); free(mx);
     return BEAM_OK;
 }
+
+
+/* ── Complex orders ──────────────────────────────────────────── */
+
+BeamError beam_model_log_mellin_complex(const BeamModel *m, const double *q_re,
+                                        const double *q_im, size_t nq,
+                                        double *out_re, double *out_im) {
+    if (!m) return BEAM_ENULL("model");
+    if (nq && (!q_re || !q_im || !out_re || !out_im))
+        return BEAM_ENULL(!q_re ? "real parts" : !q_im ? "imaginary parts"
+                                               : "output buffer");
+    if (!m->finalized) return BEAM_ENOTBUILT();
+    if (nq == 0u) return BEAM_OK;
+    if (nq > UINT32_MAX)
+        return BEAM_ERANGE("%s: %zu orders in one call; the limit is %u",
+                           __func__, nq, (unsigned)UINT32_MAX);
+    for (size_t j = 0; j < nq; ++j)
+        if (!isfinite(q_re[j]) || !isfinite(q_im[j]))
+            return BEAM_ERANGE("%s: order %zu is %g%+gi; orders must be finite",
+                               __func__, j, q_re[j], q_im[j]);
+
+    const uint32_t n = m->n_len_slots;
+    const uint32_t N = (uint32_t)nq;
+    uint32_t *work = (uint32_t *)malloc((size_t)n * sizeof(uint32_t));
+    double *lmod = (double *)malloc((size_t)N * n * sizeof(double));
+    double *lph  = (double *)malloc((size_t)N * n * sizeof(double));
+    if (!work || !lmod || !lph) {
+        free(work); free(lmod); free(lph);
+        return BEAM_EALLOC("the per-length complex Mellin terms");
+    }
+    for (size_t k = 0; k < (size_t)N * n; ++k) { lmod[k] = -INFINITY; lph[k] = 0.0; }
+    const uint32_t nw = beam_live_lengths_desc(m, work);
+
+    /* Budgeted exactly as `mellin_terms_many`: the widest fusion that leaves
+     * room for one sweep per thread, equal blocks when the orders do not fit
+     * one sweep, and a refusal only when a single order does not fit. */
+    const uint32_t S = m->n_states, R = m->n_residues;
+    const uint64_t base = beam_jet_cfan_bytes(S, R, 0u);
+    const uint64_t per_tilt = beam_jet_cfan_bytes(S, R, 1u) - base;
+    const int th = beam_model_effective_threads();
+    uint32_t want = th > 0 ? (uint32_t)th : 1u;
+    if (nw && want > nw) want = nw;
+    const uint64_t room = beam_model_memory_budget() / want;
+    const uint64_t fit = room > base ? (room - base) / per_tilt : 0u;
+    uint32_t width = fit >= N ? N : (fit > 0u ? (uint32_t)fit : 1u);
+    const uint32_t nb = (N + width - 1u) / width;
+    width = (N + nb - 1u) / nb;
+
+    const uint64_t items = (uint64_t)nw * nb;
+    const uint64_t need = beam_jet_cfan_bytes(S, R, width);
+    const uint32_t conc = beam_budget_concurrency(
+        need, items == 0u ? 1u : (items > UINT32_MAX ? UINT32_MAX
+                                                     : (uint32_t)items));
+    if (items && conc == 0u) {
+        const uint32_t at = work[0];
+        free(work); free(lmod); free(lph);
+        return beam_budget_refuse("a complex tilted per-length sweep", at, need);
+    }
+
+    int failed = BEAM_OK;
+#ifdef _OPENMP
+    #pragma omp parallel for schedule(dynamic, 1) reduction(max:failed) \
+            num_threads((int)conc)
+#endif
+    for (int64_t k = 0; k < (int64_t)items; ++k) {
+        const uint32_t L  = work[(uint64_t)k / nb];
+        const uint32_t q0 = (uint32_t)((uint64_t)k % nb) * width;
+        const uint32_t wq = N - q0 < width ? N - q0 : width;
+        const BeamError e = jet_sweep_cfan(m, L, q_re + q0, q_im + q0, wq,
+                                           lmod + (size_t)q0 * n + L,
+                                           lph + (size_t)q0 * n + L, n);
+        if (e != BEAM_OK && (int)e > failed) failed = (int)e;
+    }
+    free(work);
+    if (failed != BEAM_OK) {
+        free(lmod); free(lph);
+        return BEAM_FAIL((BeamError)failed,
+                        "a complex per-length tilted sweep could not be computed");
+    }
+
+    /*
+     * Combine the lengths. Length L contributes
+     *     exp(q c_L) Z_q(L),   c_L = ln pi(L) - ln Z(L),
+     * whose log-modulus is `re(q) c_L + lmod[L]` and whose phase is
+     * `im(q) c_L + lph[L]`. Summed in ascending length after shifting by the
+     * largest log-modulus, as the real transform's log-sum-exp is.
+     */
+    for (uint32_t j = 0; j < N; ++j) {
+        const double *lm = lmod + (size_t)j * n;
+        const double *lp = lph + (size_t)j * n;
+        double mx = -INFINITY;
+        for (uint32_t L = 1; L < n; ++L) {
+            if (!beam_length_live(m, L) || lm[L] == -INFINITY) continue;
+            const double t = q_re[j] * (m->log_pi[L] - m->log_z[L]) + lm[L];
+            if (t > mx) mx = t;
+        }
+        if (mx == -INFINITY) { out_re[j] = -INFINITY; out_im[j] = 0.0; continue; }
+        double ar = 0.0, ai = 0.0;
+        for (uint32_t L = 1; L < n; ++L) {
+            if (!beam_length_live(m, L) || lm[L] == -INFINITY) continue;
+            const double c = m->log_pi[L] - m->log_z[L];
+            const double mod = exp(q_re[j] * c + lm[L] - mx);
+            const double ph = q_im[j] * c + lp[L];
+            ar += mod * cos(ph);
+            ai += mod * sin(ph);
+        }
+        const double a = hypot(ar, ai);
+        if (!(a > 0.0)) { out_re[j] = -INFINITY; out_im[j] = 0.0; continue; }
+        out_re[j] = mx + log(a);
+        out_im[j] = atan2(ai, ar);
+    }
+    free(lmod); free(lph);
+    return BEAM_OK;
+}
+
+
+/* ── A vertical line ─────────────────────────────────────────── */
+
+BeamError beam_model_log_mellin_line(const BeamModel *m, double re, double im0,
+                                     double dim, size_t nq, double *out_re,
+                                     double *out_im) {
+    if (!m) return BEAM_ENULL("model");
+    if (nq && (!out_re || !out_im)) return BEAM_ENULL("output buffer");
+    if (!m->finalized) return BEAM_ENOTBUILT();
+    if (!isfinite(re) || !isfinite(im0) || !isfinite(dim))
+        return BEAM_ERANGE("%s: the line %g + i(%g + k %g) must be finite",
+                           __func__, re, im0, dim);
+    if (nq == 0u) return BEAM_OK;
+    if (nq > UINT32_MAX)
+        return BEAM_ERANGE("%s: %zu orders in one call; the limit is %u",
+                           __func__, nq, (unsigned)UINT32_MAX);
+
+    const uint32_t n = m->n_len_slots;
+    const uint32_t N = (uint32_t)nq;
+    uint32_t *work = (uint32_t *)malloc((size_t)n * sizeof(uint32_t));
+    double *lmod = (double *)malloc((size_t)N * n * sizeof(double));
+    double *lph  = (double *)malloc((size_t)N * n * sizeof(double));
+    if (!work || !lmod || !lph) {
+        free(work); free(lmod); free(lph);
+        return BEAM_EALLOC("the per-length line Mellin terms");
+    }
+    for (size_t k = 0; k < (size_t)N * n; ++k) { lmod[k] = -INFINITY; lph[k] = 0.0; }
+    const uint32_t nw = beam_live_lengths_desc(m, work);
+
+    /* Budgeted as the complex form. Where the orders are split into stretches
+     * does not change any order's bits (see jet_sweep_line), so the stretch
+     * width is chosen for memory alone. */
+    const uint32_t S = m->n_states, R = m->n_residues;
+    const uint64_t base = beam_jet_cfan_bytes(S, R, 0u);
+    const uint64_t per_tilt = beam_jet_cfan_bytes(S, R, 1u) - base;
+    const int th = beam_model_effective_threads();
+    uint32_t want = th > 0 ? (uint32_t)th : 1u;
+    if (nw && want > nw) want = nw;
+    const uint64_t room = beam_model_memory_budget() / want;
+    const uint64_t fit = room > base ? (room - base) / per_tilt : 0u;
+    uint32_t width = fit >= N ? N : (fit > 0u ? (uint32_t)fit : 1u);
+    const uint32_t nb = (N + width - 1u) / width;
+    width = (N + nb - 1u) / nb;
+
+    const uint64_t items = (uint64_t)nw * nb;
+    const uint64_t need = beam_jet_cfan_bytes(S, R, width);
+    const uint32_t conc = beam_budget_concurrency(
+        need, items == 0u ? 1u : (items > UINT32_MAX ? UINT32_MAX
+                                                     : (uint32_t)items));
+    if (items && conc == 0u) {
+        const uint32_t at = work[0];
+        free(work); free(lmod); free(lph);
+        return beam_budget_refuse("a complex tilted line sweep", at, need);
+    }
+
+    int failed = BEAM_OK;
+#ifdef _OPENMP
+    #pragma omp parallel for schedule(dynamic, 1) reduction(max:failed) \
+            num_threads((int)conc)
+#endif
+    for (int64_t k = 0; k < (int64_t)items; ++k) {
+        const uint32_t L  = work[(uint64_t)k / nb];
+        const uint32_t q0 = (uint32_t)((uint64_t)k % nb) * width;
+        const uint32_t wq = N - q0 < width ? N - q0 : width;
+        const BeamError e = jet_sweep_line(m, L, re, im0, dim, q0, wq,
+                                           lmod + (size_t)q0 * n + L,
+                                           lph + (size_t)q0 * n + L, n);
+        if (e != BEAM_OK && (int)e > failed) failed = (int)e;
+    }
+    free(work);
+    if (failed != BEAM_OK) {
+        free(lmod); free(lph);
+        return BEAM_FAIL((BeamError)failed,
+                        "a complex per-length line sweep could not be computed");
+    }
+
+    /* The lengths combined exactly as in `beam_model_log_mellin_complex`. */
+    for (uint32_t j = 0; j < N; ++j) {
+        const double qi = im0 + (double)j * dim;
+        const double *lm = lmod + (size_t)j * n;
+        const double *lp = lph + (size_t)j * n;
+        double mx = -INFINITY;
+        for (uint32_t L = 1; L < n; ++L) {
+            if (!beam_length_live(m, L) || lm[L] == -INFINITY) continue;
+            const double t = re * (m->log_pi[L] - m->log_z[L]) + lm[L];
+            if (t > mx) mx = t;
+        }
+        if (mx == -INFINITY) { out_re[j] = -INFINITY; out_im[j] = 0.0; continue; }
+        double ar = 0.0, ai = 0.0;
+        for (uint32_t L = 1; L < n; ++L) {
+            if (!beam_length_live(m, L) || lm[L] == -INFINITY) continue;
+            const double c = m->log_pi[L] - m->log_z[L];
+            const double mod = exp(re * c + lm[L] - mx);
+            const double ph = qi * c + lp[L];
+            ar += mod * cos(ph);
+            ai += mod * sin(ph);
+        }
+        const double a = hypot(ar, ai);
+        if (!(a > 0.0)) { out_re[j] = -INFINITY; out_im[j] = 0.0; continue; }
+        out_re[j] = mx + log(a);
+        out_im[j] = atan2(ai, ar);
+    }
+    free(lmod); free(lph);
+    return BEAM_OK;
+}

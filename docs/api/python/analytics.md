@@ -148,6 +148,53 @@ A sweep carrying `n` orders holds `n` mass vectors where one order holds one, an
 
 Orders must be finite; `nan` and `inf` raise `BeamValueError`.
 
+#### Complex orders
+
+```python
+log_mellin_complex(orders) -> np.ndarray   # complex128: ln|M(q)| + i arg M(q)
+```
+
+`M(q) = sum_s P(s)**q` at complex `q`, exactly. `P(s)**q` factors along the sequence at any complex `q`, so the power sum is a dynamic program everywhere in the plane, not only on the real line. `np.exp(result)` is `M(q)`; `M(conj q) = conj M(q)`.
+
+**What it is for.** A sum over every sequence of a function of `P(s)` that does not factor along the sequence, such as expected richness `R(n) = sum_s 1 - e^{-n P(s)}`, is a one-dimensional contour integral of `M` (Mellin-Barnes). For `-1 < c < 0`:
+
+```
+R(n) = -(1/2pi) ∫ Gamma(c+it) n^-(c+it) M(-(c+it)) dt
+```
+
+- **What each part is:**
+  - `Gamma` is the gamma function, and its Mellin transform gives `1 - e^{-x}`.
+  - `n^-(c+it)` carries the depth.
+  - `M` evaluated on the line `-(c+it)` carries the model.
+- **Cost:** `M` does not depend on `n`, so one set of values on the line serves every depth.
+- **Accuracy:** a trapezoid rule on `c = -1/2` with step `0.1` and `|t| <= 40` (801 values of `M`) was tested on a million exact probabilities from an enumerated order-4 model. It reproduced `R(n)` from `n = 10` to `1e12` to between `3e-12` and `3e-7` of the direct sum. That is with no spectrum and no grid, where a binned spectrum at 16,384 bins is off by about `1e-4`.
+
+**Precision.** It is exact to rounding in the moduli. Sequences of different probability carry different phases and cancel, so `|M(q)|` can sit far below `M(Re q)`, the sum of the moduli. The relative error of the result grows by that ratio, while the absolute error stays at rounding relative to `M(Re q)`. Against enumeration the worst measured error is `6e-14` of the moduli.
+
+**Determinism.** As for `log_mellin_many`:
+- The same bits for an order whatever the thread count, the memory budget or the company it keeps.
+- One traversal per length for all the orders.
+- At a real order it agrees with `log_mellin` to rounding, not bit for bit, because the phase is carried.
+
+**Memory and cost.** Each mass plane is twice as wide as a real order's, and the budget is divided the same way. A complex order currently costs about 1.5 times a real one, and fusing orders saves little. The per-edge `exp`, `cos` and `sin` are taken per order, which is the obvious thing to optimise for orders sharing a real part.
+
+Orders must be finite, and real input is accepted.
+
+#### Along a vertical line
+
+```python
+log_mellin_line(re, im_start, im_step, n) -> np.ndarray   # complex128
+```
+
+`log_mellin_complex` at the orders `re + 1j*(im_start + k*im_step)`, `k = 0 .. n-1`. That is how a Mellin-Barnes contour is sampled, and the line shares two things that make it several times faster:
+
+- **Moduli.** Every order has the same real part, so each edge's modulus factor `exp(re*w - shift)` is one number for all of them, taken once per edge.
+- **Rotations.** Order `k`'s rotation `exp(i(im_start + k*im_step)w)` is order `k-1`'s times `exp(i*im_step*w)`. It is recomputed directly at every multiple of 32, so the chain of multiplies is at most 31 long. One cosine and one sine per edge replace one per edge per order.
+
+**Exact to rounding, not to the bit, against `log_mellin_complex`**, since the recurrence reaches the same rotation by different operations. Measured differences are within `1e-12` of `M(Re q)`, and the tests hold them there. What IS bit-for-bit is everything the line determines: order `k`'s value depends on the line and on `k` alone. The number of orders, the thread count and the memory budget change none of its bits, even when the budget splits the line into stretches that start between the recurrence's anchors, because such a stretch rebuilds its first rotation from the anchor below.
+
+Use it for contours and keep `log_mellin_complex` as the reference.
+
 ### Diversity
 
 ```python

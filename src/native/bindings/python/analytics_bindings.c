@@ -236,6 +236,94 @@ PyObject *py_log_mellin_many(PyObject *self, PyObject *args) {
     PyMem_Free(out);
     return res;
 }
+/* log_mellin_complex(cap, re, im) -> bytes of 2*nq doubles, interleaved
+ * (re, im) per order: the memory layout of numpy's complex128. */
+PyObject *py_log_mellin_complex(PyObject *self, PyObject *args) {
+    (void)self;
+    PyObject *cap, *reobj, *imobj;
+    if (!PyArg_ParseTuple(args, "OOO", &cap, &reobj, &imobj)) return NULL;
+    BeamModel *m = edge_from_capsule(cap);
+    if (!m) return NULL;
+    Py_buffer rv, iv;
+    if (!get_f64_buffer(reobj, &rv, 0, "real parts")) return NULL;
+    if (!get_f64_buffer(imobj, &iv, 0, "imaginary parts")) {
+        PyBuffer_Release(&rv);
+        return NULL;
+    }
+    const Py_ssize_t nq = f64_buffer_count(&rv);
+    if (f64_buffer_count(&iv) != nq) {
+        PyBuffer_Release(&rv); PyBuffer_Release(&iv);
+        PyErr_Format(PyExc_ValueError,
+                     "%zd real parts but %zd imaginary parts",
+                     nq, f64_buffer_count(&iv));
+        return NULL;
+    }
+    if ((uint64_t)nq > UINT32_MAX) {
+        PyBuffer_Release(&rv); PyBuffer_Release(&iv);
+        PyErr_Format(PyExc_ValueError,
+                     "%zd orders in one call; the limit is %u",
+                     nq, (unsigned)UINT32_MAX);
+        return NULL;
+    }
+    double *out = (double *)beam_py_alloc((uint64_t)nq * 2u * sizeof(double),
+                                          "the complex Mellin values",
+                                          (uint32_t)nq, "orders");
+    if (!out) { PyBuffer_Release(&rv); PyBuffer_Release(&iv); return NULL; }
+    double *ore = out, *oim = out + nq;
+    BeamError err;
+    Py_BEGIN_ALLOW_THREADS
+    err = beam_model_log_mellin_complex(m, (const double *)rv.buf,
+                                        (const double *)iv.buf, (size_t)nq,
+                                        ore, oim);
+    Py_END_ALLOW_THREADS
+    PyBuffer_Release(&rv); PyBuffer_Release(&iv);
+    if (err != BEAM_OK) { PyMem_Free(out); return set_beam_error(err); }
+    /* Interleave in a second buffer so the result is complex128 as-is. */
+    double *il = (double *)beam_py_alloc((uint64_t)nq * 2u * sizeof(double),
+                                         "the complex Mellin values",
+                                         (uint32_t)nq, "orders");
+    if (!il) { PyMem_Free(out); return NULL; }
+    for (Py_ssize_t j = 0; j < nq; ++j) {
+        il[2 * j] = ore[j];
+        il[2 * j + 1] = oim[j];
+    }
+    PyMem_Free(out);
+    PyObject *res = edge_doubles_to_bytes(il, (size_t)nq * 2u);
+    PyMem_Free(il);
+    return res;
+}
+/* log_mellin_line(cap, re, im0, dim, n) -> bytes of 2n doubles,
+ * interleaved (re, im): numpy complex128. */
+PyObject *py_log_mellin_line(PyObject *self, PyObject *args) {
+    (void)self;
+    PyObject *cap; double re, im0, dim; Py_ssize_t n;
+    if (!PyArg_ParseTuple(args, "Odddn", &cap, &re, &im0, &dim, &n)) return NULL;
+    BeamModel *m = edge_from_capsule(cap);
+    if (!m) return NULL;
+    if (n < 0) {
+        PyErr_Format(PyExc_ValueError, "n must be non-negative, got %zd", n);
+        return NULL;
+    }
+    if ((uint64_t)n > UINT32_MAX) {
+        PyErr_Format(PyExc_ValueError, "%zd orders in one call; the limit is %u",
+                     n, (unsigned)UINT32_MAX);
+        return NULL;
+    }
+    double *out = (double *)beam_py_alloc((uint64_t)n * 4u * sizeof(double),
+                                          "the line Mellin values",
+                                          (uint32_t)n, "orders");
+    if (!out) return NULL;
+    double *ore = out, *oim = out + n, *il = out + 2 * n;
+    BeamError err;
+    Py_BEGIN_ALLOW_THREADS
+    err = beam_model_log_mellin_line(m, re, im0, dim, (size_t)n, ore, oim);
+    Py_END_ALLOW_THREADS
+    if (err != BEAM_OK) { PyMem_Free(out); return set_beam_error(err); }
+    for (Py_ssize_t j = 0; j < n; ++j) { il[2 * j] = ore[j]; il[2 * j + 1] = oim[j]; }
+    PyObject *res = edge_doubles_to_bytes(il, (size_t)n * 2u);
+    PyMem_Free(out);
+    return res;
+}
 PyObject *py_surprisal_moments(PyObject *self, PyObject *args) {
     (void)self;
     PyObject *cap; double q; unsigned int order;

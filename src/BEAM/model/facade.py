@@ -1479,6 +1479,93 @@ class BeamModel:
         return np.frombuffer(_c.log_mellin_many(self._g, q),
                              dtype=np.float64).copy()
 
+    def log_mellin_complex(self, orders: Iterable[complex]) -> np.ndarray:
+        """``ln sum_s P(s)**q`` at COMPLEX orders, exactly.
+
+        ``P(s)**q`` factors along the sequence at any complex ``q``, so the
+        power sum ``M(q)`` is an exact dynamic program everywhere in the
+        plane, not only on the real line :meth:`log_mellin` covers. On a
+        vertical line it is what a Mellin-Barnes integral needs: a sum over
+        every sequence of a function of ``P(s)`` with a Mellin transform --
+        expected richness ``sum_s 1 - e^{-n P(s)}``, occupancy counts,
+        pairwise sharing -- is a one-dimensional contour integral of ``M``,
+        with no binned spectrum and so no grid error.
+
+        Returns a complex128 array the length of ``orders``: the real part is
+        ``ln |M(q)|`` and the imaginary part ``arg M(q)`` in ``(-pi, pi]``, so
+        ``np.exp(result)`` is ``M(q)``. ``M(conj(q)) = conj(M(q))``.
+
+        EXACT TO ROUNDING, with one caveat that is arithmetic rather than
+        approximation: sequences of different probability carry different
+        phases and cancel, so ``|M(q)|`` can sit far below ``M(Re q)``, the
+        sum of the moduli, and the relative error of the result grows by that
+        ratio. The absolute error stays at rounding relative to ``M(Re q)``.
+
+        Deterministic like :meth:`log_mellin_many`: the same bits for an order
+        whatever the thread count, the memory budget or which other orders
+        share the call, and one traversal per length for all of them. At a
+        real order it agrees with :meth:`log_mellin` to rounding.
+
+        Orders must be finite. Real input is accepted as orders with zero
+        imaginary part; an empty sequence returns an empty array.
+        """
+        if isinstance(orders, (str, bytes)):
+            raise BeamTypeError("orders must be a sequence of numbers, not a string")
+        try:
+            seq = orders if isinstance(orders, np.ndarray) else list(orders)
+            q = np.array(seq, dtype=np.complex128)
+        except (TypeError, ValueError):
+            raise BeamTypeError(
+                f"orders must be a sequence of numbers, got "
+                f"{type(orders).__name__}") from None
+        if q.ndim != 1:
+            raise BeamValueError(
+                f"orders must be one-dimensional, got shape {q.shape}")
+        bad = q[~np.isfinite(q)]
+        if bad.size:
+            raise BeamValueError(
+                f"orders must be finite, got {bad[:3].tolist()}")
+        if q.size == 0:
+            return np.empty(0, dtype=np.complex128)
+        # Fresh arrays: the C side reads them with the GIL released.
+        re = np.array(q.real, dtype=np.float64)
+        im = np.array(q.imag, dtype=np.float64)
+        return np.frombuffer(_c.log_mellin_complex(self._g, re, im),
+                             dtype=np.complex128).copy()
+
+    def log_mellin_line(self, re: float, im_start: float, im_step: float,
+                        n: int) -> np.ndarray:
+        """:meth:`log_mellin_complex` along one vertical line.
+
+        The orders are ``re + 1j * (im_start + k * im_step)`` for
+        ``k = 0 .. n-1``: equally spaced on the line ``Re q = re``, which is how
+        a Mellin-Barnes contour is sampled. Returns complex128, ``ln|M| + i
+        arg M``, as :meth:`log_mellin_complex` does.
+
+        FASTER BY WHAT THE LINE SHARES. Every order has the same real part,
+        so each edge's modulus factor is taken once for all of them. Each
+        order's rotation is the previous one's times a fixed factor,
+        recomputed directly every 32 orders, so one cosine and one sine per
+        edge replace one per edge per order.
+
+        EXACT TO ROUNDING, NOT TO THE BIT, against :meth:`log_mellin_complex`:
+        the recurrence reaches the same rotation by different operations.
+        Order ``k``'s bits depend on the line and on ``k`` alone -- not on
+        ``n``, the thread count or the memory budget.
+        """
+        for name, v in (("re", re), ("im_start", im_start), ("im_step", im_step)):
+            if not math.isfinite(float(v)):
+                raise BeamValueError(f"{name} must be finite, got {v!r}")
+        n = operator.index(n)
+        if n < 0:
+            raise BeamValueError(f"n must be non-negative, got {n}")
+        if n == 0:
+            return np.empty(0, dtype=np.complex128)
+        return np.frombuffer(
+            _c.log_mellin_line(self._g, float(re), float(im_start),
+                               float(im_step), n),
+            dtype=np.complex128).copy()
+
     def power_sum(self, q: float) -> float:
         """``sum_s P(s)**q`` on the linear scale.
 

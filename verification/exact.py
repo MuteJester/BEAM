@@ -185,6 +185,30 @@ def tier1(report):
         qs = (-2.0, -0.5, 0.0, 0.5, 2.0)
         for q, v in zip(qs, m.log_mellin_many(qs)):
             report(f"{tag}: log_mellin_many q={q}", v, o.log_mellin(q))
+        # Complex orders, the Mellin-Barnes route's input. Judged against the
+        # enumerated sum as M / M(Re q): at complex q the terms carry phases
+        # and cancel, so the error is only meaningful relative to what was
+        # summed, and M / M(Re q) is that ratio exactly.
+        cq = (0.5 + 3.0j, 0.3 - 11.0j, 2.0 + 1.5j, -0.5 + 2.0j, 25.0j)
+        for q, lv in zip(cq, m.log_mellin_complex(cq)):
+            ref = o.log_mellin(q.real)
+            got = np.exp(lv - ref)
+            want = complex(np.exp(q * o.logp[o.live].astype(complex)
+                                  - ref).sum())
+            report(f"{tag}: log_mellin_complex q={q}",
+                   (got.real, got.imag), (want.real, want.imag), abs_=1e-12)
+        # The vertical-line form, which reaches each rotation by recurrence:
+        # against the same enumeration, not against the general form.
+        ref = o.log_mellin(0.5)
+        for k, lv in enumerate(m.log_mellin_line(0.5, -20.0, 1.3, 33)):
+            if k % 8:
+                continue
+            q = complex(0.5, -20.0 + 1.3 * k)
+            got = np.exp(lv - ref)
+            want = complex(np.exp(q * o.logp[o.live].astype(complex)
+                                  - ref).sum())
+            report(f"{tag}: log_mellin_line k={k}",
+                   (got.real, got.imag), (want.real, want.imag), abs_=1e-12)
         orders = (0.0, 0.5, 1.0, 2.0, 3.0)
         want = [float(o.live.sum()) if q == 0.0 else
                 math.exp(o.entropy()) if q == 1.0 else

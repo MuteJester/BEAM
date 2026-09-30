@@ -378,4 +378,40 @@ static inline uint64_t beam_jet_fan_bytes(uint32_t n_states,
          + T * (7u * sizeof(double) + sizeof(uint32_t)); /* per tilt    */
 }
 
+/**
+ * `jet_sweep_fan` at complex tilts `q_re[j] + i q_im[j]`: per length, the
+ * log-modulus and the phase of `sum over paths of exp(q * raw)`. See the
+ * definition in dp/jet.c for the rescaling and what cancellation costs.
+ */
+BeamError jet_sweep_cfan(const BeamModel *m, uint32_t len, const double *q_re,
+                         const double *q_im, uint32_t nq, double *out_log_mod,
+                         double *out_phase, size_t out_stride);
+
+/**
+ * `jet_sweep_cfan` for `nq` orders `re + i (im0 + g dim)`, `g = k0 ..`, on one
+ * vertical line: the modulus factor shared by the line, each rotation by a
+ * multiply from the last, recomputed directly every 32 orders. An order's
+ * bits depend on the line and on g only. See dp/jet.c.
+ */
+BeamError jet_sweep_line(const BeamModel *m, uint32_t len, double re,
+                         double im0, double dim, uint64_t k0, uint32_t nq,
+                         double *out_log_mod, double *out_phase,
+                         size_t out_stride);
+
+/**
+ * Peak bytes one `jet_sweep_cfan` over `n_tilts` tilts holds: `beam_jet_fan_bytes`
+ * with each mass plane twice as wide (re, im) and one more scalar per tilt.
+ */
+static inline uint64_t beam_jet_cfan_bytes(uint32_t n_states,
+                                           uint32_t n_residues,
+                                           uint32_t n_tilts) {
+    const uint64_t S = n_states;
+    const uint64_t T = n_tilts;
+    return S * (uint64_t)n_residues * sizeof(double)     /* one layer   */
+         + S * sizeof(double)                            /* the sink    */
+         + 4ull * T * S * sizeof(double)                 /* cur, next   */
+         + S                                             /* alive       */
+         + T * (8u * sizeof(double) + sizeof(uint32_t)); /* per tilt    */
+}
+
 #endif /* BEAM_INTERNAL_DP_H */
