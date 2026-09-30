@@ -245,6 +245,128 @@ def _locked(path: Path):
             fcntl.flock(fh, fcntl.LOCK_UN)
 
 
+# ── the sampling deficit ────────────────────────────────────────
+#
+# D(lam) = E[ln(1 + Y)] - ln lam, Y ~ Poisson(lam), is the entropy a sequence
+# of expected count lam loses to being sampled rather than known: the sampled
+# Hill D1 of a depth-N Poisson sample is exp(H - S(N)), S(N) = sum_s P D(N P).
+#
+# Its Mellin transform, for 0 < Re w < 1, is
+#
+#     D~(w) = Gamma(w) J(w),   J(w) = 1/w + int_0^1 v^-w psi(v) dv,
+#     psi(v) = 1/v + 1/ln(1-v) = sum_{n>=1} |G_n| v^(n-1),
+#
+# (Frullani's integral for ln(1+Y) and for ln lam, then the Mellin transform of
+# each exponential), |G_n| the Gregory coefficients: positive, summing to 1,
+# so psi rises from 1/2 to 1 and |J(w)| <= 1/|w| + 1/(1 - Re w).
+#
+# J is taken in three pieces, each to double precision:
+#   [0, 1/2]  term by term, sum_n |G_n| 2^(w-n) / (n - w): geometric;
+#   [1/2, 1]  the 1/v part in closed form, (2^w - 1)/w, and the 1/ln(1-v)
+#             part, after 1 - v = e^-x / 2, as
+#             -(1/2) int_0^inf e^-x (1 - e^-x/2)^-w / (ln 2 + x) dx.
+#             That integrand is smooth but turns through about 0.69 Im(w)
+#             radians, nearly all of it below x = 8: composite Gauss-Legendre
+#             there, 128 panels of 16 points, and Gauss-Laguerre beyond, where
+#             it no longer oscillates.
+# The tests hold D~ to 1e-13 of a 30-digit mpmath reference.
+
+_LN2 = math.log(2.0)
+
+
+def _gregory_abs(nmax: int) -> np.ndarray:
+    """|G_1| .. |G_nmax|, exactly, as the coefficients of psi(v).
+
+    v / (-ln(1-v)) is the reciprocal of sum_k v^k / (k+1); its coefficients
+    b_k have b_0 = 1 and b_k = -|G_k| after.
+    """
+    from fractions import Fraction
+    a = [Fraction(1, k + 1) for k in range(nmax + 1)]
+    b = [Fraction(1)] + [Fraction(0)] * nmax
+    for k in range(1, nmax + 1):
+        b[k] = -sum(a[j] * b[k - j] for j in range(1, k + 1))
+    return np.array([float(-b[k]) for k in range(1, nmax + 1)])
+
+
+_GREGORY = _gregory_abs(64)
+_LAGUERRE: tuple | None = None
+_KERNEL_NODES: tuple | None = None
+_X_SPLIT = 8.0
+
+
+def _kernel_nodes():
+    """Nodes and weights for int_0^inf e^-x f(x) dx: composite Gauss-Legendre
+    on [0, _X_SPLIT] (weights carrying e^-x), Gauss-Laguerre beyond."""
+    global _KERNEL_NODES
+    if _KERNEL_NODES is None:
+        g, gw = np.polynomial.legendre.leggauss(16)
+        edges = np.linspace(0.0, _X_SPLIT, 129)
+        a, b = edges[:-1, None], edges[1:, None]
+        xs = (0.5 * (b - a) * g[None, :] + 0.5 * (a + b)).ravel()
+        ws = (0.5 * (b - a) * gw[None, :]).ravel() * np.exp(-xs)
+        from scipy.special import roots_laguerre
+        lx, lw = roots_laguerre(60)
+        xs = np.concatenate([xs, _X_SPLIT + lx])
+        ws = np.concatenate([ws, math.exp(-_X_SPLIT) * lw])
+        _KERNEL_NODES = (xs, ws)
+    return _KERNEL_NODES
+
+
+def _laguerre():
+    global _LAGUERRE
+    if _LAGUERRE is None:
+        # scipy's rule: numpy's laggauss overflows its weights at this size
+        from scipy.special import roots_laguerre
+        x, wt = roots_laguerre(200)
+        keep = wt > 0
+        _LAGUERRE = (x[keep], wt[keep])
+    return _LAGUERRE
+
+
+def _deficit_kernel(w: np.ndarray) -> np.ndarray:
+    """D~(w) for 0 < Re w < 1, elementwise."""
+    w = np.asarray(w, dtype=np.complex128).reshape(-1)
+    n = np.arange(1, _GREGORY.size + 1, dtype=np.float64)
+    head = np.sum(_GREGORY[None, :] * np.exp((w[:, None] - n[None, :]) * _LN2)
+                  / (n[None, :] - w[:, None]), axis=1)
+    closed = np.expm1(w * _LN2) / w
+    x, wt = _kernel_nodes()
+    g = (np.exp(-w[:, None] * np.log1p(-0.5 * np.exp(-x))[None, :])
+         / (_LN2 + x)[None, :])
+    log_part = 0.5 * (g @ wt)
+    return np.exp(loggamma(w)) * (1.0 / w + head + closed - log_part)
+
+
+def _deficit_kernel_abs_bound(w: np.ndarray) -> np.ndarray:
+    """An upper bound on |D~(w)|: |Gamma(w)| (1/|w| + 1/(1 - Re w))."""
+    w = np.asarray(w, dtype=np.complex128)
+    return np.exp(loggamma(w).real) * (1.0 / np.abs(w) + 1.0 / (1.0 - w.real))
+
+
+_DEFICIT_SERIES: np.ndarray | None = None
+
+
+def _deficit_series_coeffs(kmax: int) -> np.ndarray:
+    """c_k = Delta^k ln(1+x) at 0, over k!, for k = 1..kmax: the coefficients
+    of E[ln(1+Y)] = sum_k c_k lam^k.
+
+    |Delta^k ln(1+x)|_0 = int_0^1 u^k / (-ln(1-u)) du, with sign (-1)^(k+1):
+    decreasing in k, which is what makes the truncated series' error its
+    first omitted term. Taken by Gauss-Laguerre after u = 1 - e^-x.
+    """
+    global _DEFICIT_SERIES
+    if _DEFICIT_SERIES is None or _DEFICIT_SERIES.size < kmax:
+        x, wt = _laguerre()
+        k = np.arange(1, kmax + 1, dtype=np.float64)
+        base = -np.expm1(-x)                          # 1 - e^-x
+        # (1 - e^-x)^k / x, in logs: stays finite for every k
+        f = np.exp(k[:, None] * np.log(base)[None, :] - np.log(x)[None, :])
+        integ = f @ wt
+        sign = np.where(k % 2 == 1, 1.0, -1.0)
+        _DEFICIT_SERIES = sign * np.exp(np.log(integ) - gammaln(k + 1))
+    return _DEFICIT_SERIES[:kmax]
+
+
 def _check_depth(n, name="n") -> float:
     n = float(n)
     if not math.isfinite(n) or n < 0.0:
@@ -322,6 +444,13 @@ class ExactOccupancy:
         n = np.asarray(ns, dtype=float)[:, None]
         if kind == "richness":
             b = lm + q * np.log(np.maximum(n, 1e-300))
+        elif kind == "deficit":
+            # D(lam) <= ln(1 + 1/lam) <= lam^-a / a for a in (0, 1]: with
+            # q = 1 - a, S(N) <= N^-(1-q) M(q) / (1-q)
+            a = 1.0 - q
+            with np.errstate(divide="ignore", invalid="ignore"):
+                b = np.where(a > 0, lm - a * np.log(np.maximum(n, 1e-300))
+                             - np.log(np.where(a > 0, a, 1.0)), np.inf)
         else:
             with np.errstate(divide="ignore", invalid="ignore"):
                 b = lm + (1.0 - q) * np.log((1.0 - q) / (math.e * np.maximum(n - 1.0, 1e-300)))
@@ -797,8 +926,13 @@ class ExactOccupancy:
     _CHUNK = 1024
 
     def _integrate_many(self, ln, kmat, kabs_mat, sign, amp_left, amp_right,
-                        rate_right, n_scale, idx, extra=None):
-        """`_integrate` for many parameters at once: (values, abs bounds)."""
+                        rate_right, n_scale, idx, extra=None, alias_fn=None):
+        """`_integrate` for many parameters at once: (values, abs bounds).
+
+        `alias_fn(ln, sub, D)`, where given, is the quantity's own aliasing
+        bound for the parameters `sub`; otherwise it is the two geometric
+        tails `amp_left x_l / (1 - x_l) + amp_right x_r / (1 - x_r)`.
+        """
         z = -ln.q + 1j * ln.t
         w = np.full(ln.t.size, 2.0)
         w[0] = 1.0
@@ -821,7 +955,10 @@ class ExactOccupancy:
             floor = EPS * (ln.h / _TWO_PI) * (
                 w @ (np.abs(I) * kphase + np.abs(K) * m_real * dphase))
             tail = self._kernel_tail_many(kabs_mat, ln.q, float(ln.t[-1]), sub)
-            alias = amp_left[sub] * xl / (1 - xl) + amp_right[sub] * xr / (1 - xr)
+            if alias_fn is not None:
+                alias = alias_fn(ln, sub, D)
+            else:
+                alias = amp_left[sub] * xl / (1 - xl) + amp_right[sub] * xr / (1 - xr)
             bnds[lo:lo + sub.size] = 1.01 * alias + floor + 2.0 * m_real * tail / _TWO_PI
         return vals, bnds
 
@@ -841,9 +978,16 @@ class ExactOccupancy:
                         np.where(a > 1.0, upper + closing, np.inf))
 
     def _solve_many(self, kmat, kabs_mat, sign, amp_left, amp_right,
-                    rate_right, n_scale, guess, idx, extra=None, label="contour"):
+                    rate_right, n_scale, guess, idx, extra=None, label="contour",
+                    alias_fn=None, abs_floor=0.0):
         """Values and relative bounds for the parameters `idx`, designing and
-        computing lines only for those that cached lines do not serve."""
+        computing lines only for those that cached lines do not serve.
+
+        `abs_floor`: a value counts as resolved once its ABSOLUTE error is
+        within rel_tol * max(|value|, abs_floor) -- for a quantity only ever
+        used through something like exp(H - S), where S's absolute error is
+        what matters. The value still reports its true relative bound.
+        """
         P = idx.size
         best_v = np.full(P, np.nan)
         best_r = np.full(P, np.inf)
@@ -856,7 +1000,7 @@ class ExactOccupancy:
         def take(ln, pos):
             v, b = self._integrate_many(ln, kmat, kabs_mat, sign, amp_left,
                                         amp_right, rate_right, n_scale,
-                                        idx[pos], extra)
+                                        idx[pos], extra, alias_fn)
             r = rel(v, b)
             better = r < best_r[pos]
             best_v[pos[better]] = v[better]
@@ -876,8 +1020,15 @@ class ExactOccupancy:
         # a stricter target, at most four times.
         tries = np.zeros(P, dtype=int)
         order = np.argsort(np.log(np.maximum(n_scale[idx], 1e-300)), kind="stable")
+
+        def unresolved():
+            with np.errstate(divide="ignore", invalid="ignore"):
+                tol = self.rel_tol * np.maximum(
+                    1.0, abs_floor / np.maximum(np.abs(best_v), 1e-300))
+            return ~(best_r <= np.where(np.isfinite(best_v), tol, self.rel_tol))
+
         while True:
-            open_ = order[(best_r[order] > self.rel_tol) & (tries[order] < 4)]
+            open_ = order[unresolved()[order] & (tries[order] < 4)]
             if open_.size == 0:
                 break
             j = int(open_[0])
@@ -885,14 +1036,15 @@ class ExactOccupancy:
             strict = 0.1 ** max(tries[j] - 1, 0)
             tries[j] += 1
             est = abs(best_v[j]) if np.isfinite(best_r[j]) else guess[i]
+            est = max(est, abs_floor)
             q, h = self._design_qh(est, amp_left[i], amp_right[i], rate_right, strict)
             T = self._design_T_many(kabs_mat, q, idx[[j]], np.array([est]), strict)
             ln = self._line(q, h, T)
             cost = self._last_cost
-            pending = np.nonzero(best_r > self.rel_tol)[0]
+            pending = np.nonzero(unresolved())[0]
             take(ln, pending)
             if cost is not None:
-                left = int(np.count_nonzero(best_r[pending] > self.rel_tol))
+                left = int(np.count_nonzero(unresolved()[pending]))
                 _log.info("line q=%g h=%.4g: %s, %d orders in %.1fs; resolved "
                           "%d of %d pending %s values", q, h, cost[0], cost[1],
                           cost[2], pending.size - left, pending.size, label)
@@ -1038,6 +1190,147 @@ class ExactOccupancy:
             res = self._solve_many(kmat, kabs_mat, 1.0, amp_left,
                                    np.ones(ns.size), 1.0, ns, guess, idx,
                                    extra=extra, label="contour")
+            for i, v in zip(todo, res):
+                if out[i] is None or v.bound < out[i].bound:
+                    out[i] = v
+        return out
+
+    def poisson_richness_many(self, ns) -> list[BoundedValue]:
+        """sum_s 1 - exp(-N P(s)): the richness of a POISSON sample of depth
+        N (each sequence's count Poisson(N P)), at every N in `ns`.
+
+        Kernel Gamma(z) N^-z, the Mellin transform of 1 - e^-x for
+        -1 < Re z < 0, on the same lines as `richness_many`; the same range
+        0 <= f <= min(1, N P) bounds its aliasing. Small N: the alternating
+        series sum_k (-1)^(k+1) N^k M(k) / k!, whose terms fall while
+        N p_max <= 1/2, so its first omitted term bounds it.
+        """
+        ns = np.array([_check_depth(n) for n in np.asarray(ns, dtype=float).ravel()])
+        out: list = [None] * ns.size
+        d0 = math.exp(self.log_d0)
+        K = self._K_SERIES
+        k = np.arange(1, K + 1, dtype=np.float64)
+        todo = []
+        for i, n in enumerate(ns):
+            if n == 0.0:
+                out[i] = BoundedValue(0.0, 0.0, "exact")
+            elif n * self.p_min > 800.0:
+                out[i] = BoundedValue(d0, math.exp(-n * self.p_min), "saturated")
+            elif n * self.p_max <= 0.5:
+                terms = np.where(k % 2 == 1, 1.0, -1.0) * np.exp(
+                    k * math.log(n) + self._log_mk[:K] - gammaln(k + 1))
+                v = float(np.sum(terms[::-1]))
+                b = 16 * EPS * float(np.sum(np.abs(terms))) + abs(float(terms[-1]))
+                out[i] = BoundedValue(v, self._rel(v, b), "series")
+                if out[i].bound > self.rel_tol:
+                    todo.append(i)
+            else:
+                todo.append(i)
+        if todo:
+            idx = np.array(todo)
+            lnn = np.log(ns)
+
+            def kmat(z, sub):
+                return np.exp(loggamma(z)[:, None] - z[:, None] * lnn[sub][None, :])
+
+            def kabs_mat(z, sub):
+                return np.abs(kmat(z, sub))
+
+            def extra(ln, sub):
+                zz = -ln.q + 1j * ln.t
+                return (np.abs(loggamma(zz))[:, None]
+                        + ln.t[:, None] * np.abs(np.minimum(lnn[sub], 0.0))[None, :])
+
+            guess = np.zeros(ns.size)
+            guess[idx] = self._estimate("richness", ns[idx])
+            res = self._solve_many(kmat, kabs_mat, -1.0, np.full(ns.size, d0),
+                                   ns * math.exp(self._log_mk[0]), 1.0, ns,
+                                   guess, idx, extra=extra)
+            for i, v in zip(todo, res):
+                if out[i] is None or v.bound < out[i].bound:
+                    out[i] = v
+        return out
+
+    def sampling_deficit_many(self, ns) -> list[BoundedValue]:
+        """S(N) = sum_s P(s) D(N P(s)), D(lam) = E[ln(1+Y)] - ln lam with
+        Y ~ Poisson(lam), at every N > 0 in `ns`.
+
+        The entropy a Poisson sample of depth N loses to sampling: the sample's
+        expected Shannon entropy is H - S(N), H the model's own, so the
+        sampled Hill number D1 is exp(H - S(N)). S falls from H - ln N at
+        small N to D0 / (2N) at large.
+
+        Large N: the contour int D~(w) N^-w M(1-w) dw / 2 pi i on the same
+        lines as richness, w = 1 - q + it (see `_deficit_kernel`). Its
+        aliasing comes from D's own range, 0 <= D(lam) <= ln(1 + 1/lam):
+        copies at larger lam add at most (D0/N) e^-qD each, and copies at
+        smaller lam at most (H + M(1) ln 2 + M(1) j D) e^-(1-q)jD, H the
+        exact entropy.
+
+        Small N (N p_max <= 1/2): S = H - M(1) ln N + sum_k c_k N^k M(k+1),
+        with c_k = Delta^k ln(1+x)|_0 / k!, alternating and falling, so the
+        first omitted term bounds the series.
+        """
+        ns = np.array([_check_depth(n) for n in np.asarray(ns, dtype=float).ravel()])
+        if np.any(ns <= 0.0):
+            raise ValueError("the sampling deficit needs N > 0")
+        out: list = [None] * ns.size
+        d0 = math.exp(self.log_d0)
+        m1 = math.exp(self._log_mk[0])
+        H = float(self._m.entropy())
+        K = self._K_SERIES - 1
+        c = _deficit_series_coeffs(K)
+        k = np.arange(1, K + 1, dtype=np.float64)
+        todo = []
+        for i, n in enumerate(ns):
+            if n * self.p_max <= 0.5:
+                terms = c * np.exp(k * math.log(n) + self._log_mk[1:K + 1])
+                head = H - m1 * math.log(n)
+                v = head + float(np.sum(terms[::-1]))
+                b = (16 * EPS * (abs(H) + m1 * abs(math.log(n)) + float(np.sum(np.abs(terms))))
+                     + 2e-12 * float(np.sum(np.abs(terms)))      # the c_k, to 2e-12
+                     + abs(float(terms[-1])))
+                out[i] = BoundedValue(v, self._rel(v, b), "series")
+                if b > self.rel_tol * max(abs(v), 1.0):
+                    todo.append(i)
+            else:
+                todo.append(i)
+        if todo:
+            idx = np.array(todo)
+            lnn = np.log(ns)
+
+            def kmat(z, sub):
+                w = 1.0 + z
+                return _deficit_kernel(w)[:, None] * np.exp(-w[:, None] * lnn[sub][None, :])
+
+            def kabs_mat(z, sub):
+                w = 1.0 + z
+                return (_deficit_kernel_abs_bound(w)[:, None]
+                        * np.exp(-w.real[:, None] * lnn[sub][None, :]))
+
+            def extra(ln, sub):
+                w = 1.0 - ln.q + 1j * ln.t
+                return ((np.abs(loggamma(w)) + 10.0 * (1.0 + ln.t))[:, None]
+                        + ln.t[:, None] * np.abs(np.minimum(lnn[sub], 0.0))[None, :])
+
+            def alias_fn(ln, sub, D):
+                xl = math.exp(-ln.q * D)
+                xr = math.exp(-(1.0 - ln.q) * D)
+                return ((d0 / ns[sub]) * xl / (1 - xl)
+                        + (H + m1 * _LN2) * xr / (1 - xr)
+                        + m1 * D * xr / (1 - xr) ** 2)
+
+            amp_left = d0 / ns
+            amp_right = np.full(ns.size, H + m1 * (_LN2 + 60.0))
+            guess = np.zeros(ns.size)
+            guess[idx] = self._estimate("deficit", ns[idx])
+            # S is used as exp(H - S): its ABSOLUTE error is D1's relative
+            # one, so it is resolved to rel_tol of max(S, 1 nat). Deep in N,
+            # where S ~ D0 / 2N falls to 1e-50 and below, a relative target
+            # would be both out of reach and beside the point.
+            res = self._solve_many(kmat, kabs_mat, 1.0, amp_left, amp_right, 1.0,
+                                   ns, guess, idx, extra=extra,
+                                   alias_fn=alias_fn, abs_floor=1.0)
             for i, v in zip(todo, res):
                 if out[i] is None or v.bound < out[i].bound:
                     out[i] = v

@@ -431,6 +431,9 @@ eo.novelty_many(ns)              # U(n) = sum_s P (1-P)**(n-1), n >= 1
 eo.private_at_depth(depths, total_depth=T)
                                  # per repertoire: R(d_i) and R(T) - R(T - d_i)
 eo.save_lines(path); eo.load_lines(path)   # reuse lines across processes
+
+eo.poisson_richness_many(ns)     # sum_s 1 - exp(-N P): a Poisson sample's richness
+eo.sampling_deficit_many(ns)     # S(N); a Poisson sample's expected entropy is H - S(N)
 ```
 
 The `atoms` family above, computed **exactly** rather than on a grid. Every method returns a `BoundedValue`, which is `value` together with `bound`, a rigorous relative error: `|value - truth| <= bound * |truth|`. `float(v)` raises so that the bound cannot be dropped by accident.
@@ -450,6 +453,21 @@ The `atoms` family above, computed **exactly** rather than on a grid. Every meth
 | DP rounding | exact relative to `M(Re q)`, the sum of the moduli, not to `|M|`. |
 
 The relative form divides by `|value| - bound`, never by the value itself. Lines are designed from those terms, computed on demand and cached; `eo.lines` lists them. A batch plans one line at a time: each is designed for the smallest depth still unresolved, and every pending depth is tried on it before the next is planned, so one line serves the whole band it can. `save_lines` writes them with a fingerprint of the model's power sums, and `load_lines` refuses a file made by any other model.
+
+**The sampled Hill numbers.** Draw a Poisson sample of depth `N`, each sequence's count `Y ~ Poisson(N P(s))`, and take its Shannon entropy. Its expectation is `H - S(N)`, where `H` is the model's own entropy and
+
+- `S(N) = sum_s P(s) D(N P(s))`;
+- `D(lam) = E[ln(1+Y)] - ln lam` is the entropy one sequence loses to being sampled rather than known.
+
+So the sampled `D1` is `exp(H - S(N))` and the sampled `D0` is `poisson_richness`. `S` has its own Mellin kernel:
+
+- `D~(w) = Gamma(w) [1/w + int_0^1 v^-w (1/v + 1/ln(1-v)) dv]`, for `0 < Re w < 1`.
+- It is taken to about `1e-14` from a Gregory-coefficient series, a closed form and a smooth quadrature.
+- It uses the same lines as richness.
+
+Its aliasing is bounded from `0 <= D(lam) <= ln(1 + 1/lam)`. Small `N` uses an exact alternating series in `M` at the integers.
+
+`S` is resolved to `rel_tol` of `max(S, 1 nat)`, not of `S` alone. `D1 = exp(H - S)` feels only `S`'s absolute error. Deep in `N`, `S ~ D0 / 2N` falls to `1e-50` and below, where a relative target would be out of reach and beside the point. Each value still reports its true relative bound.
 
 **When the tolerance is out of reach**, the value comes back with the bound it has, never silently:
 

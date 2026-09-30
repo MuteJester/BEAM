@@ -335,3 +335,113 @@ def test_rejects_bad_depths(case):
             eo.richness(bad)
     with pytest.raises(ValueError):
         eo.frequency(10.0, 0)
+
+
+# ── the sampling deficit (sampled Hill D1) ────────────────────────────────
+
+def _deficit_one(lam):
+    """D(lam) = E[ln((1+Y)/lam)], Y ~ Poisson(lam), in long double.
+
+    Weights by the recurrence w_k = w_(k-1) lam / k outward from the mode,
+    normalised by their own sum (the Poisson PMF sums to exactly 1), so no
+    log-gamma of a large argument is ever formed; and each term's value as
+    log1p((1 + k - lam) / lam), so ln lam is never subtracted from a sum
+    near it. Tails beyond 60 standard deviations are dropped."""
+    if lam > 1e6:
+        # 1/(2 lam) + 1/(12 lam^2) + O(lam^-3): E[ln(1 + x)], x = (1+Y-lam)/lam,
+        # expanded to x^4 -- the x^4 term is ORDER lam^-2 too, since
+        # E[(Y-lam)^4] ~ 3 lam^2: -1/2 + 4/3 - 3/4 = 1/12. (Stopping at x^3
+        # gives 5/6, which is wrong; mpmath confirms 1/12.)
+        return 1.0 / (2.0 * lam) + 1.0 / (12.0 * lam * lam)
+    ld = np.longdouble
+    lam = ld(lam)
+    mode = int(lam)
+    span = int(60 * float(np.sqrt(lam)) + 80)
+    lo, hi = max(0, mode - span), mode + span
+    up = np.ones(hi - mode + 1, dtype=ld)
+    for k in range(mode + 1, hi + 1):
+        up[k - mode] = up[k - mode - 1] * lam / ld(k)
+    down = np.ones(mode - lo + 1, dtype=ld)
+    for k in range(mode - 1, lo - 1, -1):
+        down[mode - k] = down[mode - k - 1] * ld(k + 1) / lam
+    w = np.concatenate([down[::-1], up[1:]])
+    k = np.arange(lo, hi + 1, dtype=ld)
+    return float(np.sum(w * np.log1p((1 + k - lam) / lam)) / np.sum(w))
+
+
+def _deficit_direct(p, n):
+    """sum_s p D(n p), each distinct D(n p) summed directly (`_deficit_one`)."""
+    p = np.asarray(p, dtype=np.float64)
+    lam, inv = np.unique(n * p, return_inverse=True)
+    d = np.array([_deficit_one(x) for x in lam])
+    return float(np.sum(np.longdouble(p) * d[inv]))
+
+
+def _deficit_kernel_reference(w, dps=30):
+    """D~(w) to `dps` digits without integrating through a singularity:
+    [0, 1/2] by the exact Gregory series (160 terms, error below 2^-150),
+    [1/2, 1] as the smooth integral, subdivided where it oscillates."""
+    import mpmath as mp
+    from fractions import Fraction
+    N = 160
+    a = [Fraction(1, k + 1) for k in range(N + 1)]
+    b = [Fraction(1)] + [Fraction(0)] * N
+    for k in range(1, N + 1):
+        b[k] = -sum(a[j] * b[k - j] for j in range(1, k + 1))
+    with mp.workdps(dps):
+        w = mp.mpc(w)
+        ln2 = mp.log(2)
+        head = mp.fsum(mp.mpf((-b[n]).numerator) / (-b[n]).denominator
+                       * mp.exp((w - n) * ln2) / (n - w) for n in range(1, N + 1))
+        f = lambda x: mp.exp(-x) * mp.exp(-w * mp.log1p(-mp.exp(-x) / 2)) / (ln2 + x)
+        log_part = mp.quad(f, [mp.mpf(i) / 4 for i in range(49)] + [mp.inf]) / 2
+        return complex(mp.gamma(w) * (1 / w + head + mp.expm1(w * ln2) / w - log_part))
+
+
+def test_deficit_kernel_matches_a_high_precision_reference():
+    """D~(w) = Gamma(w) [1/w + int_0^1 v^-w (1/v + 1/ln(1-v)) dv], the Mellin
+    transform of the sampling deficit, held to the rounding the contour bound
+    charges it: EPS (|ln Gamma(w)| + 10 (1 + |Im w|))."""
+    from scipy.special import loggamma
+    from BEAM.analytics.exact_occupancy import EPS, _deficit_kernel
+    for c in (0.05, 0.3, 0.7, 0.95):
+        for t in (0.0, 0.4, 3.0, 17.0, 60.0, 150.0):
+            w = complex(c, t)
+            got = complex(_deficit_kernel(np.array([w]))[0])
+            want = _deficit_kernel_reference(w)
+            charged = EPS * (abs(loggamma(w)) + 10 * (1 + t))
+            assert abs(got - want) <= charged * abs(want), (w, abs(got / want - 1))
+
+
+@pytest.mark.parametrize("n", [0.3, 1.0, 7.0, 60.0, 1e3, 1e4])
+def test_sampling_deficit(case, n):
+    """S(N) = sum_s P D(N P); the sampled Hill D1 is exp(H - S(N)), so S is
+    held to rel_tol of max(S, 1 nat): its absolute error is D1's relative."""
+    m, p, eo = case
+    v = eo.sampling_deficit_many([n])[0]
+    exact = _deficit_direct(p.astype(np.float64), n)
+    _held(v, exact, tol=1e-10 * max(1.0, 1.0 / exact))
+
+
+def test_sampling_deficit_deep_in_n_is_resolved_absolutely(case):
+    """Far past the model's own scale S ~ D0 / 2N is tiny; it is resolved to
+    an absolute 1e-10 -- all that exp(H - S) needs -- without a pile of
+    lines chasing a relative target nothing uses."""
+    m, p, eo = case
+    if m.alphabet == "aa":
+        pytest.skip("the direct sum is slow over 168,420 sequences at these depths")
+    fresh = ExactOccupancy(m, rel_tol=1e-10)
+    ns = [1e8, 1e12, 1e20]
+    for n, v in zip(ns, fresh.sampling_deficit_many(ns)):
+        exact = _deficit_direct(p.astype(np.float64), n)
+        assert abs(v.value - exact) <= v.bound * exact + 1e-300, (n, v, exact)
+        assert v.bound * exact <= 1e-10, (n, v)
+    assert len(fresh.lines) <= 4, fresh.lines
+
+
+def test_poisson_richness(case):
+    """sum_s 1 - exp(-N P): the richness of a Poisson sample of depth N."""
+    m, p, eo = case
+    ns = [0.5, 3.0, 1e2, 1e4, 1e6]
+    for n, v in zip(ns, eo.poisson_richness_many(ns)):
+        _held(v, float(np.sum(-np.expm1(-np.longdouble(n) * p))))

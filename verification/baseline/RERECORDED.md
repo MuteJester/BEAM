@@ -1929,3 +1929,25 @@ Recorded with the four-orders-at-a-time line sweep of the next commit already
 built, which moved none of these: `numeric`, `thread independence` and
 `exact.py` (411 quantities, worst 5.8% of its tolerance, as before) passed
 unchanged. The full suite: 901 passed, 1 skipped; the C suite 337 passed.
+
+# Why the test inventory moved for the sampled Hill numbers
+
+Re-recorded 2026-09-30, tag `predeficit`. `ExactOccupancy` gained
+`sampling_deficit_many` -- S(N) = sum_s P D(N P), which makes a Poisson
+sample's expected Shannon entropy H - S(N) and so its Hill D1 exact -- and
+`poisson_richness_many`, its D0. No C changed.
+
+    pytest_cases.txt      +17 -0  analytics/test_exact_occupancy.py: the
+                                  deficit kernel against a 30-digit
+                                  reference; S(N) at six depths and deep in
+                                  N; Poisson richness; each on both alphabets
+                                  (the deep-N case skips the amino-acid model,
+                                  whose direct sum is too slow there)
+    python_api.txt         unchanged (re-written by the recorder, byte-identical)
+    c_cases.txt            unchanged (likewise)
+    numeric.json           unchanged (likewise)
+    threads.json           unchanged (likewise)
+
+The gate passed on everything else before recording, `exact.py` at 411
+quantities, worst 5.8% of its tolerance. The full suite: 917 passed, 2
+skipped.
