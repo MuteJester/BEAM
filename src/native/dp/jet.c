@@ -743,6 +743,8 @@ done:
  * `jet_sweep_cfan` for the orders `re + i (im0 + g dim)`, `g = k0 .. k0+nq-1`:
  * a stretch of one vertical line, which is the contour a Mellin-Barnes
  * integral runs along. Output as `jet_sweep_cfan`'s, one entry per order.
+ * `k0` must be a multiple of BEAM_LINE_LANES; `beam_line_plan` cuts stretches
+ * that way.
  *
  * WHAT THE LINE SHARES. Every order has the same real part, so the layer shift
  * and each edge's modulus `exp(re * w - qmax)` are one number for all of them,
@@ -750,19 +752,36 @@ done:
  * which do not depend on any order, rather than from each order's mass as in
  * `jet_sweep_cfan`; on a reached state the two coincide.
  *
- * WHAT THE LINE RECURS. The rotation `exp(i (im0 + g dim) w)` is taken
- * DIRECTLY at every g that is a multiple of BEAM_LINE_BLOCK (the anchor);
- * the next three orders are the one before times `exp(i dim w)`, and every
- * later order in the block is the order four before times `exp(4 i dim w)`,
- * itself taken directly. No rotation is more than 34 multiplies from a direct
- * value -- the original one-at-a-time recurrence allowed 31 -- and the four
- * chains of a block run side by side, so a stretch is computed four orders
- * at a time. The block is 128 orders rather than 32 because the cosines and
- * sines an edge pays per block, not the multiplies, had come to dominate.
+ * WHAT THE LINE RECURS. The rotation `exp(i (im0 + g dim) w)`, times the
+ * edge's modulus, is taken DIRECTLY at every g that is a multiple of
+ * BEAM_LINE_BLOCK (the anchor). The anchor's next three orders are it times
+ * `exp(i dim w)` in turn; the next twelve are those four times
+ * `exp(4 i dim w)`, four at a time; every later order in the block is the one
+ * sixteen before times `exp(16 i dim w)`, all three factors taken directly.
+ * No rotation is more than 13 multiplies from a direct value.
+ *
+ * WHY SIXTEEN CHAINS. A multiply waits for the one before it in its chain, so
+ * with only four chains the edge spent its time waiting (41% of a line's
+ * time, measured on the foundation, against 25% on the multiply-add it
+ * feeds). Sixteen chains keep both arithmetic units busy, and the rotations
+ * go straight from registers into the multiply-add rather than through a
+ * buffer.
+ *
+ * ONE PASS PER TARGET. A target's edges accumulate into a row the size of one
+ * stretch, which stays in cache; the row is then scaled and written once. So
+ * the planes are neither cleared between layers nor swept again to rescale.
+ *
+ * THE SCALE IS A POWER OF TWO, CHOSEN A LAYER AHEAD. What keeps an order's
+ * mass in range is dividing each layer by its largest entry. Here each layer
+ * is instead multiplied, as it is written, by the power of two nearest the
+ * reciprocal of the PREVIOUS layer's largest entry: a layer changes the scale
+ * by at most the sum of its incoming moduli, so the mass stays within a few
+ * binary orders of one, and a power of two changes no digit of it. The
+ * divisions this replaces rounded every entry of every layer.
  *
  * LAYOUT. A state's accumulators are two planes, the real parts of all its
- * orders and then the imaginary parts, each padded to a multiple of four
- * orders so the inner loop runs whole vectors with no branch. A padded order
+ * orders and then the imaginary parts, each padded to a multiple of sixteen
+ * orders so the inner loop runs whole chains with no branch. A padded order
  * starts at zero and stays zero; it is never read out.
  *
  * WHY THAT MATTERS: an order's value depends on the line and on g alone --
@@ -772,88 +791,172 @@ done:
  * different sequence of operations.
  */
 #define BEAM_LINE_BLOCK 128u
+#define BEAM_LN2        0.693147180559945309417232121458176568
 #define BEAM_LINE_VEC   4u
+#define BEAM_LINE_NV    (BEAM_LINE_LANES / BEAM_LINE_VEC)
+#define BEAM_LINE_WIDE  8u                       /* the multiply-add's vectors */
+#define BEAM_LINE_NW    (BEAM_LINE_LANES / BEAM_LINE_WIDE)
 
 typedef double beam_v4d __attribute__((vector_size(32)));
+typedef long long beam_v4i __attribute__((vector_size(32)));
+/* Eight lanes: one AVX-512 register, two AVX2 ones, four SSE2 ones -- each
+ * lane the same arithmetic whichever the CPU runs. */
+typedef double beam_v8d __attribute__((vector_size(64)));
+#define V8_LOAD(dst, p)  memcpy(&(dst), (p), sizeof(beam_v8d))
+#define V8_STORE(p, src) memcpy((p), &(src), sizeof(beam_v8d))
 
 /* Unaligned whole-vector access, as macros: a function passing a vector by
  * value changes the ABI between builds with and without AVX. */
 #define V4_LOAD(dst, p)  memcpy(&(dst), (p), sizeof(beam_v4d))
 #define V4_STORE(p, src) memcpy((p), &(src), sizeof(beam_v4d))
 
-/* Rotations of orders k0 .. k0+Wp-1 for weight w, into rr/ri. Each block is
- * built from its own anchor, whatever part of it the stretch covers, so the
- * value of order g does not depend on where the stretch starts. The four
- * chains of a block advance as one vector; each lane performs exactly the
- * scalar recurrence. */
+/* An edge's rotations for one stretch, as cosines and sines: [0] exp(i dim w),
+ * [1] exp(4 i dim w), [2] exp(16 i dim w), then the anchor of each block the
+ * stretch touches, from the block holding k0 onwards. */
+#define LINE_ROT_FIXED 3u
+
+static uint32_t line_blocks(uint64_t k0, uint32_t Wp) {
+    const uint64_t a0 = k0 - k0 % BEAM_LINE_BLOCK;
+    return (uint32_t)((k0 + Wp - a0 + BEAM_LINE_BLOCK - 1u) / BEAM_LINE_BLOCK);
+}
+
+/* The rotations of `ne` edges with weights `w`, each `K = LINE_ROT_FIXED +
+ * line_blocks(k0, Wp)` angles long in `ang`, all in one vector call: taken
+ * edge by edge, libm's sincos was a third of the line's time. The angles are
+ * formed exactly as they always were, so only the sine and cosine changed. */
+static void line_rotations(const double *w, uint32_t ne, double im0, double dim,
+                           uint64_t k0, uint32_t K, double *ang, double *sn,
+                           double *cs) {
+    const uint64_t a0 = k0 - k0 % BEAM_LINE_BLOCK;
+    for (uint32_t e = 0; e < ne; ++e) {
+        double *an = ang + (size_t)e * K;
+        an[0] = dim * w[e];
+        an[1] = 4.0 * dim * w[e];
+        an[2] = (double)BEAM_LINE_LANES * dim * w[e];
+        for (uint32_t b = 0; b + LINE_ROT_FIXED < K; ++b)
+            an[LINE_ROT_FIXED + b] =
+                (im0 + (double)(a0 + (uint64_t)b * BEAM_LINE_BLOCK) * dim) * w[e];
+    }
+    beam_sincos_many(ang, sn, cs, (size_t)ne * K);
+}
+
+/* acc (= if first, else +=) mag exp(i (im0 + g dim) w) c over the stretch's
+ * Wp orders, Wp and k0 multiples of BEAM_LINE_LANES, from the edge's
+ * rotations `cs`/`sn` (see line_rotations). Each lane performs exactly the
+ * recurrence the block comment describes, whichever stretch it falls in. */
 __attribute__((always_inline))
-static inline void line_rotations(double w, double im0, double dim, uint64_t k0,
-                                  uint32_t Wp, double *restrict rr,
-                                  double *restrict ri) {
-    const double d1r = cos(dim * w), d1i = sin(dim * w);
-    const double d4r = cos(4.0 * dim * w), d4i = sin(4.0 * dim * w);
+static inline void line_edge_body(double mag, const double *restrict cs,
+                                  const double *restrict sn, uint64_t k0,
+                                  uint32_t Wp, const double *restrict c,
+                                  double *restrict acc, int first) {
+    const double d1r = cs[0], d1i = sn[0];
+    const double d4r = cs[1], d4i = sn[1];
+    const double dLr = cs[2], dLi = sn[2];
+    const double *cre = c, *cim = c + Wp;
+    double *are = acc, *aim = acc + Wp;
     const uint64_t end = k0 + Wp;
-    for (uint64_t a = k0 - k0 % BEAM_LINE_BLOCK; a < end; a += BEAM_LINE_BLOCK) {
-        const double ang = (im0 + (double)a * dim) * w;
-        double b0r = cos(ang), b0i = sin(ang);
-        double b1r = b0r * d1r - b0i * d1i, b1i = b0r * d1i + b0i * d1r;
-        double b2r = b1r * d1r - b1i * d1i, b2i = b1r * d1i + b1i * d1r;
-        double b3r = b2r * d1r - b2i * d1i, b3i = b2r * d1i + b2i * d1r;
-        beam_v4d vr = {b0r, b1r, b2r, b3r}, vi = {b0i, b1i, b2i, b3i};
-        for (uint64_t g = a; g < a + BEAM_LINE_BLOCK && g < end;
-             g += BEAM_LINE_VEC) {
-            if (g >= k0 && g + BEAM_LINE_VEC <= end) {
-                V4_STORE(rr + (g - k0), vr);
-                V4_STORE(ri + (g - k0), vi);
-            } else {
-                for (uint32_t l = 0; l < BEAM_LINE_VEC; ++l)
-                    if (g + l >= k0 && g + l < end) {
-                        rr[g + l - k0] = vr[l];
-                        ri[g + l - k0] = vi[l];
-                    }
+    uint32_t b = LINE_ROT_FIXED;
+    for (uint64_t a = k0 - k0 % BEAM_LINE_BLOCK; a < end; a += BEAM_LINE_BLOCK, ++b) {
+        const double b0r = mag * cs[b], b0i = mag * sn[b];
+        const double b1r = b0r * d1r - b0i * d1i, b1i = b0r * d1i + b0i * d1r;
+        const double b2r = b1r * d1r - b1i * d1i, b2i = b1r * d1i + b1i * d1r;
+        const double b3r = b2r * d1r - b2i * d1i, b3i = b2r * d1i + b2i * d1r;
+        beam_v4d sr[BEAM_LINE_NV], si[BEAM_LINE_NV];
+        sr[0] = (beam_v4d){b0r, b1r, b2r, b3r};
+        si[0] = (beam_v4d){b0i, b1i, b2i, b3i};
+        for (uint32_t v = 1; v < BEAM_LINE_NV; ++v) {
+            sr[v] = sr[v - 1] * d4r - si[v - 1] * d4i;
+            si[v] = sr[v - 1] * d4i + si[v - 1] * d4r;
+        }
+        /* The sixteen seeds, repacked as eight-lane vectors. */
+        beam_v8d rr[BEAM_LINE_NW], ri[BEAM_LINE_NW];
+        memcpy(rr, sr, sizeof rr);
+        memcpy(ri, si, sizeof ri);
+        uint64_t g = a;
+        const uint64_t stop = a + BEAM_LINE_BLOCK < end ? a + BEAM_LINE_BLOCK : end;
+        for (; g < k0; g += BEAM_LINE_LANES) {          /* a stretch mid-block */
+            for (uint32_t v = 0; v < BEAM_LINE_NW; ++v) {
+                const beam_v8d t = rr[v] * dLr - ri[v] * dLi;
+                ri[v] = rr[v] * dLi + ri[v] * dLr;
+                rr[v] = t;
             }
-            const beam_v4d tr = vr * d4r - vi * d4i;
-            vi = vr * d4i + vi * d4r;
-            vr = tr;
+        }
+        for (; g < stop; g += BEAM_LINE_LANES) {
+            const size_t j = (size_t)(g - k0);
+            for (uint32_t v = 0; v < BEAM_LINE_NW; ++v) {
+                const size_t o = j + (size_t)v * BEAM_LINE_WIDE;
+                beam_v8d cr, ci, ar, ai;
+                V8_LOAD(cr, cre + o); V8_LOAD(ci, cim + o);
+                const beam_v8d tr = rr[v] * cr - ri[v] * ci;
+                const beam_v8d ti = rr[v] * ci + ri[v] * cr;
+                if (first) {
+                    ar = tr; ai = ti;
+                } else {
+                    V8_LOAD(ar, are + o); V8_LOAD(ai, aim + o);
+                    ar += tr; ai += ti;
+                }
+                V8_STORE(are + o, ar); V8_STORE(aim + o, ai);
+                const beam_v8d t = rr[v] * dLr - ri[v] * dLi;
+                ri[v] = rr[v] * dLi + ri[v] * dLr;
+                rr[v] = t;
+            }
         }
     }
 }
 
-/* nx += mag * rot * c over Wp orders (a multiple of four), as whole vectors. */
-__attribute__((always_inline))
-static inline void line_mac(uint32_t Wp, double mag, const double *restrict rr,
-                            const double *restrict ri, const double *restrict c,
-                            double *restrict nx) {
-    const double *cre = c, *cim = c + Wp;
-    double *nre = nx, *nim = nx + Wp;
+/* Compiled twice where the platform can choose at load time -- for AVX2 and
+ * for the baseline -- and the CPU picks. Both perform the same operations in
+ * the same order with no fused multiply-add, so they agree to the bit. The
+ * `first` split is here so that each copy's inner loop has no branch. */
+#if defined(__x86_64__) && defined(__ELF__) && defined(__GNUC__)
+#define BEAM_LINE_CLONES __attribute__((target_clones("avx2", "default")))
+/* The edge's loop also gets an AVX-512 copy: it is most of a line's time,
+ * and eight lanes a register is where that copy earns its place. Still no
+ * fused multiply-add -- contraction is off under -std=c11 -- so it agrees
+ * with the other two to the bit. */
+#define BEAM_EDGE_CLONES __attribute__((target_clones("avx512f", "avx2", "default")))
+#else
+#define BEAM_LINE_CLONES
+#define BEAM_EDGE_CLONES
+#endif
+
+BEAM_EDGE_CLONES
+static void line_edge(double mag, const double *restrict cs,
+                      const double *restrict sn, uint64_t k0, uint32_t Wp,
+                      const double *restrict c, double *restrict acc, int first) {
+    if (first) line_edge_body(mag, cs, sn, k0, Wp, c, acc, 1);
+    else       line_edge_body(mag, cs, sn, k0, Wp, c, acc, 0);
+}
+
+/* nx = acc * s, and nmax = max(nmax, |re|, |im|), over Wp orders. */
+BEAM_LINE_CLONES
+static void line_store(uint32_t Wp, const double *restrict acc,
+                       const double *restrict s, double *restrict nx,
+                       double *restrict nmax) {
+    const beam_v4i absmask = {0x7fffffffffffffffLL, 0x7fffffffffffffffLL,
+                              0x7fffffffffffffffLL, 0x7fffffffffffffffLL};
     for (uint32_t j = 0; j < Wp; j += BEAM_LINE_VEC) {
-        beam_v4d vr, vi, cr, ci, ar, ai;
-        V4_LOAD(vr, rr + j); V4_LOAD(vi, ri + j);
-        V4_LOAD(cr, cre + j); V4_LOAD(ci, cim + j);
-        V4_LOAD(ar, nre + j); V4_LOAD(ai, nim + j);
-        const beam_v4d er = mag * vr, ei = mag * vi;
-        ar += er * cr - ei * ci;
-        ai += er * ci + ei * cr;
-        V4_STORE(nre + j, ar); V4_STORE(nim + j, ai);
+        beam_v4d ar, ai, sv, mv;
+        V4_LOAD(ar, acc + j); V4_LOAD(ai, acc + Wp + j);
+        V4_LOAD(sv, s + j); V4_LOAD(mv, nmax + j);
+        ar *= sv; ai *= sv;
+        V4_STORE(nx + j, ar); V4_STORE(nx + Wp + j, ai);
+        const beam_v4d xr = (beam_v4d)((beam_v4i)ar & absmask);
+        const beam_v4d xi = (beam_v4d)((beam_v4i)ai & absmask);
+        const beam_v4i g1 = xi > xr;
+        const beam_v4d xm = (beam_v4d)((g1 & (beam_v4i)xi) | (~g1 & (beam_v4i)xr));
+        const beam_v4i g2 = xm > mv;
+        mv = (beam_v4d)((g2 & (beam_v4i)xm) | (~g2 & (beam_v4i)mv));
+        V4_STORE(nmax + j, mv);
     }
 }
 
-/* One edge's whole contribution: its rotations, then the multiply-add.
- * Compiled twice where the platform can choose at load time -- for AVX2 and
- * for the baseline -- and the CPU picks. Both perform the same operations in
- * the same order with no fused multiply-add, so they agree to the bit. */
-#if defined(__x86_64__) && defined(__ELF__) && defined(__GNUC__)
-#define BEAM_LINE_CLONES __attribute__((target_clones("avx2", "default")))
-#else
-#define BEAM_LINE_CLONES
-#endif
-
-BEAM_LINE_CLONES
-static void line_edge(double w, double mag, double im0, double dim, uint64_t k0,
-                      uint32_t Wp, double *restrict rot, const double *restrict c,
-                      double *restrict nx) {
-    line_rotations(w, im0, dim, k0, Wp, rot, rot + Wp);
-    line_mac(Wp, mag, rot, rot + Wp, c, nx);
+static void *line_alloc(size_t n_doubles) {
+    /* Whole cache lines: a plane row is a multiple of sixteen orders. */
+    size_t bytes = n_doubles * sizeof(double);
+    bytes = (bytes + 63u) / 64u * 64u;
+    void *p = aligned_alloc(64u, bytes ? bytes : 64u);
+    return p;
 }
 
 BeamError jet_sweep_line(const BeamModel *m, uint32_t len, double re,
@@ -865,13 +968,17 @@ BeamError jet_sweep_line(const BeamModel *m, uint32_t len, double re,
     const uint32_t S = m->n_states;
     const uint32_t SK = m->state_shift;
     const uint32_t W = nq;
-    const uint32_t Wp = (W + BEAM_LINE_VEC - 1u) / BEAM_LINE_VEC * BEAM_LINE_VEC;
+    const uint32_t Wp = (W + BEAM_LINE_LANES - 1u) / BEAM_LINE_LANES * BEAM_LINE_LANES;
 
     for (uint32_t j = 0; j < W; ++j) {
         out_log_mod[(size_t)j * out_stride] = -INFINITY;
         out_phase[(size_t)j * out_stride] = 0.0;
     }
     if (W == 0u) return BEAM_OK;
+    if (k0 % BEAM_LINE_LANES != 0u)
+        return BEAM_ERANGE("%s: a stretch must start at a multiple of %u orders, "
+                           "not %llu", __func__, BEAM_LINE_LANES,
+                           (unsigned long long)k0);
 
     BEAM_BUDGET_OR_REFUSE("a complex tilted line sweep", len,
                           beam_jet_cfan_bytes(S, R, Wp));
@@ -879,46 +986,54 @@ BeamError jet_sweep_line(const BeamModel *m, uint32_t len, double re,
     const size_t W2 = (size_t)Wp * 2u;
     double  *w     = (double *)malloc((size_t)S * R * sizeof(double));
     double  *tail  = (double *)malloc((size_t)S * sizeof(double));
-    double  *cur   = (double *)calloc((size_t)S * W2, sizeof(double));
-    double  *next  = (double *)calloc((size_t)S * W2, sizeof(double));
+    double  *cur   = (double *)line_alloc((size_t)S * W2);
+    double  *next  = (double *)line_alloc((size_t)S * W2);
     uint8_t *alive = (uint8_t *)malloc(S);
-    double  *pt    = (double *)malloc((size_t)Wp * 4u * sizeof(double));
+    double  *pt    = (double *)line_alloc((size_t)Wp * 8u);
+    int     *ex    = (int *)calloc(Wp, sizeof(int));
     uint8_t *dead  = (uint8_t *)calloc(Wp, 1);
+    /* One target's edges at a time: their weights, sources, moduli and
+     * rotations (see line_rotations). */
+    const uint32_t K = LINE_ROT_FIXED + line_blocks(k0, Wp);
+    double   *ew   = (double *)malloc((size_t)A * 2u * sizeof(double));
+    uint32_t *esrc = (uint32_t *)malloc((size_t)A * sizeof(uint32_t));
+    double   *erot = (double *)malloc((size_t)A * K * 3u * sizeof(double));
     LiveHandle h;
-    if (!w || !tail || !cur || !next || !alive || !pt || !dead
-        || beam_live_acquire(m, len, &h) != BEAM_OK) {
+    if (!w || !tail || !cur || !next || !alive || !pt || !ex || !dead
+        || !ew || !esrc || !erot || beam_live_acquire(m, len, &h) != BEAM_OK) {
         free(w); free(tail); free(cur); free(next); free(alive);
-        free(pt); free(dead);
+        free(pt); free(ex); free(dead); free(ew); free(esrc); free(erot);
         return BEAM_EALLOC("the complex line-sweep buffers");
     }
+    double *emag = ew + A;
+    double *eang = erot, *esn = erot + (size_t)A * K, *ecs = erot + 2u * (size_t)A * K;
     const BeamLive *L = h.L;
     double *scale = pt;
     double *nmax  = pt + 1u * Wp;
-    double *fre   = pt + 2u * Wp;
-    double *fim   = pt + 3u * Wp;
+    double *sv    = pt + 2u * Wp;      /* this layer's power-of-two scale */
+    double *acc   = pt + 4u * Wp;      /* one target's row, re then im    */
+    double *fre   = pt + 6u * Wp;
+    double *fim   = pt + 7u * Wp;
     uint32_t nalive = W;
 
-    for (uint32_t j = 0; j < W; ++j) {
-        scale[j] = 0.0;
-        cur[(size_t)(S - 1) * W2 + j] = 1.0;
-    }
+    /* Only the start state is read before it is written. */
+    memset(cur + (size_t)(S - 1) * W2, 0, W2 * sizeof(double));
+    for (uint32_t j = 0; j < Wp; ++j) scale[j] = 0.0;
+    for (uint32_t j = 0; j < W; ++j) cur[(size_t)(S - 1) * W2 + j] = 1.0;
 
     for (uint32_t i = 0; i < len; ++i) {
         beam_reached_mask(L, i, S, alive);
-        beam_layer_weights_live(m, i, len, w, NULL, alive);
-
+        /* The layer's largest weight comes with the weights; the smallest,
+         * needed only left of the imaginary axis, takes a scan. */
         double hi = -INFINITY, lo = INFINITY;
-        const uint32_t  nr = L->n_reached[i];
-        const uint32_t *rv = L->reached[i];
-#ifdef _OPENMP
-        #pragma omp parallel for schedule(static) reduction(max:hi) \
-                reduction(min:lo) num_threads(beam_threads())
-#endif
-        for (int64_t k = 0; k < (int64_t)nr; ++k) {
-            const double *row = w + (size_t)rv[k] * R;
-            for (uint32_t x = 0; x < R; ++x) {
-                if (row[x] > hi) hi = row[x];
-                if (row[x] != -INFINITY && row[x] < lo) lo = row[x];
+        beam_layer_weights_live(m, i, len, w, &hi, alive);
+        if (re < 0.0) {
+            const uint32_t  nr = L->n_reached[i];
+            const uint32_t *rv = L->reached[i];
+            for (uint32_t k = 0; k < nr; ++k) {
+                const double *row = w + (size_t)rv[k] * R;
+                for (uint32_t x = 0; x < R; ++x)
+                    if (row[x] != -INFINITY && row[x] < lo) lo = row[x];
             }
         }
         if (hi == -INFINITY) goto done;
@@ -926,70 +1041,43 @@ BeamError jet_sweep_line(const BeamModel *m, uint32_t len, double re,
                           : (lo == INFINITY ? -INFINITY : re * lo);
         if (qmax == -INFINITY) goto done;
 
+        for (uint32_t j = 0; j < Wp; ++j) {
+            sv[j] = (j < W && !dead[j]) ? ldexp(1.0, -ex[j]) : 0.0;
+            nmax[j] = 0.0;
+        }
         const uint32_t  nt  = L->n_reached[i + 1];
         const uint32_t *tgt = L->reached[i + 1];
-        for (uint32_t j = 0; j < Wp; ++j) nmax[j] = 0.0;
-        int oom = 0;
-#ifdef _OPENMP
-        #pragma omp parallel reduction(max:nmax[:Wp]) reduction(max:oom) \
-                num_threads(beam_threads())
-#endif
-        {
-            double *rot = (double *)malloc((size_t)Wp * 2u * sizeof(double));
-            if (!rot) oom = 1;
-#ifdef _OPENMP
-            #pragma omp for schedule(static)
-#endif
-            for (int64_t k = 0; k < (int64_t)nt; ++k) {
-                if (!rot) continue;
-                const uint32_t t = tgt[k];
-                const uint32_t x = t % A;
-                if (x >= R) continue;
+        for (uint32_t k = 0; k < nt; ++k) {
+            const uint32_t t = tgt[k];
+            const uint32_t x = t % A;
+            double *nx = next + (size_t)t * W2;
+            uint32_t ne = 0;
+            if (x < R) {
                 const uint32_t rest = t / A;
-                double *nx = next + (size_t)t * W2;
                 for (uint32_t a = 0; a < A; ++a) {
                     const uint32_t src = a * SK + rest;
                     if (!alive[src]) continue;
                     const double wv = w[(size_t)src * R + x];
                     if (wv == -INFINITY) continue;
-                    line_edge(wv, exp(re * wv - qmax), im0, dim, k0, Wp, rot,
-                              cur + (size_t)src * W2, nx);
-                }
-                for (uint32_t j = 0; j < W; ++j) {
-                    const double v = fmax(fabs(nx[j]), fabs(nx[Wp + j]));
-                    if (v > nmax[j]) nmax[j] = v;
+                    ew[ne] = wv;
+                    emag[ne] = exp(re * wv - qmax);
+                    esrc[ne++] = src;
                 }
             }
-            free(rot);
-        }
-        if (oom) {
-            free(w); free(tail); free(cur); free(next); free(alive);
-            free(pt); free(dead);
-            beam_live_release(&h);
-            return BEAM_EALLOC("the complex line-sweep rotations");
+            if (ne) line_rotations(ew, ne, im0, dim, k0, K, eang, esn, ecs);
+            for (uint32_t e = 0; e < ne; ++e)
+                line_edge(emag[e], ecs + (size_t)e * K, esn + (size_t)e * K, k0, Wp,
+                          cur + (size_t)esrc[e] * W2, acc, e == 0);
+            if (!ne) memset(acc, 0, W2 * sizeof(double));
+            line_store(Wp, acc, sv, nx, nmax);
         }
         for (uint32_t j = 0; j < W; ++j) {
             if (dead[j]) continue;
-            scale[j] += qmax;
-            if (!(nmax[j] > 0.0)) { dead[j] = 1; --nalive; }
+            scale[j] += qmax + (double)ex[j] * BEAM_LN2;
+            if (!(nmax[j] > 0.0)) { dead[j] = 1; --nalive; continue; }
+            ex[j] = ilogb(nmax[j]);
         }
         if (nalive == 0u) goto done;
-#ifdef _OPENMP
-        #pragma omp parallel for schedule(static) num_threads(beam_threads())
-#endif
-        for (int64_t k = 0; k < (int64_t)nt; ++k) {
-            double *nx = next + (size_t)tgt[k] * W2;
-            for (uint32_t j = 0; j < W; ++j) {
-                if (dead[j]) continue;
-                nx[j]      = beam_rescale(nx[j], nmax[j]);
-                nx[Wp + j] = beam_rescale(nx[Wp + j], nmax[j]);
-            }
-        }
-        for (uint32_t j = 0; j < W; ++j)
-            if (!dead[j]) scale[j] += log(nmax[j]);
-
-        for (uint32_t k = 0; k < nr; ++k)
-            memset(cur + (size_t)rv[k] * W2, 0, W2 * sizeof(double));
         double *tmp = cur; cur = next; next = tmp;
     }
 
@@ -998,36 +1086,31 @@ BeamError jet_sweep_line(const BeamModel *m, uint32_t len, double re,
     beam_tail_weights(m, len, tail);
     {
         const uint32_t  ns = L->n_reached[len];
-        const uint32_t *sv = L->reached[len];
+        const uint32_t *sv2 = L->reached[len];
         double tmax = -INFINITY;
         for (uint32_t k = 0; k < ns; ++k) {
-            const double tv = tail[sv[k]];
+            const double tv = tail[sv2[k]];
             if (tv != -INFINITY && re * tv > tmax) tmax = re * tv;
         }
         if (tmax == -INFINITY) goto done;
-        double *rot = (double *)malloc((size_t)Wp * 2u * sizeof(double));
-        if (!rot) {
-            free(w); free(tail); free(cur); free(next); free(alive);
-            free(pt); free(dead);
-            beam_live_release(&h);
-            return BEAM_EALLOC("the complex line-sweep rotations");
+        int first = 1;
+        for (uint32_t k = 0; k < ns; ) {               /* A end states a batch */
+            uint32_t ne = 0;
+            for (; k < ns && ne < A; ++k) {
+                const uint32_t s = sv2[k];
+                const double tv = tail[s];
+                if (tv == -INFINITY) continue;
+                ew[ne] = tv;
+                emag[ne] = exp(re * tv - tmax);
+                esrc[ne++] = s;
+            }
+            if (ne) line_rotations(ew, ne, im0, dim, k0, K, eang, esn, ecs);
+            for (uint32_t e = 0; e < ne; ++e, first = 0)
+                line_edge(emag[e], ecs + (size_t)e * K, esn + (size_t)e * K, k0, Wp,
+                          cur + (size_t)esrc[e] * W2, acc, first);
         }
-        double *acc = (double *)calloc(W2, sizeof(double));
-        if (!acc) {
-            free(rot); free(w); free(tail); free(cur); free(next); free(alive);
-            free(pt); free(dead);
-            beam_live_release(&h);
-            return BEAM_EALLOC("the complex line-sweep sink");
-        }
-        for (uint32_t k = 0; k < ns; ++k) {
-            const uint32_t s = sv[k];
-            const double tv = tail[s];
-            if (tv == -INFINITY) continue;
-            line_edge(tv, exp(re * tv - tmax), im0, dim, k0, Wp, rot,
-                      cur + (size_t)s * W2, acc);
-        }
+        if (first) goto done;
         for (uint32_t j = 0; j < W; ++j) { fre[j] = acc[j]; fim[j] = acc[Wp + j]; }
-        free(acc); free(rot);
         for (uint32_t j = 0; j < W; ++j) {
             if (dead[j]) continue;
             const double mod = hypot(fre[j], fim[j]);
@@ -1039,7 +1122,7 @@ BeamError jet_sweep_line(const BeamModel *m, uint32_t len, double re,
 
 done:
     free(w); free(tail); free(cur); free(next); free(alive);
-    free(pt); free(dead);
+    free(pt); free(ex); free(dead); free(ew); free(esrc); free(erot);
     beam_live_release(&h);
     return BEAM_OK;
 }

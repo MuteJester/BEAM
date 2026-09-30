@@ -389,14 +389,41 @@ BeamError jet_sweep_cfan(const BeamModel *m, uint32_t len, const double *q_re,
 
 /**
  * `jet_sweep_cfan` for `nq` orders `re + i (im0 + g dim)`, `g = k0 ..`, on one
- * vertical line: the modulus factor shared by the line, each rotation by a
- * multiply from the last, recomputed directly every 32 orders. An order's
- * bits depend on the line and on g only. See dp/jet.c.
+ * vertical line: the modulus factor shared by the line, the rotations by
+ * sixteen independent recurrences anchored directly every 128 orders. `k0`
+ * must be a multiple of BEAM_LINE_LANES. An order's bits depend on the line
+ * and on g only. See dp/jet.c.
  */
 BeamError jet_sweep_line(const BeamModel *m, uint32_t len, double re,
                          double im0, double dim, uint64_t k0, uint32_t nq,
                          double *out_log_mod, double *out_phase,
                          size_t out_stride);
+
+/**
+ * s[k] = sin x[k], c[k] = cos x[k], four at a time: within two ulp of 1 for
+ * |x| up to about 8e5 (libm beyond), the same bits on every CPU and whatever
+ * the call's size. See math/vtrig.c.
+ */
+void beam_sincos_many(const double *x, double *s, double *c, size_t n);
+
+/** Orders a line sweep advances at once; a stretch starts at a multiple. */
+#define BEAM_LINE_LANES 16u
+
+/**
+ * How `beam_model_log_mellin_line` splits `n_orders` orders over `n_lengths`
+ * lengths: stretches of `width` orders (the last may be shorter), `n_stretches`
+ * of them per length, `concurrency` (length, stretch) items at once. A
+ * `concurrency` of 0 means not even one item fits the budget. See math/mellin.c.
+ */
+typedef struct {
+    uint32_t width;
+    uint32_t n_stretches;
+    uint32_t concurrency;
+} BeamLinePlan;
+
+BeamLinePlan beam_line_plan(uint32_t n_states, uint32_t n_residues,
+                            uint32_t n_orders, uint32_t n_lengths,
+                            uint32_t n_threads, uint64_t budget);
 
 /**
  * Peak bytes one `jet_sweep_cfan` over `n_tilts` tilts holds: `beam_jet_fan_bytes`

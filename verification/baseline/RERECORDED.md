@@ -2072,3 +2072,37 @@ changed.
 
 The gate passed on everything else before recording. The full suite: 931
 passed, 2 skipped.
+
+# Why the C test inventory moved for a faster line sweep
+
+Re-recorded 2026-09-30, tag `prelinespeed`. Profiling a 2,048-order line on
+the foundation (887M complex multiply-adds per order) found a quarter of the
+time in the multiply-add itself. The rest went to 13 of 40 threads sitting
+idle, because stretches were sized for one thread per length; to rotations
+built one dependent multiply at a time; to libm's sincos, called edge by edge;
+and to a separate rescaling pass per layer. The line now keeps every thread
+busy, runs sixteen independent rotation chains fused into the multiply-add
+(eight lanes a register, with an AVX-512 copy), takes each target's sines and
+cosines four at a time from `beam_sincos_many`, and scales each layer by an
+exact power of two as it is written. 207 -> 62 ms per order on ig05.
+
+Line values move at the rounding level only: against the direct form on the
+foundation, 1e-24 of M(Re q) for t >= 0.1 (as before) and 7e-15 at t = 0,
+where the old line shared the direct form's divisions. The AVX-512 copy is
+bit-identical to the AVX2 copy on the foundation's 2,048 orders.
+
+    c_cases.txt            7 added, 0 renamed or dropped:
+                           test_a_long_line_keeps_every_thread_busy,
+                           test_line_plans_cover_the_line_within_the_budget
+                           (test_mellin_complex.c); test_random_angles_within_two_ulp,
+                           test_near_multiples_of_half_pi, test_zero_is_exact,
+                           test_bits_do_not_depend_on_the_call_size,
+                           test_beyond_the_reduction_range (test_vtrig.c, new)
+    python_api.txt         unchanged (re-written by the recorder, byte-identical)
+    pytest_cases.txt       unchanged (likewise)
+    numeric.json           unchanged (likewise)
+    threads.json           unchanged (likewise)
+
+`beam_line_plan` is newly external (internal header only). The gate passed on
+everything else before recording, `exact.py` at 411 quantities. The full
+suite: 931 passed, 2 skipped; C 345 passed.

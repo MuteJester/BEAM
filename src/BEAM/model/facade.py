@@ -1580,8 +1580,8 @@ class BeamModel:
 
         FASTER BY WHAT THE LINE SHARES. Every order has the same real part,
         so each edge's modulus factor is taken once for all of them. Each
-        order's rotation is the previous one's times a fixed factor,
-        recomputed directly every 32 orders, so one cosine and one sine per
+        order's rotation is the one sixteen before times a fixed factor,
+        recomputed directly every 128 orders, so a few cosines and sines per
         edge replace one per edge per order.
 
         EXACT TO ROUNDING, NOT TO THE BIT, against :meth:`log_mellin_complex`:

@@ -286,9 +286,10 @@ static void test_line_bits_depend_on_the_line_alone(void) {
     beam_model_set_threads(1);
     ok = ok && beam_model_log_mellin_line(m, re, im0, dim, K, tre, tim) == BEAM_OK;
     beam_model_set_threads(0);
-    /* 7 orders a stretch: stretches start at 7, 14, 21 ... between anchors */
+    /* One chain a stretch: stretches start at 16, 32, 48 ... between anchors */
     beam_model_set_memory_budget(beam_jet_cfan_bytes(m->n_states,
-                                                     m->n_residues, 7u));
+                                                     m->n_residues,
+                                                     BEAM_LINE_LANES));
     beam_model_set_threads(1);
     ok = ok && beam_model_log_mellin_line(m, re, im0, dim, K, bre, bim) == BEAM_OK;
     beam_model_set_threads(0);
@@ -338,6 +339,59 @@ static void test_the_calling_contract(void) {
     PASS();
 }
 
+/* ── How a line is split over lengths, stretches and threads ─── */
+
+static void test_a_long_line_keeps_every_thread_busy(void) {
+    /* The foundation: 194,481 states, 27 lengths, 40 threads, 32 GiB. A
+     * 2,048-order line used to be cut for 27 threads -- one per length --
+     * so the budget then admitted only 27 stretches at once. */
+    const uint64_t gib = 1ull << 30;
+    const BeamLinePlan p = beam_line_plan(194481u, 20u, 2048u, 27u, 40u, 32u * gib);
+    printf("    width %u, %u stretches a length, %u at once\n",
+           p.width, p.n_stretches, p.concurrency);
+    ASSERT_MSG(p.concurrency == 40u, "a long line left threads idle");
+    ASSERT_MSG(p.concurrency * beam_jet_cfan_bytes(194481u, 20u, (p.width + 15u) / 16u * 16u)
+               <= 32u * gib, "the plan overran the budget");
+    PASS();
+}
+
+static void test_line_plans_cover_the_line_within_the_budget(void) {
+    const uint32_t Ns[] = {1u, 7u, 100u, 128u, 512u, 2048u, 12000u};
+    const uint32_t nws[] = {1u, 3u, 27u};
+    const uint32_t nths[] = {1u, 8u, 40u};
+    const uint64_t budgets[] = {1ull << 26, 1ull << 30, 32ull << 30, 256ull << 30};
+    const uint32_t S = 194481u, R = 20u;
+    for (size_t a = 0; a < sizeof Ns / sizeof *Ns; ++a)
+    for (size_t b = 0; b < sizeof nws / sizeof *nws; ++b)
+    for (size_t c = 0; c < sizeof nths / sizeof *nths; ++c)
+    for (size_t d = 0; d < sizeof budgets / sizeof *budgets; ++d) {
+        const uint32_t N = Ns[a], nw = nws[b], nth = nths[c];
+        const uint64_t budget = budgets[d];
+        const BeamLinePlan p = beam_line_plan(S, R, N, nw, nth, budget);
+        const uint64_t need = beam_jet_cfan_bytes(S, R, (p.width + 15u) / 16u * 16u);
+        const uint64_t items = (uint64_t)nw * p.n_stretches;
+        snprintf(msg, sizeof msg, "N=%u nw=%u threads=%u budget=%llu: width %u, "
+                 "%u stretches, %u at once", N, nw, nth,
+                 (unsigned long long)budget, p.width, p.n_stretches, p.concurrency);
+        if (budget < beam_jet_cfan_bytes(S, R, BEAM_LINE_LANES)) {
+            ASSERT_MSG(p.concurrency == 0u, msg);    /* nothing fits: refuse */
+            continue;
+        }
+        ASSERT_MSG(p.width >= 1u && p.n_stretches >= 1u, msg);
+        ASSERT_MSG((uint64_t)p.width * p.n_stretches >= N, msg);
+        ASSERT_MSG((uint64_t)p.width * (p.n_stretches - 1u) < N, msg);
+        ASSERT_MSG(p.width % BEAM_LINE_LANES == 0u || p.n_stretches == 1u, msg);
+        ASSERT_MSG(p.concurrency >= 1u && p.concurrency <= nth
+                   && p.concurrency <= items, msg);
+        ASSERT_MSG((uint64_t)p.concurrency * need <= budget, msg);
+        /* Enough memory for every thread at the narrowest worthwhile width:
+         * then every thread that has an item to run gets one. */
+        if (budget >= (uint64_t)nth * beam_jet_cfan_bytes(S, R, 128u))
+            ASSERT_MSG(p.concurrency == (items < nth ? items : nth), msg);
+    }
+    PASS();
+}
+
 
 int main(void) {
     printf("Mellin transform at complex orders\n");
@@ -347,6 +401,8 @@ int main(void) {
     RUN_TEST(test_line_agrees_with_the_general_form);
     RUN_TEST(test_line_bits_depend_on_the_line_alone);
     RUN_TEST(test_the_calling_contract);
+    RUN_TEST(test_a_long_line_keeps_every_thread_busy);
+    RUN_TEST(test_line_plans_cover_the_line_within_the_budget);
     printf("  %d passed, %d failed\n", pass_count, fail_count);
     return fail_count ? 1 : 0;
 }
