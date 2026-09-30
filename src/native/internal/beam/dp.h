@@ -387,17 +387,30 @@ BeamError jet_sweep_cfan(const BeamModel *m, uint32_t len, const double *q_re,
                          const double *q_im, uint32_t nq, double *out_log_mod,
                          double *out_phase, size_t out_stride);
 
+typedef struct BeamLineWork BeamLineWork;
+
 /**
  * `jet_sweep_cfan` for `nq` orders `re + i (im0 + g dim)`, `g = k0 ..`, on one
  * vertical line: the modulus factor shared by the line, the rotations by
- * sixteen independent recurrences anchored directly every 128 orders. `k0`
+ * sixteen independent recurrences anchored directly every 128 orders, all
+ * threads sharing out each layer's targets, in the workspace `wk`. `k0`
  * must be a multiple of BEAM_LINE_LANES. An order's bits depend on the line
  * and on g only. See dp/jet.c.
  */
-BeamError jet_sweep_line(const BeamModel *m, uint32_t len, double re,
-                         double im0, double dim, uint64_t k0, uint32_t nq,
-                         double *out_log_mod, double *out_phase,
+BeamError jet_sweep_line(const BeamModel *m, BeamLineWork *wk, uint32_t len,
+                         double re, double im0, double dim, uint64_t k0,
+                         uint32_t nq, double *out_log_mod, double *out_phase,
                          size_t out_stride);
+
+/**
+ * A line sweep's planes and scratch for stretches up to `Wp` orders with
+ * `n_threads` threads, `beam_jet_line_bytes` of them, made once per line and
+ * reused by every (length, stretch): fresh planes each time had the system
+ * clear 12.7 GB per length of a 2,048-order foundation line.
+ */
+BeamLineWork *beam_line_work_new(const BeamModel *m, uint32_t Wp,
+                                 uint32_t n_threads);
+void beam_line_work_free(BeamLineWork *wk);
 
 /**
  * s[k] = sin x[k], c[k] = cos x[k], four at a time: within two ulp of 1 for
@@ -408,22 +421,69 @@ void beam_sincos_many(const double *x, double *s, double *c, size_t n);
 
 /** Orders a line sweep advances at once; a stretch starts at a multiple. */
 #define BEAM_LINE_LANES 16u
+/** Orders between a line's directly taken rotations (its anchors). */
+#define BEAM_LINE_BLOCK 128u
+/** Orders a thread walks a group of targets through at a time. */
+#define BEAM_LINE_TILE 256u
+/** End states summed together before the sink's partial sums are added. */
+#define BEAM_LINE_SINK_CHUNK 256u
 
 /**
- * How `beam_model_log_mellin_line` splits `n_orders` orders over `n_lengths`
- * lengths: stretches of `width` orders (the last may be shorter), `n_stretches`
- * of them per length, `concurrency` (length, stretch) items at once. A
- * `concurrency` of 0 means not even one item fits the budget. See math/mellin.c.
+ * How `beam_model_log_mellin_line` splits `n_orders` orders: stretches of
+ * `width` orders (the last may be shorter), `n_stretches` of them per length,
+ * each swept by all `n_threads` threads in turn. A `width` of 0 means not even
+ * one chain of orders fits the budget. See math/mellin.c.
  */
 typedef struct {
     uint32_t width;
     uint32_t n_stretches;
-    uint32_t concurrency;
 } BeamLinePlan;
 
 BeamLinePlan beam_line_plan(uint32_t n_states, uint32_t n_residues,
-                            uint32_t n_orders, uint32_t n_lengths,
+                            uint32_t n_alphabet, uint32_t n_orders,
                             uint32_t n_threads, uint64_t budget);
+
+/**
+ * A state's row in a line sweep's planes: the real parts of its `Wp` orders,
+ * one cache line, the imaginary parts, one more line. Unpadded, a 2,048-order
+ * row was 32 KB and its halves 16 KB apart, so a group's source rows and
+ * both halves of each fell in the same cache sets: that width ran at 47.7 ms
+ * an order on the foundation against 37.4 at 1,536.
+ */
+static inline size_t beam_line_im(uint32_t Wp) { return (size_t)Wp + 8u; }
+static inline size_t beam_line_row(uint32_t Wp) { return 2u * (size_t)Wp + 16u; }
+
+/** Doubles of one thread's scratch in a line sweep of `Wp` padded orders. */
+static inline uint64_t beam_line_scratch_doubles(uint32_t Wp, uint32_t A,
+                                                 uint32_t R) {
+    const uint64_t AR = (uint64_t)A * R;
+    const uint64_t E = AR > BEAM_LINE_SINK_CHUNK ? AR : BEAM_LINE_SINK_CHUNK;
+    const uint64_t blocks = BEAM_LINE_TILE / BEAM_LINE_BLOCK + 1u;
+    const uint64_t d = 2u * BEAM_LINE_TILE + Wp + 2u * E + 9u * E + 3u * blocks * E
+                     + 2u * BEAM_LINE_LANES * E;
+    const uint64_t u = E + A + 1u;                    /* uint32 slots */
+    return (d + (u + 1u) / 2u + 7u) / 8u * 8u;        /* whole lines  */
+}
+
+/**
+ * Peak bytes one `jet_sweep_line` over `Wp` padded orders holds with
+ * `n_threads` threads: the layer's weights and the sink's, two planes of
+ * complex accumulators, the group index, the per-order scalars, and each
+ * thread's scratch.
+ */
+static inline uint64_t beam_jet_line_bytes(uint32_t n_states, uint32_t n_residues,
+                                           uint32_t n_alphabet, uint32_t Wp,
+                                           uint32_t n_threads) {
+    const uint64_t S = n_states;
+    return S * (uint64_t)n_residues * sizeof(double)     /* one layer   */
+         + S * sizeof(double)                            /* the sink    */
+         + 2ull * S * beam_line_row(Wp) * sizeof(double) /* cur, next   */
+         + S + (S + 1u) * sizeof(uint32_t)               /* alive, groups */
+         + (uint64_t)Wp * (5u * sizeof(double) + sizeof(int) + 1u)
+         + (S + BEAM_LINE_SINK_CHUNK - 1u) / BEAM_LINE_SINK_CHUNK
+         + (uint64_t)n_threads * sizeof(double)
+           * beam_line_scratch_doubles(Wp, n_alphabet, n_residues);
+}
 
 /**
  * Peak bytes one `jet_sweep_cfan` over `n_tilts` tilts holds: `beam_jet_fan_bytes`

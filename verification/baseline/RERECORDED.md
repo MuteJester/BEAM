@@ -2106,3 +2106,42 @@ bit-identical to the AVX2 copy on the foundation's 2,048 orders.
 `beam_line_plan` is newly external (internal header only). The gate passed on
 everything else before recording, `exact.py` at 411 quantities. The full
 suite: 931 passed, 2 skipped; C 345 passed.
+
+# Why the C test inventory moved for a line swept by all threads at once
+
+Re-recorded 2026-09-30, tag `prelinewide`. After `prelinespeed` a line was
+still split into many narrow stretches, one thread each, so every stretch
+repeated the per-edge work (the layer's weights, each edge's modulus and
+fixed rotations), a short line left threads idle, and each length's live
+frontier was built serially on a process's first line (11.7 s of a 20.7 s
+128-order line on the foundation). Each stretch of each length is now swept
+by all the threads together, sharing out a layer's targets in groups with
+the same sources, a tile of 256 orders at a time; a line is one stretch
+wherever the budget holds it; the frontiers are built in parallel first; one
+workspace serves the whole line. Each edge's sixteen-lane rotation pattern
+is taken once per layer and a block's seeds are its anchor times that
+pattern; the chains are held in named registers (as an indexed array they
+lived on the stack); rows are padded by a cache line (a 2,048-order row was
+32 KB, and that width ran 30% slower than 1,536); the next layer's rows are
+written with non-temporal stores. On ig05: 62 -> 33 ms per order at 2,048
+orders, 126 -> 65 at 128. The sweep is now bound by memory bandwidth.
+
+Line values move at the rounding level only (seeds taken as anchor times
+pattern; the sink summed over fixed chunks of end states, so the same bits
+at any thread count). Every build since was checked bit-identical to the
+one before it on the foundation's 128- and 2,048-order lines where only the
+schedule changed.
+
+    c_cases.txt            1 renamed, 0 added or dropped:
+                           test_a_long_line_keeps_every_thread_busy ->
+                           test_a_line_is_one_stretch_wherever_it_fits
+                           (the plan it checked no longer exists: a stretch
+                           now always has every thread)
+    python_api.txt         unchanged (re-written by the recorder, byte-identical)
+    pytest_cases.txt       unchanged (likewise)
+    numeric.json           unchanged (likewise)
+    threads.json           unchanged (likewise)
+
+`beam_line_work_new` and `beam_line_work_free` are newly external (internal
+header only). The gate passed on everything else before recording, `exact.py`
+at 411 quantities. The full suite: 931 passed, 2 skipped; C 345 passed.
