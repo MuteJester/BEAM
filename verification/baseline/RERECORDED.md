@@ -2145,3 +2145,25 @@ schedule changed.
 `beam_line_work_new` and `beam_line_work_free` are newly external (internal
 header only). The gate passed on everything else before recording, `exact.py`
 at 411 quantities. The full suite: 931 passed, 2 skipped; C 345 passed.
+
+# Why the pytest inventory moved for power sums taken only when needed
+
+Re-recorded 2026-10-01, tag `prelazysums`. Profiling the figure steps on
+ig05 found the exact-occupancy engine spending a minute of every process on
+ninety real power sums M(1..90) at construction -- the series route's, which
+the pairwise, depth-sweep and partition workloads never reach -- and four
+more full sweeps on every save and load of its lines to recompute the
+model's fingerprint. The ninety are now taken on first use (checks that need
+only M(1) take that one order), and the fingerprint once per engine. No
+value changes.
+
+    pytest_cases.txt       4 added, 0 renamed or dropped:
+                           test_series_power_sums_are_taken_only_when_a_series_needs_them[aa|nt],
+                           test_the_fingerprint_is_taken_once[aa|nt]
+    python_api.txt         unchanged (re-written by the recorder, byte-identical)
+    c_cases.txt            unchanged (likewise)
+    numeric.json           unchanged (likewise)
+    threads.json           unchanged (likewise)
+
+The gate passed on everything else before recording, `exact.py` at 411
+quantities. The full suite: 935 passed, 2 skipped.

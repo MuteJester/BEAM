@@ -402,8 +402,8 @@ class ExactOccupancy:
         self.p_min = math.exp(-hi)
         self.s_max = float(hi)
         self._max_len = float(model.config["max_length"])
-        ks = np.arange(1, self._K_SERIES + 1, dtype=float)
-        self._log_mk = np.asarray(model.log_mellin_many(ks), dtype=float)
+        self._log_mk_taken = None        # the series route's power sums, on first use
+        self._fingerprint_taken = None   # the model's fingerprint, on first use
 
     # ── bookkeeping ─────────────────────────────────────────────
 
@@ -416,6 +416,22 @@ class ExactOccupancy:
         if q not in self._real:
             self._real[q] = float(self._m.log_mellin(q))
         return self._real[q]
+
+    @property
+    def _log_mk(self) -> np.ndarray:
+        """ln M(k), k = 1 .. _K_SERIES: the series route's power sums, taken on
+        first use. They are ninety full sweeps -- about a minute on the
+        foundation -- and a workload that only ever reaches the contours never
+        needs them."""
+        if self._log_mk_taken is None:
+            ks = np.arange(1, self._K_SERIES + 1, dtype=float)
+            self._log_mk_taken = np.asarray(self._m.log_mellin_many(ks), dtype=float)
+        return self._log_mk_taken
+
+    @property
+    def _log_m1(self) -> float:
+        """ln M(1), one sweep, for the checks that need no other power sum."""
+        return self._log_mreal(1.0)
 
     #: Orders the planning estimates minimise over. Multiples of the 0.02 the
     #: planner snaps q to, so the lines it plans reuse these real power sums.
@@ -487,10 +503,14 @@ class ExactOccupancy:
 
     def _fingerprint(self) -> np.ndarray:
         """Exact quantities that identify the model: ln M at a few real
-        orders and the config's max_length and order."""
-        qs = np.array([0.0, 0.37, 1.73, 3.0])
-        return np.concatenate([np.asarray(self._m.log_mellin_many(qs), dtype=float),
-                               [self._max_len, float(self._m.config["order"])]])
+        orders and the config's max_length and order. Taken once: every save
+        and load checks it, and each check was four full sweeps."""
+        if self._fingerprint_taken is None:
+            qs = np.array([0.0, 0.37, 1.73, 3.0])
+            self._fingerprint_taken = np.concatenate(
+                [np.asarray(self._m.log_mellin_many(qs), dtype=float),
+                 [self._max_len, float(self._m.config["order"])]])
+        return self._fingerprint_taken
 
     def save_lines(self, path) -> None:
         """Write the computed lines to `path` (npz), with the model's
@@ -1212,7 +1232,7 @@ class ExactOccupancy:
         todo = []
         K = self._K_SERIES
         for i, n in enumerate(ns):
-            if (n - 1.0) * self.p_min - self._log_mk[0] > 746.0:
+            if (n - 1.0) * self.p_min - self._log_m1 > 746.0:
                 # U(n) <= M(1) e^{-(n-1) p_min}, below the smallest double
                 out[i] = BoundedValue(0.0, 1.0, "underflow")
                 continue
@@ -1310,7 +1330,7 @@ class ExactOccupancy:
             guess = np.zeros(ns.size)
             guess[idx] = self._estimate("richness", ns[idx])
             res = self._solve_many(kmat, kabs_mat, -1.0, np.full(ns.size, d0),
-                                   ns * math.exp(self._log_mk[0]), 1.0, ns,
+                                   ns * math.exp(self._log_m1), 1.0, ns,
                                    guess, idx, extra=extra)
             for i, v in zip(todo, res):
                 if out[i] is None or v.bound < out[i].bound:
@@ -1342,7 +1362,7 @@ class ExactOccupancy:
             raise ValueError("the sampling deficit needs N > 0")
         out: list = [None] * ns.size
         d0 = math.exp(self.log_d0)
-        m1 = math.exp(self._log_mk[0])
+        m1 = math.exp(self._log_m1)
         H = float(self._m.entropy())
         K = self._K_SERIES - 1
         c = _deficit_series_coeffs(K)

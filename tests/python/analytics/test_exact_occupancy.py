@@ -492,3 +492,50 @@ def test_a_fresh_batch_below_its_rounding_floor_builds_at_most_two_lines(case):
         _held(v, float(np.sum(p * _miss(p, n - 1))), tol=math.inf)
     if any(v.bound > 1e-10 for v in out):
         assert len(fresh.lines) <= 2, fresh.lines
+
+
+class _CountingModel:
+    """The model, with a record of how many real orders each
+    `log_mellin_many` call asked for: each order is a full sweep."""
+
+    def __init__(self, m):
+        self._m = m
+        self.many = []
+
+    def __getattr__(self, name):
+        return getattr(self._m, name)
+
+    def log_mellin_many(self, qs):
+        self.many.append(int(np.asarray(qs).size))
+        return self._m.log_mellin_many(qs)
+
+
+def test_series_power_sums_are_taken_only_when_a_series_needs_them(case):
+    """The series route's ninety real power sums are ninety full sweeps --
+    about a minute on the foundation -- and a workload that only ever uses
+    the contours must not pay for them."""
+    m, p, _ = case
+    cm = _CountingModel(m)
+    eo = ExactOccupancy(cm, rel_tol=1e-10)
+    deep = 1e9
+    assert not eo._series_ok(deep)
+    _held(eo.richness_many([deep])[0], float(np.sum(_seen(p, deep))))
+    _held(eo.novelty_many([deep])[0], float(np.sum(p * _miss(p, deep - 1))))
+    assert ExactOccupancy._K_SERIES not in cm.many
+    small = 3.0
+    _held(eo.richness(small), float(np.sum(_seen(p, small))))
+    assert cm.many.count(ExactOccupancy._K_SERIES) == 1
+
+
+def test_the_fingerprint_is_taken_once(case, tmp_path):
+    """Every save and load checks the model's fingerprint; it is the same
+    model each time, so it is computed once, not a sweep per save."""
+    m, p, _ = case
+    cm = _CountingModel(m)
+    eo = ExactOccupancy(cm, rel_tol=1e-10)
+    eo._line(0.5, 0.1, 10.0)
+    path = tmp_path / "lines.npz"
+    for _ in range(3):
+        eo.save_lines(path)
+    eo.load_lines(path)
+    assert cm.many.count(4) == 1
