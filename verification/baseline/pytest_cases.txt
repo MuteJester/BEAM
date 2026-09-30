@@ -734,6 +734,8 @@ tests/python/model/test_partition_by_layer.py::test_the_last_entry_is_log_partit
 tests/python/model/test_partition_by_layer.py::test_the_shares_sum_back_to_log_z
 tests/python/model/test_partition_by_layer.py::test_the_split_is_not_the_uniform_one
 tests/python/model/test_partition_by_layer.py::test_the_vector_sums_to_log_pseq
+tests/python/model/test_persistence.py::test_a_file_without_the_flag_still_reestimates
+tests/python/model/test_persistence.py::test_a_finalized_model_loads_under_its_stored_strengths
 tests/python/model/test_persistence.py::test_a_reload_refinalizes_under_the_stored_prior
 tests/python/model/test_persistence.py::test_corrupt_file_is_rejected
 tests/python/model/test_persistence.py::test_round_trip

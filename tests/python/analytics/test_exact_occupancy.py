@@ -402,6 +402,7 @@ def test_deficit_kernel_matches_a_high_precision_reference():
     """D~(w) = Gamma(w) [1/w + int_0^1 v^-w (1/v + 1/ln(1-v)) dv], the Mellin
     transform of the sampling deficit, held to the rounding the contour bound
     charges it: EPS (|ln Gamma(w)| + 10 (1 + |Im w|))."""
+    pytest.importorskip("mpmath")       # the reference's, not the library's
     from scipy.special import loggamma
     from BEAM.analytics.exact_occupancy import EPS, _deficit_kernel
     for c in (0.05, 0.3, 0.7, 0.95):

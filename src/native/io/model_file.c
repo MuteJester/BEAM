@@ -5,7 +5,10 @@
  * Counts are written, not the derived log-probability tables. A loaded model
  * is therefore a first-class one: it can still be observed into, subtracted
  * from, and re-finalized under different prior strengths. Writing the tables
- * instead would produce an artefact that could only be scored against.
+ * instead would produce an artefact that could only be scored against. A load
+ * re-finalizes from the counts -- under the prior strengths the header stores
+ * when the model was finalized as written (`flags`), since estimating them
+ * again from the same counts only reproduces them.
  *
  * Layout: the fixed header below, then the two count tables, then the length
  * histogram, then a CRC-32C of everything before it. A dense table is its flat
@@ -40,9 +43,15 @@ typedef struct {
     uint32_t storage_sparse;   /* 0: dense flat blocks, 1: frozen sparse */
     /* Bit 0: the level strengths are estimated from the counts; bit 1: the
      * length strength is. The values below are then the estimates the build
-     * made, and a load re-derives them from the same counts. */
+     * made. */
     uint32_t prior_auto;
-    uint32_t reserved;         /* written zero */
+    /* Bit 0: the model was FINALIZED when written, so the strengths below
+     * are the estimates for exactly these counts and a load finalizes under
+     * them instead of re-deriving them -- the same numbers, 48.5 s against
+     * 7.8 s a load on the foundation. Written zero before 2026-09-30, and
+     * such a file is re-derived as it always was. Readers from before then
+     * never read this word, so the bit is invisible to them. */
+    uint32_t flags;
     /*
      * Provenance: three facts a finished model cannot recompute about itself.
      * Contiguous, and pinned so below, because
@@ -289,6 +298,9 @@ BeamError beam_model_save(const BeamModel *m, const char *path) {
     h.storage_sparse  = m->cfg.sparse ? 1u : 0u;
     h.prior_auto      = (m->cfg.alpha_auto ? 1u : 0u)
                       | (m->cfg.alpha_length_auto ? 2u : 0u);
+    /* Any change to the counts clears `finalized`, so a finalized model's
+     * strengths are the estimates for the counts written below. */
+    h.flags           = m->finalized ? 1u : 0u;
     h.created_unix    = m->created_unix;
     h.observe_nanos   = m->observe_nanos;
     h.finalize_nanos  = m->finalize_nanos;
@@ -445,7 +457,18 @@ BeamModel *beam_model_load(const char *path) {
     m->observe_nanos  = h.observe_nanos;
     m->finalize_nanos = h.finalize_nanos;
 
-    if (beam_model_finalize(m) != BEAM_OK) {
+    /* Under the stored strengths when the file says they fit its counts
+     * (see `flags`); the auto flags come back afterwards, so a later change
+     * to the counts is re-estimated as it would have been. */
+    const bool auto_k = m->cfg.alpha_auto, auto_len = m->cfg.alpha_length_auto;
+    if (h.flags & 1u) {
+        m->cfg.alpha_auto = false;
+        m->cfg.alpha_length_auto = false;
+    }
+    const BeamError fe = beam_model_finalize(m);
+    m->cfg.alpha_auto = auto_k;
+    m->cfg.alpha_length_auto = auto_len;
+    if (fe != BEAM_OK) {
         beam_model_destroy(m);
         return NULL;
     }

@@ -1998,3 +1998,34 @@ it has. No C changed.
 
 The gate passed on everything else before recording, `exact.py` at 411
 quantities. The full suite: 925 passed, 2 skipped.
+
+# Why the saved-model bytes moved for loading under the stored prior
+
+Re-recorded 2026-09-30, tag `prestoredprior`. A model whose prior strengths
+are estimated from its counts stores the estimates, and every load estimated
+them again from the same counts -- the same numbers, 48.5 of a 53 s load on
+the foundation. The header word that was written zero, `reserved`, is now
+`flags`: bit 0 says the model was finalized when written, so the strengths it
+stores fit its counts, and a load finalizes under them. A file without the bit
+-- every file written before today -- is re-derived as it always was, and
+readers from before today never read the word, so both directions still load.
+
+    numeric.json           fixture_sha256 7e036f72... -> 746ffe58..., and
+                           nothing else: the fixture is finalized when saved,
+                           so its flags word is now 1. fixture_bytes unchanged
+                           (the word was already there). The foundation, saved
+                           again, differs from its old file in exactly byte 28
+                           (this word) and the trailing CRC, loads in 7.7 s
+                           instead of 52.6, and scores 20,000 sequences
+                           bit-identically.
+    pytest_cases.txt       +2 -0  test_persistence.py: a finalized model loads
+                                  under the strength its file stores (one
+                                  planted in the header is used, not
+                                  re-estimated), and a file without the flag
+                                  still re-estimates
+    python_api.txt         unchanged (re-written by the recorder, byte-identical)
+    c_cases.txt            unchanged (likewise)
+    threads.json           unchanged (likewise)
+
+The gate passed on everything else before recording, `exact.py` at 411
+quantities. Full suites: Python 927 passed, 2 skipped; C 338 passed.
