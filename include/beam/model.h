@@ -779,9 +779,12 @@ BeamError beam_model_log_mellin_complex(const BeamModel *m, const double *q_re,
  *
  * Faster than the general form by what the line shares. Every order has the
  * same real part, so each edge's modulus factor is taken once for all of
- * them. Each order's rotation is the previous order's times a fixed factor,
- * taken directly every 32 orders, so one cosine and one sine per edge replace
- * one per edge per order.
+ * them. Rotations are taken directly every 128 orders; the next three are
+ * the one before times a fixed factor, and the rest the one four before times
+ * its fourth power, so no rotation is more than 34 multiplies from a direct
+ * value, a few cosines and sines per edge replace one per edge per order, and
+ * four orders are computed per vector operation (AVX2 where the CPU has it,
+ * chosen at load time; the two builds agree to the bit).
  *
  * Agrees with `beam_model_log_mellin_complex` to rounding, not to the bit:
  * the rotation is the same number reached by different operations. Order k's

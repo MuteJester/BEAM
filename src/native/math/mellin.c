@@ -356,6 +356,9 @@ BeamError beam_model_log_mellin_complex(const BeamModel *m, const double *q_re,
 
 /* ── A vertical line ─────────────────────────────────────────── */
 
+/* The narrowest stretch the balance above will make; see there. */
+#define BEAM_LINE_MIN_WIDTH 128u
+
 BeamError beam_model_log_mellin_line(const BeamModel *m, double re, double im0,
                                      double dim, size_t nq, double *out_re,
                                      double *out_im) {
@@ -383,22 +386,42 @@ BeamError beam_model_log_mellin_line(const BeamModel *m, double re, double im0,
     const uint32_t nw = beam_live_lengths_desc(m, work);
 
     /* Budgeted as the complex form. Where the orders are split into stretches
-     * does not change any order's bits (see jet_sweep_line), so the stretch
-     * width is chosen for memory alone. */
+     * does not change any order's bits (see jet_sweep_line), so the width is
+     * chosen for speed within the memory budget.
+     *
+     * BALANCE. The work items are (length, stretch) pairs and a length-L
+     * sweep costs L layers, so with one stretch per length the longest length
+     * alone bounds the line's time: the lengths' sum over their maximum, 14
+     * at max_length 27, is all the parallelism there is, whatever the thread
+     * count. Stretches are therefore narrowed until there are about three
+     * items per thread -- but kept at least BEAM_LINE_MIN_WIDTH orders wide,
+     * since each edge pays a few cosines, sines and an exp per stretch. */
     const uint32_t S = m->n_states, R = m->n_residues;
     const uint64_t base = beam_jet_cfan_bytes(S, R, 0u);
     const uint64_t per_tilt = beam_jet_cfan_bytes(S, R, 1u) - base;
     const int th = beam_model_effective_threads();
-    uint32_t want = th > 0 ? (uint32_t)th : 1u;
+    const uint32_t nth = th > 0 ? (uint32_t)th : 1u;
+    uint32_t want = nth;
     if (nw && want > nw) want = nw;
     const uint64_t room = beam_model_memory_budget() / want;
     const uint64_t fit = room > base ? (room - base) / per_tilt : 0u;
     uint32_t width = fit >= N ? N : (fit > 0u ? (uint32_t)fit : 1u);
-    const uint32_t nb = (N + width - 1u) / width;
+    if (nw) {
+        const uint64_t per_len = ((uint64_t)3u * nth + nw - 1u) / nw;
+        uint64_t bal = ((uint64_t)N + per_len - 1u) / per_len;
+        if (bal < BEAM_LINE_MIN_WIDTH) bal = BEAM_LINE_MIN_WIDTH;
+        if (bal < width) width = (uint32_t)bal;
+    }
+    uint32_t nb = (N + width - 1u) / width;
     width = (N + nb - 1u) / nb;
+    /* The sweep pads a stretch to whole vectors of four orders: stretches
+     * are whole vectors wide, so only the last one pads, and the budget is
+     * asked for the padded width. */
+    if (width > 4u) width -= width % 4u;
+    nb = (N + width - 1u) / width;
 
     const uint64_t items = (uint64_t)nw * nb;
-    const uint64_t need = beam_jet_cfan_bytes(S, R, width);
+    const uint64_t need = beam_jet_cfan_bytes(S, R, (width + 3u) / 4u * 4u);
     const uint32_t conc = beam_budget_concurrency(
         need, items == 0u ? 1u : (items > UINT32_MAX ? UINT32_MAX
                                                      : (uint32_t)items));
