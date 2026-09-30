@@ -2050,3 +2050,25 @@ tolerance; it keeps the bound it has. No C changed.
 
 The gate passed on everything else before recording, `exact.py` at 411
 quantities. The full suite: 931 passed, 2 skipped.
+
+# Why the test inventory moved for one lower-q line at the rounding floor
+
+Re-recorded 2026-09-30, tag `prelowq`. The pipeline showed the previous
+commit's skip was too eager: three lines at q ~0.17 resolved none of 17
+deficit values, and one at q = 0.12 then resolved 16. A value at its rounding
+floor is at the floor OF THAT q; the sum cancels less at a lower q. So a batch
+now gets one line at half the q of such a value's best line, its step scaled
+to keep the aliasing margin, before those values keep the bounds they have.
+One per batch, not per value: each halving doubles a line's cost. No C
+changed.
+
+    pytest_cases.txt       4 renamed, 0 added or dropped: "builds no new
+                           line" -> "builds at most one new line", "a fresh
+                           batch builds at most one line" -> "at most two"
+    python_api.txt         unchanged (re-written by the recorder, byte-identical)
+    c_cases.txt            unchanged (likewise)
+    numeric.json           unchanged (likewise)
+    threads.json           unchanged (likewise)
+
+The gate passed on everything else before recording. The full suite: 931
+passed, 2 skipped.

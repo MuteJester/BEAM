@@ -463,12 +463,13 @@ def test_a_value_no_line_can_resolve_stops_the_planner(case):
     assert len(fresh.lines) <= 4, fresh.lines
 
 
-def test_a_value_below_its_rounding_floor_builds_no_new_line(case):
+def test_a_value_below_its_rounding_floor_builds_at_most_one_new_line(case):
     """What cost the foundation's discovery curve 9.5 minutes: with the
-    richness lines already built, novelties the rounding of any such line
-    cannot resolve must build NO new line -- the bound they have is limited by
-    rounding, which a finer line does not change -- and still come back
-    within the bounds they report."""
+    richness lines already built, novelties that the rounding of those lines
+    cannot resolve get ONE more line, at a lower q where the sum cancels less
+    -- on the foundation such a line resolved 16 of 17 values the higher q
+    could not -- and no more; and they come back within the bounds they
+    report."""
     m, p, eo = case
     fresh = ExactOccupancy(m, rel_tol=1e-10)
     ns = np.geomspace(1e-3 / fresh.p_min, 1e-1 / fresh.p_min, 12)
@@ -479,10 +480,10 @@ def test_a_value_below_its_rounding_floor_builds_no_new_line(case):
         _held(v, float(np.sum(p * _miss(p, n - 1))), tol=math.inf)
     unresolved = sum(v.bound > 1e-10 for v in out)
     if unresolved:
-        assert len(fresh.lines) == built, (fresh.lines[built:], unresolved)
+        assert len(fresh.lines) <= built + 1, (fresh.lines[built:], unresolved)
 
 
-def test_a_fresh_batch_below_its_rounding_floor_builds_at_most_one_line(case):
+def test_a_fresh_batch_below_its_rounding_floor_builds_at_most_two_lines(case):
     m, p, eo = case
     fresh = ExactOccupancy(m, rel_tol=1e-10)
     ns = np.geomspace(1e-3 / fresh.p_min, 1e-1 / fresh.p_min, 12)
@@ -490,4 +491,4 @@ def test_a_fresh_batch_below_its_rounding_floor_builds_at_most_one_line(case):
     for n, v in zip(ns, out):
         _held(v, float(np.sum(p * _miss(p, n - 1))), tol=math.inf)
     if any(v.bound > 1e-10 for v in out):
-        assert len(fresh.lines) <= 1, fresh.lines
+        assert len(fresh.lines) <= 2, fresh.lines

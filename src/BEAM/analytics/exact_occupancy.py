@@ -1042,13 +1042,19 @@ class ExactOccupancy:
         # after _FUTILE_LINES new lines in a row that resolved nothing the
         # batch stops. What is left is returned with the bound it has.
         #
-        # And before any line is built for a parameter: if its best line's
-        # ROUNDING floor already exceeds its tolerance, the value is smaller
-        # than the rounding of the sum that forms it, and a finer or longer
-        # line only repeats that. It keeps the bound it has (on the
-        # foundation this was 9.5 minutes of lines resolving nothing).
+        # And before a line is designed for a parameter: if its best line's
+        # ROUNDING floor already exceeds its tolerance, a finer or longer line
+        # at that q only repeats the rounding. The sum cancels less at a lower
+        # q, so the batch gets ONE line at half that q -- its step scaled to
+        # keep the same aliasing margin -- and after that such values keep the
+        # bounds they have. (On the foundation three lines at q ~0.17 resolved
+        # none of 17 deficit values that one at q = 0.12 then resolved.) One,
+        # not one per value: halving q halves the step, so each further line
+        # doubles in cost, and on the foundation a third or fourth would buy
+        # 1e-10 over a proven 1e-7 on values drawn on a log axis.
         futile = 0
         skipped = 0
+        lowered = False
         while futile < self._FUTILE_LINES:
             open_ = order[unresolved()[order] & (tries[order] < 4)]
             if open_.size == 0:
@@ -1059,8 +1065,27 @@ class ExactOccupancy:
                 with np.errstate(divide="ignore", invalid="ignore"):
                     tol_j = self.rel_tol * max(1.0, abs_floor / max(abs(best_v[j]), 1e-300))
                 if best_f[j] > 0.5 * tol_j:
-                    tries[j] = 4
-                    skipped += 1
+                    bl = best_l[j]
+                    q_low = round(bl.q / 2.0 / 0.02) * 0.02
+                    if lowered or q_low < 0.02:
+                        tries[j] = 4
+                        skipped += 1
+                        continue
+                    lowered = True
+                    h_low = bl.h * q_low / bl.q   # the same q D, so the same margin
+                    T = self._design_T_many(kabs_mat, q_low, idx[[j]],
+                                            np.array([max(abs(best_v[j]), abs_floor)]), 1.0)
+                    ln = self._line(q_low, h_low, max(T, float(bl.t[-1])))
+                    cost = self._last_cost
+                    pending = np.nonzero(unresolved())[0]
+                    take(ln, pending)
+                    if cost is not None:
+                        left = int(np.count_nonzero(unresolved()[pending]))
+                        _log.info("line q=%g h=%.4g: %s, %d orders in %.1fs, a lower q "
+                                  "for values at their rounding floor; resolved %d of "
+                                  "%d pending %s values", q_low, h_low, cost[0], cost[1],
+                                  cost[2], pending.size - left, pending.size, label)
+                        futile = futile + 1 if left == pending.size else 0
                     continue
             strict = 0.1 ** max(tries[j] - 1, 0)
             tries[j] += 1
