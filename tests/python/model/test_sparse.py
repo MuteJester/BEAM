@@ -83,8 +83,13 @@ def test_sparse_is_bit_identical_to_dense(order, abundances):
 
     assert np.array_equal(dense.surprisal_moments(order=4),
                           sparse.surprisal_moments(order=4))
+    # The total mass is M(1), taken by a sweep that shares no arithmetic with
+    # the normaliser finalize stored; so it reports the model's true mass,
+    # which on the order-4 prior-dominated fixture is 1 + 3.58e-12 (an
+    # enumeration of all 3.4M strings agrees to 6e-15). 1e-11 holds the
+    # normaliser to that; the old sweep repeated finalize's own rounding.
     assert dense.pgen_diagnostics()["total_mass"] == pytest.approx(1.0,
-                                                                  abs=1e-12)
+                                                                  abs=1e-11)
     assert sparse.pgen_diagnostics()["total_mass"] == \
         dense.pgen_diagnostics()["total_mass"]
 

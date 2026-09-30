@@ -149,9 +149,11 @@ log_mellin_many(orders) -> np.ndarray   # log_mellin at every order
 
 **Bit-identical** to `[log_mellin(q) for q in orders]` — compared with `==` in the tests, not within a tolerance — on both alphabets, in both worlds, at orders either side of 1, at 0.999 and 1.001, and at negative orders; and unchanged by the thread count, the memory budget, or which other orders share the call.
 
-What it saves is traversals. Calling `log_mellin` once per order walks every length's trellis once per order and rebuilds the same layer of edge weights each time. This walks each trellis once and carries every order through it. Each order keeps its own per-layer rescaling, because each has its own dynamic range, and that is what keeps the bits: a shared rescale would be cheaper and would move every order's last digits but one. On a donor-scale model (180,000 sequences, order 4, 16 threads), 29 orders take 0.22 s against 2.65 s one at a time.
+What it saves is traversals. Calling `log_mellin` once per order walks every length's trellis once per order and rebuilds the same layer of edge weights each time. This walks each trellis once and carries every order through it. Each order keeps its own shift and its own scale -- the largest weight among the states still carrying its mass, and an exact power of two chosen a layer ahead -- because each has its own dynamic range, and that is what keeps the bits: a shared shift would be cheaper and would move every order's last digits but one, and at large `q`, where most states' mass has underflowed, would flush the rest.
 
-A sweep carrying `n` orders holds `n` mass vectors where one order holds one, and lengths running concurrently divide the [memory budget](runtime.md#memory-budget) as they always have. Orders are fused as widely as leaves room for one sweep per thread — 31 orders at amino-acid order 4 is 128 MB a sweep — and split into blocks when they do not fit. It refuses only where a sweep of a single order would not fit either.
+`log_mellin` and `log_mellin_many` are one routine. All threads share out each layer's targets, and an edge's factors `exp(q w - shift)` are taken eight orders at a time by a vectorised `exp` (within two ulp, exactly 1 at `q = 0`). On the foundation at 40 threads, the series route's ninety integer orders take 16 s, against 58 s for the per-length sweep this replaced; the four-order fingerprint set 1.9 s against 4.1.
+
+A sweep carrying `n` orders holds `n` values a state, rounded up to a vector of eight. Orders are taken in one stretch wherever the [memory budget](runtime.md#memory-budget) holds them, and in the fewest stretches that fit otherwise. It refuses only where one vector of orders would not fit.
 
 Orders must be finite; `nan` and `inf` raise `BeamValueError`.
 

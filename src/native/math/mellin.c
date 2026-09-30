@@ -18,62 +18,136 @@
  * long tail of rare lengths from underflowing out of the total.
  */
 /**
- * Live lengths, longest first: the per-length sweeps are the unit of parallel
- * work and cost grows with the length, so the longest must be handed out
- * first or fifteen cores wait on it at the end.
+ * The widest stretch of real orders, a whole number of vectors, whose sweep
+ * fits the budget -- all of them wherever they fit. Each stretch is swept by
+ * every thread, so there is nothing to balance and no reason to cut a line
+ * of orders that fits.
  */
-BeamError beam_mellin_terms(const BeamModel *m, double q, double *terms,
-                             double *out_max) {
+BeamLinePlan beam_real_plan(uint32_t S, uint32_t R, uint32_t A, uint32_t N,
+                            uint32_t nth, uint64_t budget) {
+    BeamLinePlan p = {0u, 0u};
+    if (N == 0u) return p;
+    if (nth == 0u) nth = 1u;
+    const uint32_t V = BEAM_REAL_LANES;
+    const uint32_t whole = (N + V - 1u) / V * V;
+    if (beam_jet_real_bytes(S, R, A, whole, nth) <= budget) {
+        p.width = N;
+        p.n_stretches = 1u;
+        return p;
+    }
+    uint32_t lo = 0u, hi = whole / V;             /* in vectors; hi does not fit */
+    while (hi - lo > 1u) {
+        const uint32_t mid = lo + (hi - lo) / 2u;
+        if (beam_jet_real_bytes(S, R, A, mid * V, nth) <= budget) lo = mid;
+        else hi = mid;
+    }
+    const uint32_t fit = lo * V;
+    if (fit == 0u) return p;                       /* nothing fits */
+    const uint32_t nb = (N + fit - 1u) / fit;
+    uint32_t w = (N + nb - 1u) / nb;
+    w = (w + V - 1u) / V * V;                      /* within fit: a whole vector count */
+    p.width = w;
+    p.n_stretches = (N + w - 1u) / w;
+    return p;
+}
+
+/**
+ * `ln Z_q(L)` terms for the real orders qs[0 .. nq), combined per order into
+ * `terms[j * n_len_slots + L] = q c_L + ln Z_q(L)` and its maximum over the
+ * lengths, `out_max[j]`. One routine for one order and for many, so the two
+ * agree to the bit: an order's value depends on q alone (see jet_sweep_real).
+ *
+ * One (length, stretch) at a time, each swept by every thread, in one
+ * workspace; every length's live frontier is built first, in parallel.
+ */
+static BeamError real_terms(const BeamModel *m, const double *qs, uint32_t nq,
+                            double *terms, double *out_max) {
     const uint32_t n = m->n_len_slots;
-    for (uint32_t L = 0; L < n; ++L) terms[L] = -INFINITY;
+    for (size_t k = 0; k < (size_t)nq * n; ++k) terms[k] = -INFINITY;
+    for (uint32_t j = 0; j < nq; ++j) out_max[j] = -INFINITY;
+    if (nq == 0u) return BEAM_OK;
 
     uint32_t *work = (uint32_t *)malloc((size_t)n * sizeof(uint32_t));
-    double *lzs = (double *)malloc((size_t)n * sizeof(double));
+    double *lzs = (double *)malloc((size_t)nq * n * sizeof(double));
     if (!work || !lzs) {
         free(work); free(lzs);
         return BEAM_EALLOC("the per-length Mellin work list");
     }
+    for (size_t k = 0; k < (size_t)nq * n; ++k) lzs[k] = -INFINITY;
     const uint32_t nw = beam_live_lengths_desc(m, work);
-    int failed = BEAM_OK;
-    /* Concurrent sweeps DIVIDE the budget rather than multiplying it. A
-     * concurrency of 0 means one sweep does not fit at all, which the sweep
-     * itself refuses with the better message, so run one and report that. */
-    const uint32_t conc = beam_budget_concurrency(
-        beam_jet_sweep_bytes(m->n_states, m->n_residues, 1u), nw ? nw : 1u);
-    if (nw && conc == 0u) {
+    const int th = beam_model_effective_threads();
+    const uint32_t nth = th > 0 ? (uint32_t)th : 1u;
+    const BeamLinePlan plan = beam_real_plan(m->n_states, m->n_residues,
+                                             m->n_alphabet, nq, nth,
+                                             beam_model_memory_budget());
+    if (nw && plan.width == 0u) {
         const uint32_t at = work[0];
-        const uint64_t need = beam_jet_sweep_bytes(m->n_states, m->n_residues, 1u);
         free(work); free(lzs);
-        return beam_budget_refuse("a tilted per-length sweep", at, need);
+        return beam_budget_refuse("a tilted per-length sweep", at,
+                                  beam_jet_real_bytes(m->n_states, m->n_residues,
+                                                      m->n_alphabet,
+                                                      BEAM_REAL_LANES, nth));
     }
-
 #ifdef _OPENMP
-    #pragma omp parallel for schedule(dynamic, 1) reduction(max:failed) \
-            num_threads((int)conc)
+    #pragma omp parallel for schedule(dynamic, 1) num_threads((int)nth)
 #endif
     for (int64_t k = 0; k < (int64_t)nw; ++k) {
-        double mom[1], lz = 0.0;
-        const BeamError e = jet_sweep(m, work[k], q, 0u, mom, &lz);
-        if (e != BEAM_OK) { if ((int)e > failed) failed = (int)e; }
-        else lzs[work[k]] = lz;
+        LiveHandle h;
+        if (beam_live_acquire(m, work[k], &h) == BEAM_OK) beam_live_release(&h);
     }
+    int failed = BEAM_OK;
+    const uint32_t width = plan.width, nb = plan.n_stretches;
+    const uint64_t items = (uint64_t)nw * nb;
+    BeamRealWork *wk = NULL;
+    if (items) {
+        const uint64_t need = beam_jet_real_bytes(m->n_states, m->n_residues,
+                                                  m->n_alphabet, width, nth);
+        if (!beam_budget_fits(need)) {
+            const uint32_t at = work[0];
+            free(work); free(lzs);
+            return beam_budget_refuse("a tilted per-length sweep", at, need);
+        }
+        wk = beam_real_work_new(m, width, nth);
+        if (!wk) {
+            free(work); free(lzs);
+            return BEAM_EALLOC("the real-order sweep workspace");
+        }
+    }
+    for (uint64_t k = 0; k < items && failed == BEAM_OK; ++k) {
+        const uint32_t L  = work[k / nb];
+        const uint32_t q0 = (uint32_t)(k % nb) * width;
+        const uint32_t wq = nq - q0 < width ? nq - q0 : width;
+        const BeamError e = jet_sweep_real(m, wk, L, qs + q0, wq,
+                                           lzs + (size_t)q0 * n + L, n);
+        if (e != BEAM_OK) failed = (int)e;
+    }
+    beam_real_work_free(wk);
     free(work);
     if (failed != BEAM_OK) {
         free(lzs);
         return BEAM_FAIL((BeamError)failed,
                         "a per-length tilted sweep could not be computed");
     }
-    /* Scanned in ascending length, so the maximum and the terms are exactly
-     * what the serial loop produced. */
-    double mx = -INFINITY;
-    for (uint32_t L = 1; L < n; ++L) {
-        if (!beam_length_live(m, L) || lzs[L] == -INFINITY) continue;
-        terms[L] = q * (m->log_pi[L] - m->log_z[L]) + lzs[L];
-        if (terms[L] > mx) mx = terms[L];
+    /* Per order, scanned in ascending length. */
+    for (uint32_t j = 0; j < nq; ++j) {
+        const double q = qs[j];
+        const double *lz = lzs + (size_t)j * n;
+        double *tj = terms + (size_t)j * n;
+        double mx = -INFINITY;
+        for (uint32_t L = 1; L < n; ++L) {
+            if (!beam_length_live(m, L) || lz[L] == -INFINITY) continue;
+            tj[L] = q * (m->log_pi[L] - m->log_z[L]) + lz[L];
+            if (tj[L] > mx) mx = tj[L];
+        }
+        out_max[j] = mx;
     }
     free(lzs);
-    *out_max = mx;
     return BEAM_OK;
+}
+
+BeamError beam_mellin_terms(const BeamModel *m, double q, double *terms,
+                             double *out_max) {
+    return real_terms(m, &q, 1u, terms, out_max);
 }
 
 BeamError beam_model_log_mellin(const BeamModel *m, double q, double *out) {
@@ -99,111 +173,15 @@ BeamError beam_model_log_mellin(const BeamModel *m, double q, double *out) {
 /* ── Many orders in one pass ─────────────────────────────────── */
 
 /**
- * `beam_mellin_terms` at `nq` orders, from one traversal of each length where
- * there were `nq`.
- *
- * `terms[j * n_len_slots + L]` and `out_max[j]` are bit-identical to what
- * `beam_mellin_terms(m, qs[j], ...)` writes, whatever the budget, the thread
- * count, or the company `qs[j]` keeps. Each order's per-length value comes
- * from `jet_sweep_fan`, whose contract is exactly that, and is combined here
- * by the same expression, in the same ascending-length order.
- *
- * THE BUDGET is shared between two kinds of parallelism, and both cost memory.
- * Fusing `W` orders into one sweep multiplies its mass planes by `W`; running
- * `conc` lengths at once multiplies the whole sweep by `conc`. The lengths are
- * the unit of parallel work and the reason the single-order form is fast, so
- * they are budgeted first: the widest fusion that still lets one sweep per
- * thread run is taken, and only when not even one order per sweep allows that
- * does concurrency give way instead -- to what the single-order form would
- * have run. At the default 4 GB it never binds on a default amino-acid model:
- * 31 orders at order 4 is 128 MB a sweep, and 27 lengths at most 3.5 GB. It
- * binds on a nucleotide model near the ceiling order, where one plane is 80 MB.
- *
- * When the orders do not fit one sweep they are split into equal blocks, and
- * each (length, block) pair is one item of work. Blocks change which orders
- * share a traversal, never what any one of them computes.
+ * `beam_mellin_terms` at `nq` orders from one sweep of each length: the same
+ * routine, so `terms[j * n_len_slots + L]` and `out_max[j]` are bit-identical
+ * to what `beam_mellin_terms(m, qs[j], ...)` writes, whatever the budget, the
+ * thread count, or the company `qs[j]` keeps.
  */
 static BeamError mellin_terms_many(const BeamModel *m, const double *qs,
                                    uint32_t nq, double *terms,
                                    double *out_max) {
-    const uint32_t n = m->n_len_slots;
-    for (size_t k = 0; k < (size_t)nq * n; ++k) terms[k] = -INFINITY;
-
-    uint32_t *work = (uint32_t *)malloc((size_t)n * sizeof(uint32_t));
-    double *lzs = (double *)malloc((size_t)nq * n * sizeof(double));
-    if (!work || !lzs) {
-        free(work); free(lzs);
-        return BEAM_EALLOC("the per-length many-order Mellin work list");
-    }
-    const uint32_t nw = beam_live_lengths_desc(m, work);
-
-    /* Width first: the widest fusion that leaves room for one sweep per
-     * thread. `per_tilt` is what one more order adds to a sweep, taken as a
-     * difference of the sizing function so it cannot disagree with it. */
-    const uint32_t S = m->n_states, R = m->n_residues;
-    const uint64_t base = beam_jet_fan_bytes(S, R, 0u);
-    const uint64_t per_tilt = beam_jet_fan_bytes(S, R, 1u) - base;
-    const int th = beam_model_effective_threads();
-    uint32_t want = th > 0 ? (uint32_t)th : 1u;
-    if (nw && want > nw) want = nw;
-    const uint64_t room = beam_model_memory_budget() / want;
-    const uint64_t fit = room > base ? (room - base) / per_tilt : 0u;
-    uint32_t width = fit >= nq ? nq : (fit > 0u ? (uint32_t)fit : 1u);
-    const uint32_t nb = (nq + width - 1u) / width;
-    width = (nq + nb - 1u) / nb;             /* equal blocks, no straggler */
-
-    const uint64_t items = (uint64_t)nw * nb;
-    const uint64_t need = beam_jet_fan_bytes(S, R, width);
-    /* Concurrent sweeps DIVIDE the budget. A concurrency of 0 means one sweep
-     * of a single order does not fit at all, which is exactly where the
-     * single-order form refuses too. */
-    const uint32_t conc = beam_budget_concurrency(
-        need, items == 0u ? 1u : (items > UINT32_MAX ? UINT32_MAX
-                                                     : (uint32_t)items));
-    if (items && conc == 0u) {
-        const uint32_t at = work[0];
-        free(work); free(lzs);
-        return beam_budget_refuse("a fused tilted per-length sweep", at, need);
-    }
-
-    int failed = BEAM_OK;
-#ifdef _OPENMP
-    #pragma omp parallel for schedule(dynamic, 1) reduction(max:failed) \
-            num_threads((int)conc)
-#endif
-    for (int64_t k = 0; k < (int64_t)items; ++k) {
-        /* Longest length first, as in the single-order form; within a
-         * length, its blocks in order. */
-        const uint32_t L  = work[(uint64_t)k / nb];
-        const uint32_t q0 = (uint32_t)((uint64_t)k % nb) * width;
-        const uint32_t wq = nq - q0 < width ? nq - q0 : width;
-        const BeamError e = jet_sweep_fan(m, L, qs + q0, wq,
-                                          lzs + (size_t)q0 * n + L, n);
-        if (e != BEAM_OK && (int)e > failed) failed = (int)e;
-    }
-    free(work);
-    if (failed != BEAM_OK) {
-        free(lzs);
-        return BEAM_FAIL((BeamError)failed,
-                        "a fused per-length tilted sweep could not be computed");
-    }
-    /* Per order, scanned in ascending length: the same expression and the
-     * same order as `beam_mellin_terms`, so the terms and the maximum are its
-     * bits. */
-    for (uint32_t j = 0; j < nq; ++j) {
-        const double q = qs[j];
-        const double *lz = lzs + (size_t)j * n;
-        double *tj = terms + (size_t)j * n;
-        double mx = -INFINITY;
-        for (uint32_t L = 1; L < n; ++L) {
-            if (!beam_length_live(m, L) || lz[L] == -INFINITY) continue;
-            tj[L] = q * (m->log_pi[L] - m->log_z[L]) + lz[L];
-            if (tj[L] > mx) mx = tj[L];
-        }
-        out_max[j] = mx;
-    }
-    free(lzs);
-    return BEAM_OK;
+    return real_terms(m, qs, nq, terms, out_max);
 }
 
 BeamError beam_model_log_mellin_many(const BeamModel *m, const double *qs,

@@ -209,23 +209,15 @@ static void test_the_company_an_order_keeps_does_not_change_it(void) {
 
 static void test_threads_and_budget_do_not_change_an_order(void) {
     /* Three schedules that each take a different path through the driver:
-     * one thread, so the whole list fuses into one sweep at a time; a budget
-     * that fits one sweep of three orders per thread, so the list splits into
-     * blocks run concurrently; and a budget that fits exactly one sweep of one
-     * order, so every (length, order) pair runs alone.
-     *
-     * The last runs on one thread. With one sweep at a time the outer team
-     * is a team of one, so each layer's own parallel loops open a nested team
-     * -- afresh, since nested teams are not pooled -- and on a loaded machine
-     * that thread churn took this test from seconds to ten minutes with all
-     * threads, and still to 45 s now and then with two. One thread takes the
-     * same path through the driver -- the width falls to one order, the
-     * concurrency to one sweep -- which is what this schedule is here for. */
+     * one thread, so every layer's targets go to one thread; a budget that
+     * fits one vector of orders, so the list splits into stretches of eight;
+     * and the same budget on one thread. */
     for (size_t k = 0; k < N_SPECS; ++k) {
         if (SPECS[k].wide) continue;
         BeamModel *m = build(&SPECS[k]);
         ASSERT_MSG(m, "a fixture failed to build");
         const uint32_t S = beam_model_n_states(m), R = beam_model_n_residues(m);
+        const uint32_t A = m->n_alphabet;
         double want[NQ], one_thread[NQ], blocks[NQ], serial[NQ];
         bool ok = singles(m, QS, NQ, want);
 
@@ -234,10 +226,10 @@ static void test_threads_and_budget_do_not_change_an_order(void) {
         beam_model_set_threads(0);
 
         const int th = beam_model_effective_threads();
-        beam_model_set_memory_budget((uint64_t)(th > 0 ? th : 1)
-                                     * beam_jet_fan_bytes(S, R, 3u));
+        beam_model_set_memory_budget(beam_jet_real_bytes(
+            S, R, A, BEAM_REAL_LANES, th > 0 ? (uint32_t)th : 1u));
         ok = ok && beam_model_log_mellin_many(m, QS, NQ, blocks) == BEAM_OK;
-        beam_model_set_memory_budget(beam_jet_fan_bytes(S, R, 1u));
+        beam_model_set_memory_budget(beam_jet_real_bytes(S, R, A, BEAM_REAL_LANES, 1u));
         beam_model_set_threads(1);
         ok = ok && beam_model_log_mellin_many(m, QS, NQ, serial) == BEAM_OK;
         beam_model_set_threads(0);
@@ -246,8 +238,8 @@ static void test_threads_and_budget_do_not_change_an_order(void) {
         if (!ok) { beam_model_destroy(m); ASSERT_MSG(0, "a call failed"); }
         const bool same =
             all_same("one thread", &SPECS[k], QS, one_thread, want, NQ)
-            && all_same("blocks of three", &SPECS[k], QS, blocks, want, NQ)
-            && all_same("one sweep of one order", &SPECS[k], QS, serial, want, NQ);
+            && all_same("stretches of eight", &SPECS[k], QS, blocks, want, NQ)
+            && all_same("stretches of eight, one thread", &SPECS[k], QS, serial, want, NQ);
         beam_model_destroy(m);
         ASSERT_MSG(same, msg);
     }
@@ -258,14 +250,11 @@ static void test_it_refuses_only_where_one_order_would_not_fit(void) {
     BeamModel *m = build(&SPECS[0]);
     ASSERT_MSG(m, "the fixture failed to build");
     const uint32_t S = beam_model_n_states(m), R = beam_model_n_residues(m);
-    const uint64_t one = beam_jet_fan_bytes(S, R, 1u);
+    const uint32_t A = m->n_alphabet;
+    /* The least a sweep can hold: one vector of orders, on one thread. */
+    const uint64_t one = beam_jet_real_bytes(S, R, A, BEAM_REAL_LANES, 1u);
     double out[NQ], single = 0.0;
 
-    /* At exactly one sweep every (length, order) pair runs alone, which
-     * churns nested teams as the previous test explains, so the call that
-     * succeeds runs on one thread. The verdicts do not depend on the thread
-     * count: the width falls to one order either way, and whether that fits
-     * is the whole question. */
     beam_model_set_threads(1);
     beam_model_set_memory_budget(one);
     const BeamError at = beam_model_log_mellin_many(m, QS, NQ, out);
@@ -282,6 +271,35 @@ static void test_it_refuses_only_where_one_order_would_not_fit(void) {
     ASSERT_MSG(below == BEAM_ERR_BUDGET, "one byte short of a sweep was not refused");
     ASSERT_MSG(tiny_many == BEAM_ERR_BUDGET && tiny_single == BEAM_ERR_BUDGET,
                "a budget neither form fits must refuse in both");
+    PASS();
+}
+
+static void test_large_orders_stay_finite_and_in_bounds(void) {
+    /* At large q most states' mass underflows, and a state with none can
+     * still carry an edge heavier than the order's shift, whose factor
+     * exp(q w - qmax) would overflow; times its zero mass that is NaN. Every
+     * value must stay finite and between the largest term and D0 times it:
+     * q ln p_max <= ln M(q) <= q ln p_max + ln D0. */
+    static const double BIG[] = {30.0, 90.0, 300.0, 3000.0};
+    enum { NB = sizeof BIG / sizeof *BIG };
+    for (size_t k = 0; k < N_SPECS; ++k) {
+        if (SPECS[k].wide) continue;
+        BeamModel *m = build(&SPECS[k]);
+        ASSERT_MSG(m, "a fixture failed to build");
+        double got[NB], lo = 0.0, hi = 0.0, d0 = 0.0;
+        bool ok = beam_model_log_mellin_many(m, BIG, NB, got) == BEAM_OK
+               && beam_model_surprisal_range(m, &lo, &hi) == BEAM_OK
+               && beam_model_log_mellin(m, 0.0, &d0) == BEAM_OK;
+        beam_model_destroy(m);
+        ASSERT_MSG(ok, "a call failed");
+        for (size_t j = 0; j < NB; ++j) {
+            const double floor_ = -BIG[j] * lo, slack = 1e-9 * fabs(floor_) + 1e-9;
+            snprintf(msg, sizeof msg, "%s, q=%g: ln M = %.17g, bounds [%.17g, %.17g]",
+                     SPECS[k].name, BIG[j], got[j], floor_, floor_ + d0);
+            ASSERT_MSG(isfinite(got[j]), msg);
+            ASSERT_MSG(got[j] >= floor_ - slack && got[j] <= floor_ + d0 + slack, msg);
+        }
+    }
     PASS();
 }
 
@@ -321,6 +339,7 @@ int main(void) {
     RUN_TEST(test_the_company_an_order_keeps_does_not_change_it);
     RUN_TEST(test_threads_and_budget_do_not_change_an_order);
     RUN_TEST(test_it_refuses_only_where_one_order_would_not_fit);
+    RUN_TEST(test_large_orders_stay_finite_and_in_bounds);
     RUN_TEST(test_the_calling_contract);
     printf("  %lu (model, order) values compared with memcmp\n", cases_compared);
     printf("  %d passed, %d failed\n", pass_count, fail_count);

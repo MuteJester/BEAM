@@ -1,6 +1,6 @@
 /**
  * @file test_vtrig.c
- * @brief The line sweep's sine and cosine against long double.
+ * @brief The line sweeps' sine, cosine and exponential against long double.
  *
  * `beam_sincos_many` replaces libm's sincos in the line sweep, where each edge
  * needs a handful per stretch and libm's had become a third of the line's
@@ -111,6 +111,56 @@ static void test_beyond_the_reduction_range(void) {
     PASS();
 }
 
+/* ── exp, eight at a time ────────────────────────────────────── */
+
+static void test_exp_within_two_ulp(void) {
+    /* The real-order sweep's edge factors exp(q w - qmax) lie in
+     * [-inf, 0]; anything below the smallest normal double is flushed. */
+    enum { N = 400000 };
+    double *x = malloc(N * sizeof *x), *y = malloc(N * sizeof *y);
+    uint64_t st = 777u;
+    for (size_t k = 0; k < N; ++k) {
+        st = st * 6364136223846793005ull + 1442695040888963407ull;
+        const double u = (double)(st >> 11) / 9007199254740992.0;
+        const double span = (k % 3 == 0) ? 1.0 : (k % 3 == 1) ? 40.0 : 708.0;
+        x[k] = -u * span + (k % 7 == 0 ? 0.5 : 0.0);
+    }
+    beam_exp_many(x, y, N);
+    double worst = 0.0;
+    for (size_t k = 0; k < N; ++k) {
+        const long double want = expl((long double)x[k]);
+        const double rel = (double)fabsl(((long double)y[k] - want) / want);
+        if (rel > worst) { worst = rel; snprintf(msg, sizeof msg, "exp(%.17g)", x[k]); }
+    }
+    printf("    worst %.2e relative (%.2f ulp) at %s\n", worst, worst / DBL_EPSILON, msg);
+    free(x); free(y);
+    ASSERT_MSG(worst <= 2.0 * DBL_EPSILON, "an exponential lost more than two ulp");
+    PASS();
+}
+
+static void test_exp_is_exact_at_zero_and_flushes_below_the_normals(void) {
+    const double x[] = {0.0, -0.0, -708.5, -800.0, -INFINITY, -708.3};
+    double y[6];
+    beam_exp_many(x, y, 6);
+    ASSERT_MSG(y[0] == 1.0 && y[1] == 1.0, "exp 0 is not exactly 1");
+    ASSERT_MSG(y[2] == 0.0 && y[3] == 0.0 && y[4] == 0.0,
+               "below the smallest normal double is not flushed to 0");
+    ASSERT_MSG(y[5] >= DBL_MIN && fabs(y[5] / exp(-708.3) - 1.0) < 1e-15,
+               "just above the flush the value is wrong");
+    PASS();
+}
+
+static void test_exp_bits_do_not_depend_on_the_call_size(void) {
+    enum { N = 67 };
+    double x[N], y1[N], y2[N];
+    for (int k = 0; k < N; ++k) x[k] = -0.37 * k * k + 0.25;
+    beam_exp_many(x, y1, N);
+    for (int k = 0; k < N; ++k) beam_exp_many(x + k, y2 + k, 1);
+    ASSERT_MSG(memcmp(y1, y2, sizeof y1) == 0,
+               "an exponential's bits moved with how many came with it");
+    PASS();
+}
+
 int main(void) {
     printf("Vector sine and cosine for the line sweep\n");
     RUN_TEST(test_random_angles_within_two_ulp);
@@ -118,6 +168,9 @@ int main(void) {
     RUN_TEST(test_zero_is_exact);
     RUN_TEST(test_bits_do_not_depend_on_the_call_size);
     RUN_TEST(test_beyond_the_reduction_range);
+    RUN_TEST(test_exp_within_two_ulp);
+    RUN_TEST(test_exp_is_exact_at_zero_and_flushes_below_the_normals);
+    RUN_TEST(test_exp_bits_do_not_depend_on_the_call_size);
     printf("  %d passed, %d failed\n", pass_count, fail_count);
     return fail_count ? 1 : 0;
 }

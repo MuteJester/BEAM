@@ -3,6 +3,7 @@
  * @brief The moment-jet forward sweep: one pass carrying r+1 moments.
  */
 #include "beam/internal.h"
+#include "beam/vmath.h"
 
 
 /* ── Shared scratch for a forward sweep ──────────────────────── */
@@ -1445,6 +1446,536 @@ BeamError jet_sweep_line(const BeamModel *m, BeamLineWork *wk, uint32_t len,
             if (!(mod > 0.0)) continue;
             out_log_mod[(size_t)j * out_stride] = scale[j] + tmax + log(mod);
             out_phase[(size_t)j * out_stride] = atan2(fim[j], fre[j]);
+        }
+    }
+
+done:
+    beam_live_release(&h);
+    return BEAM_OK;
+}
+
+
+/* ── Many real orders at once ────────────────────────────────── */
+
+/**
+ * `jet_sweep_fan` for the real orders qs[0 .. nq), rebuilt the way the line
+ * sweep was: `ln Z_q(L)` per order into out_log_z[j * out_stride].
+ *
+ * WHAT CHANGED, AND WHY. The fan took `exp(q w - qmax)` from libm once per
+ * edge per order, one length per thread: 0.7 s an order on the foundation,
+ * where a complex order along a line had come down to 0.04 s. Profiled over
+ * the figure steps, these real power sums had become 40% of the exact work
+ * -- the series' ninety, the planner's grid, the lines' fingerprints.
+ * Here every thread shares out each layer's targets, in groups with the same
+ * sources and tiles of BEAM_REAL_TILE orders, and an edge's factors are taken
+ * eight orders at a time by `vm_exp8` (beam/vmath.h). Each order's scale is
+ * an exact power of two chosen a layer ahead, the next layer is written once
+ * with non-temporal stores where the CPU has them, and nothing is cleared.
+ *
+ * WHAT IS KEPT. Each order's layer shift is the fan's: its largest weight
+ * over the reached states that still carry ITS mass (its smallest, for
+ * q < 0), because at q = 90 most states' mass has underflowed and a shift
+ * taken over them all would flush the rest. An order dies where the fan's
+ * did: no mass-carrying edge, a shift of -inf, or an empty layer.
+ *
+ * WHY THAT MATTERS: an order's value depends on the model and on q alone --
+ * not on the other orders, the stretch, the thread count or the budget. Each
+ * target's edges are summed in a fixed order by one thread, the extremes are
+ * maxima and minima, and the sink's sum is taken over fixed chunks of end
+ * states and then over the chunks in order. So `beam_model_log_mellin` and
+ * `beam_model_log_mellin_many` agree to the bit, as their contract says.
+ */
+struct BeamRealWork {
+    uint32_t  Wp, nth;
+    uint64_t  per_thread;
+    double   *w, *tail, *cur, *next, *pt, *scr;
+    uint8_t  *alive, *dead, *used;
+    uint32_t *gs;
+    int      *ex;
+};
+
+void beam_real_work_free(BeamRealWork *wk) {
+    if (!wk) return;
+    free(wk->w); free(wk->tail); free(wk->cur); free(wk->next); free(wk->pt);
+    free(wk->scr); free(wk->alive); free(wk->dead); free(wk->used);
+    free(wk->gs); free(wk->ex);
+    free(wk);
+}
+
+BeamRealWork *beam_real_work_new(const BeamModel *m, uint32_t Wp, uint32_t nth) {
+    const uint32_t S = m->n_states, R = m->n_residues, A = m->n_alphabet;
+    BeamRealWork *wk = (BeamRealWork *)calloc(1, sizeof *wk);
+    if (!wk) return NULL;
+    wk->Wp = (Wp + BEAM_REAL_LANES - 1u) / BEAM_REAL_LANES * BEAM_REAL_LANES;
+    wk->nth = nth ? nth : 1u;
+    wk->per_thread = beam_real_scratch_doubles(wk->Wp, A, R);
+    const size_t RS = beam_real_row(wk->Wp);
+    const uint32_t nchunks = (S + BEAM_LINE_SINK_CHUNK - 1u) / BEAM_LINE_SINK_CHUNK;
+    wk->w     = (double *)malloc((size_t)S * R * sizeof(double));
+    wk->tail  = (double *)malloc((size_t)S * sizeof(double));
+    wk->cur   = (double *)line_alloc((size_t)S * RS);
+    wk->next  = (double *)line_alloc((size_t)S * RS);
+    wk->pt    = (double *)line_alloc((size_t)wk->Wp * 9u);
+    wk->scr   = (double *)line_alloc((size_t)(wk->per_thread * wk->nth));
+    wk->alive = (uint8_t *)malloc(S);
+    wk->dead  = (uint8_t *)malloc(wk->Wp);
+    wk->used  = (uint8_t *)malloc(nchunks ? nchunks : 1u);
+    wk->gs    = (uint32_t *)malloc(((size_t)S + 1u) * sizeof(uint32_t));
+    wk->ex    = (int *)malloc((size_t)wk->Wp * sizeof(int));
+    if (!wk->w || !wk->tail || !wk->cur || !wk->next || !wk->pt || !wk->scr
+        || !wk->alive || !wk->dead || !wk->used || !wk->gs || !wk->ex) {
+        beam_real_work_free(wk);
+        return NULL;
+    }
+    return wk;
+}
+
+typedef struct {
+    double   *acc;     /* [BEAM_REAL_TILE]            */
+    double   *nmax;    /* [Wp] this thread's largest   */
+    double   *hi, *lo; /* [Wp] this thread's extremes  */
+    double   *tmx;     /* [Wp] this thread's sink max  */
+    double   *w;       /* [E] edge weights             */
+    uint32_t *src;     /* [E]                          */
+    uint32_t *first;   /* [A + 1]                      */
+} RealScratch;
+
+static void real_scratch_carve(double *base, uint32_t Wp, uint64_t E,
+                               RealScratch *sc) {
+    double *p = base;
+    sc->acc = p;  p += BEAM_REAL_TILE;
+    sc->nmax = p; p += Wp;
+    sc->hi = p;   p += Wp;
+    sc->lo = p;   p += Wp;
+    sc->tmx = p;  p += Wp;
+    sc->w = p;    p += E;
+    sc->src = (uint32_t *)p;
+    sc->first = sc->src + E;
+}
+
+typedef double real_v8d __attribute__((vector_size(64)));
+typedef long long real_v8i __attribute__((vector_size(64)));
+#define R8_LOAD(dst, p)  memcpy(&(dst), (p), sizeof(real_v8d))
+#define R8_STORE(p, src) memcpy((p), &(src), sizeof(real_v8d))
+
+/* a where the mask is set, else b; a macro, since a function returning a
+ * vector by value changes the ABI between builds with and without AVX-512. */
+#define REAL_SEL(msk, a, b) \
+    ((real_v8d)(((msk) & (real_v8i)(a)) | (~(msk) & (real_v8i)(b))))
+
+/* Each order's extremes over the reached states rv[b .. e) that carry its
+ * mass: the rows' own max and (finite) min, offered to every order whose
+ * mass there is nonzero -- as the fan found them, order by order. */
+BEAM_EDGE_CLONES
+static void real_extremes(const uint32_t *rv, uint32_t b, uint32_t e,
+                          const double *w, uint32_t R, const double *cur,
+                          size_t RS, uint32_t Wp, double *hi, double *lo) {
+    for (uint32_t k = b; k < e; ++k) {
+        const uint32_t s = rv[k];
+        const double *row = w + (size_t)s * R;
+        double rmax = -INFINITY, rmin = INFINITY;
+        for (uint32_t x = 0; x < R; ++x) {
+            if (row[x] > rmax) rmax = row[x];
+            if (row[x] != -INFINITY && row[x] < rmin) rmin = row[x];
+        }
+        const double *c = cur + (size_t)s * RS;
+        const real_v8d vmax = {rmax, rmax, rmax, rmax, rmax, rmax, rmax, rmax};
+        const real_v8d vmin = {rmin, rmin, rmin, rmin, rmin, rmin, rmin, rmin};
+        const real_v8d zero = {0, 0, 0, 0, 0, 0, 0, 0};
+        for (uint32_t j = 0; j < Wp; j += BEAM_REAL_LANES) {
+            real_v8d cv, hv, lv;
+            R8_LOAD(cv, c + j); R8_LOAD(hv, hi + j); R8_LOAD(lv, lo + j);
+            const real_v8i has = cv != zero;
+            hv = REAL_SEL(has & (vmax > hv), vmax, hv);
+            lv = REAL_SEL(has & (vmin < lv), vmin, lv);
+            R8_STORE(hi + j, hv); R8_STORE(lo + j, lv);
+        }
+    }
+}
+
+/* nx = acc * s and nmax = max(nmax, nx) over T orders; masses are never
+ * negative, so the largest is the largest value. */
+typedef void (*RealStoreFn)(uint32_t T, const double *acc, const double *s,
+                            double *nx, double *nmax);
+
+__attribute__((always_inline))
+static inline void real_store_body(uint32_t T, const double *restrict acc,
+                                   const double *restrict s,
+                                   double *restrict nx, double *restrict nmax) {
+    for (uint32_t j = 0; j < T; j += BEAM_REAL_LANES) {
+        real_v8d a, sv, mv;
+        R8_LOAD(a, acc + j); R8_LOAD(sv, s + j); R8_LOAD(mv, nmax + j);
+        a *= sv;
+        R8_STORE(nx + j, a);
+        mv = REAL_SEL(a > mv, a, mv);
+        R8_STORE(nmax + j, mv);
+    }
+}
+
+static void real_store_plain(uint32_t T, const double *acc, const double *s,
+                             double *nx, double *nmax) {
+    real_store_body(T, acc, s, nx, nmax);
+}
+
+#if defined(__x86_64__) && defined(__GNUC__)
+#define REAL_STORE_STREAM(NAME, TARGET, VT, VI, W, STREAM)                     \
+__attribute__((target(TARGET)))                                                \
+static void NAME(uint32_t T, const double *acc, const double *s, double *nx,   \
+                 double *nmax) {                                               \
+    typedef double VT __attribute__((vector_size(8 * (W))));                   \
+    typedef long long VI __attribute__((vector_size(8 * (W))));                \
+    for (uint32_t j = 0; j < T; j += (W)) {                                    \
+        VT a, sv, mv;                                                          \
+        memcpy(&a, acc + j, sizeof a); memcpy(&sv, s + j, sizeof sv);          \
+        memcpy(&mv, nmax + j, sizeof mv);                                      \
+        a *= sv;                                                               \
+        STREAM(nx + j, a);                                                     \
+        const VI g = a > mv;                                                   \
+        mv = (VT)((g & (VI)a) | (~g & (VI)mv));                                \
+        memcpy(nmax + j, &mv, sizeof mv);                                      \
+    }                                                                          \
+}
+REAL_STORE_STREAM(real_store_nt512, "avx512f", rs_v8d, rs_v8i, 8u, LINE_STREAM512)
+REAL_STORE_STREAM(real_store_nt256, "avx2", rs_v4d, rs_v4i, 4u, LINE_STREAM256)
+
+static RealStoreFn real_store_pick(void) {
+    __builtin_cpu_init();
+    if (__builtin_cpu_supports("avx512f")) return real_store_nt512;
+    if (__builtin_cpu_supports("avx2")) return real_store_nt256;
+    return real_store_plain;
+}
+#else
+static RealStoreFn real_store_pick(void) { return real_store_plain; }
+#endif
+
+/* acc (= if first, else +=) exp(q w - qmax) c over T orders, eight at a
+ * time. `q`, `qmax`, `c` and `acc` point at the tile's first order.
+ *
+ * THE ARGUMENT IS CLAMPED AT 0. For an edge whose source carries the order's
+ * mass it is never positive -- qmax is q times that mass's largest weight
+ * (smallest, for q < 0), and rounding is monotone -- so the clamp changes no
+ * value. A source with no mass for the order can carry a heavier edge, and at
+ * large q its factor would overflow to inf, and inf times its zero mass is
+ * NaN; the old fan skipped such sources, this takes their factor as 1 times
+ * 0. */
+__attribute__((always_inline))
+static inline void real_edge_body(double w, const double *restrict q,
+                                  const double *restrict qmax, uint32_t T,
+                                  const double *restrict c,
+                                  double *restrict acc, int first) {
+    const real_v8d zero = {0, 0, 0, 0, 0, 0, 0, 0};
+    for (uint32_t j = 0; j < T; j += BEAM_REAL_LANES) {
+        real_v8d qv, mv, cv, f, a;
+        R8_LOAD(qv, q + j); R8_LOAD(mv, qmax + j); R8_LOAD(cv, c + j);
+        const real_v8d raw = qv * w - mv;
+        const vm_v8d arg = REAL_SEL(raw > zero, zero, raw);
+        vm_exp8(&arg, &f);
+        if (first) {
+            a = f * cv;
+        } else {
+            R8_LOAD(a, acc + j);
+            a += f * cv;
+        }
+        R8_STORE(acc + j, a);
+    }
+}
+
+/* One tile of one group: each target's edges into `acc`, then its row scaled
+ * into `next`. */
+BEAM_EDGE_CLONES
+static void real_tile(const uint32_t *tgt, uint32_t ntg, const uint32_t *first,
+                      const double *ew, const uint32_t *src, uint32_t ts,
+                      uint32_t T, uint32_t Wp, const double *q,
+                      const double *qmax, const double *cur, double *next,
+                      const double *sv, double *acc, double *nmax,
+                      RealStoreFn store) {
+    const size_t RS = beam_real_row(Wp);
+    for (uint32_t k = 0; k < ntg; ++k) {
+        const uint32_t q0 = first[k], q1 = first[k + 1u];
+        for (uint32_t e = q0; e < q1; ++e)
+            real_edge_body(ew[e], q + ts, qmax + ts, T,
+                           cur + (size_t)src[e] * RS + ts, acc, e == q0);
+        if (q0 == q1) memset(acc, 0, BEAM_REAL_TILE * sizeof(double));
+        store(T, acc, sv + ts, next + (size_t)tgt[k] * RS + ts, nmax + ts);
+    }
+}
+
+/* The sink's tile: every end state's tail edge into `part`. */
+BEAM_EDGE_CLONES
+static void real_sink_tile(uint32_t ne, const double *ew, const uint32_t *src,
+                           uint32_t ts, uint32_t T, uint32_t Wp,
+                           const double *q, const double *tmax,
+                           const double *cur, double *part) {
+    const size_t RS = beam_real_row(Wp);
+    for (uint32_t e = 0; e < ne; ++e)
+        real_edge_body(ew[e], q + ts, tmax + ts, T,
+                       cur + (size_t)src[e] * RS + ts, part + ts, e == 0);
+}
+
+static void real_group(const BeamModel *m, const uint32_t *tgt, uint32_t b,
+                       uint32_t e, const uint8_t *alive, const double *w,
+                       uint32_t Wp, const double *q, const double *qmax,
+                       const double *sv, const double *cur, double *next,
+                       RealScratch *sc, RealStoreFn store) {
+    const uint32_t A = m->n_alphabet, R = m->n_residues, SK = m->state_shift;
+    const uint32_t rest = tgt[b] / A;
+    uint32_t ne = 0;
+    for (uint32_t k = b; k < e; ++k) {
+        sc->first[k - b] = ne;
+        const uint32_t x = tgt[k] % A;
+        if (x >= R) continue;
+        for (uint32_t a = 0; a < A; ++a) {
+            const uint32_t src = a * SK + rest;
+            if (!alive[src]) continue;
+            const double wv = w[(size_t)src * R + x];
+            if (wv == -INFINITY) continue;
+            sc->w[ne] = wv;
+            sc->src[ne++] = src;
+        }
+    }
+    sc->first[e - b] = ne;
+    for (uint32_t ts = 0; ts < Wp; ts += BEAM_REAL_TILE) {
+        const uint32_t T = Wp - ts < BEAM_REAL_TILE ? Wp - ts : BEAM_REAL_TILE;
+        real_tile(tgt + b, e - b, sc->first, sc->w, sc->src, ts, T, Wp, q, qmax,
+                  cur, next, sv, sc->acc, sc->nmax, store);
+    }
+}
+
+BeamError jet_sweep_real(const BeamModel *m, BeamRealWork *wk, uint32_t len,
+                         const double *qs, uint32_t nq, double *out_log_z,
+                         size_t out_stride) {
+    const uint32_t A = m->n_alphabet;
+    const uint32_t R = m->n_residues;
+    const uint32_t S = m->n_states;
+    const uint32_t W = nq;
+    const uint32_t Wp = (W + BEAM_REAL_LANES - 1u) / BEAM_REAL_LANES * BEAM_REAL_LANES;
+    const uint32_t nth = wk->nth;
+
+    for (uint32_t j = 0; j < W; ++j) out_log_z[(size_t)j * out_stride] = -INFINITY;
+    if (W == 0u) return BEAM_OK;
+    if (Wp > wk->Wp)
+        return BEAM_ERANGE("%s: %u orders do not fit a workspace of %u", __func__,
+                           W, wk->Wp);
+
+    const size_t RS = beam_real_row(Wp);
+    const uint64_t per_thread = wk->per_thread;
+    const uint64_t E = LINE_EDGES(A, R);
+    const RealStoreFn store = real_store_pick();
+    double   *w = wk->w, *tail = wk->tail, *cur = wk->cur, *next = wk->next;
+    double   *pt = wk->pt, *scr = wk->scr;
+    uint8_t  *alive = wk->alive, *dead = wk->dead, *used = wk->used;
+    uint32_t *gs = wk->gs;
+    int      *ex = wk->ex;
+    double *q     = pt;
+    double *qmax  = pt + 1u * Wp;
+    double *scale = pt + 2u * Wp;
+    double *nmax  = pt + 3u * Wp;
+    double *sv    = pt + 4u * Wp;
+    double *hi    = pt + 5u * Wp;
+    double *lo    = pt + 6u * Wp;
+    double *tmax  = pt + 7u * Wp;
+    double *fin   = pt + 8u * Wp;
+    for (uint32_t j = 0; j < Wp; ++j) {
+        q[j] = j < W ? qs[j] : 0.0;
+        scale[j] = 0.0;
+        ex[j] = 0;
+        dead[j] = (uint8_t)(j >= W);
+    }
+    uint32_t nalive = W;
+    LiveHandle h;
+    if (beam_live_acquire(m, len, &h) != BEAM_OK)
+        return BEAM_EALLOC("the real-order sweep's live frontier");
+    const BeamLive *L = h.L;
+
+    /* Only the start state is read before it is written. */
+    memset(cur + (size_t)(S - 1) * RS, 0, RS * sizeof(double));
+    for (uint32_t j = 0; j < W; ++j) cur[(size_t)(S - 1) * RS + j] = 1.0;
+
+    for (uint32_t i = 0; i < len; ++i) {
+        beam_reached_mask(L, i, S, alive);
+        beam_layer_weights_live(m, i, len, w, NULL, alive);
+        const uint32_t  nr = L->n_reached[i];
+        const uint32_t *rv = L->reached[i];
+
+        /* Each order's extremes over the states carrying its mass. */
+        for (uint32_t j = 0; j < Wp; ++j) { hi[j] = -INFINITY; lo[j] = INFINITY; }
+#ifdef _OPENMP
+        #pragma omp parallel num_threads((int)nth)
+#endif
+        {
+#ifdef _OPENMP
+            const uint32_t tid = (uint32_t)omp_get_thread_num();
+            const uint32_t nt_ = (uint32_t)omp_get_num_threads();
+#else
+            const uint32_t tid = 0u, nt_ = 1u;
+#endif
+            RealScratch sc;
+            real_scratch_carve(scr + per_thread * tid, Wp, E, &sc);
+            for (uint32_t j = 0; j < Wp; ++j) { sc.hi[j] = -INFINITY; sc.lo[j] = INFINITY; }
+            const uint32_t b = (uint32_t)((uint64_t)nr * tid / nt_);
+            const uint32_t e = (uint32_t)((uint64_t)nr * (tid + 1u) / nt_);
+            real_extremes(rv, b, e, w, R, cur, RS, Wp, sc.hi, sc.lo);
+#ifdef _OPENMP
+            #pragma omp critical(beam_real_extremes)
+#endif
+            for (uint32_t j = 0; j < Wp; ++j) {
+                if (sc.hi[j] > hi[j]) hi[j] = sc.hi[j];
+                if (sc.lo[j] < lo[j]) lo[j] = sc.lo[j];
+            }
+        }
+        for (uint32_t j = 0; j < W; ++j) {
+            if (dead[j]) continue;
+            double qm = -INFINITY;
+            if (hi[j] != -INFINITY)
+                qm = q[j] >= 0.0 ? q[j] * hi[j]
+                   : (lo[j] == INFINITY ? -INFINITY : q[j] * lo[j]);
+            if (qm == -INFINITY) { dead[j] = 1; q[j] = 0.0; --nalive; continue; }
+            qmax[j] = qm;
+        }
+        if (nalive == 0u) goto done;
+        for (uint32_t j = 0; j < Wp; ++j) {
+            if (dead[j]) { qmax[j] = 0.0; sv[j] = 0.0; }
+            else sv[j] = ldexp(1.0, -ex[j]);
+            nmax[j] = 0.0;
+        }
+
+        /* Groups: runs of targets that differ only in the newest residue. */
+        const uint32_t  nt  = L->n_reached[i + 1];
+        const uint32_t *tgt = L->reached[i + 1];
+        uint32_t ng = 0;
+        uint64_t bound = 0u;
+        for (uint32_t k = 0; k < nt; ++k)
+            if (k == 0 || tgt[k] >= bound) {
+                gs[ng++] = k;
+                bound = ((uint64_t)tgt[k] / A + 1u) * A;
+            }
+        gs[ng] = nt;
+#ifdef _OPENMP
+        #pragma omp parallel num_threads((int)nth)
+#endif
+        {
+#ifdef _OPENMP
+            const uint32_t tid = (uint32_t)omp_get_thread_num();
+#else
+            const uint32_t tid = 0u;
+#endif
+            RealScratch sc;
+            real_scratch_carve(scr + per_thread * tid, Wp, E, &sc);
+            for (uint32_t j = 0; j < Wp; ++j) sc.nmax[j] = 0.0;
+#ifdef _OPENMP
+            #pragma omp for schedule(dynamic, 16)
+#endif
+            for (int64_t g = 0; g < (int64_t)ng; ++g)
+                real_group(m, tgt, gs[g], gs[g + 1], alive, w, Wp, q, qmax, sv,
+                           cur, next, &sc, store);
+            LINE_FENCE();          /* this thread's streamed rows, before the barrier */
+#ifdef _OPENMP
+            #pragma omp critical(beam_real_nmax)
+#endif
+            for (uint32_t j = 0; j < Wp; ++j)
+                if (sc.nmax[j] > nmax[j]) nmax[j] = sc.nmax[j];
+        }
+        for (uint32_t j = 0; j < W; ++j) {
+            if (dead[j]) continue;
+            scale[j] += qmax[j] + (double)ex[j] * BEAM_LN2;
+            if (!(nmax[j] > 0.0)) { dead[j] = 1; q[j] = 0.0; --nalive; continue; }
+            ex[j] = ilogb(nmax[j]);
+        }
+        if (nalive == 0u) goto done;
+        double *tmp = cur; cur = next; next = tmp;
+    }
+
+    /* Sink: one more edge whose weight is the tail. Each order's shift is its
+     * largest tilted tail over the end states carrying its mass, as the fan
+     * took it; the sum is over fixed chunks of end states, each by one
+     * thread, then over the chunks in order. */
+    beam_tail_weights(m, len, tail);
+    {
+        const uint32_t  ns = L->n_reached[len];
+        const uint32_t *ends = L->reached[len];
+        for (uint32_t j = 0; j < Wp; ++j) tmax[j] = -INFINITY;
+#ifdef _OPENMP
+        #pragma omp parallel num_threads((int)nth)
+#endif
+        {
+#ifdef _OPENMP
+            const uint32_t tid = (uint32_t)omp_get_thread_num();
+            const uint32_t nt_ = (uint32_t)omp_get_num_threads();
+#else
+            const uint32_t tid = 0u, nt_ = 1u;
+#endif
+            RealScratch sc;
+            real_scratch_carve(scr + per_thread * tid, Wp, E, &sc);
+            for (uint32_t j = 0; j < Wp; ++j) sc.tmx[j] = -INFINITY;
+            const uint32_t b = (uint32_t)((uint64_t)ns * tid / nt_);
+            const uint32_t e = (uint32_t)((uint64_t)ns * (tid + 1u) / nt_);
+            for (uint32_t k = b; k < e; ++k) {
+                const double tv = tail[ends[k]];
+                if (tv == -INFINITY) continue;
+                const double *c = cur + (size_t)ends[k] * RS;
+                for (uint32_t j = 0; j < W; ++j)
+                    if (c[j] > 0.0 && q[j] * tv > sc.tmx[j]) sc.tmx[j] = q[j] * tv;
+            }
+#ifdef _OPENMP
+            #pragma omp critical(beam_real_tmax)
+#endif
+            for (uint32_t j = 0; j < Wp; ++j)
+                if (sc.tmx[j] > tmax[j]) tmax[j] = sc.tmx[j];
+        }
+        for (uint32_t j = 0; j < Wp; ++j)
+            if (dead[j] || tmax[j] == -INFINITY) {   /* no tilted mass reaches the sink */
+                dead[j] = 1; q[j] = 0.0; tmax[j] = 0.0;
+            }
+        const uint32_t nc = (ns + BEAM_LINE_SINK_CHUNK - 1u) / BEAM_LINE_SINK_CHUNK;
+        double *part = next;          /* the planes' other half is free by now */
+#ifdef _OPENMP
+        #pragma omp parallel num_threads((int)nth)
+#endif
+        {
+#ifdef _OPENMP
+            const uint32_t tid = (uint32_t)omp_get_thread_num();
+#else
+            const uint32_t tid = 0u;
+#endif
+            RealScratch sc;
+            real_scratch_carve(scr + per_thread * tid, Wp, E, &sc);
+#ifdef _OPENMP
+            #pragma omp for schedule(dynamic, 1)
+#endif
+            for (int64_t c = 0; c < (int64_t)nc; ++c) {
+                const uint32_t b = (uint32_t)c * BEAM_LINE_SINK_CHUNK;
+                const uint32_t e = b + BEAM_LINE_SINK_CHUNK < ns ? b + BEAM_LINE_SINK_CHUNK : ns;
+                uint32_t ne = 0;
+                for (uint32_t k = b; k < e; ++k) {
+                    const double tv = tail[ends[k]];
+                    if (tv == -INFINITY) continue;
+                    sc.w[ne] = tv;
+                    sc.src[ne++] = ends[k];
+                }
+                used[c] = (uint8_t)(ne > 0u);
+                if (!ne) continue;
+                double *pc = part + (size_t)c * RS;
+                for (uint32_t ts = 0; ts < Wp; ts += BEAM_REAL_TILE) {
+                    const uint32_t T = Wp - ts < BEAM_REAL_TILE ? Wp - ts : BEAM_REAL_TILE;
+                    real_sink_tile(ne, sc.w, sc.src, ts, T, Wp, q, tmax, cur, pc);
+                }
+            }
+        }
+        int any = 0;
+        for (uint32_t c = 0; c < nc; ++c) {
+            if (!used[c]) continue;
+            const double *p = part + (size_t)c * RS;
+            if (!any) {
+                for (uint32_t j = 0; j < W; ++j) fin[j] = p[j];
+                any = 1;
+            } else {
+                for (uint32_t j = 0; j < W; ++j) fin[j] += p[j];
+            }
+        }
+        if (!any) goto done;
+        for (uint32_t j = 0; j < W; ++j) {
+            if (dead[j] || !(fin[j] > 0.0)) continue;
+            out_log_z[(size_t)j * out_stride] = scale[j] + tmax[j] + log(fin[j]);
         }
     }
 

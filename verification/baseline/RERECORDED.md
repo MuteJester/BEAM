@@ -2167,3 +2167,43 @@ value changes.
 
 The gate passed on everything else before recording, `exact.py` at 411
 quantities. The full suite: 935 passed, 2 skipped.
+
+# Why the moments and the C inventory moved for a new real-order sweep
+
+Re-recorded 2026-10-01, tag `prerealsweep`. Profiling the figure steps found
+real power sums M(q) -- the series route's ninety, the planner's grid, the
+lines' fingerprints, single orders -- at 40% of the exact work, from a
+per-length sweep that took libm's exp once per edge per order: 0.65 s an
+order on the foundation. `beam_mellin_terms` and `beam_model_log_mellin_many`
+now share one sweep (`jet_sweep_real`): all threads share out each layer's
+targets; an edge's factors exp(q w - shift) are taken eight orders at a time
+by a vectorised exp (`vm_exp8`, beam/vmath.h, within two ulp, exactly 1 at
+0); each order keeps the old fan's own shift -- its largest weight over the
+states still carrying its mass -- and an exact power-of-two scale. The ninety
+integer orders: 58 s -> 16 s on ig05.
+
+`log_mellin` and `log_mellin_many` still agree to the bit (test_mellin_many,
+560 values). Against the old sweep ln M moves by at most 3.2e-13 in absolute
+terms at q = 90. Checked against enumeration on the order-4 dense fixture
+(3.4M strings): ln M(1), M(0.5) and M(2) within 6e-15 -- which also showed that
+the model's stored normaliser is 3.6e-12 off there, something the old sweep
+hid by repeating finalize's own rounding (test_sparse now allows 1e-11 and
+says why).
+
+    numeric.json           6 keys moved, the surprisal moments at every
+                           order and prior (they take their length weights
+                           from beam_mellin_terms): at most 2.3e-15
+                           relative (10 ulp, o3/uneven), 1 to 4 ulp elsewhere
+    c_cases.txt            4 added: test_exp_within_two_ulp,
+                           test_exp_is_exact_at_zero_and_flushes_below_the_normals,
+                           test_exp_bits_do_not_depend_on_the_call_size
+                           (test_vtrig.c), test_large_orders_stay_finite_and_in_bounds
+                           (test_mellin_many.c)
+    python_api.txt         unchanged (re-written by the recorder, byte-identical)
+    pytest_cases.txt       unchanged (likewise)
+    threads.json           unchanged (likewise)
+
+Hill numbers, D0, entropy, scores and every other pinned number are
+unchanged: they come from other sweeps. The gate passed on everything else
+before recording, `exact.py` at 411 quantities. The full suite: 935 passed,
+2 skipped; C 349 passed.

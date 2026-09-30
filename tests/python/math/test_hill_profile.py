@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import math
 
+import os
+
 import numpy as np
 import pytest
 
@@ -45,24 +47,37 @@ def test_log_mellin_many_is_log_mellin_bit_for_bit(m):
     assert (bits(m.log_mellin_many(qs)) == bits(want)).all()
 
 
+def _real_sweep_bytes(S, R, A, Wp, threads):
+    """`beam_jet_real_bytes` (internal/beam/dp.h), restated: what one sweep of
+    Wp real orders holds, planes and per-thread scratch included."""
+    E = max(A * R, 256)
+    d = 256 + 4 * Wp + E
+    u = E + A + 1
+    scratch = (d + (u + 1) // 2 + 7) // 8 * 8
+    row = Wp + (8 if Wp >= 64 else 0)
+    return (S * R * 8 + S * 8 + 2 * S * row * 8 + S + (S + 1) * 4
+            + Wp * (9 * 8 + 4 + 1) + (S + 255) // 256 + threads * 8 * scratch)
+
+
 def test_no_schedule_and_no_company_moves_a_bit(m):
-    """One thread, a budget that splits the orders into blocks, a budget that
-    runs one single-order sweep at a time, and the orders reversed: four
-    different paths through the driver, one set of bits."""
+    """One thread, a budget that cuts the orders into stretches of eight --
+    on one thread and on all of them -- and the orders reversed: different
+    paths through the driver, one set of bits."""
     qs = np.concatenate([ORDERS, STRESS])
     want = bits([m.log_mellin(q) for q in qs])
     S, R = m.n_states, (5 if m.config["alphabet"] == "nt" else 20)
-    one_sweep = S * R * 8 + S * 8 + 2 * S * 8 + S + 60
+    A = int(round(S ** (1.0 / m.config["order"])))
     got = {}
     old = memory_budget()
     try:
         set_threads(1)
         got["one thread"] = m.log_mellin_many(qs)
+        # One vector of orders a stretch, so the list is cut into stretches.
+        set_memory_budget(_real_sweep_bytes(S, R, A, 8, 1))
+        got["stretches of eight, one thread"] = m.log_mellin_many(qs)
         set_threads(0)
-        set_memory_budget(4 * (one_sweep + 2 * 2 * S * 8))
-        got["blocks"] = m.log_mellin_many(qs)
-        set_memory_budget(one_sweep)
-        got["one sweep"] = m.log_mellin_many(qs)
+        set_memory_budget(_real_sweep_bytes(S, R, A, 8, os.cpu_count() or 1))
+        got["stretches of eight"] = m.log_mellin_many(qs)
     finally:
         set_threads(0)
         set_memory_budget(old)

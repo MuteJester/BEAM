@@ -419,6 +419,13 @@ void beam_line_work_free(BeamLineWork *wk);
  */
 void beam_sincos_many(const double *x, double *s, double *c, size_t n);
 
+/**
+ * y[k] = exp x[k], eight at a time, as the sweeps take it inline
+ * (beam/vmath.h): within two ulp, exactly 1 at 0, 0 below the smallest
+ * normal double. See math/vtrig.c.
+ */
+void beam_exp_many(const double *x, double *y, size_t n);
+
 /** Orders a line sweep advances at once; a stretch starts at a multiple. */
 #define BEAM_LINE_LANES 16u
 /** Orders between a line's directly taken rotations (its anchors). */
@@ -484,6 +491,78 @@ static inline uint64_t beam_jet_line_bytes(uint32_t n_states, uint32_t n_residue
          + (uint64_t)n_threads * sizeof(double)
            * beam_line_scratch_doubles(Wp, n_alphabet, n_residues);
 }
+
+/* ── Many real orders in one sweep ── */
+
+/** Orders a real-order sweep takes at once, and pads to. */
+#define BEAM_REAL_LANES 8u
+/** Orders a thread walks a group of targets through at a time. */
+#define BEAM_REAL_TILE 256u
+
+/** A state's row in a real-order sweep's planes: its orders, then -- once a
+ *  row is long enough for strides to alias (64 orders, 512 bytes) -- one
+ *  cache line, so no two rows sit a power of two apart. A single order's row
+ *  stays one line, so M(q) at one q costs no more memory than it must. */
+static inline size_t beam_real_row(uint32_t Wp) {
+    return (size_t)Wp + (Wp >= 64u ? 8u : 0u);
+}
+
+/** Doubles of one thread's scratch in a real-order sweep of `Wp` orders. */
+static inline uint64_t beam_real_scratch_doubles(uint32_t Wp, uint32_t A,
+                                                 uint32_t R) {
+    const uint64_t AR = (uint64_t)A * R;
+    const uint64_t E = AR > BEAM_LINE_SINK_CHUNK ? AR : BEAM_LINE_SINK_CHUNK;
+    const uint64_t d = BEAM_REAL_TILE + 4u * (uint64_t)Wp + E;
+    const uint64_t u = E + A + 1u;                    /* uint32 slots */
+    return (d + (u + 1u) / 2u + 7u) / 8u * 8u;        /* whole lines  */
+}
+
+/**
+ * Peak bytes one `jet_sweep_real` over `Wp` padded orders holds with
+ * `n_threads` threads: the layer's weights and the sink's, two planes, the
+ * group index, the per-order scalars, and each thread's scratch.
+ */
+static inline uint64_t beam_jet_real_bytes(uint32_t n_states, uint32_t n_residues,
+                                           uint32_t n_alphabet, uint32_t Wp,
+                                           uint32_t n_threads) {
+    const uint64_t S = n_states;
+    return S * (uint64_t)n_residues * sizeof(double)
+         + S * sizeof(double)
+         + 2ull * S * beam_real_row(Wp) * sizeof(double)
+         + S + (S + 1u) * sizeof(uint32_t)
+         + (uint64_t)Wp * (9u * sizeof(double) + sizeof(int) + 1u)
+         + (S + BEAM_LINE_SINK_CHUNK - 1u) / BEAM_LINE_SINK_CHUNK
+         + (uint64_t)n_threads * sizeof(double)
+           * beam_real_scratch_doubles(Wp, n_alphabet, n_residues);
+}
+
+/**
+ * How `beam_mellin_terms` and `beam_model_log_mellin_many` split `n_orders`
+ * real orders: stretches of `width`, each swept by all threads in turn;
+ * `width` 0 when not even one vector of orders fits. See math/mellin.c.
+ */
+BeamLinePlan beam_real_plan(uint32_t n_states, uint32_t n_residues,
+                            uint32_t n_alphabet, uint32_t n_orders,
+                            uint32_t n_threads, uint64_t budget);
+
+typedef struct BeamRealWork BeamRealWork;
+
+/** A real-order sweep's planes and scratch for up to `Wp` orders, made once
+ *  per call and reused by every length. */
+BeamRealWork *beam_real_work_new(const BeamModel *m, uint32_t Wp,
+                                 uint32_t n_threads);
+void beam_real_work_free(BeamRealWork *wk);
+
+/**
+ * `ln Z_q(L)` for the real orders qs[0 .. nq), into out_log_z[j * stride]:
+ * what `jet_sweep_fan` computes, with every thread sharing out each layer's
+ * targets, the edge factors exp(q w - qmax) taken eight orders at a time, and
+ * each order's scale an exact power of two. An order's bits do not depend on
+ * the other orders, the stretch, or the thread count. See dp/jet.c.
+ */
+BeamError jet_sweep_real(const BeamModel *m, BeamRealWork *wk, uint32_t len,
+                         const double *qs, uint32_t nq, double *out_log_z,
+                         size_t out_stride);
 
 /**
  * Peak bytes one `jet_sweep_cfan` over `n_tilts` tilts holds: `beam_jet_fan_bytes`

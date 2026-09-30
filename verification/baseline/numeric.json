@@ -39,7 +39,7 @@
   "0x1.84eae781896e7p+3",
   "0x1.3b784c4104822p+7",
   "0x1.12af1a34ce392p+11",
-  "0x1.01911f494b15dp+15"
+  "0x1.01911f494b15ep+15"
  ],
  "o2/default/public": [
   "0x1.deae71abd793dp+64",
@@ -142,9 +142,9 @@
  "o2/uneven/moments": [
   "0x1.0000000000000p+0",
   "0x1.b6ed1755f124cp+3",
-  "0x1.95429f89ca272p+7",
-  "0x1.936c2a04ef99ap+11",
-  "0x1.b06e49bad0ccap+15"
+  "0x1.95429f89ca270p+7",
+  "0x1.936c2a04ef996p+11",
+  "0x1.b06e49bad0cc6p+15"
  ],
  "o2/uneven/public": [
   "0x1.deae71abd793ap+64",
@@ -246,10 +246,10 @@
  ],
  "o3/default/moments": [
   "0x1.0000000000000p+0",
-  "0x1.dbb60af35c09ap+2",
-  "0x1.bf3638b335c30p+5",
-  "0x1.ab2ecc7f572dep+8",
-  "0x1.a1c1a2677adcbp+11"
+  "0x1.dbb60af35c09cp+2",
+  "0x1.bf3638b335c32p+5",
+  "0x1.ab2ecc7f572e1p+8",
+  "0x1.a1c1a2677adcfp+11"
  ],
  "o3/default/public": [
   "0x1.deae71abd7944p+64",
@@ -351,10 +351,10 @@
  ],
  "o3/uneven/moments": [
   "0x1.0000000000000p+0",
-  "0x1.9acb40365bb6ep+3",
-  "0x1.661dda06670dap+7",
-  "0x1.53e32140d5c30p+11",
-  "0x1.5eadbdbe078d8p+15"
+  "0x1.9acb40365bb73p+3",
+  "0x1.661dda06670e2p+7",
+  "0x1.53e32140d5c3bp+11",
+  "0x1.5eadbdbe078e6p+15"
  ],
  "o3/uneven/public": [
   "0x1.deae71abd7941p+64",
@@ -456,10 +456,10 @@
  ],
  "o4/default/moments": [
   "0x1.0000000000000p+0",
-  "0x1.da9622b117e18p+2",
+  "0x1.da9622b117e1ap+2",
   "0x1.ba6e2d1a2f77ep+5",
-  "0x1.9f5de82f5cb4bp+8",
-  "0x1.8989346bbf932p+11"
+  "0x1.9f5de82f5cb4dp+8",
+  "0x1.8989346bbf931p+11"
  ],
  "o4/default/public": [
   "0x1.deae71abd793bp+64",
@@ -562,9 +562,9 @@
  "o4/uneven/moments": [
   "0x1.0000000000000p+0",
   "0x1.db441b689d2ccp+2",
-  "0x1.bd47505d5970bp+5",
-  "0x1.a7cc76b7bb43ep+8",
-  "0x1.9fc033cc6e967p+11"
+  "0x1.bd47505d5970ap+5",
+  "0x1.a7cc76b7bb43cp+8",
+  "0x1.9fc033cc6e961p+11"
  ],
  "o4/uneven/public": [
   "0x1.deae71abd7883p+64",
