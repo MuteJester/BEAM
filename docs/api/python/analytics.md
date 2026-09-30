@@ -412,6 +412,47 @@ curve = atoms.discovery_curve(np.logspace(0, 82, 400))
 
 The point of `atoms` is that a 400-point discovery curve costs **one** spectrum and 400 numpy passes, not 400 spectrum rebuilds.
 
+### Exact occupancy, without the spectrum
+
+```python
+from BEAM.analytics.exact_occupancy import ExactOccupancy
+eo = ExactOccupancy(model, rel_tol=1e-10)
+eo.richness(n)                   # E[distinct sequences in n draws]
+eo.richness_difference(n1, n2)   # R(n1) - R(n2), keeping the digits they share
+eo.frequency(n, j)               # E[sequences drawn exactly j times], j >= 1
+eo.sharing(d1, d2)               # E[sequences in both of two repertoires]
+eo.private(depths)               # E[sequences seen by exactly one repertoire]
+eo.equal_depth_cohort(depth, N)  # {"seen", "private"} for N equal repertoires
+```
+
+The `atoms` family above, computed **exactly** rather than on a grid. Every method returns a `BoundedValue`, which is `value` together with `bound`, a rigorous relative error: `|value - truth| <= bound * |truth|`. `float(v)` raises so that the bound cannot be dropped by accident.
+
+**Why a grid is not needed.** Each quantity is a sum over every sequence of a function of `P(s)`. Such a function does not factor along the sequence, but the power sums `M(q) = sum_s P(s)^q` do, at any complex `q`. The method depends on depth:
+
+- **Small depths** use exact series in `M` at the positive integers, for example `R(n) = sum_k (-1)^{k+1} C(n,k) M(k)`. For integer `n` these are finite sums.
+- **All other depths** use Mellin-Barnes integrals of [`log_mellin_line`](#along-a-vertical-line) values along a vertical line. The kernel for `1 - (1-x)^n` is `B(z, n+1)`, and the other quantities have kernels of the same family.
+
+**Why the bound is rigorous.** It is the sum of four terms:
+
+| term | source |
+|---|---|
+| aliasing | Poisson summation turns the step-`h` rule's error into shifted copies of each sequence's own function, bounded from that function's range. The largest copies are about `D0 exp(-q 2pi/h)` and `n exp(-(1-q) 2pi/h)` for richness. |
+| truncation | an upper envelope of the kernel beyond the last node. It decays as a power of `t` past `t ~ n`, not only exponentially. |
+| kernel rounding | carried in the phase `t ln n`, which reaches thousands of radians. |
+| DP rounding | exact relative to `M(Re q)`, the sum of the moduli, not to `|M|`. |
+
+The relative form divides by `|value| - bound`, never by the value itself. Lines are designed from those terms per depth range, computed on demand and cached; `eo.lines` lists them.
+
+**Measured.**
+
+- **On enumerated models:** every value lies within its bound of the direct sum, across richness, differences at gaps of 1 in 10^12, counts, sharing and cohorts.
+- **On the foundation (order 4, max_length 27):**
+  - **Accuracy:** `R(n)` from 1 to 1e82 has a median bound of 2e-14 and a worst of 2e-10.
+  - **Binned curves:** the 16,384-bin spectrum is off by about 2e-4 against these values, and `atoms(4096)` by up to 2e-3.
+  - **Cost:** three lines of 500-900 orders, about 15 minutes on 14 threads, once. Every depth reuses them.
+
+**What it does not replace:** counts of sequences in a *range* of probability, which are the spectrum's histograms. For a sharp bin the transform decays too slowly to truncate. A smoothed bin needs about as many `M` values as the grid has bins. And the histogram spans 1e35 sequences, far beyond double precision's reach through oscillating sums. Use [`spectrum_pair`](#spectrum_pair) there.
+
 ### length_derivatives
 
 ```python
