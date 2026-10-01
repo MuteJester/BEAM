@@ -436,6 +436,26 @@ void beam_log_gamma_ratio(const double *w, size_t nw, const double *zre,
                           const double *zim, size_t nz, double *out_re,
                           double *out_im);
 
+/** Most abundance bins a repertoire's profile may use. */
+#define BEAM_ZTP_MAX_BINS 64u
+
+/**
+ * Tilted zero-truncated-Poisson bin moments of `n` sequences with Poisson
+ * means `lam`, summed over sequences: log normaliser, bin probabilities,
+ * E[count 1_bin], E[count], E[count^2] and the Gram matrix of
+ * (bin probabilities, E[count]). `edges` are the bins' lower edges as reals
+ * and `allowed` is non-zero for a bin that may hold sequences. `out` holds
+ * 2 nb + 3 + (nb + 1)^2 doubles. See math/ztp_moments.c.
+ */
+void beam_ztp_bin_reduce(const double *lam, size_t n, const double *t_bins,
+                         const double *edges, const double *allowed,
+                         size_t nb, double tau, double *out);
+
+/** E[sequences per abundance bin | the set seen, `total` reads]: `nb`
+ *  doubles. See math/ztp_moments.c. */
+void beam_ztp_bin_expect(const double *lam, size_t n, const double *edges,
+                         size_t nb, double total, double *out_F);
+
 /** A line's contour sums for the kernel exp(lg(z) + ln G(w) - ln G(w + z)),
  *  per parameter, without forming a matrix. See math/lgamma_ratio.c. */
 void beam_beta_contour_sums(size_t nt, const double *zr, const double *zi,

@@ -49,6 +49,7 @@ src/native/math/spectrum.c
 src/native/math/surprisal.c
 src/native/math/tilt.c
 src/native/math/vtrig.c
+src/native/math/ztp_moments.c
 
 src/native/mixture/inner_product.c
 src/native/mixture/shape.c

@@ -28,18 +28,20 @@ class Piece:
             ``assignment``.
         question: The conditional probability this piece is, in words.
         log_prob: Its natural log.
-        exact: False for every piece today. The saddlepoint pieces
-            (``richness``, ``sharing``, ``profile``) are approximate, and the
-            piece after each is an exact quantity minus that approximation, so
-            it carries the same error with the opposite sign. The SUM of the
-            pieces is exact.
+        exact: Whether ``log_prob`` is exact. Pieces resting on a
+            saddlepoint are not, and the piece after each is an exact quantity
+            minus that approximation, so it carries the same error with the
+            opposite sign. The SUM of the pieces is exact. A repertoire that
+            leaves nothing to approximate after the set (every count 1) has
+            its profile and assignment labelled exact.
         method: How ``log_prob`` was obtained.
-        error: Leading-order size of the approximation in ``log_prob``, in
-            nats: ``sum_j 1/(12 v_j)`` over the categories a normal term
-            covered, ``v_j`` their variance under the saddlepoint's tilt. An
-            estimate, not a ceiling. The spectrum binning of ``richness`` and
-            ``sharing`` is NOT in it: that error is separate, grows in the far
-            tail, and shrinks with more bins.
+        error: Size of the approximation in ``log_prob``, in nats: the
+            saddlepoint's ``sum_j 1/(12 v_j)`` over its tilted variances
+            ``v_j`` (an estimate, not a ceiling), plus, for the single-
+            repertoire ``richness`` and ``identity``, the spectrum binning
+            error measured against half the bins. Above a nat, read only the
+            piece's sum with its neighbour; the method says so. The pair
+            pieces' binning is not in it.
         observed: The summary this piece is about, when it has one: the number
             of unique sequences, the number shared, the count of sequences in
             each abundance bin. Empty for ``identity`` and ``assignment``.

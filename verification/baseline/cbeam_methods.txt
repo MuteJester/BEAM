@@ -87,3 +87,5 @@ threads
 top_k
 topology
 total_weight
+ztp_bin_expect
+ztp_bin_reduce

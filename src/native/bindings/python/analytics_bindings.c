@@ -413,6 +413,75 @@ PyObject *py_cohort_private_sums(PyObject *self, PyObject *args) {
     return res;
 }
 
+/* ztp_bin_reduce(lam, t_bins, edges, allowed, tau) -> bytes of
+ * 2 nb + 3 + (nb + 1)^2 doubles: the tilted zero-truncated-Poisson bin
+ * moments summed over the sequences. See math/ztp_moments.c. */
+PyObject *py_ztp_bin_reduce(PyObject *self, PyObject *args) {
+    (void)self;
+    PyObject *o[4];
+    double tau;
+    if (!PyArg_ParseTuple(args, "OOOOd", &o[0], &o[1], &o[2], &o[3], &tau))
+        return NULL;
+    static const char *names[4] = {"lam", "t_bins", "edges", "allowed"};
+    Py_buffer b[4];
+    if (!take_f64s(o, b, names, 4)) return NULL;
+    const Py_ssize_t n = f64_buffer_count(&b[0]), nb = f64_buffer_count(&b[2]);
+    if (f64_buffer_count(&b[1]) != nb || f64_buffer_count(&b[3]) != nb) {
+        release_f64s(b, 4);
+        PyErr_Format(PyExc_ValueError, "t_bins and allowed must each have %zd "
+                     "entries, one per bin", nb);
+        return NULL;
+    }
+    if (nb < 1 || nb > (Py_ssize_t)BEAM_ZTP_MAX_BINS) {
+        release_f64s(b, 4);
+        PyErr_Format(PyExc_ValueError, "%zd abundance bins; between 1 and %u "
+                     "are supported", nb, (unsigned)BEAM_ZTP_MAX_BINS);
+        return NULL;
+    }
+    const uint64_t width = 2u * (uint64_t)nb + 3u + (uint64_t)(nb + 1) * (nb + 1);
+    double *out = (double *)beam_py_alloc(width * sizeof(double),
+                                          "the bin moments", 0u, "bins");
+    if (!out) { release_f64s(b, 4); return NULL; }
+    Py_BEGIN_ALLOW_THREADS
+    beam_ztp_bin_reduce((const double *)b[0].buf, (size_t)n,
+                        (const double *)b[1].buf, (const double *)b[2].buf,
+                        (const double *)b[3].buf, (size_t)nb, tau, out);
+    Py_END_ALLOW_THREADS
+    release_f64s(b, 4);
+    PyObject *res = edge_doubles_to_bytes(out, (size_t)width);
+    PyMem_Free(out);
+    return res;
+}
+
+/* ztp_bin_expect(lam, edges, total) -> bytes of nb doubles. */
+PyObject *py_ztp_bin_expect(PyObject *self, PyObject *args) {
+    (void)self;
+    PyObject *o[2];
+    double total;
+    if (!PyArg_ParseTuple(args, "OOd", &o[0], &o[1], &total)) return NULL;
+    static const char *names[2] = {"lam", "edges"};
+    Py_buffer b[2];
+    if (!take_f64s(o, b, names, 2)) return NULL;
+    const Py_ssize_t n = f64_buffer_count(&b[0]), nb = f64_buffer_count(&b[1]);
+    if (nb < 1 || nb > (Py_ssize_t)BEAM_ZTP_MAX_BINS) {
+        release_f64s(b, 2);
+        PyErr_Format(PyExc_ValueError, "%zd abundance bins; between 1 and %u "
+                     "are supported", nb, (unsigned)BEAM_ZTP_MAX_BINS);
+        return NULL;
+    }
+    double *out = (double *)beam_py_alloc((uint64_t)nb * sizeof(double),
+                                          "the expected bin counts", 0u, "bins");
+    if (!out) { release_f64s(b, 2); return NULL; }
+    Py_BEGIN_ALLOW_THREADS
+    beam_ztp_bin_expect((const double *)b[0].buf, (size_t)n,
+                        (const double *)b[1].buf, (size_t)nb, total, out);
+    Py_END_ALLOW_THREADS
+    release_f64s(b, 2);
+    PyObject *res = edge_doubles_to_bytes(out, (size_t)nb);
+    PyMem_Free(out);
+    return res;
+}
+
 /* beta_contour_tail(zr, zi, lgr, ts, w) -> bytes of nk doubles. */
 PyObject *py_beta_contour_tail(PyObject *self, PyObject *args) {
     (void)self;

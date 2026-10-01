@@ -8,10 +8,9 @@ probability of one read. A repertoire of N reads is N independent draws, so
 which is exact and is ``log_likelihood``. Every piece below is a factor of
 this same number, never an addition to it.
 
-THE CHAIN. Let the total be free: each sequence independently Poisson with
-mean ``lambda_s = N P(s)``. The Poisson field factorises exactly as
+THE CHAIN, GIVEN N READS. The total factorises exactly as
 
-    P(counts) = P(n) * P(S | n) * P(F | S) * P(counts | S, F)
+    P(counts | N) = P(n | N) * P(S | n, N) * P(F | S, N) * P(counts | S, F, N)
 
     n       how many distinct sequences were seen            richness
     S       which ones                                       identity
@@ -20,24 +19,38 @@ mean ``lambda_s = N P(s)``. The Poisson field factorises exactly as
 
 Each later quantity determines the earlier ones -- the set S fixes n, the
 counts fix F -- so every conditional is a ratio, ``P(later) / P(earlier)``,
-and conditioning costs nothing beyond each summary's own probability. The
-product is ``P(Poisson field) = P(multinomial) * Poisson(N; N)``, exactly.
+and nothing is counted twice. The four multiply to the multinomial itself.
+
+Every piece is conditioned on N because that is the question: how surprising
+are n distinct sequences GIVEN N reads. Left free, the read total would make
+n look far more variable than it is where most reads are new, which is where
+repertoires are (on a small model at N = 30: a spread of 4.8 instead of 1.5).
+The Poisson field does the work: with each sequence independently Poisson
+``lambda_s = N P(s)``, conditioning on the total is a ratio,
+``P(x | N) = P(x, N) / P(N)``, ``P(N) = Poisson(N; N)``, and the joints are
+sums of independent units (:mod:`.fixed_total`).
 
 WHAT IS EXACT.
-  * ``P(S)``: the observed sequences present, every other absent,
-    ``prod_S (1 - e^-lambda_s) * exp(-N (mass - sum_S P(s)))``.
+  * The total, and ``P(S)``: the observed sequences present, every other
+    absent, ``prod_S (1 - e^-lambda_s) * exp(-N (mass - sum_S P(s)))``.
   * ``P(counts | S)``: each seen sequence a zero-truncated Poisson.
-  * The expectations reported with each summary, up to the spectrum binning
-    for the ones summed over the whole model.
 WHAT IS NOT.
-  * ``P(n)``, ``P(k shared | n1, n2)`` and ``P(F | S)`` are probabilities of
-    category totals of independent units, by saddlepoint
-    (:mod:`.lattice`; each piece reports the size of its error, and a
-    category nearly fixed under the tilt is convolved exactly instead). ``P(n)`` and the
-    sharing piece also sum over the model's spectrum, binned: relative error
-    about ``spacing^2 / 8``, 4e-6 at 2048 bins.
-  * ``identity`` and ``assignment`` are exact quantities divided by those,
-    so they carry the same error with the opposite sign. The total does not.
+  * ``P(n, N)`` over the whole model, and ``P(N | S)`` and ``P(F, N | S)``
+    over the seen sequences, are sums of independent units, by saddlepoint;
+    each piece reports the size of its error. ``P(n, N)`` also sums over the
+    model's spectrum, binned; that error is measured against half the bins
+    and added to the richness piece's.
+  * A total at the edge of what the pattern allows (every count at its bin's
+    floor or ceiling) fixes every count, so P(F, N | S) becomes the chance
+    that every count sits there -- a categorical sum the lattice takes, its
+    nearly fixed bins convolved exactly -- instead of the joint saddlepoint,
+    which is singular there. Where a split's error still passes a nat, its
+    method says so: read only profile + assignment, whose one approximation
+    is then P(N | S).
+  * Each joint appears in two neighbouring pieces with opposite signs, so the
+    approximations move value between pieces and never change their sum.
+  * The expected abundance pattern is to first order: each sequence's bin
+    probabilities under the tilt that makes N the expected read total.
 
 TWO REPERTOIRES UNDER ONE MODEL are independent given it, so their totals
 add. The pair chain threads the overlap through the middle:
@@ -61,6 +74,8 @@ from typing import Iterable, Sequence
 import numpy as np
 
 from ..errors import BeamValueError
+from .fixed_total import (counts_given_set_log_pmf, expected_bins_given_reads,
+                          present_and_reads_log_pmf)
 from .lattice import categorical_sum_log_pmf
 from .results import PairLikelihood, Piece, RepertoireLikelihood
 
@@ -177,7 +192,7 @@ def _profile_counts(c: np.ndarray, edges: tuple) -> np.ndarray:
 class _Rep:
     """Everything about one repertoire that does not involve the spectrum."""
 
-    def __init__(self, model, sequences, counts, edges):
+    def __init__(self, model, sequences, counts, edges, given_total=False):
         self.seqs, self.c = _collapse(sequences, counts)
         self.N = int(self.c.sum())
         self.n = len(self.seqs)
@@ -190,15 +205,28 @@ class _Rep:
             return
         self.multinomial = float(math.lgamma(N + 1) - self.lfact.sum()
                                  + np.sum(self.c * self.lp))
-        lam = N * np.exp(self.lp)
-        self.log_seen = np.log(-np.expm1(-lam))
+        log_lam = math.log(N) + np.asarray(self.lp, dtype=float)
+        lam = np.exp(log_lam)
+        # log(1 - e^-lam), which is log lam for a lam too small to hold
+        tiny = lam < 1e-8
+        self.log_seen = np.empty_like(lam)
+        self.log_seen[tiny] = log_lam[tiny] + np.log1p(-0.5 * lam[tiny])
+        self.log_seen[~tiny] = np.log(-np.expm1(-lam[~tiny]))
         self.captured = float(np.sum(np.exp(self.lp)))
         # log P(c_s | seen), each seen sequence a zero-truncated Poisson
-        self.per_seq_counts = (self.c * np.log(lam) - lam - self.lfact
+        self.per_seq_counts = (self.c * log_lam - lam - self.lfact
                                - self.log_seen)
         self.log_counts = float(self.per_seq_counts.sum())
-        log_q = _ztp_log_bins(lam, edges)
         self.F = _profile_counts(self.c, edges)
+        if given_total:
+            # P(N | S) and P(F, N | S): the read total held at N
+            self.log_N_given_S, self.exact_N_given_S, self.err_N_given_S = \
+                counts_given_set_log_pmf(lam, N)
+            self.log_FN_given_S, self.exact_FN_given_S, self.err_FN_given_S = \
+                counts_given_set_log_pmf(lam, N, edges, self.F)
+            self.F_expected = expected_bins_given_reads(lam, N, edges)
+            return
+        log_q = _ztp_log_bins(lam, edges)
         self.F_expected = np.exp(log_q).sum(axis=0)
         self.log_profile, _, self.profile_error = categorical_sum_log_pmf(
             log_q, np.ones(self.n), self.F)
@@ -206,6 +234,23 @@ class _Rep:
     def log_presence(self, mass: float) -> float:
         """``log P(exactly these sequences seen)``: every other one absent."""
         return float(self.log_seen.sum()) - self.N * (mass - self.captured)
+
+
+def _log_richness_given_reads(p, m, N, n, mass):
+    """``log P(n, N)``, ``log P(N)``, the expected n at exactly N reads
+    (``sum 1 - (1 - p)^N``), whether ``P(n, N)`` is exact, and its
+    saddlepoint error."""
+    log_nN, exact, err = present_and_reads_log_pmf(p, m, N, n, N)
+    log_pN = N * math.log(N * mass) - N * mass - math.lgamma(N + 1)
+    expected = float(np.sum(m * -np.expm1(N * np.log1p(-p))))
+    return log_nN, log_pN, expected, exact, err
+
+
+def _binning_error(fine, coarse):
+    """The binning error left in a value computed at ``bins`` from the same
+    value at ``bins / 2``: the error falls with the square of the grid
+    spacing, so the finer one keeps a third of their difference."""
+    return abs(fine - coarse) / 3.0
 
 
 def _log_richness(p, m, N, n):
@@ -221,9 +266,9 @@ def _log_richness(p, m, N, n):
 # ── Public ──────────────────────────────────────────────────────
 
 def repertoire_likelihood(model, sequences: Sequence[str], counts: Iterable, *,
-                          bins: int = 2048,
+                          bins: int = 8192,
                           profile_edges: Sequence[int] = DEFAULT_PROFILE_EDGES,
-                          atoms=None) -> RepertoireLikelihood:
+                          atoms=None, atoms_coarse=None) -> RepertoireLikelihood:
     """``log P(repertoire | model)``, exact, and the chain it factors into.
 
     Args:
@@ -233,45 +278,77 @@ def repertoire_likelihood(model, sequences: Sequence[str], counts: Iterable, *,
             reads added, which is what two nucleotide clonotypes of one
             amino-acid sequence are to an amino-acid model.
         counts: Read (template) count of each, positive integers.
-        bins: Spectrum resolution for the pieces summed over the whole model.
+        bins: Spectrum resolution for the richness piece, the one summed over
+            the whole model. It is also computed at ``bins // 2``, and its
+            reported error includes the binning error that comparison
+            measures (on an Emerson donor at 2048 bins the expected richness
+            was 85 sequences high and the piece 8 nats off).
         profile_edges: Lower edges of the abundance bins, from 1 up. The cost
             of the profile piece grows with the last edge.
         atoms: ``model.pseq_analysis().atoms(bins)``, when scoring many
             repertoires against one model: the spectrum is the expensive step
             and depends only on the model.
+        atoms_coarse: the same at ``bins // 2``, for the binning error. When
+            ``atoms`` is passed without it, that error is not estimated, and
+            the richness piece says so.
 
     Returns:
         :class:`RepertoireLikelihood`. Its totals are exact; each piece says
         whether it is.
     """
     edges = _check_edges(profile_edges)
-    r = _Rep(model, sequences, counts, edges)
+    r = _Rep(model, sequences, counts, edges, given_total=True)
     if r.n_unspellable:
         return RepertoireLikelihood(
             log_likelihood=-math.inf, poissonized_log_likelihood=-math.inf,
             log_prob_total_reads=r.log_pois_N, pieces=(), n_reads=r.N,
             n_unique=r.n, n_unspellable=r.n_unspellable, model_mass=math.nan,
             bins=bins if atoms is None else None, profile_edges=edges)
+    if atoms is None:
+        a = model.pseq_analysis()
+        atoms, atoms_coarse = a.atoms(bins), a.atoms(max(2, bins // 2))
     p, m, mass, used_bins = _spectrum(model, bins, atoms)
-    log_n, n_expected, err_n = _log_richness(p, m, r.N, r.n)
+    log_nN, log_pN, n_expected, _, err_n = _log_richness_given_reads(
+        p, m, r.N, r.n, mass)
+    how = "P(n, N) by saddlepoint over the model spectrum, over the exact P(N)"
+    if atoms_coarse is not None:
+        pc, mc, massc, _ = _spectrum(model, None, atoms_coarse)
+        coarse = _log_richness_given_reads(pc, mc, r.N, r.n, massc)
+        err_bin = _binning_error(log_nN - log_pN, coarse[0] - coarse[1])
+        how += "; error includes the binning error against half the bins"
+    else:
+        err_bin = 0.0
+        how += "; binning error NOT estimated (pass atoms_coarse)"
+    err_n = err_n + err_bin
     log_S = r.log_presence(mass)
+    split = ("P(pattern, N | sequences) over P(N | sequences), by saddlepoint"
+             if r.err_FN_given_S <= 1.0 else
+             "P(pattern, N | sequences) over P(N | sequences), by saddlepoint; "
+             f"UNRELIABLE split (error {r.err_FN_given_S:.3g} nats): read only "
+             "profile + assignment, whose one approximation is P(N | sequences)")
     pieces = (
-        Piece("richness", "P(n unique)", log_n, False,
-              f"{_SADDLE}, over the model spectrum", err_n, [r.n], [n_expected]),
-        Piece("identity", "P(these sequences | n)", log_S - log_n, False,
-              "exact P(sequences) divided by the richness saddlepoint", err_n,
-              [], []),
-        Piece("profile", "P(abundance pattern | sequences)", r.log_profile,
-              False, _SADDLE, r.profile_error, r.F, r.F_expected),
-        Piece("assignment", "P(which sequence has which count | pattern)",
-              r.log_counts - r.log_profile, False,
-              "exact P(counts | sequences) divided by the profile saddlepoint",
-              r.profile_error, [], []),
+        # richness and identity rest on the spectrum saddlepoint: never exact
+        Piece("richness", "P(n unique | N reads)", log_nN - log_pN, False,
+              how, err_n, [r.n], [n_expected]),
+        Piece("identity", "P(these sequences | n, N)",
+              log_S + r.log_N_given_S - log_nN, False,
+              "exact P(sequences) times P(N | sequences), over P(n, N); "
+              "both by saddlepoint", err_n + r.err_N_given_S, [], []),
+        Piece("profile", "P(abundance pattern | sequences, N)",
+              r.log_FN_given_S - r.log_N_given_S,
+              r.exact_FN_given_S and r.exact_N_given_S,
+              split, r.err_FN_given_S + r.err_N_given_S,
+              r.F, r.F_expected),
+        Piece("assignment", "P(which sequence has which count | pattern, N)",
+              r.log_counts - r.log_FN_given_S, r.exact_FN_given_S,
+              "exact P(counts | sequences) over the P(pattern, N | sequences) "
+              "saddlepoint" + split[split.find(";"):] * (r.err_FN_given_S > 1.0),
+              r.err_FN_given_S, [], []),
     )
     return RepertoireLikelihood(
         log_likelihood=r.multinomial,
         poissonized_log_likelihood=log_S + r.log_counts,
-        log_prob_total_reads=r.log_pois_N, pieces=pieces, n_reads=r.N,
+        log_prob_total_reads=log_pN, pieces=pieces, n_reads=r.N,
         n_unique=r.n, n_unspellable=0, model_mass=mass, bins=used_bins,
         profile_edges=edges)
 

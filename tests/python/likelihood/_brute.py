@@ -99,6 +99,11 @@ def expected_richness(sup, N) -> float:
     return sum(-math.expm1(-N * p) for p in sup.values())
 
 
+def expected_richness_at_reads(sup, N) -> float:
+    """E[distinct | exactly N reads] = sum_s 1 - (1 - p)^N."""
+    return sum(-math.expm1(N * math.log1p(-p)) for p in sup.values())
+
+
 def expected_shared(sup, N1, N2) -> float:
     return sum((-math.expm1(-N1 * p)) * (-math.expm1(-N2 * p))
                for p in sup.values())
@@ -136,3 +141,47 @@ def ztp_bin_probs(lam: float, edges) -> list[float]:
         hi = edges[i + 1] if i + 1 < len(edges) else lo + 4000
         out.append(sum(pmf(r) for r in range(lo, hi)))
     return out
+
+
+def exact_present_and_reads(probs, depth, n_max, total_max):
+    """Joint pmf of (distinct sequences seen, total reads) in the Poisson
+    field at ``depth``, ``D[n, N]``, by convolution over every sequence:
+    each is Poisson(depth * p). Entries past the maxima are dropped, which
+    leaves every entry inside them exact."""
+    import numpy as np
+    D = np.zeros((n_max + 1, total_max + 1))
+    D[0, 0] = 1.0
+    r = np.arange(total_max + 1)
+    lgam = np.array([math.lgamma(k + 1) for k in r])
+    for p in probs:
+        lam = depth * p
+        pr = np.exp(r * math.log(lam) - lam - lgam)
+        new = D * pr[0]
+        for k in range(1, total_max + 1):
+            new[1:, k:] += D[:-1, :total_max + 1 - k] * pr[k]
+        D = new
+    return D
+
+
+def exact_profile_and_reads(lams, edges, total):
+    """``{(bin counts, total reads): probability}`` for seen sequences, each
+    count zero-truncated Poisson(lam), binned by ``edges`` (the last bin
+    open), keeping only totals up to ``total``. Plain convolution."""
+    def bin_of(r):
+        b = 0
+        while b + 1 < len(edges) and r >= edges[b + 1]:
+            b += 1
+        return b
+    dist = {((0,) * len(edges), 0): 1.0}
+    for lam in lams:
+        z = -math.expm1(-lam)
+        nxt: dict = {}
+        for (F, T), w in dist.items():
+            for r in range(1, total - T + 1):
+                q = math.exp(r * math.log(lam) - lam - math.lgamma(r + 1)) / z
+                F2 = list(F)
+                F2[bin_of(r)] += 1
+                key = (tuple(F2), T + r)
+                nxt[key] = nxt.get(key, 0.0) + w * q
+        dist = nxt
+    return dist

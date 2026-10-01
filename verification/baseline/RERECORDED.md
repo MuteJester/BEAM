@@ -2342,3 +2342,76 @@ outputs bit for bit (915 -> 191 s and 282 -> 49 s on ig05).
 
 The gate passed on everything else before recording, `exact.py` at 411
 quantities. The full suite: 948 passed, 2 skipped; C 351 passed.
+
+# Why the API and pytest inventory moved for the read-total-conditioned chain
+
+Re-recorded 2026-10-01, tag `prefixedtotal`. `repertoire_likelihood`'s pieces
+are now each conditioned on the repertoire's read total N, so they multiply
+to the multinomial `P(counts | N)` itself. Before, they factored the Poisson
+field, a world whose read total is free, and the richness piece was `P(n)`
+rather than `P(n | N)`. Against 20,000 repertoires drawn at fixed N from the
+test suite's enumerable model, the old piece's distribution of n was off by a
+total-variation distance of 0.56 at N = 30 (n varies by 1.5 there, the
+free-total piece said 4.8). The new one is at the sampling-noise floor
+(0.016 at N = 300). The joints with N are new saddlepoints in
+`BEAM.likelihood.fixed_total`, each held to exact convolution. The default
+spectrum resolution rises from 2048 to 8192 bins, and the richness piece's
+binning error is now measured against half the bins and added to its error.
+On an Emerson donor, 2048 bins left the expected richness 85 sequences high
+and the piece 57 nats off.
+
+    python_api.txt   repertoire_likelihood: bins 2048 -> 8192, new atoms_coarse=None
+    pytest_cases.txt 26 added (tests/python/likelihood/test_fixed_total.py,
+                     including the exact total-at-the-pattern's-edge cases and
+                     test_an_unreliable_split_says_so;
+                     test_a_pattern_that_fixes_the_total_is_conditioned_on_exactly,
+                     test_the_expected_profile_tightens_with_more_sequences);
+                     3 replaced by their fixed-N forms:
+                       test_the_pieces_sum_to_the_poisson_field
+                         -> test_the_pieces_multiply_to_the_multinomial
+                       test_the_profile_piece_matches_exact_convolution
+                         -> test_the_profile_piece_is_P_F_given_S_and_N
+                       test_the_richness_piece_matches_exact_convolution
+                         -> test_the_richness_piece_is_P_n_given_N (test_fixed_total.py)
+    c_cases.txt      unchanged (re-written by the recorder, byte-identical)
+    numeric.json     unchanged (likewise)
+    threads.json     unchanged (likewise)
+
+The gate passed on everything else before recording. The full suite: 969
+passed, 2 skipped.
+
+# Why the callables and pytest inventory moved for the bin moments in C
+
+Re-recorded 2026-10-01, tag `preztpc`. Every Newton step of
+`counts_given_set_log_pmf` needs, per sequence the repertoire saw, the tilted
+probability of each abundance bin and the first two moments of its count.
+The numpy form (`_Units.moments`) built a (sequences x counts) matrix per
+step and scattered it into bins with `np.add.at`: on a 100,994-sequence
+Emerson donor that was 11 of the 12 seconds a donor cost, to produce the
+eight numbers per sequence the caller then summed. `math/ztp_moments.c`
+walks each sequence's counts once instead, accumulating straight into its
+bins and returning only the sums over sequences, parallel over sequences and
+reduced in fixed chunks so the answer does not depend on the thread count.
+The same donor now takes 0.3 s, at the full 101-read top bin which the numpy
+form could not afford (2.2 s even with the bins cut to 11).
+
+Two faults the comparison against the numpy form caught, both of which would
+have been silent wrong answers rather than failures:
+  * the series mu^r / r! peaks at r = mu, so starting at r = 1 starts up to a
+    thousand orders of magnitude below the peak; at mu = 1058 the first term
+    is exp(-1041), which underflows to zero and lost the whole sequence. The
+    walk now starts twelve standard deviations below the peak.
+  * the normaliser runs over the ALLOWED bins only, so a profile with no
+    large-count bin leaves a big clone's mass entirely outside the window.
+    It is centred on the largest term an allowed bin can reach.
+
+    cbeam_methods.txt  2 added by hand: ztp_bin_reduce, ztp_bin_expect
+                       (previous kept as cbeam_methods.preztpc.txt)
+    pytest_cases.txt   17 added (tests/python/likelihood/test_ztp_moments.py)
+    python_api.txt     unchanged (re-written by the recorder, byte-identical)
+    c_cases.txt        unchanged (likewise)
+    numeric.json       unchanged (likewise)
+    threads.json       unchanged (likewise)
+
+The gate passed on everything else before recording. The full suite: 990
+passed, 2 skipped; C 351 passed.

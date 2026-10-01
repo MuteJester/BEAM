@@ -18,7 +18,7 @@ def sup(tiny):
 
 @pytest.fixture(scope="module")
 def rep(sup):
-    """60 of the 320 supported sequences, one of them a 150-read clone, so the
+    """60 of the 3,905 supported sequences, one of them a 150-read clone, so the
     open-ended top count bin is occupied."""
     return repertoire(sup, 60, seed=8, big=150)
 

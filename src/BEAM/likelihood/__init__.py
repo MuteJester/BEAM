@@ -8,10 +8,10 @@
     >>> pair.piece("sharing").observed, pair.piece("sharing").expected
 
 The total is the multinomial: N reads, each an independent draw from the
-model's ``P(s)``. The pieces factor that same total, each conditioned on the
-ones before it -- how many unique, which ones, the abundance pattern, which
-sequence has which count -- and for two repertoires the number they share.
-The totals are exact; the pieces are labelled.
+model's ``P(s)``. The pieces factor that same total, each given the N reads
+and the ones before it -- how many unique, which ones, the abundance pattern,
+which sequence has which count -- and for two repertoires the number they
+share. The totals are exact; the pieces are labelled.
 
 See ``docs/api/python/likelihood.md``.
 """
