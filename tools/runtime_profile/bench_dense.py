@@ -1,14 +1,18 @@
 """
 Measure the DENSE code path, which the standard tiers never touch.
 
-`state_weights_dense` runs only when `sparse` is false — that is, for
-open-world models (`strict=False`) or an explicit `sparse=False`. The default
-Python configuration and the foundation model are both sparse, so the whole
-runtime profile exercises `state_weights_sparse` and says nothing at all about
-the dense one.
+`state_weights_dense` runs only when `sparse` is false, which takes an
+explicit `sparse=False`. The default Python configuration and the foundation
+model are both sparse, so the whole runtime profile exercises
+`state_weights_sparse` and says nothing at all about the dense one.
 
 The dense x-hoist is supposed to pay 2.60x single-threaded on a full layer.
 If it does, it shows up here and nowhere else.
+
+The sequences are a JSON list of [sequence, count] pairs, named by the
+environment variable BEAM_BENCH_SEQS:
+
+    BEAM_BENCH_SEQS=tcrb.json python bench_dense.py [n] [reps] [threads]
 """
 import json, os, statistics, sys, time
 
@@ -19,7 +23,7 @@ sys.path.insert(0, os.path.join(ROOT, "src"))
 import BEAM
 from BEAM import BeamModel
 
-SEQS = "tcrb.json"
+SEQS = os.environ.get("BEAM_BENCH_SEQS", "")
 
 
 def timeit(fn, reps, warmup=1):
@@ -40,12 +44,13 @@ def main():
     if threads:
         BEAM.set_threads(threads)
 
+    if not SEQS:
+        sys.exit("set BEAM_BENCH_SEQS to a JSON list of [sequence, count] pairs")
     data = json.load(open(SEQS))[:n]
     seqs = [s for s, _ in data]
     ab = [float(c) for _, c in data]
 
-    # strict=False selects the open-world, DENSE configuration
-    m = BeamModel(seqs, abundances=ab, order=4, strict=False)
+    m = BeamModel(seqs, abundances=ab, order=4, sparse=False)
     assert not m.config["sparse"], "expected the dense path"
     lens = list(m.observed_lengths)
     mid = int(lens[len(lens) // 2])
