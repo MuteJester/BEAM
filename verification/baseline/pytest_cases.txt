@@ -118,6 +118,9 @@ tests/python/analytics/test_liveness.py::test_live_structure_is_rebuilt_after_ev
 tests/python/analytics/test_liveness.py::test_live_structure_is_rebuilt_after_every_mutation[3]
 tests/python/analytics/test_liveness.py::test_live_structure_is_rebuilt_after_every_mutation[4]
 tests/python/analytics/test_liveness.py::test_topology_matches_an_enumerated_trellis
+tests/python/analytics/test_log_gamma_ratio.py::test_agrees_with_the_numpy_form_it_replaces
+tests/python/analytics/test_log_gamma_ratio.py::test_matches_thirty_digits_everywhere_it_is_used
+tests/python/analytics/test_log_gamma_ratio.py::test_zero_is_zero
 tests/python/analytics/test_memory_budget.py::test_a_reduced_budget_changes_no_answer
 tests/python/analytics/test_memory_budget.py::test_a_refusal_can_be_repeated_without_growing[cgf_jet]
 tests/python/analytics/test_memory_budget.py::test_a_refusal_can_be_repeated_without_growing[entropy]

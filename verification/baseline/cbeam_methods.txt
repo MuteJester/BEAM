@@ -21,6 +21,7 @@ length_derivatives
 length_marginals
 live_cache_bytes
 load
+log_gamma_ratio
 log_length_prior
 log_mellin
 log_mellin_complex

@@ -236,6 +236,46 @@ PyObject *py_log_mellin_many(PyObject *self, PyObject *args) {
     PyMem_Free(out);
     return res;
 }
+/* log_gamma_ratio(w, z_re, z_im) -> bytes of nz * nw complex128, row i the
+ * ratio ln G(w_k) - ln G(w_k + z_i) at every w: the layout of a (nz, nw)
+ * complex128 array. Not a model's: a function the contour kernels call. */
+PyObject *py_log_gamma_ratio(PyObject *self, PyObject *args) {
+    (void)self;
+    PyObject *wobj, *reobj, *imobj;
+    if (!PyArg_ParseTuple(args, "OOO", &wobj, &reobj, &imobj)) return NULL;
+    Py_buffer wv, rv, iv;
+    if (!get_f64_buffer(wobj, &wv, 0, "w")) return NULL;
+    if (!get_f64_buffer(reobj, &rv, 0, "real parts")) { PyBuffer_Release(&wv); return NULL; }
+    if (!get_f64_buffer(imobj, &iv, 0, "imaginary parts")) {
+        PyBuffer_Release(&wv); PyBuffer_Release(&rv);
+        return NULL;
+    }
+    const Py_ssize_t nw = f64_buffer_count(&wv), nz = f64_buffer_count(&rv);
+    if (f64_buffer_count(&iv) != nz) {
+        PyBuffer_Release(&wv); PyBuffer_Release(&rv); PyBuffer_Release(&iv);
+        PyErr_Format(PyExc_ValueError, "%zd real parts but %zd imaginary parts",
+                     nz, f64_buffer_count(&iv));
+        return NULL;
+    }
+    const uint64_t cells = (uint64_t)nw * (uint64_t)nz;
+    double *out = (double *)beam_py_alloc(cells * 4u * sizeof(double),
+                                          "the log-gamma ratios", 0u, "cells");
+    if (!out) {
+        PyBuffer_Release(&wv); PyBuffer_Release(&rv); PyBuffer_Release(&iv);
+        return NULL;
+    }
+    double *ore = out, *oim = out + cells, *il = out + 2u * cells;
+    Py_BEGIN_ALLOW_THREADS
+    beam_log_gamma_ratio((const double *)wv.buf, (size_t)nw,
+                         (const double *)rv.buf, (const double *)iv.buf,
+                         (size_t)nz, ore, oim);
+    for (uint64_t x = 0; x < cells; ++x) { il[2 * x] = ore[x]; il[2 * x + 1] = oim[x]; }
+    Py_END_ALLOW_THREADS
+    PyBuffer_Release(&wv); PyBuffer_Release(&rv); PyBuffer_Release(&iv);
+    PyObject *res = edge_doubles_to_bytes(il, (size_t)cells * 2u);
+    PyMem_Free(out);
+    return res;
+}
 /* log_mellin_complex(cap, re, im) -> bytes of 2*nq doubles, interleaved
  * (re, im) per order: the memory layout of numpy's complex128. */
 PyObject *py_log_mellin_complex(PyObject *self, PyObject *args) {

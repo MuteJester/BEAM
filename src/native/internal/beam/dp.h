@@ -426,6 +426,16 @@ void beam_sincos_many(const double *x, double *s, double *c, size_t n);
  */
 void beam_exp_many(const double *x, double *y, size_t n);
 
+/**
+ * out[i * nw + k] = ln Gamma(w[k]) - ln Gamma(w[k] + z_i), z_i = zre[i] +
+ * i zim[i], for w >= 1 and Re(w + z) > 0: Stirling's series for the
+ * difference, a few rounding units absolute of |z| ln(w + |z|), the imaginary
+ * part modulo 2 pi. See math/lgamma_ratio.c.
+ */
+void beam_log_gamma_ratio(const double *w, size_t nw, const double *zre,
+                          const double *zim, size_t nz, double *out_re,
+                          double *out_im);
+
 /** Orders a line sweep advances at once; a stretch starts at a multiple. */
 #define BEAM_LINE_LANES 16u
 /** Orders between a line's directly taken rotations (its anchors). */

@@ -2207,3 +2207,31 @@ Hill numbers, D0, entropy, scores and every other pinned number are
 unchanged: they come from other sweeps. The gate passed on everything else
 before recording, `exact.py` at 411 quantities. The full suite: 935 passed,
 2 skipped; C 349 passed.
+
+# Why the pytest inventory and the callables moved for a C log-gamma ratio
+
+Re-recorded 2026-10-01, tag `preloggamma`. Profiling the figure steps found
+the contour kernels' ln Gamma(w) - ln Gamma(w + z) -- a ninety-term polygamma
+series in numpy, a full matrix per term -- at a quarter to a half of the
+pairwise, depth-sweep and partition steps, most of it in the tail bound,
+which evaluates the kernel at 481 points per depth. It is now one C function
+(`beam_log_gamma_ratio`, math/lgamma_ratio.c, bound as
+`_cbeam.log_gamma_ratio`): Stirling's series for the difference, arranged so
+nothing cancels, shifted up below w = 15, on every thread. Against values
+taken to 30 significant digits it is within 2.1e-16 of its scale
+|z| ln(w + |z|) over the tested grid, where the numpy form was 5.8e-15; the
+numpy form stays in the module as the tests' second opinion.
+
+    pytest_cases.txt       3 added: test_log_gamma_ratio.py::
+                           test_matches_thirty_digits_everywhere_it_is_used,
+                           test_agrees_with_the_numpy_form_it_replaces,
+                           test_zero_is_zero
+    cbeam_methods.txt      1 added by hand: log_gamma_ratio (previous kept as
+                           cbeam_methods.preloggamma.txt)
+    python_api.txt         unchanged (re-written by the recorder, byte-identical)
+    c_cases.txt            unchanged (likewise)
+    numeric.json           unchanged (likewise)
+    threads.json           unchanged (likewise)
+
+The gate passed on everything else before recording, `exact.py` at 411
+quantities. The full suite: 938 passed, 2 skipped; C 349 passed.

@@ -69,6 +69,8 @@ from pathlib import Path
 import numpy as np
 from scipy.special import gammaln, loggamma, polygamma
 
+from .. import _cbeam as _c
+
 __all__ = ["BoundedValue", "ExactOccupancy"]
 
 #: One INFO record per contour line computed or extended: its cost, and how
@@ -119,8 +121,31 @@ def _polygammas(w: float, kmax: int) -> np.ndarray:
     return v
 
 
+def _log_gamma_ratio_c(w, z) -> np.ndarray:
+    """ln Gamma(w_k) - ln Gamma(w_k + z_i) for every node z_i and every w_k,
+    shape (len(z), len(w)), in C (math/lgamma_ratio.c): Stirling's series for
+    the difference, a few rounding units absolute of |z| ln(w + |z|), the
+    imaginary part modulo 2 pi. Every thread, and no matrix per term: the
+    numpy series it replaces had become most of the non-sweep time of the
+    figure steps that ask for tens of thousands of depths."""
+    w = np.ascontiguousarray(np.asarray(w, dtype=float).ravel())
+    z = np.asarray(z, dtype=np.complex128).ravel()
+    zr = np.ascontiguousarray(z.real)
+    zi = np.ascontiguousarray(z.imag)
+    out = np.frombuffer(_c.log_gamma_ratio(w, zr, zi), dtype=np.complex128)
+    return out.reshape(z.size, w.size).copy()
+
+
 def _log_ratio(w: float, z: np.ndarray) -> np.ndarray:
-    """ln Gamma(w) - ln Gamma(w + z), real w >= 1, complex z.
+    """ln Gamma(w) - ln Gamma(w + z), real w >= 1, complex z, as
+    `_log_gamma_ratio_c` takes it."""
+    z = np.asarray(z, dtype=np.complex128)
+    return _log_gamma_ratio_c([float(w)], z.ravel())[:, 0].reshape(z.shape)
+
+
+def _log_ratio_numpy(w: float, z: np.ndarray) -> np.ndarray:
+    """ln Gamma(w) - ln Gamma(w + z), real w >= 1, complex z: the numpy form
+    `_log_ratio` replaced, kept as the tests' second opinion.
 
     Direct below _TAYLOR_W. Above, the two log-gammas are huge and nearly
     equal, so the difference is the Taylor series
@@ -137,7 +162,7 @@ def _log_ratio(w: float, z: np.ndarray) -> np.ndarray:
         out = np.empty_like(z)
         out[far] = gammaln(w) - loggamma(w + z[far])
         if np.any(~far):
-            out[~far] = _log_ratio(w, z[~far])
+            out[~far] = _log_ratio_numpy(w, z[~far])
         return out
     pg = _polygammas(w, 90)
     out = np.zeros_like(z)
@@ -154,7 +179,13 @@ def _log_ratio(w: float, z: np.ndarray) -> np.ndarray:
 
 
 def _log_ratio_matrix(w: np.ndarray, z: np.ndarray) -> np.ndarray:
-    """_log_ratio for many w at once: shape (len(z), len(w)).
+    """_log_ratio for many w at once: shape (len(z), len(w)), in C."""
+    return _log_gamma_ratio_c(w, z)
+
+
+def _log_ratio_matrix_numpy(w: np.ndarray, z: np.ndarray) -> np.ndarray:
+    """_log_ratio_numpy for many w at once: shape (len(z), len(w)) -- the
+    numpy form `_log_ratio_matrix` replaced, kept as the tests' second opinion.
 
     The Taylor series where w >= _TAYLOR_W and |z| <= 0.3 w, the direct
     difference elsewhere (small w, or far out on the line where only a

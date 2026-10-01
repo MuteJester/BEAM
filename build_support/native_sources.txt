@@ -37,6 +37,7 @@ src/native/io/model_file.c
 src/native/math/cumulants.c
 src/native/math/diversity.c
 src/native/math/expected_counts.c
+src/native/math/lgamma_ratio.c
 src/native/math/extrema.c
 src/native/math/fb_sweep.c
 src/native/math/marginals.c
