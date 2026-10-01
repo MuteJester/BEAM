@@ -324,3 +324,62 @@ void beam_ztp_bin_expect(const double *lam, size_t n, const double *edges,
             out_F[b] += part[c * (size_t)B + b];
     free(red); free(t0); free(ones); free(rbin); free(blo); free(bhi); free(part);
 }
+
+/* ── The clone-size spectrum, exactly ──────────────────────────── */
+
+/*
+ * E[F_k] and Var[F_k] for each requested count k: how many of the sequences
+ * the repertoire was seen to hold the model expects at exactly k reads.
+ *
+ * Given the set seen, each sequence's count is an independent zero-truncated
+ * Poisson, so these are plain sums over sequences -- no tilt, no saddlepoint,
+ * no bins:
+ *
+ *     p_ik = mu_i^k e^-mu_i / (k! (1 - e^-mu_i))
+ *     E[F_k] = sum_i p_ik           Var[F_k] = sum_i p_ik (1 - p_ik)
+ *
+ * which is why this is exact where the chain's binned profile piece is not.
+ * Summed in fixed chunks combined in order, so the thread count cannot
+ * change the answer.
+ */
+void beam_ztp_count_spectrum(const double *lam, size_t n, const double *ks,
+                             size_t nk, double *out_e, double *out_v) {
+    memset(out_e, 0, nk * sizeof(double));
+    memset(out_v, 0, nk * sizeof(double));
+    if (n == 0u || nk == 0u) return;
+    double *lgam = (double *)malloc(nk * sizeof(double));
+    const size_t nchunk = (n + ZTP_CHUNK - 1u) / ZTP_CHUNK;
+    double *part = (double *)calloc(nchunk * nk * 2u, sizeof(double));
+    if (!lgam || !part) { free(lgam); free(part); return; }
+    for (size_t j = 0; j < nk; ++j) lgam[j] = lgamma(ks[j] + 1.0);
+
+#ifdef _OPENMP
+    #pragma omp parallel for schedule(dynamic, 1) num_threads(beam_threads()) \
+            if (n > ZTP_CHUNK)
+#endif
+    for (int64_t c = 0; c < (int64_t)nchunk; ++c) {
+        double *pe = part + (size_t)c * nk * 2u;
+        double *pv = pe + nk;
+        const size_t lo = (size_t)c * ZTP_CHUNK;
+        const size_t hi = lo + ZTP_CHUNK < n ? lo + ZTP_CHUNK : n;
+        for (size_t i = lo; i < hi; ++i) {
+            const double mu = lam[i];
+            if (!(mu > 0.0)) continue;
+            const double log_mu = log(mu);
+            const double lz = ztp_log_expm1(mu) - mu;   /* log(1 - e^-mu) */
+            for (size_t j = 0; j < nk; ++j) {
+                const double l = ks[j] * log_mu - mu - lgam[j] - lz;
+                if (l < -745.0) continue;               /* nothing to add */
+                const double p = exp(l);
+                pe[j] += p;
+                pv[j] += p * (1.0 - p);
+            }
+        }
+    }
+    for (size_t c = 0; c < nchunk; ++c)            /* in chunk order, always */
+        for (size_t j = 0; j < nk; ++j) {
+            out_e[j] += part[c * nk * 2u + j];
+            out_v[j] += part[c * nk * 2u + nk + j];
+        }
+    free(lgam); free(part);
+}

@@ -482,6 +482,29 @@ PyObject *py_ztp_bin_expect(PyObject *self, PyObject *args) {
     return res;
 }
 
+/* ztp_count_spectrum(lam, ks) -> bytes of 2 nk doubles: E[F_k] then
+ * Var[F_k]. See math/ztp_moments.c. */
+PyObject *py_ztp_count_spectrum(PyObject *self, PyObject *args) {
+    (void)self;
+    PyObject *o[2];
+    if (!PyArg_ParseTuple(args, "OO", &o[0], &o[1])) return NULL;
+    static const char *names[2] = {"lam", "ks"};
+    Py_buffer b[2];
+    if (!take_f64s(o, b, names, 2)) return NULL;
+    const Py_ssize_t n = f64_buffer_count(&b[0]), nk = f64_buffer_count(&b[1]);
+    double *out = (double *)beam_py_alloc((uint64_t)(nk ? nk : 1) * 2u * sizeof(double),
+                                          "the clone-size spectrum", 0u, "counts");
+    if (!out) { release_f64s(b, 2); return NULL; }
+    Py_BEGIN_ALLOW_THREADS
+    beam_ztp_count_spectrum((const double *)b[0].buf, (size_t)n,
+                            (const double *)b[1].buf, (size_t)nk, out, out + nk);
+    Py_END_ALLOW_THREADS
+    release_f64s(b, 2);
+    PyObject *res = edge_doubles_to_bytes(out, (size_t)nk * 2u);
+    PyMem_Free(out);
+    return res;
+}
+
 /* beta_contour_tail(zr, zi, lgr, ts, w) -> bytes of nk doubles. */
 PyObject *py_beta_contour_tail(PyObject *self, PyObject *args) {
     (void)self;

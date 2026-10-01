@@ -132,14 +132,57 @@ def test_a_total_at_the_edge_of_the_pattern_is_exact(lams, edges, F, N):
 
 
 def test_an_unreliable_split_says_so(tiny, rep):
-    """The test repertoire's wide bins hold a few sequences the model makes
+    """The test repertoire's FIXED bins hold a few sequences the model makes
     nearly impossible (two at 11 reads with lambda ~ 1e-7, one at 150): the
     joint saddlepoint is degenerate there. Its pieces must say so, while
-    their sum stays exact."""
-    res = repertoire_likelihood(tiny, *rep, bins=2048)
+    their sum stays exact. Automatic bins avoid the situation entirely, which
+    is why they are the default."""
+    from BEAM.likelihood import DEFAULT_PROFILE_EDGES
+    res = repertoire_likelihood(tiny, *rep, bins=2048,
+                                profile_edges=DEFAULT_PROFILE_EDGES)
     for name in ("profile", "assignment"):
         p = res.piece(name)
         assert ("UNRELIABLE" in p.method) == (p.error > 1.0), (name, p.error, p.method)
     assert res.piece("profile").error > 1.0
     total = sum(p.log_prob for p in res.pieces)
     assert total == pytest.approx(res.log_likelihood, abs=1e-8)
+
+
+#: Repertoires whose big clones the model gives essentially no chance of: one
+#: 500-read clone at lambda 1e-9, and five clones at 1e-10. With fixed bins
+#: the "over 100 reads" coordinate has no variance under any tilt, the
+#: Hessian is singular, and the Newton oscillates between step limits until
+#: it gives up -- which is how 9.3% of one cohort's donors returned nothing.
+@pytest.mark.parametrize("n_small,big,big_lam", [
+    (20000, [150, 220], 1e-7), (50000, [500], 1e-9),
+    (60000, [120, 400, 900], 1e-8), (80000, [110, 150, 300, 600, 1200], 1e-10)])
+def test_automatic_bins_rescue_a_repertoire_fixed_bins_cannot_split(n_small, big, big_lam):
+    from BEAM.likelihood.chain import auto_profile_edges
+    rng = np.random.default_rng(7)
+    lam = np.concatenate([rng.gamma(0.35, 0.25, size=n_small), np.full(len(big), big_lam)])
+    c = np.ones(lam.size, dtype=int)
+    c[:30] = rng.integers(2, 10, size=30)
+    c[-len(big):] = big
+    N = int(c.sum())
+    edges = auto_profile_edges(lam, int(c.max()))
+    hi = edges[1:] + (10 ** 9,)
+    F = np.array([float(((c >= lo) & (c < h)).sum()) for lo, h in zip(edges, hi)])
+    val, exact, err = counts_given_set_log_pmf(lam, N, edges, F)
+    assert math.isfinite(val) and val < 0.0
+    assert err < 1.0, err                       # fixed bins gave 6, or nothing
+    # every bin holds enough for the saddlepoint to have something to tilt
+    from BEAM.likelihood.chain import _count_spectrum
+    e, _ = _count_spectrum(lam, np.array(edges, dtype=float))
+    assert float(e.min()) > 0.0
+
+
+def test_automatic_bins_are_the_default_and_are_reported(tiny, rep):
+    from BEAM.likelihood import DEFAULT_PROFILE_EDGES
+    auto = repertoire_likelihood(tiny, *rep, bins=1024)
+    fixed = repertoire_likelihood(tiny, *rep, bins=1024,
+                                  profile_edges=DEFAULT_PROFILE_EDGES)
+    assert tuple(auto.profile_edges) != tuple(fixed.profile_edges)
+    # whatever the bins, the four pieces still multiply to the exact total
+    for res in (auto, fixed):
+        assert sum(p.log_prob for p in res.pieces) == pytest.approx(
+            res.log_likelihood, abs=1e-8)

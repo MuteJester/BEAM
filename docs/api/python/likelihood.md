@@ -64,11 +64,43 @@ assignment = P(counts | S) / P(F, N | S)
 
 The `poissonized_log_likelihood` is still reported: the probability of the counts with the total left free, which is `log_likelihood + log_prob_total_reads`.
 
+## The clone-size spectrum, with no bins at all
+
+```python
+from BEAM import abundance_spectrum
+sp = abundance_spectrum(model, seqs, templates)
+sp.counts, sp.observed, sp.expected, sp.sd, sp.z
+```
+
+Given the set of sequences the repertoire was seen to hold, each count is an independent zero-truncated Poisson with mean `lambda_s = N P(s)`, so
+
+```
+E[F_k] = sum_s P(count_s = k)        Var[F_k] = sum_s p_sk (1 - p_sk)
+```
+
+are **exact** — plain sums over independent sequences, with no tilt, no saddlepoint and no binning. The whole spectrum of an Emerson donor (clone sizes 1 to 3,874 over 100,994 sequences) takes 0.02 s.
+
+This is the quantity to compare between repertoires, and it is usually what you want rather than the `profile` piece. On Emerson donor Keck0001 under its own model:
+
+| k | observed | E[F_k] | sd | z |
+|---|---|---|---|---|
+| 1 | 93,327 | 97,811.9 | 45.1 | −99.4 |
+| 2 | 5,227 | 2,264.1 | 43.6 | +68.0 |
+| 3 | 1,129 | 480.1 | 20.5 | +31.6 |
+| 10 | 37 | 8.4 | 2.8 | +10.3 |
+
+That is clonal expansion, read off per clone size.
+
+It conditions on the set seen, **not** on the read total — that conditioning is the part that cannot be done exactly. `expected_reads` reports what the counts add up to under this reference, to be read beside `n_reads`.
+
+**Why the chain still bins.** The joint `P(F = f)` for the full unbinned vector has generating function `prod_s (sum_k p_sk z_k)`, and extracting one coefficient is a permanent — #P-hard with distinct rates. A single profile *probability* therefore needs an approximation, and a saddlepoint needs few enough coordinates. Only the probability needs bins; the moments above never did.
+
 ## What is exact and what is not
 
 **Exact:** the totals, `P(S)` and `P(counts | S)`.
 
 **Approximate**, each labelled with its `method` and the size of its own `error` in nats:
+- **The bins are chosen automatically** (`profile_edges="auto"`, the default) so the model expects at least five sequences in each. Fixed bins can be degenerate: "over 100 reads" is reached only by clones the model gives essentially no chance of, and a coordinate with no variance is one no tilt can move — the Hessian goes singular and the Newton oscillates between step limits. That lost 9.3% of one cohort's 846 donors outright and left others with a split worth nothing (reported error 1.3e7 nats). Automatic bins fixed every such case and cut the error fiftyfold on the rest (6.6 to 0.11 nats). They depend on the model and the repertoire, so a `profile` piece is comparable between repertoires only at the same `profile_edges`, which the result reports back.
 - `P(n, N)`, `P(N | S)` and `P(F, N | S)` are sums of independent units, computed by a saddlepoint. Each unit is tilted so that the observed values become its mean, the normal density is taken there, and the tilt is undone exactly. The error is about `sum_j 1/(12 v_j)` over the tilted variances `v_j`. For the read total alone, which is skewed when the set is small, the second-order term is added and its size is reported. All three are held to exact convolution in the tests, on repertoires small enough to convolve. When the pattern fixes the total, because every non-empty bin is a single count, `P(F, N | S)` is computed without the joint. The same applies when the total is the least the pattern allows, every count at its bin's floor, or the most. Then every count is fixed, and `P(F, N | S)` becomes the probability that every count sits there. The joint saddlepoint is singular there, so this categorical sum is taken instead, with nearly fixed bins convolved exactly. On a test repertoire it lands 0.03 nats from exact, within its reported 0.04. Where a profile split's error still passes a nat, its `method` says the split is unreliable. Then read only profile plus assignment, which is `log P(counts | S) - log P(N | S)`: its one approximation is the small one in `P(N | S)`. An all-singleton repertoire's profile and assignment are exactly 0 and labelled exact.
 - **Binning.** `P(n, N)` also uses the model's spectrum, binned. Its error is measured, not assumed. The piece is recomputed at half the bins, and a third of the difference is added to `error`, since the binning error falls with the square of the grid spacing. On an Emerson donor at 2048 bins the expected richness came out 85 sequences high (7.6e-4) and the piece 8 nats off. Hence the default of 8192 bins.
 - Each joint appears in two neighbouring pieces with opposite signs. The approximations therefore move value between pieces and never change their sum.

@@ -73,21 +73,65 @@ from typing import Iterable, Sequence
 
 import numpy as np
 
+from .. import _cbeam as _c
 from ..errors import BeamValueError
 from .fixed_total import (counts_given_set_log_pmf, expected_bins_given_reads,
                           present_and_reads_log_pmf)
 from .lattice import categorical_sum_log_pmf
-from .results import PairLikelihood, Piece, RepertoireLikelihood
+from .results import (AbundanceSpectrum, PairLikelihood, Piece,
+                      RepertoireLikelihood)
 
-__all__ = ["DEFAULT_PROFILE_EDGES", "repertoire_likelihood", "pair_likelihood"]
+__all__ = ["DEFAULT_PROFILE_EDGES", "repertoire_likelihood", "pair_likelihood",
+           "abundance_spectrum", "auto_profile_edges"]
 
-#: Abundance bins 1, 2, 3, 4, 5, 6-10, 11-100 and over 100 reads.
+#: Abundance bins 1, 2, 3, 4, 5, 6-10, 11-100 and over 100 reads. Fixed bins
+#: are convenient to compare but can be degenerate: "over 100 reads" is
+#: reached only by clones the model gives essentially no chance of, and a
+#: coordinate with no variance is one no tilt can move. Pass ``"auto"`` for
+#: bins chosen so the model expects enough sequences in each.
 DEFAULT_PROFILE_EDGES = (1, 2, 3, 4, 5, 6, 11, 101)
+
+#: The fewest sequences ``auto`` leaves the model expecting in a bin.
+AUTO_MIN_EXPECTED = 5.0
 
 _SADDLE = "saddlepoint; see `error` for its size"
 
 
 # ── Inputs ──────────────────────────────────────────────────────
+
+def _count_spectrum(lam, ks):
+    """Exact ``(E[F_k], Var[F_k])`` per count, in C (math/ztp_moments.c)."""
+    ks = np.ascontiguousarray(np.asarray(ks, dtype=float))
+    raw = _c.ztp_count_spectrum(np.ascontiguousarray(np.asarray(lam, dtype=float)), ks)
+    v = np.frombuffer(raw, dtype=float)
+    return v[:ks.size].copy(), v[ks.size:].copy()
+
+
+def auto_profile_edges(lam, max_count: int,
+                       min_expected: float = AUTO_MIN_EXPECTED) -> tuple:
+    """Abundance bins the model expects at least ``min_expected`` sequences in.
+
+    Counts are merged upward from 1 until each bin's exact expected count
+    clears the floor, the last bin running open to infinity. That is what
+    stops a bin being degenerate: a bin the model expects 1e-121 sequences in
+    has no variance under any tilt, so the saddlepoint's Hessian is singular
+    and its Newton cannot converge -- which is how fixed bins lost 9.3% of one
+    cohort's donors. With a floor of five the tilt needed is a few nats.
+    """
+    ks = np.arange(1, int(max_count) + 1, dtype=float)
+    e, _ = _count_spectrum(lam, ks)
+    edges, run = [1], 0.0
+    for k, ek in zip(ks, e):
+        run += ek
+        if run >= min_expected and int(k) + 1 <= int(max_count):
+            edges.append(int(k) + 1)
+            run = 0.0
+    while len(edges) > 1 and run < min_expected:      # the open bin, too thin
+        edges.pop()
+        run += float(e[edges[-1] - 1:].sum()) if edges[-1] <= len(e) else 0.0
+        break
+    return tuple(edges)
+
 
 def _check_edges(edges) -> tuple:
     try:
@@ -267,7 +311,7 @@ def _log_richness(p, m, N, n):
 
 def repertoire_likelihood(model, sequences: Sequence[str], counts: Iterable, *,
                           bins: int = 8192,
-                          profile_edges: Sequence[int] = DEFAULT_PROFILE_EDGES,
+                          profile_edges="auto",
                           atoms=None, atoms_coarse=None) -> RepertoireLikelihood:
     """``log P(repertoire | model)``, exact, and the chain it factors into.
 
@@ -283,8 +327,18 @@ def repertoire_likelihood(model, sequences: Sequence[str], counts: Iterable, *,
             reported error includes the binning error that comparison
             measures (on an Emerson donor at 2048 bins the expected richness
             was 85 sequences high and the piece 8 nats off).
-        profile_edges: Lower edges of the abundance bins, from 1 up. The cost
-            of the profile piece grows with the last edge.
+        profile_edges: Lower edges of the abundance bins, from 1 up, or
+            ``"auto"`` (the default) to choose them so the model expects at
+            least `AUTO_MIN_EXPECTED` sequences in each. Fixed bins can be
+            degenerate -- "over 100 reads" holds only clones the model gives
+            essentially no chance of, and a bin with no variance is one no
+            tilt can move, which lost 9.3% of one cohort's donors outright and
+            left others with a split worth nothing. Automatic bins fixed every
+            such case and cut the reported error fiftyfold on the rest. They
+            depend on the model and the repertoire, so a `profile` piece is
+            comparable between repertoires only at the same `profile_edges`;
+            the bins used are reported back. For the clone-size comparison
+            that needs no bins at all, see :func:`abundance_spectrum`.
         atoms: ``model.pseq_analysis().atoms(bins)``, when scoring many
             repertoires against one model: the spectrum is the expensive step
             and depends only on the model.
@@ -296,7 +350,15 @@ def repertoire_likelihood(model, sequences: Sequence[str], counts: Iterable, *,
         :class:`RepertoireLikelihood`. Its totals are exact; each piece says
         whether it is.
     """
-    edges = _check_edges(profile_edges)
+    seqs0, c0 = _collapse(sequences, counts)
+    if isinstance(profile_edges, str):
+        if profile_edges != "auto":
+            raise BeamValueError("profile_edges must be a sequence of integers "
+                                 f"or \"auto\", got {profile_edges!r}")
+        lam0 = int(c0.sum()) * np.exp(np.asarray(model.log_pseq_batch(seqs0), float))
+        edges = _check_edges(auto_profile_edges(lam0, int(c0.max())))
+    else:
+        edges = _check_edges(profile_edges)
     r = _Rep(model, sequences, counts, edges, given_total=True)
     if r.n_unspellable:
         return RepertoireLikelihood(
@@ -426,3 +488,47 @@ def pair_likelihood(model, sequences_1: Sequence[str], counts_1: Iterable,
         n_shared=k, shared_counts_log_prob=shared_counts,
         private_counts_log_prob=log_counts - shared_counts, model_mass=mass,
         bins=used_bins, **common)
+
+
+def abundance_spectrum(model, sequences: Sequence[str], counts: Iterable, *,
+                       counts_wanted=None, max_count: int | None = None
+                       ) -> AbundanceSpectrum:
+    """The clone-size spectrum: how many sequences the model expects at each
+    count, exactly, against how many the repertoire has.
+
+    Given the set of sequences seen, each count is an independent
+    zero-truncated Poisson with mean ``N P(s)``, so ``E[F_k]`` and
+    ``Var[F_k]`` are sums over sequences -- exact, with no tilt, no
+    saddlepoint and no binning. See :class:`AbundanceSpectrum`.
+
+    Args:
+        model: an abundance-weighted :class:`BeamModel`.
+        sequences, counts: the repertoire, as for :func:`repertoire_likelihood`.
+        counts_wanted: the clone sizes to report. The default is every size
+            the repertoire actually has.
+        max_count: report every size from 1 to this instead.
+
+    Returns:
+        :class:`AbundanceSpectrum`.
+    """
+    seqs, c = _collapse(sequences, counts)
+    N = int(c.sum())
+    lp = np.asarray(model.log_pseq_batch(seqs), dtype=float)
+    if not np.all(np.isfinite(lp)):
+        raise BeamValueError("the model cannot represent every sequence, so it "
+                             "gives the repertoire no clone-size spectrum")
+    lam = N * np.exp(lp)
+    if counts_wanted is not None:
+        ks = np.asarray(sorted({int(k) for k in counts_wanted}), dtype=np.int64)
+    elif max_count is not None:
+        ks = np.arange(1, int(max_count) + 1, dtype=np.int64)
+    else:
+        ks = np.unique(c)
+    e, v = _count_spectrum(lam, ks.astype(float))
+    obs = np.array([int(np.count_nonzero(c == k)) for k in ks], dtype=np.int64)
+    sd = np.sqrt(v)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        z = np.where(sd > 0, (obs - e) / np.where(sd > 0, sd, 1.0), 0.0)
+    return AbundanceSpectrum(
+        counts=ks, observed=obs, expected=e, sd=sd, z=z, n_sequences=len(seqs),
+        n_reads=N, expected_reads=float(np.sum(lam / -np.expm1(-lam))))

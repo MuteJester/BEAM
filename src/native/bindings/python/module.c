@@ -86,6 +86,7 @@ static PyMethodDef module_methods[] = {
     {"cohort_private_sums", py_cohort_private_sums,          METH_VARARGS, NULL},
     {"ztp_bin_reduce",     py_ztp_bin_reduce,                METH_VARARGS, NULL},
     {"ztp_bin_expect",     py_ztp_bin_expect,                METH_VARARGS, NULL},
+    {"ztp_count_spectrum", py_ztp_count_spectrum,            METH_VARARGS, NULL},
     {"log_mellin_complex", py_log_mellin_complex,            METH_VARARGS, NULL},
     {"log_mellin_line",    py_log_mellin_line,               METH_VARARGS, NULL},
     {"mixture_check_shape", py_mixture_check_shape,            METH_O, NULL},

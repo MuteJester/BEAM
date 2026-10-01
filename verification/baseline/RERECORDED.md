@@ -2415,3 +2415,45 @@ have been silent wrong answers rather than failures:
 
 The gate passed on everything else before recording. The full suite: 990
 passed, 2 skipped; C 351 passed.
+
+# Why the clone-size spectrum and automatic bins moved the baselines
+
+Re-recorded 2026-10-01, tag `preautobins`. The chain's `profile` piece bins
+abundances so that a saddlepoint has few enough coordinates, and those fixed
+bins were the fault, not the solver: "over 100 reads" is reached only by
+clones the model gives essentially no chance of, so its count has no variance
+under any tilt, the Hessian is singular and the Newton oscillates between step
+limits until it gives up. That returned nothing for 79 of 846 donors of one
+cohort (9.3%) and left others with a split whose own reported error was 1.3e7
+nats.
+
+Two changes, which replace the exact-conditioning kernel an earlier commit
+would have needed:
+  * `abundance_spectrum` reports the clone-size spectrum with NO bins and no
+    approximation. Given the set seen, each count is an independent
+    zero-truncated Poisson, so E[F_k] = sum_s P(count_s = k) and
+    Var[F_k] = sum_s p_sk (1 - p_sk) are plain sums over sequences
+    (`beam_ztp_count_spectrum`, math/ztp_moments.c): clone sizes 1 to 3,874
+    over 100,994 sequences in 0.02 s. This is the quantity to compare between
+    repertoires; only the profile PROBABILITY ever needed bins, because the
+    joint P(F = f) unbinned is a permanent, #P-hard with distinct rates.
+  * `profile_edges="auto"` is the new default: counts are merged upward until
+    the model expects at least five sequences in each bin, so no coordinate
+    is degenerate by construction. It rescued every repertoire fixed bins
+    could not split and cut the reported error fiftyfold on those they could
+    (6.6 -> 0.11 nats).
+
+    cbeam_methods.txt  1 added by hand: ztp_count_spectrum
+                       (previous kept as cbeam_methods.preautobins.txt)
+    python_api.txt     repertoire_likelihood: profile_edges default is now
+                       "auto"; abundance_spectrum, auto_profile_edges and
+                       AbundanceSpectrum added, and exported from the package
+                       top level beside repertoire_likelihood (26 lines)
+    pytest_cases.txt   13 added (test_abundance_spectrum.py, the automatic-bin
+                       rescues); 2 reworded to say which binning they test
+    c_cases.txt        unchanged (re-written by the recorder, byte-identical)
+    numeric.json       unchanged (likewise)
+    threads.json       unchanged (likewise)
+
+The gate passed on everything else before recording. The full suite: 1018
+passed, 2 skipped; C 351 passed.

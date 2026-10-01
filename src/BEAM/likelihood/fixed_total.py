@@ -38,7 +38,17 @@ from .. import _cbeam as _c
 from .lattice import categorical_sum_log_pmf
 
 __all__ = ["present_and_reads_log_pmf", "counts_given_set_log_pmf",
-           "expected_bins_given_reads"]
+           "expected_bins_given_reads", "SaddlepointDidNotConverge"]
+
+
+class SaddlepointDidNotConverge(RuntimeError):
+    """A conditional piece could not be computed: an abundance bin holds
+    sequences the model gives almost no chance of reaching, so the tilt that
+    would put the observed count there runs to infinity.
+
+    The repertoire's TOTAL likelihood is unaffected -- it is the multinomial,
+    and needs no saddlepoint. Only the split into pieces fails.
+    """
 
 
 def _ztp_reduce(lam, t_bins, edges, allowed, tau):
@@ -101,7 +111,12 @@ def _newton(fn, x0, targets):
                 cand = fn(x + s * step)
         x = x + s * step
         phi, grad, hess = cand
-    raise RuntimeError(f"the saddlepoint did not converge; gradient {grad}")
+    raise SaddlepointDidNotConverge(
+        "the saddlepoint did not converge in "
+        f"{_MAX_NEWTON} steps; the worst target is off by {np.max(np.abs(grad)):.3g} "
+        f"(targets {np.asarray(targets)}, gradient {grad}). A bin the model "
+        "makes nearly impossible has to be tilted to infinity to be reached; "
+        "it needs conditioning on exactly, which this solver does not do.")
 
 
 def _normal_term(hess):

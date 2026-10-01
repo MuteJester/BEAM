@@ -89,3 +89,4 @@ topology
 total_weight
 ztp_bin_expect
 ztp_bin_reduce
+ztp_count_spectrum

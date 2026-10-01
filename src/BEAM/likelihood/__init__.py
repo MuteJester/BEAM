@@ -15,8 +15,11 @@ share. The totals are exact; the pieces are labelled.
 
 See ``docs/api/python/likelihood.md``.
 """
-from .chain import DEFAULT_PROFILE_EDGES, pair_likelihood, repertoire_likelihood
-from .results import PairLikelihood, Piece, RepertoireLikelihood
+from .chain import (DEFAULT_PROFILE_EDGES, abundance_spectrum,
+                    auto_profile_edges, pair_likelihood, repertoire_likelihood)
+from .results import (AbundanceSpectrum, PairLikelihood, Piece,
+                      RepertoireLikelihood)
 
 __all__ = ["repertoire_likelihood", "pair_likelihood", "RepertoireLikelihood",
-           "PairLikelihood", "Piece", "DEFAULT_PROFILE_EDGES"]
+           "PairLikelihood", "Piece", "DEFAULT_PROFILE_EDGES",
+           "abundance_spectrum", "auto_profile_edges", "AbundanceSpectrum"]

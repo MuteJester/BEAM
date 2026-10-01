@@ -68,6 +68,7 @@ PyObject *py_log_gamma_ratio_shift(PyObject *self, PyObject *args);
 PyObject *py_cohort_private_sums(PyObject *self, PyObject *args);
 PyObject *py_ztp_bin_reduce(PyObject *self, PyObject *args);
 PyObject *py_ztp_bin_expect(PyObject *self, PyObject *args);
+PyObject *py_ztp_count_spectrum(PyObject *self, PyObject *args);
 PyObject *py_log_mellin_complex(PyObject *self, PyObject *args);
 PyObject *py_log_mellin_line(PyObject *self, PyObject *args);
 PyObject *py_log_partition(PyObject *self, PyObject *arg);

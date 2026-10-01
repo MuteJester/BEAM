@@ -6,6 +6,8 @@ Each :class:`Piece` names its own ``method`` and says whether it is ``exact``.
 """
 from __future__ import annotations
 
+import numpy as np
+
 from dataclasses import dataclass
 
 import numpy as np
@@ -160,3 +162,57 @@ class PairLikelihood:
         return (f"PairLikelihood(log P = {self.log_likelihood:.6g} exact; "
                 f"N={self.n_reads}, n={self.n_unique}, shared={self.n_shared}; "
                 f"{len(self.pieces)} pieces, see .pieces)")
+
+
+class AbundanceSpectrum:
+    """How many sequences the model expects at each clone size, and how many
+    the repertoire has.
+
+    Given the SET of sequences the repertoire was seen to hold, each
+    sequence's count is an independent zero-truncated Poisson with mean
+    ``lambda_s = N P(s)``. So
+
+        E[F_k] = sum_s P(count_s = k)      Var[F_k] = sum_s p_sk (1 - p_sk)
+
+    are exact: plain sums over independent sequences, with no tilt, no
+    saddlepoint and no binning. ``z`` is the standardised departure,
+    ``(observed - expected) / sd``, one number per clone size.
+
+    This is the quantity to compare between repertoires. The chain's
+    ``profile`` piece bins counts together only so that a saddlepoint has few
+    enough coordinates, and those bins are what make a count the model nearly
+    forbids degenerate; nothing here needs them.
+
+    It conditions on the set seen, NOT on the read total: that conditioning
+    is what cannot be done exactly. ``expected_reads`` is what the counts add
+    up to under this reference, to be read beside ``n_reads``.
+
+    Attributes:
+        counts: the clone sizes k, ascending.
+        observed: how many sequences have exactly k reads.
+        expected, sd, z: the model's exact mean, standard deviation and the
+            standardised departure, per clone size.
+        n_sequences, n_reads: the repertoire's totals.
+        expected_reads: ``sum_s E[count_s]``, the reads this reference expects.
+    """
+
+    __slots__ = ("counts", "observed", "expected", "sd", "z", "n_sequences",
+                 "n_reads", "expected_reads")
+
+    def __init__(self, *, counts, observed, expected, sd, z, n_sequences,
+                 n_reads, expected_reads):
+        self.counts = counts
+        self.observed = observed
+        self.expected = expected
+        self.sd = sd
+        self.z = z
+        self.n_sequences = int(n_sequences)
+        self.n_reads = int(n_reads)
+        self.expected_reads = float(expected_reads)
+
+    def __repr__(self) -> str:
+        worst = int(self.counts[int(np.argmax(np.abs(self.z)))]) if len(self.z) else 0
+        return (f"AbundanceSpectrum({len(self.counts)} clone sizes, "
+                f"{self.n_sequences} sequences, {self.n_reads} reads; "
+                f"largest departure at k={worst}, z={np.max(np.abs(self.z)):.1f})"
+                if len(self.z) else "AbundanceSpectrum(empty)")

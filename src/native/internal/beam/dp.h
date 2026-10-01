@@ -456,6 +456,12 @@ void beam_ztp_bin_reduce(const double *lam, size_t n, const double *t_bins,
 void beam_ztp_bin_expect(const double *lam, size_t n, const double *edges,
                          size_t nb, double total, double *out_F);
 
+/** E[F_k] and Var[F_k] for each requested count: how many sequences the
+ *  model expects at exactly k reads, given the set seen. Exact sums over
+ *  independent zero-truncated Poisson counts. See math/ztp_moments.c. */
+void beam_ztp_count_spectrum(const double *lam, size_t n, const double *ks,
+                             size_t nk, double *out_e, double *out_v);
+
 /** A line's contour sums for the kernel exp(lg(z) + ln G(w) - ln G(w + z)),
  *  per parameter, without forming a matrix. See math/lgamma_ratio.c. */
 void beam_beta_contour_sums(size_t nt, const double *zr, const double *zi,

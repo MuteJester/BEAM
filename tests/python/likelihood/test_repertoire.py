@@ -153,8 +153,11 @@ def test_exactness_is_labelled_on_every_piece(tiny, rep):
 
 
 def test_the_default_profile_bins(tiny, rep):
+    """`DEFAULT_PROFILE_EDGES` is the documented fixed set; it is no longer
+    what a call uses unless asked for, since automatic bins replaced it."""
     assert DEFAULT_PROFILE_EDGES == (1, 2, 3, 4, 5, 6, 11, 101)
-    prof = _pieces(repertoire_likelihood(tiny, *rep, bins=BINS))["profile"]
+    prof = _pieces(repertoire_likelihood(tiny, *rep, bins=BINS,
+                                         profile_edges=DEFAULT_PROFILE_EDGES))["profile"]
     c = np.asarray(rep[1])
     edges = DEFAULT_PROFILE_EDGES + (np.inf,)
     want = [int(((c >= lo) & (c < hi)).sum()) for lo, hi in zip(edges, edges[1:])]
