@@ -423,6 +423,11 @@ class ExactOccupancy:
     #: Integer power sums kept for the series route.
     _K_SERIES = 90
 
+    #: Take Beta-type kernels' line integrals and tails in one C pass per
+    #: parameter (`_beta_sums`, `_beta_tail`) rather than as numpy matrices.
+    #: False only to compare the two.
+    _fused = True
+
     def __init__(self, model, *, rel_tol: float = 1e-10):
         self._m = model
         self.rel_tol = float(rel_tol)
@@ -1016,8 +1021,27 @@ class ExactOccupancy:
         vals = np.empty(idx.size)
         bnds = np.empty(idx.size)
         flrs = np.empty(idx.size)
+        beta = getattr(kmat, "beta", None)
         for lo in range(0, idx.size, self._CHUNK):
             sub = idx[lo:lo + self._CHUNK]
+            # The fused path takes no `extra` phase: that allowance was for the
+            # direct difference ln G(w) - ln G(w + z) below _TAYLOR_W, whose two
+            # terms are large and cancel. The C ratio never forms it -- it is a
+            # few rounding units of |z| ln(w + |z|) at every w, which the base
+            # phase 1 + t ln n and M's own rounding term already cover.
+            if beta is not None:
+                val, absi, absk = self._beta_sums(ln, beta, sub, n_scale, w,
+                                                  dphase[:, 0])
+                vals[lo:lo + sub.size] = sign * (ln.h / _TWO_PI) * val
+                floor = EPS * (ln.h / _TWO_PI) * (absi + absk * m_real)
+                tail = self._kernel_tail_many(kabs_mat, ln.q, float(ln.t[-1]), sub)
+                if alias_fn is not None:
+                    alias = alias_fn(ln, sub, D)
+                else:
+                    alias = amp_left[sub] * xl / (1 - xl) + amp_right[sub] * xr / (1 - xr)
+                bnds[lo:lo + sub.size] = 1.01 * alias + floor + 2.0 * m_real * tail / _TWO_PI
+                flrs[lo:lo + sub.size] = floor
+                continue
             K = kmat(z, sub)
             I = K * Mv
             vals[lo:lo + sub.size] = sign * (ln.h / _TWO_PI) * (w @ I.real)
@@ -1036,9 +1060,37 @@ class ExactOccupancy:
         return vals, bnds, flrs
 
     @staticmethod
+    def _beta_sums(ln, beta, sub, n_scale, wt, dph):
+        """A line's contour sums for the kernel Gamma(z+s) Gamma(w) /
+        Gamma(w+z+s) at the parameters `sub`, in one C pass each
+        (`beam_beta_contour_sums`): sum wt Re(K M), sum wt |K M| (1 + t ln n)
+        and sum wt |K| dphase, in log space and with no matrix -- what the numpy
+        form took as a nodes-by-parameters complex matrix, single-threaded,
+        which on a line of 2,000 nodes and 38,538 depths is 77 million."""
+        w_all, shift = beta
+        zs = -ln.q + shift + 1j * ln.t
+        lg = loggamma(zs)
+        f = np.ascontiguousarray
+        raw = _c.beta_contour_sums(
+            f(zs.real), f(zs.imag), f(lg.real), f(lg.imag),
+            f(ln.log_m.real), f(ln.log_m.imag), f(np.asarray(wt, dtype=float)),
+            f(ln.t), f(np.asarray(dph, dtype=float)), f(w_all[sub]),
+            f(np.log(np.maximum(n_scale[sub], 1.0))))
+        out = np.frombuffer(raw, dtype=float).reshape(3, sub.size)
+        return out[0].copy(), out[1].copy(), out[2].copy()
+
+    @staticmethod
     def _kernel_tail_many(kabs_mat, q, T, idx):
         """`_kernel_tail` for many parameters: an upper bound per column."""
         ts = T * np.geomspace(1.0, 1e8, 481)
+        beta = getattr(kabs_mat, "beta", None)
+        if beta is not None:            # the same bound, in C (_beta_sums)
+            w_all, shift = beta
+            zs = -q + shift + 1j * ts
+            f = np.ascontiguousarray
+            raw = _c.beta_contour_tail(f(zs.real), f(zs.imag),
+                                       f(loggamma(zs).real), f(ts), f(w_all[idx]))
+            return np.frombuffer(raw, dtype=float).copy()
         with np.errstate(all="ignore"):
             vals = np.asarray(kabs_mat(-q + 1j * ts, idx), dtype=float)
         vals = np.where(np.isfinite(vals), vals, np.inf)
@@ -1310,6 +1362,12 @@ class ExactOccupancy:
             def kabs_mat(z, sub):
                 return np.abs(kmat(z, sub))
 
+            if self._fused:     # Gamma(z) Gamma(w) / Gamma(w + z): see _beta_sums
+                def kabs_mat(z, sub):
+                    return np.exp(loggamma(z).real[:, None]
+                                  + _log_gamma_ratio_c(w_all[sub], z).real)
+                kmat.beta = kabs_mat.beta = (w_all, 0.0)
+
             def extra(ln, sub):
                 ws = w_all[sub]
                 if np.all(ws >= _TAYLOR_W):
@@ -1371,6 +1429,12 @@ class ExactOccupancy:
 
             def kabs_mat(z, sub):
                 return np.abs(kmat(z, sub))
+
+            if self._fused:     # Gamma(z+1) Gamma(n) / Gamma(n+1+z): see _beta_sums
+                def kabs_mat(z, sub):
+                    return np.exp(loggamma(z + 1.0).real[:, None]
+                                  + _log_gamma_ratio_c(ns[sub], z + 1.0).real)
+                kmat.beta = kabs_mat.beta = (ns, 1.0)
 
             def extra(ln, sub):
                 ws = ns[sub]

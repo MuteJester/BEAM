@@ -583,3 +583,30 @@ def test_a_value_no_allowed_q_can_resolve_builds_no_line(case):
     for n, v in zip(ns, out):
         _held(v, float(np.sum(_seen(p, n))), tol=math.inf)
     assert fresh.lines == [], fresh.lines
+
+
+def test_the_fused_contour_sums_agree_with_the_matrix_form(case, monkeypatch):
+    """Richness and novelty take each line's integral and tail in one C pass
+    per parameter, with no nodes-by-parameters matrix; the numpy matrix form
+    they replaced must give the same values to rounding, and both must hold
+    against the enumerated truth."""
+    import BEAM.analytics.exact_occupancy as eo_mod
+    m, p, _ = case
+    ns = np.geomspace(1e2, 1e9, 9)
+    fused = ExactOccupancy(m, rel_tol=1e-10)
+    matrix = ExactOccupancy(m, rel_tol=1e-10)
+    matrix._fused = False
+    built = []
+    real_matrix = eo_mod._log_ratio_matrix
+    monkeypatch.setattr(eo_mod, "_log_ratio_matrix",
+                        lambda w, z: built.append(1) or real_matrix(w, z))
+    for name, truth in (("richness_many", lambda n: np.sum(_seen(p, n))),
+                        ("novelty_many", lambda n: np.sum(p * _miss(p, n - 1)))):
+        built.clear()
+        a = getattr(fused, name)(ns)
+        assert not built, f"{name} formed a nodes-by-parameters matrix"
+        b = getattr(matrix, name)(ns)
+        for n, x, y in zip(ns, a, b):
+            _held(x, float(truth(n)), tol=math.inf)
+            _held(y, float(truth(n)), tol=math.inf)
+            assert abs(x.value - y.value) <= 1e-12 * abs(y.value), (name, n, x, y)

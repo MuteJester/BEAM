@@ -2,6 +2,8 @@ accumulator_max
 add
 alphabet_info
 alphabets
+beta_contour_sums
+beta_contour_tail
 build
 compact
 config

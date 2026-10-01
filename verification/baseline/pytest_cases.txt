@@ -105,6 +105,8 @@ tests/python/analytics/test_exact_occupancy.py::test_sharing[aa]
 tests/python/analytics/test_exact_occupancy.py::test_sharing[nt]
 tests/python/analytics/test_exact_occupancy.py::test_the_fingerprint_is_taken_once[aa]
 tests/python/analytics/test_exact_occupancy.py::test_the_fingerprint_is_taken_once[nt]
+tests/python/analytics/test_exact_occupancy.py::test_the_fused_contour_sums_agree_with_the_matrix_form[aa]
+tests/python/analytics/test_exact_occupancy.py::test_the_fused_contour_sums_agree_with_the_matrix_form[nt]
 tests/python/analytics/test_expected_counts_memory.py::test_a_budget_below_the_working_set_refuses_rather_than_allocating
 tests/python/analytics/test_expected_counts_memory.py::test_the_refusal_is_a_memory_error
 tests/python/analytics/test_expected_counts_memory.py::test_the_working_set_covers_the_answer_it_returned

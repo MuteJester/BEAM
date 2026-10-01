@@ -436,6 +436,21 @@ void beam_log_gamma_ratio(const double *w, size_t nw, const double *zre,
                           const double *zim, size_t nz, double *out_re,
                           double *out_im);
 
+/** A line's contour sums for the kernel exp(lg(z) + ln G(w) - ln G(w + z)),
+ *  per parameter, without forming a matrix. See math/lgamma_ratio.c. */
+void beam_beta_contour_sums(size_t nt, const double *zr, const double *zi,
+                            const double *lgr, const double *lgi,
+                            const double *lmr, const double *lmi,
+                            const double *wt, const double *tt,
+                            const double *dph, size_t nk, const double *w,
+                            const double *lnns, double *out_val,
+                            double *out_absi, double *out_absk);
+
+/** The same kernel's tail bound beyond a line's reach, per parameter. */
+void beam_beta_contour_tail(size_t nt, const double *zr, const double *zi,
+                            const double *lgr, const double *ts, size_t nk,
+                            const double *w, double *out);
+
 /** Orders a line sweep advances at once; a stretch starts at a multiple. */
 #define BEAM_LINE_LANES 16u
 /** Orders between a line's directly taken rotations (its anchors). */

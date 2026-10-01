@@ -2265,3 +2265,28 @@ profiling the figure steps:
 
 The gate passed on everything else before recording, `exact.py` at 411
 quantities. The full suite: 942 passed, 2 skipped.
+
+# Why the pytest inventory and the callables moved for fused contour sums
+
+Re-recorded 2026-10-01, tag `prefused`. With the log-gamma ratio in C, the
+richness and novelty integrals were still a nodes-by-parameters complex
+matrix per line -- exp, abs and a matrix product over 77 million values on a
+2,000-node line at 38,538 depths, single-threaded -- and the tail bound
+another such matrix at 481 points. Both are now one C pass per parameter
+(`beam_beta_contour_sums`, `beam_beta_contour_tail`, math/lgamma_ratio.c),
+in log space, on every thread; the planner's small magnitude queries take
+the C ratio directly. The fused path drops the `extra` phase allowance,
+which was for the direct log-gamma difference below w = 200 that the C ratio
+never forms. Values agree with the matrix form to 1e-12 and both hold against
+enumeration (test_the_fused_contour_sums_agree_with_the_matrix_form).
+
+    pytest_cases.txt       2 added: test_the_fused_contour_sums_agree_with_the_matrix_form[aa|nt]
+    cbeam_methods.txt      2 added by hand: beta_contour_sums, beta_contour_tail
+                           (previous kept as cbeam_methods.prefused.txt)
+    python_api.txt         unchanged (re-written by the recorder, byte-identical)
+    c_cases.txt            unchanged (likewise)
+    numeric.json           unchanged (likewise)
+    threads.json           unchanged (likewise)
+
+The gate passed on everything else before recording, `exact.py` at 411
+quantities. The full suite: 944 passed, 2 skipped; C 349 passed.
