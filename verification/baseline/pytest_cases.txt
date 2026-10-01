@@ -103,6 +103,8 @@ tests/python/analytics/test_exact_occupancy.py::test_series_power_sums_are_taken
 tests/python/analytics/test_exact_occupancy.py::test_series_power_sums_are_taken_only_when_a_series_needs_them[nt]
 tests/python/analytics/test_exact_occupancy.py::test_sharing[aa]
 tests/python/analytics/test_exact_occupancy.py::test_sharing[nt]
+tests/python/analytics/test_exact_occupancy.py::test_the_cohort_private_sums_agree_with_the_taylor_form[aa]
+tests/python/analytics/test_exact_occupancy.py::test_the_cohort_private_sums_agree_with_the_taylor_form[nt]
 tests/python/analytics/test_exact_occupancy.py::test_the_fingerprint_is_taken_once[aa]
 tests/python/analytics/test_exact_occupancy.py::test_the_fingerprint_is_taken_once[nt]
 tests/python/analytics/test_exact_occupancy.py::test_the_fused_contour_sums_agree_with_the_matrix_form[aa]
@@ -126,6 +128,8 @@ tests/python/analytics/test_liveness.py::test_live_structure_is_rebuilt_after_ev
 tests/python/analytics/test_liveness.py::test_topology_matches_an_enumerated_trellis
 tests/python/analytics/test_log_gamma_ratio.py::test_agrees_with_the_numpy_form_it_replaces
 tests/python/analytics/test_log_gamma_ratio.py::test_matches_thirty_digits_everywhere_it_is_used
+tests/python/analytics/test_log_gamma_ratio.py::test_the_shifted_ratio_keeps_its_digits
+tests/python/analytics/test_log_gamma_ratio.py::test_the_shifted_ratio_refuses_a_small_shifted_argument
 tests/python/analytics/test_log_gamma_ratio.py::test_zero_is_zero
 tests/python/analytics/test_memory_budget.py::test_a_reduced_budget_changes_no_answer
 tests/python/analytics/test_memory_budget.py::test_a_refusal_can_be_repeated_without_growing[cgf_jet]

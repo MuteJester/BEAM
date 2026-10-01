@@ -334,6 +334,85 @@ PyObject *py_beta_contour_sums(PyObject *self, PyObject *args) {
     return res;
 }
 
+/* log_gamma_ratio_shift(w, d, z_re, z_im) -> bytes of nz * nd complex128, row
+ * i the shift [ln G(w-d_k) - ln G(w-d_k+z_i)] - [ln G(w) - ln G(w+z_i)] at
+ * every d: the layout of a (nz, nd) complex128 array. */
+PyObject *py_log_gamma_ratio_shift(PyObject *self, PyObject *args) {
+    (void)self;
+    double w;
+    PyObject *o[3];
+    if (!PyArg_ParseTuple(args, "dOOO", &w, &o[0], &o[1], &o[2])) return NULL;
+    static const char *names[3] = {"d", "real parts", "imaginary parts"};
+    Py_buffer b[3];
+    if (!take_f64s(o, b, names, 3)) return NULL;
+    const Py_ssize_t nd = f64_buffer_count(&b[0]), nz = f64_buffer_count(&b[1]);
+    if (f64_buffer_count(&b[2]) != nz) {
+        release_f64s(b, 3);
+        PyErr_Format(PyExc_ValueError, "%zd real parts but %zd imaginary parts",
+                     nz, f64_buffer_count(&b[2]));
+        return NULL;
+    }
+    const uint64_t cells = (uint64_t)nd * (uint64_t)nz;
+    double *out = (double *)beam_py_alloc((cells ? cells : 1u) * 4u * sizeof(double),
+                                          "the log-gamma shifts", 0u, "cells");
+    if (!out) { release_f64s(b, 3); return NULL; }
+    double *ore = out, *oim = out + cells, *il = out + 2u * cells;
+    Py_BEGIN_ALLOW_THREADS
+    beam_log_gamma_ratio_shift(w, (const double *)b[0].buf, (size_t)nd,
+                               (const double *)b[1].buf, (const double *)b[2].buf,
+                               (size_t)nz, ore, oim);
+    for (uint64_t x = 0; x < cells; ++x) { il[2 * x] = ore[x]; il[2 * x + 1] = oim[x]; }
+    Py_END_ALLOW_THREADS
+    release_f64s(b, 3);
+    PyObject *res = edge_doubles_to_bytes(il, (size_t)cells * 2u);
+    PyMem_Free(out);
+    return res;
+}
+
+/* cohort_private_sums(zr, zi, lbr, lbi, lmr, lmi, wt, tt, dph, w, d, lnns) ->
+ * bytes of 3 * nk doubles: the values' sums, then the two rounding sums. */
+PyObject *py_cohort_private_sums(PyObject *self, PyObject *args) {
+    (void)self;
+    PyObject *o[11];
+    double w;
+    if (!PyArg_ParseTuple(args, "OOOOOOOOOdOO", &o[0], &o[1], &o[2], &o[3], &o[4],
+                          &o[5], &o[6], &o[7], &o[8], &w, &o[9], &o[10])) return NULL;
+    static const char *names[11] = {"zr", "zi", "lbr", "lbi", "lmr", "lmi", "wt",
+                                    "tt", "dph", "d", "lnns"};
+    Py_buffer b[11];
+    if (!take_f64s(o, b, names, 11)) return NULL;
+    const Py_ssize_t nt = f64_buffer_count(&b[0]), nk = f64_buffer_count(&b[9]);
+    for (int i = 1; i < 9; ++i)
+        if (f64_buffer_count(&b[i]) != nt) {
+            release_f64s(b, 11);
+            PyErr_Format(PyExc_ValueError, "%s has %zd entries, not %zd",
+                         names[i], f64_buffer_count(&b[i]), nt);
+            return NULL;
+        }
+    if (f64_buffer_count(&b[10]) != nk) {
+        release_f64s(b, 11);
+        PyErr_Format(PyExc_ValueError, "lnns has %zd entries, not %zd",
+                     f64_buffer_count(&b[10]), nk);
+        return NULL;
+    }
+    double *out = (double *)beam_py_alloc((uint64_t)(nk ? nk : 1) * 3u * sizeof(double),
+                                          "the contour sums", 0u, "parameters");
+    if (!out) { release_f64s(b, 11); return NULL; }
+    Py_BEGIN_ALLOW_THREADS
+    beam_cohort_private_sums((size_t)nt, (const double *)b[0].buf, (const double *)b[1].buf,
+                             (const double *)b[2].buf, (const double *)b[3].buf,
+                             (const double *)b[4].buf, (const double *)b[5].buf,
+                             (const double *)b[6].buf, (const double *)b[7].buf,
+                             (const double *)b[8].buf, w, (size_t)nk,
+                             (const double *)b[9].buf, (const double *)b[10].buf,
+                             out, out + nk, out + 2 * nk);
+    Py_END_ALLOW_THREADS
+    release_f64s(b, 11);
+    PyObject *res = edge_doubles_to_bytes(out, (size_t)nk * 3u);
+    PyMem_Free(out);
+    return res;
+}
+
 /* beta_contour_tail(zr, zi, lgr, ts, w) -> bytes of nk doubles. */
 PyObject *py_beta_contour_tail(PyObject *self, PyObject *args) {
     (void)self;

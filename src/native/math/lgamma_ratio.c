@@ -171,3 +171,134 @@ void beam_beta_contour_tail(size_t nt, const double *zr, const double *zi,
         else out[k] = INFINITY;
     }
 }
+
+/* ── The ratio's shift in w: the cohort private kernel ─────────── */
+
+/*
+ * D(w, d, z) = [ln G(w-d) - ln G(w-d+z)] - [ln G(w) - ln G(w+z)]
+ *            = G(w, z) - G(v, z),   v = w - d,   G(x, z) = ln G(x+z) - ln G(x),
+ *
+ * which `ExactOccupancy.private_at_depth` needs at every node and depth:
+ * its kernel is -Gamma(z) exp(ln G(w) - ln G(w+z)) expm1(D). D is of size
+ * d |z| / w where each ratio is |z| ln w, so it cannot be their difference;
+ * the numpy form took it as a Taylor series in d, a matrix per power. Here
+ * Stirling's series for G is differenced term by term, each difference
+ * written so that nothing cancels:
+ *
+ *   (w+z-1/2) log1p(z/w) - (v+z-1/2) log1p(z/v)
+ *       = (w+z-1/2) log1p(-d z / (w (v+z))) + d log1p(z/v)
+ *   z ln w - z ln v = -z log1p(-d/w)
+ *   c_k [w^(1-2k) (r_w^(2k-1) - 1) - v^(1-2k) (r_v^(2k-1) - 1)],  r_x = 1/(1+z/x),
+ *
+ * with r^m - 1 = (r - 1)(1 + r + ... + r^(m-1)) and r - 1 = -r z/x, so each
+ * term keeps its relative digits. The error is a few rounding units of
+ * |D| + d |z| / v (tests/python/analytics/test_log_gamma_ratio.py, against
+ * mpmath). Needs v >= 15, where the series holds unshifted; below that the
+ * result is NaN.
+ */
+static void lgr_corrections(double x, double zr, double zi, double *cr, double *ci) {
+    const double ur = zr / x, ui = zi / x;
+    const double den = (1.0 + ur) * (1.0 + ur) + ui * ui;
+    const double rr = (1.0 + ur) / den, ri = -ui / den;          /* r = 1/(1+u) */
+    const double gr = -(rr * ur - ri * ui), gi = -(rr * ui + ri * ur); /* r - 1 */
+    const double r2r = rr * rr - ri * ri, r2i = 2.0 * rr * ri;
+    double sr = 1.0, si = 0.0;            /* S_m = 1 + r + ... + r^(m-1), m = 1 */
+    double pr = rr, pi = ri;              /* r^m */
+    double xp = 1.0 / x;
+    const double ix2 = 1.0 / (x * x);
+    double accr = 0.0, acci = 0.0;
+    for (int k = 0; k < 8; ++k) {
+        /* c_k x^(1-2k) (r - 1) S_m */
+        const double tr = gr * sr - gi * si, ti = gr * si + gi * sr;
+        accr += LGR_C[k] * xp * tr;
+        acci += LGR_C[k] * xp * ti;
+        /* S_(m+2) = S_m + r^m + r^(m+1); r^(m+2) */
+        const double qr = pr * rr - pi * ri, qi = pr * ri + pi * rr;
+        sr += pr + qr; si += pi + qi;
+        const double t = pr * r2r - pi * r2i;
+        pi = pr * r2i + pi * r2r;
+        pr = t;
+        xp *= ix2;
+    }
+    *cr = accr; *ci = acci;
+}
+
+/* `lb` = log1p(-d / w), which depends on the depth only. */
+static void lgr_shift(double w, double d, double lb, double zr, double zi,
+                      double *out_re, double *out_im) {
+    const double v = w - d;
+    if (!(v >= LGR_W0)) { *out_re = NAN; *out_im = NAN; return; }
+    if (zr == 0.0 && zi == 0.0) { *out_re = 0.0; *out_im = 0.0; return; }
+    /* -d z / (w (v + z)) */
+    const double vr = v + zr;
+    const double den = vr * vr + zi * zi;
+    const double f = -(d / w) / den;
+    const double ar = f * (zr * vr + zi * zi), ai = f * (zi * v);
+    double l1r, l1i, l2r, l2i;
+    lgr_log1p(ar, ai, &l1r, &l1i);
+    lgr_log1p(zr / v, zi / v, &l2r, &l2i);
+    const double cr0 = w + zr - 0.5;
+    double dr = cr0 * l1r - zi * l1i + d * l2r - zr * lb;
+    double di = cr0 * l1i + zi * l1r + d * l2i - zi * lb;
+    double cwr, cwi, cvr, cvi;
+    lgr_corrections(w, zr, zi, &cwr, &cwi);
+    lgr_corrections(v, zr, zi, &cvr, &cvi);
+    *out_re = dr + (cwr - cvr);
+    *out_im = di + (cwi - cvi);
+}
+
+void beam_log_gamma_ratio_shift(double w, const double *d, size_t nd,
+                                const double *zre, const double *zim, size_t nz,
+                                double *out_re, double *out_im) {
+    const int64_t total = (int64_t)(nd * nz);
+#ifdef _OPENMP
+    #pragma omp parallel for schedule(static) num_threads(beam_threads()) \
+            if (total > 4096)
+#endif
+    for (int64_t x = 0; x < total; ++x) {
+        const size_t i = (size_t)x / nd, k = (size_t)x % nd;
+        lgr_shift(w, d[k], log1p(-d[k] / w), zre[i], zim[i], out_re + x, out_im + x);
+    }
+}
+
+/*
+ * The contour sums of `ExactOccupancy._integrate_many` for the cohort private
+ * kernel K(z) = -B(z) expm1(D(w, d_k, z)), B = Gamma(z) Gamma(w) / Gamma(w+z),
+ * given ln B at the nodes (lbr, lbi): the same three sums as
+ * `beam_beta_contour_sums`, with |B M| and |B| taken in log space and
+ * expm1(D) on its own, so no digit of a small D is lost to the 1 it is
+ * added to. One thread's loop per depth, in node order.
+ */
+void beam_cohort_private_sums(size_t nt, const double *zr, const double *zi,
+                              const double *lbr, const double *lbi,
+                              const double *lmr, const double *lmi,
+                              const double *wt, const double *tt,
+                              const double *dph, double w, size_t nk,
+                              const double *d, const double *lnns,
+                              double *out_val, double *out_absi,
+                              double *out_absk) {
+#ifdef _OPENMP
+    #pragma omp parallel for schedule(dynamic, 16) num_threads(beam_threads()) \
+            if (nk * nt > 4096)
+#endif
+    for (int64_t k = 0; k < (int64_t)nk; ++k) {
+        const double lb = log1p(-d[k] / w);
+        double sv = 0.0, sa = 0.0, sk = 0.0;
+        for (size_t t = 0; t < nt; ++t) {
+            double ar, ai;
+            lgr_shift(w, d[k], lb, zr[t], zi[t], &ar, &ai);
+            /* expm1(ar + i ai) */
+            const double em = expm1(ar), sh = sin(0.5 * ai);
+            const double c = cos(ai), s = sin(ai);
+            const double er = em * c - 2.0 * sh * sh;
+            const double ei = (em + 1.0) * s;
+            const double ae = hypot(er, ei);
+            const double bm = exp(lbr[t] + lmr[t]);
+            const double ph = lbi[t] + lmi[t];
+            sv -= wt[t] * bm * (cos(ph) * er - sin(ph) * ei);
+            sa += wt[t] * bm * ae * (1.0 + tt[t] * lnns[k]);
+            sk += wt[t] * exp(lbr[t]) * ae * dph[t];
+        }
+        out_val[k] = sv; out_absi[k] = sa; out_absk[k] = sk;
+    }
+}

@@ -446,6 +446,27 @@ void beam_beta_contour_sums(size_t nt, const double *zr, const double *zi,
                             const double *lnns, double *out_val,
                             double *out_absi, double *out_absk);
 
+/**
+ * out[i * nd + k] = [ln G(w-d_k) - ln G(w-d_k+z_i)] - [ln G(w) - ln G(w+z_i)],
+ * to a few rounding units of its size plus d |z| / (w - d), the imaginary
+ * part modulo 2 pi; NaN where w - d < 15. See math/lgamma_ratio.c.
+ */
+void beam_log_gamma_ratio_shift(double w, const double *d, size_t nd,
+                                const double *zre, const double *zim, size_t nz,
+                                double *out_re, double *out_im);
+
+/** A line's contour sums for the cohort private kernel
+ *  -B(z) expm1(D(w, d_k, z)), given ln B at the nodes, per depth, without
+ *  forming a matrix. See math/lgamma_ratio.c. */
+void beam_cohort_private_sums(size_t nt, const double *zr, const double *zi,
+                              const double *lbr, const double *lbi,
+                              const double *lmr, const double *lmi,
+                              const double *wt, const double *tt,
+                              const double *dph, double w, size_t nk,
+                              const double *d, const double *lnns,
+                              double *out_val, double *out_absi,
+                              double *out_absk);
+
 /** The same kernel's tail bound beyond a line's reach, per parameter. */
 void beam_beta_contour_tail(size_t nt, const double *zr, const double *zi,
                             const double *lgr, const double *ts, size_t nk,

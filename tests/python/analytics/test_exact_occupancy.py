@@ -610,3 +610,32 @@ def test_the_fused_contour_sums_agree_with_the_matrix_form(case, monkeypatch):
             _held(x, float(truth(n)), tol=math.inf)
             _held(y, float(truth(n)), tol=math.inf)
             assert abs(x.value - y.value) <= 1e-12 * abs(y.value), (name, n, x, y)
+
+
+def test_the_cohort_private_sums_agree_with_the_taylor_form(case, monkeypatch):
+    """private_at_depth takes each line's integral and tail in one C pass per
+    depth, from the kernel's exponent in C, with no Taylor series in the
+    depth: no polygammas and no matrix per power. The Taylor form it replaced
+    must give the same values to rounding, and both must hold against the
+    enumerated truth."""
+    import BEAM.analytics.exact_occupancy as eo_mod
+    m, p, _ = case
+    rng = np.random.default_rng(3)
+    depths = rng.integers(100, 100_000, size=60).astype(float)
+    T = float(depths.sum())
+    fused = ExactOccupancy(m, rel_tol=1e-10)
+    taylor = ExactOccupancy(m, rel_tol=1e-10)
+    taylor._fused = False
+    called = []
+    real_pg = eo_mod._polygammas
+    monkeypatch.setattr(eo_mod, "_polygammas",
+                        lambda *a: called.append(1) or real_pg(*a))
+    a = fused.private_at_depth(depths, total_depth=T)["private"]
+    assert not called, "the fused path took the Taylor series"
+    b = taylor.private_at_depth(depths, total_depth=T)["private"]
+    assert called, "the comparison never reached the Taylor path"
+    for d, x, y in zip(depths, a, b):
+        truth = float(np.sum(_seen(p, d) * _miss(p, T - d)))
+        _held(x, truth, tol=1e-9)
+        _held(y, truth, tol=1e-9)
+        assert abs(x.value - y.value) <= 1e-12 * abs(y.value), (d, x, y)

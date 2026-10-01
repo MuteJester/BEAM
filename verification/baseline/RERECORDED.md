@@ -2290,3 +2290,30 @@ enumeration (test_the_fused_contour_sums_agree_with_the_matrix_form).
 
 The gate passed on everything else before recording, `exact.py` at 411
 quantities. The full suite: 944 passed, 2 skipped; C 349 passed.
+
+# Why the pytest inventory and the callables moved for the cohort private kernel
+
+Re-recorded 2026-10-01, tag `precohort`. `private_at_depth`'s kernel,
+-Gamma(z) Gamma(w)/Gamma(w+z) expm1(D) with D the ratio's shift when w drops
+by a repertoire's depth, was the last contour kernel built in numpy: D as a
+Taylor series in the depth, a polygamma matrix per power, then the nodes-by-
+depths matrix and its tail bound. D is now taken in C by Stirling's series
+differenced term by term so nothing cancels (`beam_log_gamma_ratio_shift`,
+within 2.2e-16 of |D| + d |z| / (w - d) against mpmath), and each line's
+three sums are one C pass per depth (`beam_cohort_private_sums`), on every
+thread; the tail is |B|'s, scaled. Values agree with the Taylor form to
+1e-12 and both hold against enumeration
+(test_the_cohort_private_sums_agree_with_the_taylor_form).
+
+    pytest_cases.txt       4 added: test_the_cohort_private_sums_agree_with_the_taylor_form[aa|nt],
+                           test_the_shifted_ratio_keeps_its_digits,
+                           test_the_shifted_ratio_refuses_a_small_shifted_argument
+    cbeam_methods.txt      2 added by hand: cohort_private_sums, log_gamma_ratio_shift
+                           (previous kept as cbeam_methods.precohort.txt)
+    python_api.txt         unchanged (re-written by the recorder, byte-identical)
+    c_cases.txt            unchanged (likewise)
+    numeric.json           unchanged (likewise)
+    threads.json           unchanged (likewise)
+
+The gate passed on everything else before recording, `exact.py` at 411
+quantities. The full suite: 948 passed, 2 skipped; C 349 passed.

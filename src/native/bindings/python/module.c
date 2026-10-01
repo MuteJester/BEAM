@@ -82,6 +82,8 @@ static PyMethodDef module_methods[] = {
     {"log_gamma_ratio",    py_log_gamma_ratio,               METH_VARARGS, NULL},
     {"beta_contour_sums",  py_beta_contour_sums,             METH_VARARGS, NULL},
     {"beta_contour_tail",  py_beta_contour_tail,             METH_VARARGS, NULL},
+    {"log_gamma_ratio_shift", py_log_gamma_ratio_shift,      METH_VARARGS, NULL},
+    {"cohort_private_sums", py_cohort_private_sums,          METH_VARARGS, NULL},
     {"log_mellin_complex", py_log_mellin_complex,            METH_VARARGS, NULL},
     {"log_mellin_line",    py_log_mellin_line,               METH_VARARGS, NULL},
     {"mixture_check_shape", py_mixture_check_shape,            METH_O, NULL},

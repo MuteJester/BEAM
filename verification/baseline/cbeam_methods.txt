@@ -5,6 +5,7 @@ alphabets
 beta_contour_sums
 beta_contour_tail
 build
+cohort_private_sums
 compact
 config
 depth_occupancy
@@ -24,6 +25,7 @@ length_marginals
 live_cache_bytes
 load
 log_gamma_ratio
+log_gamma_ratio_shift
 log_length_prior
 log_mellin
 log_mellin_complex

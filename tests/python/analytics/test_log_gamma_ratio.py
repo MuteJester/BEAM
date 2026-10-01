@@ -70,3 +70,54 @@ def test_agrees_with_the_numpy_form_it_replaces():
 def test_zero_is_zero():
     got = _log_gamma_ratio_c(np.array([1.0, 1e82]), np.array([0j]))
     assert np.all(got == 0)
+
+
+# The cohort private kernel's exponent: how much the ratio moves when w drops
+# by d. Tiny next to either ratio -- d |z| / w against |z| ln w -- so it cannot
+# be their difference; the Taylor series in d it replaces needed a matrix per
+# power of d.
+SHIFT_WS = [200.0, 1e3, 1e6, 1e12, 1e40, 1e82]
+SHIFT_ZS = [-0.02 + 0j, -0.5 + 0j, -0.5 + 1j, -0.9 + 0.1j, -0.3 + 40j,
+            -0.7 - 5j, -0.2 + 1e3j, -0.5 + 1e5j, -0.75 + 3.25j]
+
+
+def _shift_reference(w, d, z):
+    # Four log-gammas of size w ln w whose sum is d |z| / w: enough digits
+    # for both.
+    big = math.log10(w * (1.0 + math.log(w)) + 1.0)
+    mpmath.mp.dps = 30 + int(2 * big)
+    W, V, Z = mpmath.mpf(w), mpmath.mpf(w) - mpmath.mpf(d), mpmath.mpc(z)
+    v = (mpmath.loggamma(V) - mpmath.loggamma(V + Z)
+         - mpmath.loggamma(W) + mpmath.loggamma(W + Z))
+    return complex(v)
+
+
+def test_the_shifted_ratio_keeps_its_digits():
+    """[ln G(w-d) - ln G(w-d+z)] - [ln G(w) - ln G(w+z)] to a few rounding
+    units of d |z| / (w - d), its size where |z| << w and what bounds its
+    error everywhere -- the imaginary part modulo 2 pi."""
+    from BEAM.analytics.exact_occupancy import _log_gamma_ratio_shift_c
+    worst = 0.0
+    for w in SHIFT_WS:
+        ds = sorted({1.0, 37.0, 1e-3 * w, 0.25 * w})
+        z = np.array(SHIFT_ZS)
+        got = _log_gamma_ratio_shift_c(w, np.array(ds), z)
+        assert got.shape == (z.size, len(ds))
+        for i, zz in enumerate(SHIFT_ZS):
+            for k, d in enumerate(ds):
+                want = _shift_reference(w, d, zz)
+                scale = abs(want) + d * abs(zz) / (w - d)
+                d_re = abs(got[i, k].real - want.real)
+                d_im = abs(math.remainder(got[i, k].imag - want.imag, 2 * math.pi))
+                err = max(d_re, d_im) / scale
+                worst = max(worst, err)
+                assert err <= 8 * np.finfo(float).eps, (w, d, zz, got[i, k], want)
+    print(f"worst {worst:.2e} of the scale")
+
+
+def test_the_shifted_ratio_refuses_a_small_shifted_argument():
+    """Stirling's series needs w - d >= 15; below that it says so with NaN
+    rather than return a number with no digits."""
+    from BEAM.analytics.exact_occupancy import _log_gamma_ratio_shift_c
+    got = _log_gamma_ratio_shift_c(200.0, np.array([1.0, 190.0]), np.array([-0.5 + 1j]))
+    assert np.isfinite(got[0, 0]) and np.isnan(got[0, 1].real)

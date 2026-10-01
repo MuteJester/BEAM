@@ -138,6 +138,21 @@ def _log_gamma_ratio_c(w, z) -> np.ndarray:
     return out.reshape(z.size, w.size).copy()
 
 
+def _log_gamma_ratio_shift_c(w: float, d, z) -> np.ndarray:
+    """[ln Gamma(w - d_k) - ln Gamma(w - d_k + z_i)] - [ln Gamma(w) -
+    ln Gamma(w + z_i)], shape (len(z), len(d)), in C (math/lgamma_ratio.c):
+    the cohort private kernel's exponent, to a few rounding units of its size
+    plus d |z| / (w - d) -- where the difference of the two ratios would keep
+    none of its digits. NaN where w - d < 15."""
+    d = np.ascontiguousarray(np.asarray(d, dtype=float).ravel())
+    z = np.asarray(z, dtype=np.complex128).ravel()
+    out = np.frombuffer(_c.log_gamma_ratio_shift(float(w), d,
+                                                 np.ascontiguousarray(z.real),
+                                                 np.ascontiguousarray(z.imag)),
+                        dtype=np.complex128)
+    return out.reshape(z.size, d.size).copy()
+
+
 def _log_ratio(w: float, z: np.ndarray) -> np.ndarray:
     """ln Gamma(w) - ln Gamma(w + z), real w >= 1, complex z, as
     `_log_gamma_ratio_c` takes it."""
@@ -1022,6 +1037,7 @@ class ExactOccupancy:
         bnds = np.empty(idx.size)
         flrs = np.empty(idx.size)
         beta = getattr(kmat, "beta", None)
+        cohort = getattr(kmat, "cohort", None)
         for lo in range(0, idx.size, self._CHUNK):
             sub = idx[lo:lo + self._CHUNK]
             # The fused path takes no `extra` phase: that allowance was for the
@@ -1029,9 +1045,13 @@ class ExactOccupancy:
             # terms are large and cancel. The C ratio never forms it -- it is a
             # few rounding units of |z| ln(w + |z|) at every w, which the base
             # phase 1 + t ln n and M's own rounding term already cover.
-            if beta is not None:
-                val, absi, absk = self._beta_sums(ln, beta, sub, n_scale, w,
-                                                  dphase[:, 0])
+            if beta is not None or cohort is not None:
+                if beta is not None:
+                    val, absi, absk = self._beta_sums(ln, beta, sub, n_scale, w,
+                                                      dphase[:, 0])
+                else:
+                    val, absi, absk = self._cohort_sums(ln, cohort, sub, n_scale,
+                                                        w, dphase[:, 0])
                 vals[lo:lo + sub.size] = sign * (ln.h / _TWO_PI) * val
                 floor = EPS * (ln.h / _TWO_PI) * (absi + absk * m_real)
                 tail = self._kernel_tail_many(kabs_mat, ln.q, float(ln.t[-1]), sub)
@@ -1080,9 +1100,37 @@ class ExactOccupancy:
         return out[0].copy(), out[1].copy(), out[2].copy()
 
     @staticmethod
+    def _cohort_sums(ln, cohort, sub, n_scale, wt, dph):
+        """`_beta_sums` for the cohort private kernel -B(z) expm1(D), B =
+        Gamma(z) Gamma(w) / Gamma(w + z) and D = ln B(w - d) - ln B(w), in one
+        C pass per depth (`beam_cohort_private_sums`) with D in C as well:
+        what the numpy form took as a Taylor series in d, a polygamma matrix
+        per power of d, single-threaded."""
+        w, dd, _ = cohort
+        zs = -ln.q + 1j * ln.t
+        lb = loggamma(zs) + _log_ratio(w, zs)
+        f = np.ascontiguousarray
+        raw = _c.cohort_private_sums(
+            f(zs.real), f(zs.imag), f(lb.real), f(lb.imag),
+            f(ln.log_m.real), f(ln.log_m.imag), f(np.asarray(wt, dtype=float)),
+            f(ln.t), f(np.asarray(dph, dtype=float)), float(w), f(dd[sub]),
+            f(np.log(np.maximum(n_scale[sub], 1.0))))
+        out = np.frombuffer(raw, dtype=float).reshape(3, sub.size)
+        return out[0].copy(), out[1].copy(), out[2].copy()
+
+    @staticmethod
     def _kernel_tail_many(kabs_mat, q, T, idx):
         """`_kernel_tail` for many parameters: an upper bound per column."""
         ts = T * np.geomspace(1.0, 1e8, 481)
+        cohort = getattr(kabs_mat, "cohort", None)
+        if cohort is not None:          # |B| (1 + w/(w-d)): |B|'s tail, scaled
+            w, _, grow = cohort
+            zs = -q + 1j * ts
+            f = np.ascontiguousarray
+            raw = _c.beta_contour_tail(f(zs.real), f(zs.imag),
+                                       f(loggamma(zs).real), f(ts),
+                                       np.array([float(w)]))
+            return float(np.frombuffer(raw, dtype=float)[0]) * (1.0 + grow[idx])
         beta = getattr(kabs_mat, "beta", None)
         if beta is not None:            # the same bound, in C (_beta_sums)
             w_all, shift = beta
@@ -1601,8 +1649,9 @@ class ExactOccupancy:
         "private", R(T) - R(T - d_i), the expected number of its sequences no
         other member carries -- as lists of BoundedValues, in input order.
 
-        The private counts are one batch per line through the node-only
-        coefficients of `private`; the distinct counts are `richness_many`.
+        The private counts are one batch per line, each line's sums one C pass
+        per depth with the kernel's exponent taken in C (`_cohort_sums`); the
+        distinct counts are `richness_many`.
         """
         d = np.asarray(depths, dtype=float).ravel()
         if d.size == 0 or not np.all(np.isfinite(d)) or np.any(d < 0):
@@ -1622,48 +1671,54 @@ class ExactOccupancy:
         fi = np.nonzero(fast)[0]
         if fi.size:
             dd = uniq[fi]
-            mmax = 1
-            while mmax < 60 and (dd.max() / w) ** mmax / mmax > 1e-19:
-                mmax += 1
-            pg = _polygammas(w, mmax + 100)
-            powers = np.stack([(-dd) ** m / math.factorial(m)
-                               for m in range(1, mmax + 1)])
-            d0 = math.exp(self.log_d0)
-            ecache: dict = {}
-
-            def e_coeffs(z):
-                key = (z.size, float(z[0].real), float(z[-1].imag))
-                if key in ecache:
-                    return ecache[key]
-                out = np.zeros((mmax, z.size), dtype=np.complex128)
-                for m in range(1, mmax + 1):
-                    acc = np.zeros(z.size, dtype=np.complex128)
-                    zk = np.ones_like(z)
-                    kf = 1.0
-                    for k in range(1, 100):
-                        zk = zk * z
-                        kf *= k
-                        term = pg[m - 1 + k] * zk / kf
-                        acc += term
-                        if np.max(np.abs(term)) <= 1e-19 * max(1e-300, float(np.max(np.abs(acc)))):
-                            break
-                    out[m - 1] = -acc
-                ecache[key] = out
-                return out
-
-            def kmat(z, sub):
-                if np.max(np.abs(z)) > 0.3 * w:
-                    return kabs_mat(z, sub).astype(np.complex128)
-                E = e_coeffs(z)
-                base = np.exp(loggamma(z) + _log_ratio(w, z))
-                return -base[:, None] * np.expm1(E.T @ powers[:, sub])
-
             grow = w / (w - dd)
 
             def kabs_mat(z, sub):
-                b = np.abs(np.exp(loggamma(z) + _log_ratio(w, z)))
+                b = np.exp(loggamma(z).real + _log_ratio(w, z).real)
                 return b[:, None] * (1.0 + grow[sub])[None, :]
 
+            if self._fused:
+                def kmat(z, sub):       # the sums are taken in C: _cohort_sums
+                    raise AssertionError("the cohort kernel is fused")
+
+                kmat.cohort = kabs_mat.cohort = (w, dd, grow)
+            else:                       # D as a Taylor series in d
+                mmax = 1
+                while mmax < 60 and (dd.max() / w) ** mmax / mmax > 1e-19:
+                    mmax += 1
+                pg = _polygammas(w, mmax + 100)
+                powers = np.stack([(-dd) ** m / math.factorial(m)
+                                   for m in range(1, mmax + 1)])
+                ecache: dict = {}
+
+                def e_coeffs(z):
+                    key = (z.size, float(z[0].real), float(z[-1].imag))
+                    if key in ecache:
+                        return ecache[key]
+                    out = np.zeros((mmax, z.size), dtype=np.complex128)
+                    for m in range(1, mmax + 1):
+                        acc = np.zeros(z.size, dtype=np.complex128)
+                        zk = np.ones_like(z)
+                        kf = 1.0
+                        for k in range(1, 100):
+                            zk = zk * z
+                            kf *= k
+                            term = pg[m - 1 + k] * zk / kf
+                            acc += term
+                            if np.max(np.abs(term)) <= 1e-19 * max(1e-300, float(np.max(np.abs(acc)))):
+                                break
+                        out[m - 1] = -acc
+                    ecache[key] = out
+                    return out
+
+                def kmat(z, sub):
+                    if np.max(np.abs(z)) > 0.3 * w:
+                        return kabs_mat(z, sub).astype(np.complex128)
+                    E = e_coeffs(z)
+                    base = np.exp(loggamma(z) + _log_ratio(w, z))
+                    return -base[:, None] * np.expm1(E.T @ powers[:, sub])
+
+            d0 = math.exp(self.log_d0)
             amp_left = d0 * np.minimum(1.0, np.maximum(dd, 1.0) / (w - dd))
             amp_right = np.maximum(dd, 1.0)
             guess = dd * min(T, d0) / w * 0.3
