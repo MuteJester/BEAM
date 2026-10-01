@@ -176,7 +176,12 @@ class AbundanceSpectrum:
 
     are exact: plain sums over independent sequences, with no tilt, no
     saddlepoint and no binning. ``z`` is the standardised departure,
-    ``(observed - expected) / sd``, one number per clone size.
+    ``(observed - expected) / sd``, one number per clone size -- but only
+    where the model expects enough sequences for a standard deviation to mean
+    anything. Where it expects almost none the count is Poisson-like, not
+    Gaussian: dividing by a standard deviation of 1e-65 would call a single
+    observed clone a departure of 1e136. Those sizes carry ``nan``, and are
+    read straight off ``observed`` against ``expected``.
 
     This is the quantity to compare between repertoires. The chain's
     ``profile`` piece bins counts together only so that a saddlepoint has few
@@ -190,8 +195,10 @@ class AbundanceSpectrum:
     Attributes:
         counts: the clone sizes k, ascending.
         observed: how many sequences have exactly k reads.
-        expected, sd, z: the model's exact mean, standard deviation and the
-            standardised departure, per clone size.
+        expected, sd: the model's exact mean and standard deviation per
+            clone size.
+        z: the standardised departure, or ``nan`` where the model expects too
+            few sequences for one to mean anything (see above).
         n_sequences, n_reads: the repertoire's totals.
         expected_reads: ``sum_s E[count_s]``, the reads this reference expects.
     """

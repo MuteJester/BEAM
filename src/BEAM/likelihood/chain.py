@@ -94,6 +94,10 @@ DEFAULT_PROFILE_EDGES = (1, 2, 3, 4, 5, 6, 11, 101)
 #: The fewest sequences ``auto`` leaves the model expecting in a bin.
 AUTO_MIN_EXPECTED = 5.0
 
+#: Below this expected count a clone size is Poisson-like, not Gaussian, so
+#: :class:`AbundanceSpectrum` reports no standardised departure for it.
+GAUSSIAN_MIN_EXPECTED = 10.0
+
 _SADDLE = "saddlepoint; see `error` for its size"
 
 
@@ -527,8 +531,14 @@ def abundance_spectrum(model, sequences: Sequence[str], counts: Iterable, *,
     e, v = _count_spectrum(lam, ks.astype(float))
     obs = np.array([int(np.count_nonzero(c == k)) for k in ks], dtype=np.int64)
     sd = np.sqrt(v)
-    with np.errstate(divide="ignore", invalid="ignore"):
-        z = np.where(sd > 0, (obs - e) / np.where(sd > 0, sd, 1.0), 0.0)
+    # A standardised departure means nothing where the model expects almost
+    # no sequences at this count: the count is Poisson-like, not Gaussian, and
+    # dividing by a standard deviation of 1e-65 reports 1e136 for having seen
+    # one. Those counts get NaN, and are read straight off `observed` against
+    # `expected` instead.
+    gaussian = e >= GAUSSIAN_MIN_EXPECTED
+    z = np.full(e.shape, np.nan)
+    np.divide(obs - e, sd, out=z, where=gaussian & (sd > 0))
     return AbundanceSpectrum(
         counts=ks, observed=obs, expected=e, sd=sd, z=z, n_sequences=len(seqs),
         n_reads=N, expected_reads=float(np.sum(lam / -np.expm1(-lam))))

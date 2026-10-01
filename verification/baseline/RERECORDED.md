@@ -2449,8 +2449,16 @@ would have needed:
                        "auto"; abundance_spectrum, auto_profile_edges and
                        AbundanceSpectrum added, and exported from the package
                        top level beside repertoire_likelihood (26 lines)
-    pytest_cases.txt   13 added (test_abundance_spectrum.py, the automatic-bin
-                       rescues); 2 reworded to say which binning they test
+    pytest_cases.txt   14 added (test_abundance_spectrum.py, including the
+                       guard below, and the automatic-bin rescues); 2 reworded
+                       to say which binning they test
+
+A standardised departure also had to be withheld where it means nothing. The
+spectrum's z divides by a standard deviation, and at a clone size the model
+all but forbids that is 1e-65: seeing a single clone was reported as a
+departure of 1e136. Such a count is Poisson-like, not Gaussian, so z is now
+`nan` below ten expected sequences and the size is read off `observed`
+against `expected` instead.
     c_cases.txt        unchanged (re-written by the recorder, byte-identical)
     numeric.json       unchanged (likewise)
     threads.json       unchanged (likewise)

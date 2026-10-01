@@ -77,11 +77,15 @@ def test_the_observed_counts_are_the_repertoire(tiny, rep):
 
 
 def test_the_z_scores_say_where_the_model_is_wrong(tiny, rep):
+    """Where the model expects enough sequences to have a standard deviation
+    worth dividing by, z is that division."""
+    from BEAM.likelihood.chain import GAUSSIAN_MIN_EXPECTED
     sp = abundance_spectrum(tiny, *rep)
-    z = sp.z
-    assert np.all(np.isfinite(z[sp.sd > 0]))
+    ok = np.asarray(sp.expected) >= GAUSSIAN_MIN_EXPECTED
+    assert np.all(np.isfinite(np.asarray(sp.z)[ok]))
     i = list(sp.counts).index(1)
-    assert z[i] == pytest.approx((sp.observed[i] - sp.expected[i]) / sp.sd[i], rel=1e-12)
+    assert sp.expected[i] >= GAUSSIAN_MIN_EXPECTED
+    assert sp.z[i] == pytest.approx((sp.observed[i] - sp.expected[i]) / sp.sd[i], rel=1e-12)
 
 
 def test_a_count_no_sequence_reached_is_reported_when_asked(tiny, rep):
@@ -102,3 +106,16 @@ def test_it_agrees_with_an_enumerated_model(sup):
         e, v = _direct(lam, int(k))
         assert sp.expected[i] == pytest.approx(e, rel=1e-11)
         assert sp.sd[i] == pytest.approx(math.sqrt(v), rel=1e-11)
+
+
+def test_a_clone_size_the_model_all_but_forbids_gets_no_z(tiny, rep):
+    """Where the model expects almost no sequences the count is Poisson-like,
+    so a standardised departure is meaningless -- 1e136 for one clone. Those
+    sizes report nan and are read off observed against expected instead."""
+    sp = abundance_spectrum(tiny, *rep, max_count=400)
+    e = np.asarray(sp.expected)
+    rare = e < 10.0
+    assert np.any(rare)
+    assert np.all(np.isnan(np.asarray(sp.z)[rare]))
+    assert np.all(np.isfinite(np.asarray(sp.z)[~rare]))
+    assert np.nanmax(np.abs(sp.z)) < 1e4            # no runaway standardisation
