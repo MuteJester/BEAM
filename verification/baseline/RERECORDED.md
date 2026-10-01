@@ -2317,3 +2317,28 @@ thread; the tail is |B|'s, scaled. Values agree with the Taylor form to
 
 The gate passed on everything else before recording, `exact.py` at 411
 quantities. The full suite: 948 passed, 2 skipped; C 349 passed.
+
+# Why the C test inventory moved for the grouped spectrum transport
+
+Re-recorded 2026-10-01, tag `prespectrum`. The spectrum DP's per-layer
+transport (math/spectrum.c) now runs a GROUP of targets at a time -- the up
+to R targets that share every source -- over 512-bin tiles, with a
+branch-free vector inner loop, so a source histogram comes from memory about
+once instead of once per target; the lengths of one call share their scratch
+instead of allocating and freeing tens of gigabytes per length; and the sink
+runs on every thread, each owning a slice of the output bins. Every bin is
+summed in the order the per-target, per-bin form summed it, so nothing moves:
+a new C test keeps that form as a sequential reference and holds every public
+route to it bit for bit, and on the foundation the pipeline's 16,384-bin
+`histogram_pair` and 8,192-bin per-length spectra reproduce the cached
+outputs bit for bit (915 -> 191 s and 282 -> 49 s on ig05).
+
+    c_cases.txt            2 added: test_every_route_matches_the_reference_bit_for_bit,
+                           test_the_fine_grid_loses_mass_off_its_top
+    python_api.txt         unchanged (re-written by the recorder, byte-identical)
+    pytest_cases.txt       unchanged (likewise)
+    numeric.json           unchanged (likewise; its atoms keys are spectrum outputs)
+    threads.json           unchanged (likewise)
+
+The gate passed on everything else before recording, `exact.py` at 411
+quantities. The full suite: 948 passed, 2 skipped; C 351 passed.
