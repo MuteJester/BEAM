@@ -15,14 +15,13 @@ import pytest
 
 from BEAM import BeamModel, Mixture
 from BEAM.errors import BeamValueError
-from _tiny import tiny_model
+from _tiny import brute_hill, mixture_pmf, tiny_model, whole_space
 
 
 @pytest.fixture(scope="module")
 def many():
     """Enough members to cross the union's ceiling, and cheap to build."""
-    return [tiny_model(4000 + i, letters="ACDG", n=60, lo=3, hi=4)
-            for i in range(70)]
+    return [tiny_model(4000 + i, n=60, lo=3, hi=4) for i in range(70)]
 
 
 def test_a_mixture_larger_than_the_union_ceiling_still_builds(many):
@@ -71,9 +70,13 @@ def test_the_union_bounds_are_available_at_any_size(many):
 
 
 def test_sixty_four_members_still_have_an_exact_union(many):
-    """The boundary itself, from the inside."""
+    """The boundary itself, from the inside.
+
+    Every member spans the whole space, so the exact answer is known: a
+    64-bit mask that dropped or double-counted a member would miss it.
+    """
     s = Mixture(many[:64]).support_size()
-    assert s.exact and s.value > 0.0
+    assert s.exact and s.value == whole_space()
 
 
 # ── The Gram matrix ─────────────────────────────────────────────
@@ -108,16 +111,20 @@ def test_q2_through_the_driver_matches_the_q_tuple_expansion(
     The off-diagonal is DOUBLED rather than summed twice, which is the whole
     content of the expansion and the easiest thing to get wrong by hand.
     """
-    from _tiny import brute_hill, mixture_pmf
     w = (0.2, 0.5, 0.3)
     mix = Mixture([tiny_a, tiny_b, tiny_c], w)
     pmf = mixture_pmf([sup_a, sup_b, sup_c], w)
     assert mix.hill_number(2.0) == pytest.approx(brute_hill(pmf, 2.0), rel=1e-11)
 
 
-def test_a_disjoint_pair_reads_as_minus_inf_in_the_log_gram(far_a, far_b):
-    """Zero on the linear scale cannot be told from underflow; -inf can."""
+def test_a_far_pair_reads_as_finite_in_the_log_gram(far_a, far_b):
+    """No pair of members is disjoint any more, and the Gram matrix says so.
+
+    The far pair shares ~4e-20 of mass. The log Gram matrix must carry that as
+    the finite number the pairwise route gives, not collapse it to the `-inf` a
+    closed world would have reported.
+    """
     g = Mixture([far_a, far_b]).log_gram_matrix()
-    assert g[0, 1] == -math.inf
-    assert np.exp(g)[0, 1] == 0.0
-    assert math.isfinite(g[0, 0]) and math.isfinite(g[1, 1])
+    assert np.isfinite(g).all()
+    assert g[0, 1] == Mixture([far_a, far_b]).log_inner_product(0, 1)
+    assert g[0, 1] < min(g[0, 0], g[1, 1]) - 30.0

@@ -8,7 +8,8 @@ partition function in math/diversity.c.
 That is worth more than any brute-force check on a toy alphabet, because it
 runs at full scale on a real model. A recursion that is subtly wrong about
 rescaling, about which states carry mass, or about the sink terms will agree
-with a four-residue enumeration and disagree here.
+with a small enumeration and disagree here. Under the prior every cell is
+positive, so every state carries mass and nothing drops out of the sum.
 """
 from __future__ import annotations
 
@@ -21,7 +22,8 @@ import numpy as np
 import pytest
 
 from BEAM import BeamModel, Mixture
-from _tiny import support, tiny_model
+from BEAM import _cbeam as _c
+from _tiny import MAX_LENGTH, POOL_A, POOL_B, strings, tiny_model
 
 FOUNDATION = Path(".dev/runtime_profile/cache/foundation.beam")
 
@@ -31,18 +33,19 @@ def _foundation_or_skip():
     reasons applies.
 
     Presence is no longer sufficient. The cache is a file this build may
-    decline to read: every model written before the single-expert change is a
-    format this one refuses, on the grounds that its depth index was clamped
-    and the exact depths cannot be recovered. That is a stale cache, not a
-    kernel defect, and saying so is the difference between a skip somebody
-    acts on and one they ignore.
+    decline to read: this build reads only the format it writes, and refuses
+    a file from any earlier development build -- which, since the prior
+    replaced the strict and open worlds, is every cache written before it.
+    That is a stale cache, not a kernel defect, and saying so is the
+    difference between a skip somebody acts on and one they ignore. Matched
+    on the refusal's own words, so any other load failure still raises.
     """
     if not FOUNDATION.exists():
         pytest.skip("the cached foundation model is not present")
     try:
         return BeamModel.from_file(str(FOUNDATION))
     except Exception as exc:                       # noqa: BLE001
-        if "retrain" not in str(exc).lower():
+        if "earlier development build" not in str(exc).lower():
             raise
         pytest.skip(f"the cached foundation model predates this build and "
                     f"must be rebuilt: {exc}")
@@ -72,16 +75,6 @@ def test_self_inner_product_is_one_over_d2_at_order_three(model):
     _self_inner_product_matches_d2(model)
 
 
-def test_self_inner_product_is_one_over_d2_open_world(open_small):
-    """The open world: every cell positive, so nothing drops out of the sum.
-
-    A different regime for the sweep -- no state is dead, the intersection of
-    the reached sets is everything, and the rescaling has to hold a trellis
-    with no zeros in it.
-    """
-    _self_inner_product_matches_d2(open_small)
-
-
 def test_self_inner_product_is_one_over_d2_on_the_foundation():
     """The same identity on the 927M-sequence, order-4, 194k-state model.
 
@@ -97,7 +90,6 @@ def test_self_inner_product_is_one_over_d2_on_the_foundation():
 
 def test_the_total_is_the_log_sum_of_the_per_length_terms(tiny_a, tiny_b):
     """The by-length vector and the scalar must be the same quantity."""
-    from BEAM import _cbeam as _c
     total, by = _c.mixture_inner_product([tiny_a._g, tiny_b._g])
     v = np.frombuffer(by, dtype=np.float64)
     live = v[np.isfinite(v)]
@@ -113,65 +105,62 @@ def test_one_member_sums_to_one(tiny_a):
     assert mix.log_inner_product(0) == pytest.approx(0.0, abs=1e-12)
 
 
-# A pair whose supports meet in exactly ONE sequence, at full CDR3 length.
-# Two corpora over disjoint residue pools, each given a single copy of the same
-# rare 27-mer: nothing else can be spelled by both, so the inner product is
-# knowable in closed form -- the product of that one sequence's probability
-# under each model -- and it is around 1e-25.
-_RARE = "CADEFGHIKLMNPQRSTVWYACDEFGH"
+# A pair built over disjoint residue pools with a very weak prior. Every string
+# is still in both supports, but a residue outside a member's pool costs about
+# (alpha / n)**(order + 1) there -- ~1e-186 at alpha = 1e-60 -- so every string
+# is far-fetched under at least one of the two, and the length-L overlap falls
+# by tens of orders of magnitude per residue. From length 4 up it is below the
+# smallest double.
+_TINY_ALPHA = 1e-60
 
 
-def _one_shared_sequence(seed_a=1, seed_b=2, n=3000, length=27):
-    import random
-
-    def corpus(letters, seed):
-        g = random.Random(seed)
-        return ["".join(g.choice(letters) for _ in range(length))
-                for _ in range(n)]
-
-    a = BeamModel(corpus("ACDG", seed_a) + [_RARE],
-                  abundances=[2000] * n + [1], order=2, max_length=27)
-    b = BeamModel(corpus("FHKL", seed_b) + [_RARE],
-                  abundances=[2000] * n + [1], order=2, max_length=27)
+def _far_pair():
+    a = tiny_model(21, letters=POOL_A, alpha=_TINY_ALPHA)
+    b = tiny_model(22, letters=POOL_B, alpha=_TINY_ALPHA)
     return a, b
 
 
+def _log_sum_exp(values):
+    values = np.asarray(values, dtype=np.float64)
+    mx = values.max()
+    return float(mx + math.log(np.exp(values - mx).sum()))
+
+
 def test_a_tiny_overlap_survives_the_rescaling():
-    """An inner product around 1e-25 must come back finite, nonzero and right.
+    """Per-length overlaps far below a double must come back finite and right.
 
-    A product of per-edge probabilities over 27 layers is far below what a
+    A product of per-edge probabilities over the layers is far below what a
     double holds, which is why the accumulator is rescaled every layer with the
-    log of the scale carried alongside. Without that the sweep returns 0.0,
-    which looks exactly like disjoint supports -- a wrong answer indistinguish-
-    able from a right one, and the reason this is asserted rather than assumed.
+    log of the scale carried alongside. Without that the sweep returns 0.0 --
+    `-inf` in the log -- which is the answer a closed world would give for two
+    members that share nothing, and is wrong for any two members now.
 
-    The expected value is known in closed form here: the two supports meet in
-    exactly one sequence, so `<P_a, P_b>` is that sequence's probability under
-    each, multiplied.
+    Checked against brute force in the log domain: every string is scored by
+    each member, the log-probabilities are added, and the per-length sums are
+    taken by log-sum-exp. The deepest of them is around e**-1000, more than a
+    hundred orders of magnitude below the smallest subnormal double, so no
+    linear-scale shortcut could reproduce it.
     """
-    a, b = _one_shared_sequence()
-    mix = Mixture([a, b])
-    want = a.pseq(_RARE) * b.pseq(_RARE)
-    assert want < 1e-20, "the construction must actually be small"
+    a, b = _far_pair()
+    seqs = list(strings())
+    la = np.asarray(a.log_pseq_batch(seqs), dtype=np.float64)
+    lb = np.asarray(b.log_pseq_batch(seqs), dtype=np.float64)
+    assert np.isfinite(la).all() and np.isfinite(lb).all(), \
+        "the prior must still reach every string at this alpha"
+    lengths = np.array([len(s) for s in seqs])
+    want = [_log_sum_exp((la + lb)[lengths == L])
+            for L in range(1, MAX_LENGTH + 1)]
+    assert want[-1] < -745.0, "the construction must actually underflow"
 
-    lp = mix.log_inner_product(0, 1)
-    assert math.isfinite(lp)
-    assert mix.inner_product(0, 1) > 0.0
-    assert mix.inner_product(0, 1) == pytest.approx(want, rel=1e-11)
-
-
-def test_one_shared_sequence_gives_a_union_one_short_of_the_sum():
-    """`|A u B| = |A| + |B| - |A n B|`, with the intersection known to be 1.
-
-    A half-billion-sequence union counted exactly, against arithmetic. The
-    bitmask sweep has to attribute that single shared sequence to BOTH members
-    and still count it once; a sweep that dropped it or double-counted it would
-    be off by exactly one, which is the error a large total hides best.
-    """
-    a, b = _one_shared_sequence()
-    size = Mixture([a, b]).support_size()
-    assert size.exact
-    assert size.value == a.path_count() + b.path_count() - 1.0
+    total, by = _c.mixture_inner_product([a._g, b._g])
+    got = np.frombuffer(by, dtype=np.float64)
+    assert got[0] == -math.inf, "there is no length-0 sequence"
+    for L in range(1, MAX_LENGTH + 1):
+        assert math.isfinite(got[L])
+        assert got[L] == pytest.approx(want[L - 1], rel=1e-12), f"length {L}"
+    assert total == pytest.approx(_log_sum_exp(la + lb), rel=1e-12)
+    assert Mixture([a, b]).log_inner_product(0, 1) == pytest.approx(
+        _log_sum_exp(la + lb), rel=1e-12)
 
 
 @pytest.mark.parametrize("k", [2, 3, 4, 5, 6, 7, 8])

@@ -19,6 +19,7 @@
  * two packages during the transition is still recognised; it is renamed with
  * everything else in the rename step. */
 #include "beam/python_bindings.h"
+#include "guards.h"
 
 PyObject *py_new(PyObject *self, PyObject *args) {
     (void)self;
@@ -116,14 +117,7 @@ PyObject *py_load(PyObject *self, PyObject *arg) {
     m = beam_model_load(path);
     Py_END_ALLOW_THREADS
     if (!m) {
-        /* A pre-split EDGE file is a common and confusing way to land here,
-         * so name it rather than leaving it to look like corruption. */
-        if (beam_model_is_legacy_file(path)) {
-            PyErr_Format(PyExc_OSError,
-                "%s was written by EDGE, before the split into BEAM. The "
-                "format is the same but the file identifier is not, and such "
-                "files are not loadable. Rebuild the model with BEAM.", path);
-        } else if (beam_last_error() != BEAM_OK) {
+        if (beam_last_error() != BEAM_OK) {
             /*
              * `beam_model_load` now names its own failure, and so do
              * `beam_model_new` and `beam_model_finalize` when the file is
@@ -160,14 +154,26 @@ PyObject *py_config(PyObject *self, PyObject *arg) {
     BeamModel *m = edge_from_capsule(arg);
     if (!m) return NULL;
     const BeamModelConfig *c = beam_model_config(m);
-    return Py_BuildValue(
-        "{s:s,s:i,s:i,s:(dd),s:O,s:O}",
+    PyObject *alpha = PyTuple_New((Py_ssize_t)c->order + 1);
+    if (!alpha) return NULL;
+    for (uint32_t k = 0; k <= c->order; ++k) {
+        PyObject *v = PyFloat_FromDouble(c->alpha[k]);
+        if (!v) { Py_DECREF(alpha); return NULL; }
+        PyTuple_SET_ITEM(alpha, (Py_ssize_t)k, v);
+    }
+    PyObject *out = Py_BuildValue(
+        "{s:s,s:i,s:i,s:(dd),s:O,s:d,s:O,s:O,s:O}",
         "alphabet", beam_alphabet_info(c->alphabet)->name,
         "order", (int)c->order,
         "max_length", (int)c->max_length,
         "weights", c->weight_forward, c->weight_backward,
-        "strict", c->strict ? Py_True : Py_False,
+        "alpha", alpha,
+        "alpha_length", c->alpha_length,
+        "alpha_auto", c->alpha_auto ? Py_True : Py_False,
+        "alpha_length_auto", c->alpha_length_auto ? Py_True : Py_False,
         "sparse", c->sparse ? Py_True : Py_False);
+    Py_DECREF(alpha);
+    return out;
 }
 /*
  * The alphabet descriptor, verbatim.
@@ -220,6 +226,19 @@ PyObject *py_compact(PyObject *self, PyObject *arg) {
     if (err != BEAM_OK) return set_beam_error(err);
     Py_RETURN_NONE;
 }
+PyObject *py_temper(PyObject *self, PyObject *args) {
+    (void)self;
+    PyObject *cap; double t;
+    if (!PyArg_ParseTuple(args, "Od", &cap, &t)) return NULL;
+    BeamModel *m = edge_from_capsule(cap);
+    if (!m) return NULL;
+    BeamError err;
+    Py_BEGIN_ALLOW_THREADS
+    err = beam_model_temper(m, t);
+    Py_END_ALLOW_THREADS
+    if (err != BEAM_OK) return set_beam_error(err);
+    Py_RETURN_NONE;
+}
 PyObject *py_posterior(PyObject *self, PyObject *args) {
     (void)self;
     PyObject *cap, *prior_cap; double kappa;
@@ -231,6 +250,44 @@ PyObject *py_posterior(PyObject *self, PyObject *args) {
     Py_BEGIN_ALLOW_THREADS
     err = beam_model_posterior(m, p, kappa);
     if (err == BEAM_OK) err = beam_model_finalize(m);
+    Py_END_ALLOW_THREADS
+    if (err != BEAM_OK) return set_beam_error(err);
+    Py_RETURN_NONE;
+}
+PyObject *py_set_prior(PyObject *self, PyObject *args) {
+    (void)self;
+    /* None for either strength hands it to the data. */
+    PyObject *cap, *alpha_obj, *alpha_length_obj;
+    if (!PyArg_ParseTuple(args, "OOO", &cap, &alpha_obj, &alpha_length_obj))
+        return NULL;
+    BeamModel *m = edge_from_capsule(cap);
+    if (!m) return NULL;
+    double alpha_length = NAN;
+    if (alpha_length_obj != Py_None) {
+        alpha_length = PyFloat_AsDouble(alpha_length_obj);
+        if (PyErr_Occurred()) return NULL;
+    }
+    double alpha[BEAM_MAX_ORDER + 1];
+    Py_ssize_t n = 0;
+    if (alpha_obj != Py_None) {
+        PyObject *fast = PySequence_Fast(alpha_obj, "alpha must be a sequence");
+        if (!fast) return NULL;
+        n = PySequence_Fast_GET_SIZE(fast);
+        if (n < 1 || n > (Py_ssize_t)(BEAM_MAX_ORDER + 1)) {
+            Py_DECREF(fast);
+            PyErr_Format(PyExc_ValueError, "alpha has %zd entries", n);
+            return NULL;
+        }
+        for (Py_ssize_t k = 0; k < n; ++k) {
+            alpha[k] = PyFloat_AsDouble(PySequence_Fast_GET_ITEM(fast, k));
+            if (PyErr_Occurred()) { Py_DECREF(fast); return NULL; }
+        }
+        Py_DECREF(fast);
+    }
+    BeamError err;
+    Py_BEGIN_ALLOW_THREADS
+    err = beam_model_set_prior(m, alpha_obj == Py_None ? NULL : alpha,
+                               (uint32_t)n, alpha_length);
     Py_END_ALLOW_THREADS
     if (err != BEAM_OK) return set_beam_error(err);
     Py_RETURN_NONE;

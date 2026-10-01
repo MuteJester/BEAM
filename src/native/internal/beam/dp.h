@@ -85,8 +85,12 @@ void beam_layer_weights(const BeamModel *m, uint32_t i, uint32_t len,
 /**
  * As above, but skipping states `alive` marks dead. When `out_max == NULL`,
  * this is safe only where the caller provably never reads a dead row. When
- * `out_max != NULL`, sparse tables still take the exact global maximum while
- * materialising only marked rows; dense tables build the complete layer.
+ * `out_max != NULL`, the maximum is over the MARKED states only -- the rows it
+ * builds -- not over the whole layer, in either storage form. That is the
+ * right rescale for a caller that consumes only those rows, and the only one
+ * that does not defeat the point of marking: under the hierarchical prior
+ * every state is live, so an all-state maximum would build the whole layer.
+ * `beam_layer_max` is the all-state maximum when that is what is wanted.
  */
 void beam_layer_weights_live(const BeamModel *m, uint32_t i, uint32_t len,
                                  double *out, double *out_max,
@@ -122,8 +126,8 @@ void beam_tail_weights(const BeamModel *m, uint32_t len, double *out);
  * overflows to infinity.
  *
  * That is not a theoretical concern. Three sweeps did exactly this, and in the
- * open world with backoff off -- `beam_model_config_default()` with `strict`
- * cleared -- unobserved cells sit at `ln(1e-300)`, so any `|q| > 1.03`
+ * open world of an earlier build, with backoff off, unobserved cells sat at
+ * `ln(1e-300)`, so any `|q| > 1.03`
  * overflowed. `beam_model_log_mellin(-5)` returned `-inf` and
  * `beam_model_hill_number(-5)` returned `0.0`, both with BEAM_OK, where the
  * true values are finite; and at `q = -1.5` the answer came back finite and
@@ -372,6 +376,254 @@ static inline uint64_t beam_jet_fan_bytes(uint32_t n_states,
          + 2ull * T * S * sizeof(double)                 /* cur, next   */
          + S                                             /* alive       */
          + T * (7u * sizeof(double) + sizeof(uint32_t)); /* per tilt    */
+}
+
+/**
+ * `jet_sweep_fan` at complex tilts `q_re[j] + i q_im[j]`: per length, the
+ * log-modulus and the phase of `sum over paths of exp(q * raw)`. See the
+ * definition in dp/jet.c for the rescaling and what cancellation costs.
+ */
+BeamError jet_sweep_cfan(const BeamModel *m, uint32_t len, const double *q_re,
+                         const double *q_im, uint32_t nq, double *out_log_mod,
+                         double *out_phase, size_t out_stride);
+
+typedef struct BeamLineWork BeamLineWork;
+
+/**
+ * `jet_sweep_cfan` for `nq` orders `re + i (im0 + g dim)`, `g = k0 ..`, on one
+ * vertical line: the modulus factor shared by the line, the rotations by
+ * sixteen independent recurrences anchored directly every 128 orders, all
+ * threads sharing out each layer's targets, in the workspace `wk`. `k0`
+ * must be a multiple of BEAM_LINE_LANES. An order's bits depend on the line
+ * and on g only. See dp/jet.c.
+ */
+BeamError jet_sweep_line(const BeamModel *m, BeamLineWork *wk, uint32_t len,
+                         double re, double im0, double dim, uint64_t k0,
+                         uint32_t nq, double *out_log_mod, double *out_phase,
+                         size_t out_stride);
+
+/**
+ * A line sweep's planes and scratch for stretches up to `Wp` orders with
+ * `n_threads` threads, `beam_jet_line_bytes` of them, made once per line and
+ * reused by every (length, stretch): fresh planes each time had the system
+ * clear 12.7 GB per length of a 2,048-order foundation line.
+ */
+BeamLineWork *beam_line_work_new(const BeamModel *m, uint32_t Wp,
+                                 uint32_t n_threads);
+void beam_line_work_free(BeamLineWork *wk);
+
+/**
+ * s[k] = sin x[k], c[k] = cos x[k], four at a time: within two ulp of 1 for
+ * |x| up to about 8e5 (libm beyond), the same bits on every CPU and whatever
+ * the call's size. See math/vtrig.c.
+ */
+void beam_sincos_many(const double *x, double *s, double *c, size_t n);
+
+/**
+ * y[k] = exp x[k], eight at a time, as the sweeps take it inline
+ * (beam/vmath.h): within two ulp, exactly 1 at 0, 0 below the smallest
+ * normal double. See math/vtrig.c.
+ */
+void beam_exp_many(const double *x, double *y, size_t n);
+
+/**
+ * out[i * nw + k] = ln Gamma(w[k]) - ln Gamma(w[k] + z_i), z_i = zre[i] +
+ * i zim[i], for w >= 1 and Re(w + z) > 0: Stirling's series for the
+ * difference, a few rounding units absolute of |z| ln(w + |z|), the imaginary
+ * part modulo 2 pi. See math/lgamma_ratio.c.
+ */
+void beam_log_gamma_ratio(const double *w, size_t nw, const double *zre,
+                          const double *zim, size_t nz, double *out_re,
+                          double *out_im);
+
+/** A line's contour sums for the kernel exp(lg(z) + ln G(w) - ln G(w + z)),
+ *  per parameter, without forming a matrix. See math/lgamma_ratio.c. */
+void beam_beta_contour_sums(size_t nt, const double *zr, const double *zi,
+                            const double *lgr, const double *lgi,
+                            const double *lmr, const double *lmi,
+                            const double *wt, const double *tt,
+                            const double *dph, size_t nk, const double *w,
+                            const double *lnns, double *out_val,
+                            double *out_absi, double *out_absk);
+
+/**
+ * out[i * nd + k] = [ln G(w-d_k) - ln G(w-d_k+z_i)] - [ln G(w) - ln G(w+z_i)],
+ * to a few rounding units of its size plus d |z| / (w - d), the imaginary
+ * part modulo 2 pi; NaN where w - d < 15. See math/lgamma_ratio.c.
+ */
+void beam_log_gamma_ratio_shift(double w, const double *d, size_t nd,
+                                const double *zre, const double *zim, size_t nz,
+                                double *out_re, double *out_im);
+
+/** A line's contour sums for the cohort private kernel
+ *  -B(z) expm1(D(w, d_k, z)), given ln B at the nodes, per depth, without
+ *  forming a matrix. See math/lgamma_ratio.c. */
+void beam_cohort_private_sums(size_t nt, const double *zr, const double *zi,
+                              const double *lbr, const double *lbi,
+                              const double *lmr, const double *lmi,
+                              const double *wt, const double *tt,
+                              const double *dph, double w, size_t nk,
+                              const double *d, const double *lnns,
+                              double *out_val, double *out_absi,
+                              double *out_absk);
+
+/** The same kernel's tail bound beyond a line's reach, per parameter. */
+void beam_beta_contour_tail(size_t nt, const double *zr, const double *zi,
+                            const double *lgr, const double *ts, size_t nk,
+                            const double *w, double *out);
+
+/** Orders a line sweep advances at once; a stretch starts at a multiple. */
+#define BEAM_LINE_LANES 16u
+/** Orders between a line's directly taken rotations (its anchors). */
+#define BEAM_LINE_BLOCK 128u
+/** Orders a thread walks a group of targets through at a time. */
+#define BEAM_LINE_TILE 256u
+/** End states summed together before the sink's partial sums are added. */
+#define BEAM_LINE_SINK_CHUNK 256u
+
+/**
+ * How `beam_model_log_mellin_line` splits `n_orders` orders: stretches of
+ * `width` orders (the last may be shorter), `n_stretches` of them per length,
+ * each swept by all `n_threads` threads in turn. A `width` of 0 means not even
+ * one chain of orders fits the budget. See math/mellin.c.
+ */
+typedef struct {
+    uint32_t width;
+    uint32_t n_stretches;
+} BeamLinePlan;
+
+BeamLinePlan beam_line_plan(uint32_t n_states, uint32_t n_residues,
+                            uint32_t n_alphabet, uint32_t n_orders,
+                            uint32_t n_threads, uint64_t budget);
+
+/**
+ * A state's row in a line sweep's planes: the real parts of its `Wp` orders,
+ * one cache line, the imaginary parts, one more line. Unpadded, a 2,048-order
+ * row was 32 KB and its halves 16 KB apart, so a group's source rows and
+ * both halves of each fell in the same cache sets: that width ran at 47.7 ms
+ * an order on the foundation against 37.4 at 1,536.
+ */
+static inline size_t beam_line_im(uint32_t Wp) { return (size_t)Wp + 8u; }
+static inline size_t beam_line_row(uint32_t Wp) { return 2u * (size_t)Wp + 16u; }
+
+/** Doubles of one thread's scratch in a line sweep of `Wp` padded orders. */
+static inline uint64_t beam_line_scratch_doubles(uint32_t Wp, uint32_t A,
+                                                 uint32_t R) {
+    const uint64_t AR = (uint64_t)A * R;
+    const uint64_t E = AR > BEAM_LINE_SINK_CHUNK ? AR : BEAM_LINE_SINK_CHUNK;
+    const uint64_t blocks = BEAM_LINE_TILE / BEAM_LINE_BLOCK + 1u;
+    const uint64_t d = 2u * BEAM_LINE_TILE + Wp + 2u * E + 9u * E + 3u * blocks * E
+                     + 2u * BEAM_LINE_LANES * E;
+    const uint64_t u = E + A + 1u;                    /* uint32 slots */
+    return (d + (u + 1u) / 2u + 7u) / 8u * 8u;        /* whole lines  */
+}
+
+/**
+ * Peak bytes one `jet_sweep_line` over `Wp` padded orders holds with
+ * `n_threads` threads: the layer's weights and the sink's, two planes of
+ * complex accumulators, the group index, the per-order scalars, and each
+ * thread's scratch.
+ */
+static inline uint64_t beam_jet_line_bytes(uint32_t n_states, uint32_t n_residues,
+                                           uint32_t n_alphabet, uint32_t Wp,
+                                           uint32_t n_threads) {
+    const uint64_t S = n_states;
+    return S * (uint64_t)n_residues * sizeof(double)     /* one layer   */
+         + S * sizeof(double)                            /* the sink    */
+         + 2ull * S * beam_line_row(Wp) * sizeof(double) /* cur, next   */
+         + S + (S + 1u) * sizeof(uint32_t)               /* alive, groups */
+         + (uint64_t)Wp * (5u * sizeof(double) + sizeof(int) + 1u)
+         + (S + BEAM_LINE_SINK_CHUNK - 1u) / BEAM_LINE_SINK_CHUNK
+         + (uint64_t)n_threads * sizeof(double)
+           * beam_line_scratch_doubles(Wp, n_alphabet, n_residues);
+}
+
+/* ── Many real orders in one sweep ── */
+
+/** Orders a real-order sweep takes at once, and pads to. */
+#define BEAM_REAL_LANES 8u
+/** Orders a thread walks a group of targets through at a time. */
+#define BEAM_REAL_TILE 256u
+
+/** A state's row in a real-order sweep's planes: its orders, then -- once a
+ *  row is long enough for strides to alias (64 orders, 512 bytes) -- one
+ *  cache line, so no two rows sit a power of two apart. A single order's row
+ *  stays one line, so M(q) at one q costs no more memory than it must. */
+static inline size_t beam_real_row(uint32_t Wp) {
+    return (size_t)Wp + (Wp >= 64u ? 8u : 0u);
+}
+
+/** Doubles of one thread's scratch in a real-order sweep of `Wp` orders. */
+static inline uint64_t beam_real_scratch_doubles(uint32_t Wp, uint32_t A,
+                                                 uint32_t R) {
+    const uint64_t AR = (uint64_t)A * R;
+    const uint64_t E = AR > BEAM_LINE_SINK_CHUNK ? AR : BEAM_LINE_SINK_CHUNK;
+    const uint64_t d = BEAM_REAL_TILE + 4u * (uint64_t)Wp + E;
+    const uint64_t u = E + A + 1u;                    /* uint32 slots */
+    return (d + (u + 1u) / 2u + 7u) / 8u * 8u;        /* whole lines  */
+}
+
+/**
+ * Peak bytes one `jet_sweep_real` over `Wp` padded orders holds with
+ * `n_threads` threads: the layer's weights and the sink's, two planes, the
+ * group index, the per-order scalars, and each thread's scratch.
+ */
+static inline uint64_t beam_jet_real_bytes(uint32_t n_states, uint32_t n_residues,
+                                           uint32_t n_alphabet, uint32_t Wp,
+                                           uint32_t n_threads) {
+    const uint64_t S = n_states;
+    return S * (uint64_t)n_residues * sizeof(double)
+         + S * sizeof(double)
+         + 2ull * S * beam_real_row(Wp) * sizeof(double)
+         + S + (S + 1u) * sizeof(uint32_t)
+         + (uint64_t)Wp * (9u * sizeof(double) + sizeof(int) + 1u)
+         + (S + BEAM_LINE_SINK_CHUNK - 1u) / BEAM_LINE_SINK_CHUNK
+         + (uint64_t)n_threads * sizeof(double)
+           * beam_real_scratch_doubles(Wp, n_alphabet, n_residues);
+}
+
+/**
+ * How `beam_mellin_terms` and `beam_model_log_mellin_many` split `n_orders`
+ * real orders: stretches of `width`, each swept by all threads in turn;
+ * `width` 0 when not even one vector of orders fits. See math/mellin.c.
+ */
+BeamLinePlan beam_real_plan(uint32_t n_states, uint32_t n_residues,
+                            uint32_t n_alphabet, uint32_t n_orders,
+                            uint32_t n_threads, uint64_t budget);
+
+typedef struct BeamRealWork BeamRealWork;
+
+/** A real-order sweep's planes and scratch for up to `Wp` orders, made once
+ *  per call and reused by every length. */
+BeamRealWork *beam_real_work_new(const BeamModel *m, uint32_t Wp,
+                                 uint32_t n_threads);
+void beam_real_work_free(BeamRealWork *wk);
+
+/**
+ * `ln Z_q(L)` for the real orders qs[0 .. nq), into out_log_z[j * stride]:
+ * what `jet_sweep_fan` computes, with every thread sharing out each layer's
+ * targets, the edge factors exp(q w - qmax) taken eight orders at a time, and
+ * each order's scale an exact power of two. An order's bits do not depend on
+ * the other orders, the stretch, or the thread count. See dp/jet.c.
+ */
+BeamError jet_sweep_real(const BeamModel *m, BeamRealWork *wk, uint32_t len,
+                         const double *qs, uint32_t nq, double *out_log_z,
+                         size_t out_stride);
+
+/**
+ * Peak bytes one `jet_sweep_cfan` over `n_tilts` tilts holds: `beam_jet_fan_bytes`
+ * with each mass plane twice as wide (re, im) and one more scalar per tilt.
+ */
+static inline uint64_t beam_jet_cfan_bytes(uint32_t n_states,
+                                           uint32_t n_residues,
+                                           uint32_t n_tilts) {
+    const uint64_t S = n_states;
+    const uint64_t T = n_tilts;
+    return S * (uint64_t)n_residues * sizeof(double)     /* one layer   */
+         + S * sizeof(double)                            /* the sink    */
+         + 4ull * T * S * sizeof(double)                 /* cur, next   */
+         + S                                             /* alive       */
+         + T * (8u * sizeof(double) + sizeof(uint32_t)); /* per tilt    */
 }
 
 #endif /* BEAM_INTERNAL_DP_H */

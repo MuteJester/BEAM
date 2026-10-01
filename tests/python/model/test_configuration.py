@@ -21,16 +21,21 @@ def test_single_anchor_weights_are_accepted(corpus):
     """(1, 0) and (0, 1) must build, and are the point.
 
     The weights should sum to 1 and are deliberately NOT refused when they do
-    not, because scoring each anchor's chain alone is the only way to separate
-    a partition function below 1 into its two causes: the two chains
-    disagreeing, and the closed world leaking mass at rows it never observed.
-    A refusal here would make the model's defining property unmeasurable.
+    not, because scoring each anchor's chain alone is how a partition
+    function below 1 is traced to its cause. Every row of either table is a
+    full categorical under the prior, so one anchor alone is a proper chain
+    and its Z(L) is exactly one: whatever the pair loses is the two chains
+    disagreeing, and nothing else. A refusal here would make that
+    unmeasurable.
     """
     seqs, abund = corpus
     for w in ((1.0, 0.0), (0.0, 1.0)):
         m = BeamModel(seqs, abundances=abund, order=2, weights=w)
         assert m.config["weights"] == w
-        assert m.log_partition(len(seqs[0])) <= 1e-12
+        for L in (1, len(seqs[0]), int(m.config["max_length"])):
+            assert m.log_partition(L) == pytest.approx(0.0, abs=1e-12), L
+    both = BeamModel(seqs, abundances=abund, order=2)
+    assert both.log_partition(len(seqs[0])) < -1e-6
 
 
 def test_rejects_bad_order(corpus):
@@ -121,15 +126,16 @@ def test_out_of_range_length_is_refused(small):
             call(hi + 1)
 
 
-def test_topology_refuses_a_length_with_no_support(small):
+def test_topology_refuses_length_zero_and_describes_an_unseen_length(small):
     """Zero means "all lengths" everywhere else, but there is no pooled
-    trellis to describe, and an unobserved length has no live structure."""
+    trellis to describe. A length the corpus never had is NOT refused: the
+    length prior gives it a share, so it has a trellis like any other."""
     with pytest.raises(ValueError, match="at least 1"):
         small.topology(0)
-    dead = next(L for L in range(1, int(small.config["max_length"]) + 1)
-                if not math.isfinite(small.log_length_prior(L)))
-    with pytest.raises(ValueError, match="no sequences of length"):
-        small.topology(dead)
+    unseen = 3                       # the `small` corpus spans 6..9
+    assert math.isfinite(small.log_length_prior(unseen))
+    t = small.topology(unseen)
+    assert t["length"] == unseen and t["n_nodes"] > 0
 
 
 def test_spectrum_bin_floor_is_explained(small):
@@ -180,21 +186,20 @@ def test_explain_reports_the_reason_it_refuses(small):
         small.explain(None)
 
 
-def test_explain_flags_an_unproducible_length(open_small):
-    """`explain` returns finite per-residue terms for a sequence whose LENGTH
-    the model never saw, while `log_pseq` is -inf: the length prior, not any
-    residue, is what rules it out. Presenting the decomposition without saying
-    so would make it look like a valid explanation of a zero."""
-    dead = next(L for L in range(1, int(open_small.config["max_length"]) + 1)
-                if not math.isfinite(open_small.log_length_prior(L)))
-    e = open_small.explain("C" * dead)
-    assert e["length_is_producible"] is False
+def test_explain_calls_an_unseen_length_producible(small):
+    """A length the corpus never had is priced by the length prior, not ruled
+    out by it, so `explain` must present it as an ordinary finite score
+    rather than flag it as the explanation of a zero."""
+    unseen = 3                       # the `small` corpus spans 6..9
+    e = small.explain("C" * unseen)
+    assert e["length_is_producible"] is True
     assert np.isfinite(e["forward"]).all() and np.isfinite(e["backward"]).all()
-    assert e["log_pseq"] == -math.inf
+    assert math.isfinite(e["log_pseq"])
+    assert e["log_pseq"] == small.log_pseq("C" * unseen)
 
-    live = int(np.argmax(open_small.length_pmf()))
-    good = open_small.sample(1, length=live, seed=1)[0]
-    assert open_small.explain(good)["length_is_producible"] is True
+    live = int(np.argmax(small.length_pmf()))
+    good = small.sample(1, length=live, seed=1)[0]
+    assert small.explain(good)["length_is_producible"] is True
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -264,36 +269,6 @@ def test_length_distribution_is_the_prior(model):
     assert min(ld) >= 1 and max(ld) <= model.config["max_length"]
 
 
-def test_a_pre_split_edge_file_is_refused_by_name(tmp_path, small):
-    """A model written before the BEAM split must fail with an explanation.
-
-    The format did not change across the split, only the magic did, so a
-    pre-BEAM file is byte-for-byte loadable apart from its first four bytes.
-    That makes it exactly the case most likely to be mistaken for corruption,
-    which is why the loader names it instead of reporting a generic failure.
-    """
-    good = tmp_path / "m.beam"
-    small.save(good)
-
-    legacy = tmp_path / "legacy.beam"
-    raw = bytearray(good.read_bytes())
-    raw[:4] = (0x45444745).to_bytes(4, "little")     # the old EDGE magic
-    legacy.write_bytes(bytes(raw))
-
-    with pytest.raises(OSError, match="written by EDGE"):
-        BeamModel.from_file(legacy)
-
-    junk = tmp_path / "junk.beam"
-    junk.write_bytes(b"not a model at all, not even close")
-    # The loader used to answer every failure with one sentence -- "not a model
-    # file, truncated, or corrupt" -- which is what this line pinned. It now
-    # names the cause, so the assertion moves with it. The property under test
-    # is unchanged: a junk file is refused, and refused DIFFERENTLY from an
-    # EDGE file, which is what makes the EDGE message worth having.
-    with pytest.raises(OSError, match="not a BEAM model file"):
-        BeamModel.from_file(junk)
-
-
 def test_n_sequences_is_the_ingested_weight(corpus):
     seqs, abund = corpus
     m = BeamModel(seqs, abundances=abund, order=2, max_length=20)
@@ -313,26 +288,35 @@ def test_calibration_median_converges_with_the_grid(small):
     L = int(np.bincount(lengths).argmax())
 
     # Convergence is measured against a much finer grid, not against the
-    # sample median, and the reason is that the sample median is the noisier
-    # of the two. About 780 draws land on this length, so its own standard
-    # error is around 0.15 nats, while the grid error at 1024 bins is 0.012.
-    # Comparing against it therefore measured the sample and not the grid:
-    # at 256 bins the estimate came out CLOSER than at 1024, by luck, which
-    # is what a reference noisier than the effect will do.
-    ref = small.calibrate(bins=65536).median(L)
-    errors = [abs(small.calibrate(bins=b).median(L) - ref)
-              for b in (64, 256, 1024, 4096)]
-    # The coarse grid is decisively worse and the fine one has converged.
-    # Monotonicity across every step is NOT asserted, because beyond about
-    # 256 bins the remaining differences are where a bin boundary happens to
-    # fall relative to the median, which is not ordered in the grid.
-    assert errors[0] > 10 * errors[-1], errors
+    # sample median, because the sample median can be the noisier of the
+    # two. It was on the fixture this was written for: about 780 draws gave
+    # it a standard error near 0.15 nats against a grid error of 0.012 at
+    # 1024 bins, and at 256 bins the estimate came out CLOSER than at 1024,
+    # by luck, which is what a reference noisier than the effect will do.
+    # (Under the prior this length's surprisal sits on few values and the
+    # sample median is good to ~0.001; the grid reference does not care.)
+    #
+    # 16384 bins is four times finer than the finest grid checked, and its
+    # own error is well under the 0.01 asserted below: 0.0014 measured
+    # against 65536 bins, which cost twice as long again.
+    ref = small.calibrate(bins=16384).median(L)
+    medians = {b: small.calibrate(bins=b).median(L)
+               for b in (64, 256, 1024, 4096)}
+    errors = [abs(m - ref) for m in medians.values()]
+    # The coarse grids are decisively worse and the fine one has converged.
+    # Monotonicity across every step is NOT asserted, because the remaining
+    # differences are where a bin boundary happens to fall relative to the
+    # median, which is not ordered in the grid -- and a single coarse grid can
+    # be lucky: under the estimated prior 64 bins landed an edge near the
+    # median (0.017) while 256 did not (0.069). So the WORST coarse grid is
+    # what must be decisively worse.
+    assert max(errors[:2]) > 10 * errors[-1], errors
     assert errors[-1] < 0.01, errors
 
     # And the estimate is close to the drawn sample, within that sample's own
     # resolution rather than within the grid's.
     truth = float(np.median(u[lengths == L]))
-    assert abs(small.calibrate(bins=1024).median(L) - truth) < 0.3
+    assert abs(medians[1024] - truth) < 0.3
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -342,24 +326,52 @@ def test_c_and_python_defaults_describe_the_same_model():
     """The two entry points must agree on what "default" means.
 
     A caller writing BeamModel(seqs) and a caller reaching
-    beam_model_config_default() in C are asking for the same model. Between
-    the closed-world flip and its follow-up they were not: C set strict but
-    kept backoff at 20/20/200, so the same corpus gave a different support --
-    D0 of 4 instead of 3 on three short sequences -- with nothing failing,
-    because both configurations are individually valid.
+    beam_model_config_default() in C are asking for the same model. Once
+    already they were not: each layer kept its own copy of the smoothing
+    strengths, the copies drifted, and the same corpus gave a different
+    model with nothing failing, because both configurations were valid.
 
-    Storage is the one field allowed to differ. The C layer stays dense while
-    Python selects sparse, and a dense and a sparse strict model are
-    bit-identical, which is asserted separately.
+    The prior's strengths are the numbers still kept in both layers --
+    Python restates BEAM_DEFAULT_ALPHA and BEAM_DEFAULT_ALPHA_LENGTH rather
+    than reading them -- so they are held here to the header they copy.
+    Order and max_length are served from the C descriptor and checked in
+    test_nucleotide.py. Storage no longer differs: both layers default to
+    sparse, since a dense model under the prior materialises every row.
     """
-    seqs = ["CASSF", "CASTF", "CAGSF"]
-    py = BeamModel(seqs, abundances=[3, 2, 1], order=2, max_length=6)
-    cfg = py.config
+    import re
+    from pathlib import Path
 
-    # What the C default resolves to, read back through a model built with it.
-    c_defaults = _c.config(_c.new(*_config_args_from_dict(
-        {**cfg, "sparse": False})))
+    import BEAM
+    from BEAM.model import config as py_config
 
-    assert cfg["strict"] is True
-    for field in ("strict", "order", "max_length", "weights", "alphabet"):
-        assert c_defaults[field] == cfg[field], field
+    header = (Path(BEAM.__file__).resolve().parents[2]
+              / "include" / "beam" / "model.h")
+    if not header.is_file():                  # installed, not a source tree
+        pytest.skip("no C headers beside the package")
+    text = header.read_text()
+    c_alpha, c_alpha_length = (
+        float(re.search(rf"#define\s+{name}\s+(\S+)", text).group(1))
+        for name in ("BEAM_DEFAULT_ALPHA", "BEAM_DEFAULT_ALPHA_LENGTH"))
+    assert py_config.DEFAULT_ALPHA == c_alpha
+    assert py_config.DEFAULT_ALPHA_LENGTH == c_alpha_length
+
+    # Both layers leave the strengths to the data by default, and an
+    # unfinalized C model reports the starting values the header names.
+    cfg = BeamModel(["CASSF", "CASTF", "CAGSF"], abundances=[3, 2, 1],
+                    order=2, max_length=6).config
+    assert cfg["alpha_auto"] is True and cfg["alpha_length_auto"] is True
+    assert cfg["sparse"] is True
+    assert cfg["weights"] == (0.5, 0.5)
+    fresh = _c.config(_c.new(*_config_args_from_dict(cfg)))
+    assert fresh["alpha_auto"] and fresh["alpha_length_auto"]
+    assert fresh["alpha"] == (c_alpha,) * 3
+    assert fresh["alpha_length"] == c_alpha_length
+
+    # And the C layer keeps what it is handed, field for field: a strength
+    # dropped or reordered at the boundary would build a valid other model.
+    handed = {**cfg, "alpha": (1.5, 2.5, 3.5), "alpha_length": 4.5,
+              "alpha_auto": False, "alpha_length_auto": False}
+    back = _c.config(_c.new(*_config_args_from_dict(handed)))
+    for field in ("order", "max_length", "weights", "alphabet", "alpha",
+                  "alpha_length", "alpha_auto", "alpha_length_auto", "sparse"):
+        assert back[field] == handed[field], field

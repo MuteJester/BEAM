@@ -24,26 +24,27 @@ def test_surprisal_mean_is_the_entropy(model):
 
 
 def test_surprisal_moments_match_brute_force():
-    """Exhaustive: every length-3 and length-4 sequence, weighted by its own
-    probability. This pins the jet DP against a direct sum."""
+    """Exhaustive: every sequence the model can produce, weighted by its own
+    probability. This pins the jet DP against a direct sum.
+
+    Every string over the whole alphabet up to max_length is possible, so the
+    space is nucleotide and short (19,530 strings), and the high moments feel
+    the improbable tail as well as the corpus-like bulk."""
     import itertools
-    seqs, abund = make_corpus(n=400, seed=5, lo=3, hi=4)
-    m = BeamModel(seqs, abundances=abund, order=2, max_length=6)
+    rng = random.Random(5)
+    seqs = ["TG" + "".join(rng.choice("ACGT") for _ in range(rng.randint(0, 3)))
+            + "C" for _ in range(400)]
+    abund = [rng.randint(1, 40) for _ in seqs]
+    m = BeamModel(seqs, abundances=abund, alphabet="nt", order=3, max_length=6)
+    every = ["".join(t) for L in range(1, 7)
+             for t in itertools.product("ACGTN", repeat=L)]
+    lp = np.asarray(m.log_pseq_batch(every), dtype=np.float64)
+    assert np.isfinite(lp).all(), "the prior leaves no string impossible"
 
     for q in (1.0, 2.0):
-        wsum = 0.0
-        acc = np.zeros(5)
-        for L in (3, 4):
-            for t in itertools.product(AA, repeat=L):
-                lp = m.log_pseq("".join(t))
-                if not math.isfinite(lp):
-                    continue
-                w = math.exp(q * lp)
-                u = -lp
-                wsum += w
-                for k in range(5):
-                    acc[k] += w * u ** k
-        want = acc / wsum
+        w = np.exp(q * lp)
+        u = -lp
+        want = np.array([(w * u ** k).sum() for k in range(5)]) / w.sum()
         got = m.surprisal_moments(q=q, order=4)
         for k in range(5):
             assert got[k] == pytest.approx(want[k], rel=1e-8), (q, k)
@@ -122,11 +123,16 @@ def test_length_moments_conditional_mean_matches_length_marginals(model):
             float(marg["mean_surprisal"][L]), rel=1e-9)
 
 
-def test_length_moments_ungenerated_lengths_are_zero(model):
+def test_length_moments_share_is_zero_only_at_length_zero(model):
+    """Every length 1..max_length is generated -- the length prior gives even
+    the ones the corpus never had a pseudo-count -- so slot 0 is the only
+    empty one, and it must be exactly empty rather than merely small."""
     lm = model.length_moments(q=1.0, order=2)
-    for L in range(len(lm["share"])):
-        if L not in model.observed_lengths:
-            assert lm["share"][L] == 0.0
+    share = lm["share"]
+    assert len(share) == int(model.config["max_length"]) + 1
+    assert share[0] == 0.0
+    assert (share[1:] > 0.0).all()
+    assert tuple(model.observed_lengths) == tuple(range(1, len(share)))
 
 
 def test_length_derivatives_q0_still_is_the_per_length_support(model):

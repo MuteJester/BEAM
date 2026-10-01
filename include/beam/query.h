@@ -409,8 +409,7 @@ BeamError beam_query_deletions(const BeamModel *m, const char *sequence,
  */
 typedef struct {
     uint64_t states;  /**< trellis states the sweep will VISIT, summed
-                           over layers -- an upper bound on the live count,
-                           and on a closed-world model a very loose one   */
+                           over layers -- an upper bound on the live count */
     uint64_t edges;   /**< edge relaxations the sweep will perform    */
     uint64_t bytes;   /**< peak working-set bytes, the budgeted figure */
 } BeamQueryCost;
@@ -479,8 +478,8 @@ BeamError beam_query_information_matrix(const BeamModel *m,
  * What `beam_query_information_matrix` will cost, as an upper bound.
  *
  * The bound assumes every `(position, residue)` pair carries mass; the real
- * count is lower wherever the model cannot spell a residue at a position, and
- * in a closed-world model it is dramatically lower. Reported without running
+ * count is lower only where a query constraint rules a residue out. Reported
+ * without running
  * any sweep, so a caller can find out that a matrix is a twenty-second
  * question before waiting twenty seconds for it.
  */
@@ -514,9 +513,8 @@ BeamError beam_query_log_probability(const BeamModel *m,
  *             that subtracting `beam_model_log_partition` gives the same number
  *             as `beam_query_log_probability`.
  *
- * Zero-probability cells come back as exactly 0.0, unfloored: in a strict model
- * a residue that cannot appear at a position is information, not a number to be
- * smoothed.
+ * No floor is applied. Under the hierarchical prior a cell is exactly 0.0 only
+ * where the query's own constraint rules the residue out.
  *
  * @return BEAM_ERR_NO_LIVE_PATHS if the constraint admits nothing, since the
  *         conditional it asks for does not exist; BEAM_ERR_PARAM_OUT_OF_RANGE

@@ -45,15 +45,15 @@ def test_posterior_closes_on_the_prior_but_never_reaches_it(corpus):
     """Raising kappa pulls the individual toward the prior, and then stops.
 
     It stops because `posterior` is not a blend of two models: it adds
-    pseudo-counts to ROWS, and three things survive any kappa — rows the
-    prior never observed, this model's own hierarchical backoff reapplied to
+    pseudo-counts to ROWS, and three things survive any kappa -- rows the
+    prior never observed, this model's own hierarchical prior reapplied to
     the blended counts, and its own Z(L) and pi(L). Anyone reading
     `posterior` as "become the prior at large kappa" would be wrong, so the
     floor is asserted rather than left to be discovered.
     """
     seqs, abund = corpus
-    donor = BeamModel(seqs[:200], abundances=abund[:200], order=2, max_length=20, strict=False)
-    prior = BeamModel(seqs[200:], abundances=abund[200:], order=2, max_length=20, strict=False)
+    donor = BeamModel(seqs[:200], abundances=abund[:200], order=2, max_length=20)
+    prior = BeamModel(seqs[200:], abundances=abund[200:], order=2, max_length=20)
     probe = seqs[900:1100]
     ref = prior.log_pseq_batch(probe)
 
@@ -64,7 +64,13 @@ def test_posterior_closes_on_the_prior_but_never_reaches_it(corpus):
     closing = [gap(k) for k in (0.0, 1.0, 10.0, 100.0)]
     assert all(b < a for a, b in zip(closing, closing[1:])), closing
     assert closing[-1] < 0.1 * closing[0]
-    assert gap(1e6) > 0.5, "a huge kappa must not collapse onto the prior"
+    # And then it stops: from kappa 1e4 to 1e6 the gap does not move, and it
+    # stops well above zero (0.13 nats measured, against 39 at kappa 0). The
+    # strengths are re-estimated on the blended counts, so the floor sits
+    # lower than it did under fixed strengths, but it is a floor.
+    floor = gap(1e6)
+    assert floor > 0.05, "a huge kappa must not collapse onto the prior"
+    assert abs(floor - gap(1e4)) < 0.2 * floor
 
 
 def test_posterior_leaves_the_sequence_counters_alone(corpus):

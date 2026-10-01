@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import math
 
+import numpy as np
 import pytest
 
 import BEAM
@@ -30,11 +31,11 @@ from _tiny import tiny_model
 @pytest.mark.parametrize("differs", [
     {"order": 3},
     {"max_length": 8},
-    {"alphabet": "nt"},
+    {"alphabet": "aa"},
 ])
 def test_incompatible_members_are_refused_at_construction(tiny_a, differs):
     """One differing field is enough: the state index stops being shared."""
-    other = tiny_model(9, letters="ACGT" if "alphabet" in differs else "ACDG",
+    other = tiny_model(9, letters="ACDG" if "alphabet" in differs else "ACGT",
                        **differs)
     with pytest.raises(IncompatibleMembers) as exc:
         Mixture([tiny_a, other])
@@ -175,34 +176,54 @@ def test_log_power_sum_refuses_q_zero(tiny_a, tiny_b):
 
 
 # ── -inf is an answer and must survive ──────────────────────────
+#
+# The prior gives every string over the alphabet up to max_length a positive
+# probability, so -inf now has exactly two sources: a string outside that space
+# (a foreign residue, a length past max_length) and a member given zero weight.
+# Both still have to reach the caller as -inf, never floored and never NaN.
 
-def test_a_sequence_no_member_spells_scores_minus_infinity(far_a, far_b):
-    """Never floored, never smoothed. Closed world all the way to the caller."""
-    mix = Mixture([far_a, far_b])
-    assert mix.log_pseq("WWWWW") == -math.inf
-    assert mix.pseq("WWWWW") == 0.0
-    assert mix.log_pseq_batch(["WWWWW"])[0] == -math.inf
-
-
-def test_a_sequence_only_one_member_spells_keeps_its_share(far_a, far_b):
-    """Not -inf, and exactly the weighted probability under the one member."""
-    from _tiny import support
-    s = next(iter(support(far_a)))
-    assert far_b.log_pseq(s) == -math.inf
-    mix = Mixture([far_a, far_b], [0.25, 0.75])
-    assert mix.log_pseq(s) == pytest.approx(
-        math.log(0.25) + far_a.log_pseq(s), rel=1e-13)
+#: Outside every member's space: W and Y are not nucleotides, and the last is
+#: one residue past max_length.
+_UNSPELLABLE = ["WWWWW", "ACGYA", "ACGTACG"]
 
 
-def test_a_batch_of_all_unspellable_sequences_is_all_minus_infinity(far_a,
-                                                                    far_b):
+def test_a_sequence_outside_the_space_scores_minus_infinity(tiny_a, tiny_b):
+    """Never floored, never smoothed. The prior stops at the alphabet."""
+    mix = Mixture([tiny_a, tiny_b])
+    for s in _UNSPELLABLE:
+        assert tiny_a.log_pseq(s) == tiny_b.log_pseq(s) == -math.inf
+        assert mix.log_pseq(s) == -math.inf
+        assert mix.pseq(s) == 0.0
+        assert mix.log_pseq_batch([s])[0] == -math.inf
+
+
+def test_a_zero_weight_member_leaves_the_other_members_score_intact(tiny_a,
+                                                                    tiny_b,
+                                                                    sup_a):
+    """A `-inf` term in the reduction must not disturb the finite one.
+
+    With every string in every member's support, the zero-weight member is the
+    one way left for `log w_i + ln P_i(s)` to be `-inf` on a string the mixture
+    scores. The result has to be the other member's score bit for bit, not a
+    NaN and not a nudged value.
+    """
+    mix = Mixture([tiny_a, tiny_b], [1.0, 0.0])
+    seqs = sorted(sup_a)[:40]
+    for s in seqs:
+        assert mix.log_pseq(s) == tiny_a.log_pseq(s)
+    assert np.array_equal(mix.log_pseq_batch(seqs),
+                          np.asarray(tiny_a.log_pseq_batch(seqs)))
+
+
+def test_a_batch_of_all_unspellable_sequences_is_all_minus_infinity(tiny_a,
+                                                                    tiny_b):
     """The all-dead reduction must not become NaN.
 
     Shifting by the maximum gives `-inf - -inf` when every term is `-inf`, and
     NaN is the one answer that is worse than either a number or a refusal.
     """
-    mix = Mixture([far_a, far_b])
-    out = mix.log_pseq_batch(["WWWWW", "WWWWWW", "YYYYY"])
+    mix = Mixture([tiny_a, tiny_b])
+    out = mix.log_pseq_batch(_UNSPELLABLE)
     assert all(v == -math.inf for v in out)
 
 
@@ -210,11 +231,15 @@ def test_a_batch_of_all_unspellable_sequences_is_all_minus_infinity(far_a,
 
 def test_a_length_no_member_produces_has_no_within_length_weights(tiny_a,
                                                                   tiny_b):
+    """Length 0 is the one left: the prior covers every length from 1 up.
+
+    The empty string is not a sequence any member scores, so there is no mass
+    at length 0 to divide between the members.
+    """
     mix = Mixture([tiny_a, tiny_b])
-    missing = next(L for L in range(1, mix.max_length + 1)
-                   if L not in mix.observed_lengths)
+    assert mix.observed_lengths == tuple(range(1, mix.max_length + 1))
     with pytest.raises(NoLivePaths) as exc:
-        mix.member_weights(missing)
+        mix.member_weights(0)
     assert "no member" in str(exc.value)
 
 

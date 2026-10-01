@@ -16,6 +16,13 @@ log_pseq_batch(sequences) -> np.ndarray
 ```
 Vectorised form, parallel where OpenMP is available. Same `-inf` convention.
 
+### log_pseq_arrow
+
+```python
+log_pseq_arrow(array) -> np.ndarray
+```
+`log_pseq_batch` for a pyarrow `string` or `large_string` column, a slice of one, or a `ChunkedArray`. It reads the column's offsets and bytes directly, so no Python string is made per sequence and no Python float per score. Every score is bit-identical to `log_pseq_batch` on the same sequences. A null is not a sequence and scores `NaN`.
+
 ### pseq
 
 ```python
@@ -43,7 +50,7 @@ log_pseq_parquet(path, *, column=None, batch_size=1_000_000,
                  out=None, dtype=np.float64) -> np.ndarray
 ```
 
-`log_pseq_chunks` is the primitive: it scores an arbitrary iterable and yields one array per chunk, never holding more than `chunk_size` sequences. The other two are it, pointed at a file.
+`log_pseq_chunks` is the primitive: it scores an arbitrary iterable and yields one array per chunk, never holding more than `chunk_size` sequences. `log_pseq_file` is it, pointed at a delimited file. `log_pseq_parquet` streams the file the same way but scores each batch with `log_pseq_arrow`, straight from its buffers.
 
 `out` takes a preallocated array or `numpy` memmap and fills it in place, which is the pattern a corpus-scale scan wants:
 
@@ -121,15 +128,9 @@ path_count(length=None) -> float
 Distinct sequences the model can produce; `None` pools over every length.
 
 !!! danger "Read this before quoting a support size"
-    Under `strict=False` this is exactly `sum_L 20 ** L`, because the Laplace add-one leaves every cell strictly positive and so nothing is dead. **That number describes the smoothing, not the grammar.** For the corpus above it is `2.759e23`, which is exactly the sum of `20 ** L` over the observed lengths and therefore says nothing about the repertoire.
+    Under the hierarchical prior every sequence up to `max_length` is possible, so this is exactly `sum_L R ** L` over the lengths `1..max_length`: `1.413e35` for the corpus above, whatever the corpus. **That number describes the alphabet and the length range, not the repertoire.**
 
-    `strict=True` is the **default**, and there dead transitions stay dead:
-    `path_count` reports the exact support of the observed-transition DAG. For
-    the same corpus that is `2168` — twenty orders of magnitude smaller, and
-    the number that is about the data. Sparse and dense strict storage return
-    the same value.
-
-    It is kept because it is the exact `q=0` corner of the Hill family and because it is what the counting spectrum integrates to, so the two have to agree. `effective_diversity()` (`D1`) is the number to quote if you are quoting one — here `1.04e09` against that `2.76e23`.
+    It is kept because it is the exact `q=0` corner of the Hill family and because it is what the counting spectrum integrates to, so the two have to agree. `effective_diversity()` (`D1`) is the number to quote if you are quoting one -- here `4.66e08`.
 
 ### The Mellin transform
 
@@ -148,11 +149,65 @@ log_mellin_many(orders) -> np.ndarray   # log_mellin at every order
 
 **Bit-identical** to `[log_mellin(q) for q in orders]` — compared with `==` in the tests, not within a tolerance — on both alphabets, in both worlds, at orders either side of 1, at 0.999 and 1.001, and at negative orders; and unchanged by the thread count, the memory budget, or which other orders share the call.
 
-What it saves is traversals. Calling `log_mellin` once per order walks every length's trellis once per order and rebuilds the same layer of edge weights each time. This walks each trellis once and carries every order through it. Each order keeps its own per-layer rescaling, because each has its own dynamic range, and that is what keeps the bits: a shared rescale would be cheaper and would move every order's last digits but one. On a donor-scale model (180,000 sequences, order 4, 16 threads), 29 orders take 0.22 s against 2.65 s one at a time.
+What it saves is traversals. Calling `log_mellin` once per order walks every length's trellis once per order and rebuilds the same layer of edge weights each time. This walks each trellis once and carries every order through it. Each order keeps its own shift and its own scale -- the largest weight among the states still carrying its mass, and an exact power of two chosen a layer ahead -- because each has its own dynamic range, and that is what keeps the bits: a shared shift would be cheaper and would move every order's last digits but one, and at large `q`, where most states' mass has underflowed, would flush the rest.
 
-A sweep carrying `n` orders holds `n` mass vectors where one order holds one, and lengths running concurrently divide the [memory budget](runtime.md#memory-budget) as they always have. Orders are fused as widely as leaves room for one sweep per thread — 31 orders at amino-acid order 4 is 128 MB a sweep — and split into blocks when they do not fit. It refuses only where a sweep of a single order would not fit either.
+`log_mellin` and `log_mellin_many` are one routine. All threads share out each layer's targets, and an edge's factors `exp(q w - shift)` are taken eight orders at a time by a vectorised `exp` (within two ulp, exactly 1 at `q = 0`). On the foundation at 40 threads, the series route's ninety integer orders take 16 s, against 58 s for the per-length sweep this replaced; the four-order fingerprint set 1.9 s against 4.1.
+
+A sweep carrying `n` orders holds `n` values a state, rounded up to a vector of eight. Orders are taken in one stretch wherever the [memory budget](runtime.md#memory-budget) holds them, and in the fewest stretches that fit otherwise. It refuses only where one vector of orders would not fit.
 
 Orders must be finite; `nan` and `inf` raise `BeamValueError`.
+
+#### Complex orders
+
+```python
+log_mellin_complex(orders) -> np.ndarray   # complex128: ln|M(q)| + i arg M(q)
+```
+
+`M(q) = sum_s P(s)**q` at complex `q`, exactly. `P(s)**q` factors along the sequence at any complex `q`, so the power sum is a dynamic program everywhere in the plane, not only on the real line. `np.exp(result)` is `M(q)`; `M(conj q) = conj M(q)`.
+
+**What it is for.** A sum over every sequence of a function of `P(s)` that does not factor along the sequence, such as expected richness `R(n) = sum_s 1 - e^{-n P(s)}`, is a one-dimensional contour integral of `M` (Mellin-Barnes). For `-1 < c < 0`:
+
+```
+R(n) = -(1/2pi) ∫ Gamma(c+it) n^-(c+it) M(-(c+it)) dt
+```
+
+- **What each part is:**
+  - `Gamma` is the gamma function, and its Mellin transform gives `1 - e^{-x}`.
+  - `n^-(c+it)` carries the depth.
+  - `M` evaluated on the line `-(c+it)` carries the model.
+- **Cost:** `M` does not depend on `n`, so one set of values on the line serves every depth.
+- **Accuracy:** a trapezoid rule on `c = -1/2` with step `0.1` and `|t| <= 40` (801 values of `M`) was tested on a million exact probabilities from an enumerated order-4 model. It reproduced `R(n)` from `n = 10` to `1e12` to between `3e-12` and `3e-7` of the direct sum. That is with no spectrum and no grid, where a binned spectrum at 16,384 bins is off by about `1e-4`.
+
+**Precision.** It is exact to rounding in the moduli. Sequences of different probability carry different phases and cancel, so `|M(q)|` can sit far below `M(Re q)`, the sum of the moduli. The relative error of the result grows by that ratio, while the absolute error stays at rounding relative to `M(Re q)`. Against enumeration the worst measured error is `6e-14` of the moduli.
+
+**Determinism.** As for `log_mellin_many`:
+- The same bits for an order whatever the thread count, the memory budget or the company it keeps.
+- One traversal per length for all the orders.
+- At a real order it agrees with `log_mellin` to rounding, not bit for bit, because the phase is carried.
+
+**Memory and cost.** Each mass plane is twice as wide as a real order's, and the budget is divided the same way. A complex order currently costs about 1.5 times a real one, and fusing orders saves little. The per-edge `exp`, `cos` and `sin` are taken per order, which is the obvious thing to optimise for orders sharing a real part.
+
+Orders must be finite, and real input is accepted.
+
+#### Along a vertical line
+
+```python
+log_mellin_line(re, im_start, im_step, n) -> np.ndarray   # complex128
+```
+
+`log_mellin_complex` at the orders `re + 1j*(im_start + k*im_step)`, `k = 0 .. n-1`. That is how a Mellin-Barnes contour is sampled, and the line shares two things that make it several times faster:
+
+- **Moduli.** Every order has the same real part, so each edge's modulus factor `exp(re*w - shift)` is one number for all of them, taken once per edge.
+- **Rotations.** Order `k`'s rotation `exp(i(im_start + k*im_step)w)` is taken directly at every multiple of 128. Each edge carries the sixteen rotations `exp(i*r*im_step*w)`, `r = 0..15` (lanes 1-3 each the one before times `exp(i*im_step*w)`, lanes 4-15 the one four before times `exp(4i*im_step*w)`), so a block's first sixteen orders are its anchor times that pattern, and every later one is the one sixteen before times `exp(16i*im_step*w)`. No rotation is more than 14 multiplies from direct values. The few cosines and sines per edge are taken four at a time for many edges at once (`beam_sincos_many`, within two ulp; libm's, one at a time, had become a third of a line's time).
+- **Vectors.** Sixteen independent chains, held in registers, feed the multiply-add eight orders per vector operation. Where the CPU has AVX-512 or AVX2, that build of the inner loop is chosen at load time; each performs the same operations per order as the baseline build and agrees with it to the bit.
+- **Threads.** Each stretch of each length is swept by all the threads together, which share out a layer's targets in groups that have the same sources, walking each group a tile of 256 orders at a time. So a line is one stretch wherever the memory budget holds it, and per-edge work -- the layer's weights, each edge's modulus and fixed rotations -- is paid once per layer, not once per stretch. Every length's live frontier is built in parallel before the sweeps start.
+- **Memory.** One workspace per line; a target's edges accumulate in a cached tile that is scaled by an exact power of two and written once, with non-temporal stores where available; rows are padded by a cache line so they never sit a power of two apart (at 2,048 orders that alone was 47.7 against 36.7 ms per order).
+
+On the foundation at 40 threads on ig05 a 2,048-order line went from 207 to 33 ms per order, and a 128-order line from 245 to 65. The sweep is then bound by memory bandwidth: 24 threads do nearly as much as 40.
+
+**Exact to rounding, not to the bit, against `log_mellin_complex`**, since the recurrence reaches the same rotation by different operations. Measured differences are within `1e-12` of `M(Re q)`, and the tests hold them there. What IS bit-for-bit is everything the line determines: order `k`'s value depends on the line and on `k` alone. The number of orders, the thread count and the memory budget change none of its bits, even when the line is split into stretches that start inside a block, because each block is built from its own anchor.
+
+Use it for contours and keep `log_mellin_complex` as the reference.
 
 ### Diversity
 
@@ -172,7 +227,7 @@ effective_diversity() -> float    # D1
 !!! note "`hill_profile` agrees with `hill_numbers` to machine precision, NOT bit for bit"
     `hill_number` reaches `sum P**q` through a different tilted sweep, one that rescales each layer by a different maximum and so rounds differently. Over nine models spanning both alphabets and both worlds, the two values of `ln sum P**q` differ by at most 7.1e-15, and on the grid 0 to 3 in steps of 0.1 the Hill numbers differ by at most 1.1e-14 relative. The two corners take `hill_number`'s own routes and are bit-identical.
 
-    **Near `q = 1` the relative difference grows as `1 / |1 - q|`**, because `D_q = exp(ln M / (1 - q))` magnifies any rounding in `ln M` by that factor on both routes: 1.3e-12 was measured at `q = 1.001` on an open-world model. Neither route is the more accurate one there.
+    **Near `q = 1` the relative difference grows as `1 / |1 - q|`**, because `D_q = exp(ln M / (1 - q))` magnifies any rounding in `ln M` by that factor on both routes: 1.3e-12 was measured at `q = 1.001` on a model whose support was every sequence up to its maximum length. Neither route is the more accurate one there.
 
     Keep `hill_numbers` wherever a profile has to reproduce one already published from it to the last bit.
 
@@ -371,6 +426,77 @@ curve = atoms.discovery_curve(np.logspace(0, 82, 400))
 
 The point of `atoms` is that a 400-point discovery curve costs **one** spectrum and 400 numpy passes, not 400 spectrum rebuilds.
 
+### Exact occupancy, without the spectrum
+
+```python
+from BEAM.analytics.exact_occupancy import ExactOccupancy
+eo = ExactOccupancy(model, rel_tol=1e-10)
+eo.richness(n)                   # E[distinct sequences in n draws]
+eo.richness_difference(n1, n2)   # R(n1) - R(n2), keeping the digits they share
+eo.frequency(n, j)               # E[sequences drawn exactly j times], j >= 1
+eo.sharing(d1, d2)               # E[sequences in both of two repertoires]
+eo.private(depths)               # E[sequences seen by exactly one repertoire]
+eo.equal_depth_cohort(depth, N)  # {"seen", "private"} for N equal repertoires
+
+eo.richness_many(ns)             # R at many depths, one batch per line
+eo.novelty_many(ns)              # U(n) = sum_s P (1-P)**(n-1), n >= 1
+eo.private_at_depth(depths, total_depth=T)
+                                 # per repertoire: R(d_i) and R(T) - R(T - d_i)
+eo.save_lines(path); eo.load_lines(path)   # reuse lines across processes
+
+eo.poisson_richness_many(ns)     # sum_s 1 - exp(-N P): a Poisson sample's richness
+eo.sampling_deficit_many(ns)     # S(N); a Poisson sample's expected entropy is H - S(N)
+```
+
+The `atoms` family above, computed **exactly** rather than on a grid. Every method returns a `BoundedValue`, which is `value` together with `bound`, a rigorous relative error: `|value - truth| <= bound * |truth|`. `float(v)` raises so that the bound cannot be dropped by accident.
+
+**Why a grid is not needed.** Each quantity is a sum over every sequence of a function of `P(s)`. Such a function does not factor along the sequence, but the power sums `M(q) = sum_s P(s)^q` do, at any complex `q`. The method depends on depth:
+
+- **Small depths** use exact series in `M` at the positive integers, for example `R(n) = sum_k (-1)^{k+1} C(n,k) M(k)`. For integer `n` these are finite sums.
+- **All other depths** use Mellin-Barnes integrals of [`log_mellin_line`](#along-a-vertical-line) values along a vertical line. The kernel for `1 - (1-x)^n` is `B(z, n+1)`, and the other quantities have kernels of the same family.
+
+**Why the bound is rigorous.** It is the sum of four terms:
+
+| term | source |
+|---|---|
+| aliasing | Poisson summation turns the step-`h` rule's error into shifted copies of each sequence's own function, bounded from that function's range. The largest copies are about `D0 exp(-q 2pi/h)` and `n exp(-(1-q) 2pi/h)` for richness. |
+| truncation | an upper envelope of the kernel beyond the last node. It decays as a power of `t` past `t ~ n`, not only exponentially. |
+| kernel rounding | carried in the phase `t ln n`, which reaches thousands of radians. |
+| DP rounding | exact relative to `M(Re q)`, the sum of the moduli, not to `|M|`. |
+
+The relative form divides by `|value| - bound`, never by the value itself. Lines are designed from those terms, computed on demand and cached; `eo.lines` lists them. A batch plans one line at a time: each is designed for the smallest depth still unresolved, and every pending depth is tried on it before the next is planned, so one line serves the whole band it can. `save_lines` writes them with a fingerprint of the model's power sums, and `load_lines` refuses a file made by any other model.
+
+**The sampled Hill numbers.** Draw a Poisson sample of depth `N`, each sequence's count `Y ~ Poisson(N P(s))`, and take its Shannon entropy. Its expectation is `H - S(N)`, where `H` is the model's own entropy and
+
+- `S(N) = sum_s P(s) D(N P(s))`;
+- `D(lam) = E[ln(1+Y)] - ln lam` is the entropy one sequence loses to being sampled rather than known.
+
+So the sampled `D1` is `exp(H - S(N))` and the sampled `D0` is `poisson_richness`. `S` has its own Mellin kernel:
+
+- `D~(w) = Gamma(w) [1/w + int_0^1 v^-w (1/v + 1/ln(1-v)) dv]`, for `0 < Re w < 1`.
+- It is taken to about `1e-14` from a Gregory-coefficient series, a closed form and a smooth quadrature.
+- It uses the same lines as richness.
+
+Its aliasing is bounded from `0 <= D(lam) <= ln(1 + 1/lam)`. Small `N` uses an exact alternating series in `M` at the integers.
+
+`S` is resolved to `rel_tol` of `max(S, 1 nat)`, not of `S` alone. `D1 = exp(H - S)` feels only `S`'s absolute error. Deep in `N`, `S ~ D0 / 2N` falls to `1e-50` and below, where a relative target would be out of reach and beside the point. Each value still reports its true relative bound.
+
+**When the tolerance is out of reach**, the value comes back with the bound it has, never silently:
+
+- `method` "underflow": `U(n)` past `(n-1) p_min = 746` is below the smallest double. The value is 0 and its bound is 1.
+- `method` "... unresolved": no line could resolve the value. Every quantity here is non-negative, so 0 with bound 1 is still true.
+- Deep in saturation (`n p_min` well above 1), `U(n)` is exponentially small and its bounds grow. The foundation does not reach this below `n = 1e100`.
+
+**Measured.**
+
+- **On enumerated models:** every value lies within its bound of the direct sum, across richness, differences at gaps of 1 in 10^12, counts, sharing and cohorts.
+- **On the foundation (order 4, max_length 27):**
+  - **Accuracy:** `R(n)` from 1 to 1e82 has a median bound of 2e-14 and a worst of 2e-10.
+  - **Binned curves:** the 16,384-bin spectrum is off by about 2e-4 against these values, and `atoms(4096)` by up to 2e-3.
+  - **Cost:** three lines of 500-900 orders, about 15 minutes on 14 threads, once. Every depth reuses them.
+
+**What it does not replace:** counts of sequences in a *range* of probability, which are the spectrum's histograms. For a sharp bin the transform decays too slowly to truncate. A smoothed bin needs about as many `M` values as the grid has bins. And the histogram spans 1e35 sequences, far beyond double precision's reach through oscillating sums. Use [`spectrum_pair`](#spectrum_pair) there.
+
 ### length_derivatives
 
 ```python
@@ -387,7 +513,7 @@ For length `L`, element `r` is `sum_{len(s)=L} P(s)**q * ln(P(s))**r` — the un
 
 The graph models in this library carry a `diversity_under_edge_thresholds` sweep. BeamModel does **not** have it at all — not even as a method that raises, which is what this page used to claim.
 
-There is nothing for it to do. In the open world the Laplace add-one leaves every table cell strictly positive, so a threshold sweep would either be a no-op or describe a model the smoothing does not define. In the closed world there is already an exact zero-probability boundary, which is a property of the corpus rather than an arbitrary cut. `spectrum` and `atoms` answer where the mass and the sequences sit under either regime.
+There is nothing for it to do. The hierarchical prior leaves every table cell strictly positive, so a threshold sweep would describe a cut the model does not make. `spectrum` and `atoms` answer where the mass and the sequences sit.
 
 ## The distribution of the surprisal
 
@@ -446,13 +572,13 @@ By default `scale_score(s)` is `-log10 P(U >= -ln P(s))` under the exact per-len
 
 ```python
 cal = model.calibrate(bins=512)
-model.scale_score("CASSALNIWEQYF", cal)                   # 0.6881
-model.scale_score("CASSALNIWEQYF", cal, method="robust")  # 0.7017
-model.scale_score("CASSALNIWEQYW", cal)                   # inf — the closed
-                                                          # world cannot spell it
+model.scale_score("CASSALNIWEQYF", cal)                   # 0.0270
+model.scale_score("CASSALNIWEQYF", cal, method="robust")  # -1.0141
+model.scale_score("CASSALNIWEQYW", cal)                   # 4.0151 -- possible,
+                                                          # but far in the tail
 ```
 
-`inf` is what a sequence outside the support scores under the default `strict=True`: its surprisal is infinite, so no tail probability covers it. That is the honest answer rather than a large finite number, and it is why the corrupted sequence above is not quoted as a ratio here.
+`inf` is now reached only by a sequence the model cannot represent at all -- a character outside the alphabet, or a length past `max_length` -- whose surprisal is infinite. Every other sequence, the corrupted one above included, has a finite surprisal and a finite score.
 
 Under `method="robust"`, sequences drawn from the model are its null by definition, so their scores have median 0 and interquartile range 1; the tests assert both, and assert that the median of the score is flat across lengths where the median of the raw surprisal spans more than a nat. The default `pvalue` method is normalised differently — a threshold on it is a false positive rate, not a z-like deviation.
 

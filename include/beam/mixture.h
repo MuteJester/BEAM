@@ -13,17 +13,17 @@
  * ## `beam_model_add` is not this, and the difference is measurable
  *
  * Summing edge counts and refinalizing gives the model you would get by
- * TRAINING on the pooled corpus. Its support is strictly larger than the union
- * of the members' supports, because a pooled path may splice an edge learned
- * from one donor onto an edge learned from another and spell a sequence no
- * single member spells. Pooling 64 donors at a fixed 30,000-sequence budget
- * raises D0 by 24.3% while the number of transitions rises 0.57%: almost all
- * of that excess is recombination, not new evidence.
+ * TRAINING on the pooled corpus, which is not a mixture of the members: a
+ * pooled row blends every donor's counts before the prior is applied, so the
+ * merged model scores spliced sequences -- an edge learned from one donor
+ * followed by an edge learned from another -- above what any mixture of the
+ * members can.
  *
- * So nothing in this file is implemented in terms of the count algebra, and
- * `beam_mixture_support_union` is deliberately not `beam_model_path_count_total`
- * of a merged model. `D0(union) <= D0(merged)` always, and the gap is the
- * point.
+ * So nothing in this file is implemented in terms of the count algebra.
+ * Under the hierarchical prior every member's support is the whole space, so
+ * `beam_mixture_support_union` equals `beam_model_path_count_total` of the
+ * merged model; the difference between the two constructions lives in the
+ * probabilities, not in the supports.
  *
  * ## What is exact here, and what is not
  *
@@ -113,8 +113,9 @@ extern "C" {
  * two independent implementations on one number at full scale.
  *
  * Returns -INFINITY, with BEAM_OK, when no sequence of that length is spelled
- * by all `k` members at once. That is an ANSWER -- the supports are disjoint
- * at this length -- not a failure.
+ * by all `k` members at once. That is an ANSWER, not a failure; under the
+ * hierarchical prior it happens only at a length some member cannot represent,
+ * since every member spells every string up to its max_length.
  *
  * NUMERICS: a product of k per-edge probabilities over ~27 layers underflows a
  * double long before the sweep ends, so the accumulator is rescaled every

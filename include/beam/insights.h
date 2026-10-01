@@ -99,11 +99,11 @@ typedef struct {
      * true weights every producible sequence 1, false weights it by its own
      * probability -- the two measures `beam_model_spectrum` offers.
      *
-     * BEWARE the counting measure on an OPEN-WORLD model. Backoff leaves
-     * every cell positive, so every sequence is producible, every position's
-     * counting marginal is uniform, and the logo is flat everywhere. That is
-     * the correct answer to a badly posed question and it looks exactly like
-     * a bug.
+     * BEWARE the counting measure: under the hierarchical prior every cell is
+     * positive, so every sequence is producible, every position's counting
+     * marginal is uniform, and the logo is flat everywhere. That is the
+     * correct answer to a badly posed question and it looks exactly like a
+     * bug. The generated measure is the one that says something.
      */
     bool counting;
 
@@ -150,9 +150,9 @@ typedef struct {
     uint32_t  length;
     uint32_t  n_residues;
 
-    /** `[length * n_residues]`, row-major. Each row sums to 1, and a residue
-     *  the model cannot spell here is exactly 0 -- not floored, because in a
-     *  strict model that zero is information. */
+    /** `[length * n_residues]`, row-major. Each row sums to 1. Under the
+     *  hierarchical prior no residue is exactly 0: one the corpus never put
+     *  here is small, not absent. */
     double   *probability;
 
     /** `[length * n_residues]`, `probability * information`. The stack
@@ -171,9 +171,10 @@ typedef struct {
 
     /** `[length]`, how many residues carry any probability at all.
      *
-     *  The disclosure that the `log R` reference is partly fictional. A
-     *  strict model spells three residues at some positions, and there the
-     *  maximum entropy a position could have had is `log 3`, not `log 20`.
+     *  Under the hierarchical prior every residue carries some probability,
+     *  so this is `R` wherever the model is defined; it was the disclosure
+     *  that the `log R` reference could be partly fictional when a model
+     *  could spell only a few residues at a position.
      *  It is reported rather than used: a per-position reference would make
      *  positions incomparable, which is worse than a generous one. */
     uint32_t *n_support;

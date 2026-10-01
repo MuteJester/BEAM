@@ -36,17 +36,11 @@ The effect is easy to see. Take a sequence the corpus contains and swap its term
 real = "CASSALNIWEQYF"      # in the corpus
 bad  = "CASSALNIWEQYW"      # same, terminal F -> W
 
-model.pseq(real)            # 0.0004047
-model.pseq(bad)             # 0.0        <- the closed world refuses it
+model.pseq(real)            # 2.774e-06
+model.pseq(bad)             # 8.188e-14   <- 34 million times less likely
 ```
 
-Zero is the honest answer under the default `strict=True`: the model never saw a length-13 sequence ending in `W`, so it declines to spell one. That is the strongest form of the point but it does not put a number on it. The open world does, because its add-one leaves every cell finite:
-
-```python
-model = BeamModel(sequences, order=3, strict=False)
-model.pseq(real)            # 5.913e-09
-model.pseq(bad)             # 6.109e-13   <- 9,679x less likely
-```
+Neither is zero: under the hierarchical prior every sequence up to `max_length` is possible, and one the corpus never spelled gets the probability its contexts' shorter contexts give it. The model never saw a length-13 sequence ending in `W`, and the C-anchored reading of the last position says so with 34 million to one.
 
 A left-to-right model has no strong opinion at that position. The C-anchored expert has a very strong one.
 

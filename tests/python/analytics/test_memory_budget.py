@@ -44,18 +44,37 @@ REDUCED = 64 << 20
 
 @pytest.fixture(scope="module")
 def model():
+    """max_length is the corpus's longest (12). Every length up to it is live
+    under the prior, and the moment drivers below run a whole Mellin pass
+    before they reach the refusal they are pinned to, fifty times over; two
+    lengths the corpus never had would add a third to each pass."""
     return BEAM.BeamModel(
         ["CASSLGGYEQYF", "CASSLGGTEQYF", "CASRLGGYEQYF", "CASSPGGYEQYF",
          "CASSLGGYEQF", "CASRLGGTEQF"],
-        order=3, max_length=14, strict=True)
+        order=3, max_length=12)
 
 
 def _refusing_calls(m):
     """The drivers above, including two `_calls` does not carry."""
     d = dict(_calls(m))
     d["length_marginals"] = lambda: m.length_marginals()
-    d["length_derivatives"] = lambda: m.length_moments(q=1.0, order=2)
+    # A moment sweep of order 12 holds thirteen moments a state, more than a
+    # Mellin pass of one order (one vector of eight): so a budget between the
+    # two lets the Mellin pass through and stops the moment sweep itself.
+    d["surprisal_moments"] = lambda: m.surprisal_moments(q=1.0, order=MOMENT_ORDER)
+    d["length_derivatives"] = lambda: m.length_moments(q=1.0, order=MOMENT_ORDER)
     return d
+
+
+#: See `_refusing_calls`.
+MOMENT_ORDER = 12
+
+
+def _moment_sweep_bytes(m):
+    """`beam_jet_sweep_bytes` (internal/beam/dp.h) at MOMENT_ORDER + 1
+    moments; a budget one byte short of it stops the moment sweep."""
+    S, R, nm = m.n_states, 20, MOMENT_ORDER + 1
+    return S * R * 8 + S * 8 + 2 * nm * S * 8 + S
 
 
 def _calls(m):
@@ -239,8 +258,9 @@ def test_the_reported_figure_matches_an_independent_calculation(
 #: exercised and four were not. That is the same mistake as the leaks
 #: themselves: treating sites that look alike as though they behave alike.
 #:
-#: The middle tier is what separates them. At ~1.8 MB a Mellin jet fits and a
-#: moment jet does not, so `moments.c` refuses on its own account. The message
+#: The middle tier is what separates them. One byte short of an order-12
+#: moment sweep, the Mellin pass fits and the moment sweep does not, so
+#: `moments.c` refuses on its own account. The message
 #: is asserted for exactly this reason -- it is the only evidence available
 #: from Python about WHICH return ran.
 REFUSING_DRIVERS = [
@@ -250,9 +270,11 @@ REFUSING_DRIVERS = [
     ("log_mellin",          2048,    "a tilted per-length sweep"),   # mellin.c
     ("length_marginals",    2048,    "a per-length marginal sweep"), # marginals.c
     ("cgf_jet",             2048,    "a tilted cumulant sweep"),     # tilt.c
-    ("surprisal_moments",   1800000, "a moment sweep"),              # moments.c
-    ("length_derivatives",  1800000, "a moment sweep"),              # moments.c (via length_moments)
+    ("surprisal_moments",   None,    "a moment sweep"),              # moments.c
+    ("length_derivatives",  None,    "a moment sweep"),              # moments.c (via length_moments)
 ]
+# None: one byte short of the moment sweep itself (`_moment_sweep_bytes`), since
+# the Mellin pass the moment drivers run first no longer fits below ~1.8 MB.
 
 
 @pytest.mark.parametrize("name,budget,expected", REFUSING_DRIVERS,
@@ -273,6 +295,8 @@ def test_a_refusal_can_be_repeated_without_growing(
     does not degrade; run the suite under LSan and it becomes the leak test.
     """
     call = _refusing_calls(model)[name]
+    if budget is None:
+        budget = _moment_sweep_bytes(model) - 1
     BEAM.set_memory_budget(budget)
 
     first = None

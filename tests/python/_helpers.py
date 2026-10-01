@@ -67,5 +67,3 @@ ANALYSIS_BINS = 384
 
 #: reconstructed null is still a few hundredths of an IQR out. Still ~2s.
 CALIBRATION_BINS = 1024
-
-STRICT_SEQS = ["CASSF", "CASSY", "CTTGW"]

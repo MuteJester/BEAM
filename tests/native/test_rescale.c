@@ -12,10 +12,19 @@
  * Two halves, and both are needed. The first checks that the detector detects,
  * because a guard that cannot fire proves nothing about the sweeps it guards.
  * The second runs the sweeps over a matrix of configurations and requires that
- * nothing is ever lost -- including the OPEN-world cases, where the smallest
- * surviving value measured is 4.94e-324. That is the smallest positive double
- * there is, so those rows have no margin at all and are the reason this file
- * exists.
+ * nothing is ever lost. Under the hierarchical prior every string over the
+ * alphabet carries mass, so every state of every layer is live, and each layer
+ * divides all of them by its one maximum. The spread a layer has to hold
+ * grows with the length, which is why the matrix reaches the longest length
+ * each alphabet is run at: 27 for amino acids, 90 for nucleotides.
+ *
+ * Each configuration runs on the default sparse storage, and the cheap ones
+ * on dense storage as well; the two are the same model bit for bit and reach
+ * their rows by different code. Amino-acid order 4 is not in the matrix: all
+ * 160,000 of its residue contexts are live at every layer past the fourth,
+ * and the eight analytics below cost minutes at its default length. What the
+ * rescale depends on is the length and the spread of the weights, not the
+ * width of a layer, so the long amino-acid case is order 3 at 27.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -82,15 +91,14 @@ static void test_the_guard_divides_exactly_as_the_operator_does(void) {
 static char pool_aa[] = "ACDEFGHIKLMNPQRSTVWY";
 static char pool_nt[] = "ACGT";
 
-static BeamModel *build(bool aa, uint8_t order, uint8_t max_len, bool strict,
+static BeamModel *build(bool aa, uint8_t order, uint8_t max_len, bool sparse,
                         uint32_t lo, uint32_t hi, uint32_t n) {
     BeamModelConfig cfg;
     beam_model_config_default(&cfg);
     if (!aa) beam_model_config_default_for(BEAM_ALPHABET_NT, &cfg);
     cfg.order = order;
     cfg.max_length = max_len;
-    cfg.strict = strict ? 1 : 0;
-    if (!strict) cfg.sparse = 0;
+    cfg.sparse = sparse;
     BeamModel *m = beam_model_new(&cfg);
     if (!m) return NULL;
 
@@ -158,9 +166,9 @@ static unsigned long long lost_by(const BeamModel *m) {
 }
 
 static void check_config(const char *label, bool aa, uint8_t order,
-                         uint8_t max_len, bool strict, uint32_t lo,
+                         uint8_t max_len, bool sparse, uint32_t lo,
                          uint32_t hi, uint32_t n) {
-    BeamModel *m = build(aa, order, max_len, strict, lo, hi, n);
+    BeamModel *m = build(aa, order, max_len, sparse, lo, hi, n);
     if (!m) { printf("FAIL: %s did not build\n", label); fail_count++; return; }
     const unsigned long long lost = lost_by(m);
     beam_model_destroy(m);
@@ -171,33 +179,39 @@ static void check_config(const char *label, bool aa, uint8_t order,
     }
 }
 
-static void test_no_closed_world_sweep_loses_a_state(void) {
+static void test_no_sparse_sweep_loses_a_state(void) {
+    /*
+     * Every cell is positive, so a layer holds live states many nats apart,
+     * and the longer the sequence the further apart they drift. If any change
+     * to the prior, the length range or the tilt ever pushes one of them past
+     * what a double can hold beside its layer's maximum, this is what says so.
+     * nt order 6 is cut from its default length of 81 to 24: every one of its
+     * 15,625 residue contexts is live at every layer, and the length the
+     * rescale is most exposed to is already covered by order 3 at 90.
+     */
+    const int before = fail_count;
     check_config("aa order 2 len 12", true, 2, 12, true, 6, 11, 2000);
-    check_config("aa order 4 len 27", true, 4, 27, true, 11, 25, 3000);
-    check_config("nt order 6 len 81", false, 6, 81, true, 30, 78, 2000);
-    if (fail_count) return;
+    check_config("aa order 3 len 27", true, 3, 27, true, 11, 25, 1500);
+    check_config("nt order 6 len 24", false, 6, 24, true, 10, 22, 2000);
+    check_config("nt order 3 len 90", false, 3, 90, true, 40, 88, 1200);
+    if (fail_count != before) return;
     PASS();
 }
 
-static void test_no_open_world_sweep_loses_a_state(void) {
-    /*
-     * The cases with no margin. In the open world hierarchical backoff leaves
-     * every cell positive, so a layer holds live states hundreds of nats apart
-     * and the smallest surviving accumulator measured here is 4.94e-324 -- one
-     * unit in the last place away from being lost. If any change to the
-     * smoothing, the length range or the tilt ever crosses that line, this is
-     * what says so.
-     */
-    check_config("aa order 3 len 27 OPEN", true, 3, 27, false, 11, 25, 1500);
-    check_config("nt order 3 len 90 OPEN", false, 3, 90, false, 40, 88, 1200);
-    if (fail_count) return;
+static void test_no_dense_sweep_loses_a_state(void) {
+    const int before = fail_count;
+    check_config("aa order 2 len 12 dense", true, 2, 12, false, 6, 11, 2000);
+    check_config("nt order 3 len 90 dense", false, 3, 90, false, 40, 88, 1200);
+    if (fail_count != before) return;
     PASS();
 }
 
 static void test_the_mixture_sweep_loses_nothing_either(void) {
-    /* The product sweep rescales the same way and is guarded the same way. */
-    BeamModel *a = build(true, 3, 20, true, 8, 18, 2000);
-    BeamModel *b = build(true, 3, 20, true, 8, 18, 1500);
+    /* The product sweep rescales the same way and is guarded the same way,
+     * and multiplies two members' weights, so its layers spread twice as far.
+     * At the default amino-acid length. */
+    BeamModel *a = build(true, 3, 27, true, 11, 25, 2000);
+    BeamModel *b = build(true, 3, 27, true, 11, 25, 1500);
     ASSERT_MSG(a && b, "a model did not build");
     const BeamModel *pair[2] = {a, b};
     beam_rescale_flush_reset();
@@ -222,8 +236,8 @@ int main(void) {
     RUN_TEST(test_the_guard_divides_exactly_as_the_operator_does);
 
     printf("\n[no sweep loses a state that carries mass]\n");
-    RUN_TEST(test_no_closed_world_sweep_loses_a_state);
-    RUN_TEST(test_no_open_world_sweep_loses_a_state);
+    RUN_TEST(test_no_sparse_sweep_loses_a_state);
+    RUN_TEST(test_no_dense_sweep_loses_a_state);
     RUN_TEST(test_the_mixture_sweep_loses_nothing_either);
 
     printf("\n==============================================================\n");

@@ -15,8 +15,13 @@
  * cannot detect this, and did not. What it checks is that the policy WORKS;
  * what this checks is that it is THERE when nobody asks for it.
  *
- * The bound is deliberately loose. Measured is about 2x, the regression is
- * 35x, so 8x separates them with room for allocator differences.
+ * The bound is deliberately loose, and the fixture is sized so that it
+ * separates the two cases: the ratio compares a sweep's pinned scratch to the
+ * model's size, and a model too large hides it. The 60,000-sequence,
+ * length-20 fixture this used to build holds 236 MB under the hierarchical
+ * prior and measured 5.2x with the policy disabled -- a pass. This one
+ * measured 2.7x with the policy and 17.4x without it, so 8x separates them
+ * with room for allocator differences.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -48,12 +53,12 @@ static void test_the_policy_applies_without_being_named(void) {
     ASSERT_MSG(before > 0, "/proc/self/statm is unreadable");
 
     rs = 88172645463325252ull;
-    const uint32_t n = 60000u;
+    const uint32_t n = 10000u;
     char **seqs = (char **)malloc(n * sizeof(char *));
     double *w = (double *)malloc(n * sizeof(double));
     ASSERT_MSG(seqs && w, "out of memory");
     for (uint32_t k = 0; k < n; ++k) {
-        const uint32_t L = 8u + rnd(10u);
+        const uint32_t L = 6u + rnd(5u);
         char *s = (char *)malloc(L + 3u);
         s[0] = 'C';
         for (uint32_t j = 0; j < L; ++j) s[1 + j] = AA[rnd(20u)];
@@ -62,7 +67,7 @@ static void test_the_policy_applies_without_being_named(void) {
     }
     BeamModelConfig cfg;
     beam_model_config_default(&cfg);
-    cfg.order = 4u; cfg.max_length = 20u; cfg.sparse = true;
+    cfg.order = 4u; cfg.max_length = 12u; cfg.sparse = true;
     BeamModel *m = beam_model_new(&cfg);
     const BeamError oe = m ? beam_model_observe(m, (const char **)seqs, w, n)
                            : BEAM_ERR_NULL_ARG;
@@ -85,8 +90,8 @@ static void test_the_policy_applies_without_being_named(void) {
     printf("\n      model %.1f MB, resident grew %.1f MB, ratio %.2fx  ",
            model / 1e6, (after - before) / 1e6, ratio);
     if (ratio > 8.0)
-        printf("\n      (allocator.o was dropped from the link: 35x is the "
-               "unpolicied figure)  ");
+        printf("\n      (allocator.o was dropped from the link: about 17x "
+               "is the unpolicied figure)  ");
     ASSERT_MSG(ratio <= 8.0, "the allocator policy did not reach this binary");
     PASS();
 }

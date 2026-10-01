@@ -96,30 +96,35 @@ every resample is a freshly fitted model. The depth belongs to the call, so
 profiles are comparable only within one. See
 [`docs/api/python/diversity.md`](docs/api/python/diversity.md).
 
-### Closed world by default
+### A hierarchical Bayesian prior
 
-The model holds what the sequences you gave it actually spell. A sequence no
-path supports scores `-inf`, and `path_count()` is the number of sequences the
-data can spell rather than the size of the whole lattice. Storage is sparse,
-so only occupied rows exist.
+Every sequence up to `max_length` is possible, and the repertoire decides where
+the mass goes. Each table row is a Dirichlet posterior centred on its parent,
+the same position with one residue less of context, down to the position alone
+and then the uniform `1/R`:
 
-```python
-model = BeamModel(seqs, abundances=ab)          # observed support only
-model.log_pseq("CWWWWWWWF")                     # -inf, if nothing spells it
+```
+P_k(x) = (n_k(x) + alpha[k] * P_{k-1}(x)) / (n_k + alpha[k])
 ```
 
-Pass `strict=False` for the open world instead. A Laplace add-one then
-leaves every table cell positive, so every sequence over the alphabet receives
-a graded probability and the support becomes all of sequence space:
+So a context the corpus never saw predicts what its shorter context predicts:
+new CDR3-like sequences get graded probabilities, and junk stays improbable.
 
 ```python
-open_world = BeamModel(seqs, abundances=ab, strict=False)
+model = BeamModel(seqs, abundances=ab)          # strengths estimated from the counts
+model.config["alpha"]                           # what the evidence chose
+model.log_pseq("CWWWWWWWF")                     # finite, and very low
+fit = BEAM.fit_alpha(seqs, ab)                  # or: fit them to held-out reads
 ```
 
-That is a different model, and a useful one: it is what lets BEAM rank
-sequences the corpus never saw. It is no longer what you get without asking,
-because a support of `sum_L R**L`, for an alphabet of `R` residues, describes
-the smoother rather than the data, and it should not arrive by default.
+Unless you name them, the strengths are the ones that maximise the evidence of
+the model's own counts (the Dirichlet-multinomial marginal likelihood), level
+by level, under a weak hyperprior centred on 10 for the corpora the counts say
+nothing about.
+
+Storage stays sparse: only observed rows are kept, and an unobserved row is
+resolved through its parent. See
+[`docs/api/python/model.md`](docs/api/python/model.md#the-hierarchical-prior).
 
 ## Testing
 
@@ -152,10 +157,8 @@ python -m pytest tests    # Python suite
 
 ## A note on the file format
 
-Saved models carry the magic `0x4245414D` (`"BEAM"`). This model shipped as
-EDGE before it was split into its own repository, under a different magic, and
-files written then are **not loadable** even though the format is otherwise
-identical. That is deliberate: the foundation models are being rebuilt, and a
-file that loads under a name the project no longer uses is worse than one that
-refuses with a reason. Such files are detected and refused by name, so the
-failure says "written by EDGE, rebuild it" rather than looking like corruption.
+Saved models carry the magic `0x4245414D` (`"BEAM"`) and store counts plus the
+configuration, the prior's strengths included, so a loaded model can still be
+observed into and re-finalized. Only the current format is read: BEAM has not
+been released, so a file from an earlier development build is refused with a
+message naming its format, and the remedy is to rebuild it from its sequences.

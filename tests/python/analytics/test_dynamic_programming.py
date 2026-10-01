@@ -13,24 +13,45 @@ from BEAM import BeamModel
 
 from _helpers import AA, J_MOTIFS, make_corpus
 
+NT = "ACGTN"
+
+
+def _enumerable():
+    """A nucleotide model whose WHOLE support fits in a list, and that list.
+
+    The prior makes every string over the alphabet of length 1..max_length
+    possible, so "every sequence" means all of them, N included -- not the
+    letters the corpus happened to use. Nucleotides at max_length 6 keep that
+    at 19,530 strings, and order 3 still exercises full contexts and both
+    anchors, which an amino-acid space small enough to enumerate would not.
+    """
+    import itertools
+    rng = random.Random(5)
+    seqs = ["TG" + "".join(rng.choice("ACGT") for _ in range(rng.randint(0, 3)))
+            + "C" for _ in range(400)]
+    abund = [rng.randint(1, 40) for _ in seqs]
+    m = BeamModel(seqs, abundances=abund, alphabet="nt", order=3, max_length=6)
+    every = ["".join(t) for L in range(1, 7)
+             for t in itertools.product(NT, repeat=L)]
+    return m, every, np.asarray(m.log_pseq_batch(every), dtype=np.float64)
+
+
 # ── Internal consistency of the DAG ──────────────────────────────
 
 def test_partition_normalises_by_enumeration():
-    """The sharpest check available: sum P(s|L) over EVERY sequence of a short
-    length must be exactly 1. If the partition function or any context packing
-    is wrong, this cannot come out right by accident."""
-    seqs, abund = make_corpus(n=400, seed=5, lo=3, hi=4)
-    m = BeamModel(seqs, abundances=abund, order=2, max_length=6)
-    import itertools
-    for length in (3, 4):
-        total = 0.0
+    """The sharpest check available: sum P(s|L) over EVERY sequence of every
+    length must be exactly 1, and so must sum P(s) over the whole space. If the
+    partition function or any context packing is wrong, this cannot come out
+    right by accident."""
+    m, every, lp = _enumerable()
+    assert np.isfinite(lp).all(), "the prior leaves no string impossible"
+    lengths = np.array([len(s) for s in every])
+    for length in range(1, 7):
         logpi = m.log_length_prior(length)
-        for t in itertools.product(AA, repeat=length):
-            lp = m.log_pseq("".join(t))
-            if math.isfinite(lp):
-                total += math.exp(lp - logpi)
+        total = float(np.exp(lp[lengths == length] - logpi).sum())
         assert total == pytest.approx(1.0, abs=1e-9), (
             f"L={length}: sum P(s|L) = {total!r}")
+    assert float(np.exp(lp).sum()) == pytest.approx(1.0, abs=1e-9)
 
 
 def test_length_prior_normalises(model):
@@ -68,16 +89,10 @@ def test_entropy_matches_brute_force():
     """The entropy DP against an exhaustive sum over every short sequence.
 
     `test_hill_number_one_is_exp_entropy` compares the entropy with itself;
-    this compares it with `-sum P ln P` computed one sequence at a time."""
-    import itertools
-    seqs, abund = make_corpus(n=400, seed=5, lo=3, hi=4)
-    m = BeamModel(seqs, abundances=abund, order=2, max_length=6)
-    h = 0.0
-    for length in (3, 4):
-        for t in itertools.product(AA, repeat=length):
-            lp = m.log_pseq("".join(t))
-            if math.isfinite(lp):
-                h -= math.exp(lp) * lp
+    this compares it with `-sum P ln P` computed one sequence at a time, over
+    the whole support."""
+    m, _, lp = _enumerable()
+    h = float(-(np.exp(lp) * lp).sum())
     assert m.entropy() == pytest.approx(h, rel=1e-9)
 
 
@@ -91,22 +106,26 @@ def test_hill_numbers_are_ordered(model):
 def test_support_is_all_of_sequence_space():
     """Documented, not desired, and the reason `path_count` carries a warning.
 
-    Hierarchical backoff leaves no cell at zero, so nothing is dead and the
-    support is every peptide of every producible length. That is a property of
-    the smoother, not of the grammar, and the number must never be quoted as a
+    Every model carries the hierarchical prior, which leaves no cell at zero,
+    so nothing is dead and the support is every peptide of every length up to
+    max_length -- including lengths the corpus never had. That is a property
+    of the prior, not of the grammar, and the number must never be quoted as a
     diversity."""
     seqs, abund = make_corpus(n=300, seed=9, lo=5, hi=6)
-    m = BeamModel(seqs, abundances=abund, order=2, max_length=8, strict=False)
-    assert m.path_count(5) == pytest.approx(20.0 ** 5)
-    assert m.path_count(6) == pytest.approx(20.0 ** 6)
+    m = BeamModel(seqs, abundances=abund, order=2, max_length=8)
+    for length in range(1, 9):
+        assert m.path_count(length) == pytest.approx(20.0 ** length,
+                                                     rel=1e-12)
+    total = sum(20.0 ** L for L in range(1, 9))
+    assert m.path_count() == pytest.approx(total, rel=1e-12)
+    assert m.hill_number(0.0) == pytest.approx(total, rel=1e-9)
 
 
 
-def test_spectrum_totals(corpus):
+def test_spectrum_totals(small):
     """The counting measure integrates to the support size and the generated
     measure to 1. Both are checked against a different code path."""
-    seqs, abund = corpus
-    m = BeamModel(seqs, abundances=abund, order=2)
+    m = small
 
     counting = m.spectrum(measure="counting", bins=512)
     generated = m.spectrum(measure="generated", bins=512,
@@ -116,7 +135,7 @@ def test_spectrum_totals(corpus):
     assert generated["total"] == pytest.approx(1.0, rel=1e-9)
 
 
-def test_spectrum_identity(corpus):
+def test_spectrum_identity(small):
     """`sum over bins of multiplicity * mean probability` must be 1.
 
     This is the check that catches per-bin error, which totals alone cannot
@@ -125,8 +144,7 @@ def test_spectrum_identity(corpus):
     mean, NOT `exp(-surprisal)` at the bin edge, which carries a systematic
     bias of `exp(spacing)` across the bin.
     """
-    seqs, abund = corpus
-    m = BeamModel(seqs, abundances=abund, order=2)
+    m = small
     c = m.spectrum(measure="counting", bins=512)
     g = m.spectrum(measure="generated", bins=512, spacing=c["spacing"])
     keep = (c["weights"] > 0) & (g["weights"] > 0)
@@ -135,7 +153,7 @@ def test_spectrum_identity(corpus):
     assert p.max() <= 1.0 + 1e-12
 
 
-def test_spectrum_mean_is_exact_but_the_shape_is_not(corpus):
+def test_spectrum_mean_is_exact_but_the_shape_is_not(small):
     """The documented guarantee is precise, and it is not "every bin is right".
 
     Linear splitting happens at EVERY layer, not once at the end, so a
@@ -145,8 +163,7 @@ def test_spectrum_mean_is_exact_but_the_shape_is_not(corpus):
     future change that made the spectrum exact bin-by-bin would be an
     improvement, and one that broke the mean would not be caught by
     `test_spectrum_totals`."""
-    seqs, abund = corpus
-    m = BeamModel(seqs, abundances=abund, order=2)
+    m = small
     lm = m.length_marginals()
     length = int(np.argmax(lm["generated"]))
 
@@ -167,26 +184,22 @@ def test_spectrum_mean_is_exact_but_the_shape_is_not(corpus):
     assert 0.0 < inflation <= budget, (inflation, budget)
 
 
-def test_spectrum_per_length_sums_to_pooled(corpus):
-    seqs, abund = corpus
-    m = BeamModel(seqs, abundances=abund, order=2)
+def test_spectrum_per_length_sums_to_pooled(small):
+    m = small
     pooled = m.spectrum(measure="generated", bins=256)
     acc = np.zeros(256)
-    for length in range(1, 28):
-        if not math.isfinite(m.log_length_prior(length)):
-            continue
+    for length in m.observed_lengths:
         acc += m.spectrum(measure="generated", length=length, bins=256,
                           spacing=pooled["spacing"])["weights"]
     assert np.abs(acc - pooled["weights"]).max() < 1e-12
 
 
-def test_accumulator_max_bounds_the_grid(corpus):
+def test_accumulator_max_bounds_the_grid(small):
     """The grid must be sized by the accumulator, not by the surprisal: the DP
     accumulates monotonically and only applies a per-length constant at the
     sink. A grid sized to the surprisal silently drops mass off the top when
     that constant is negative."""
-    seqs, abund = corpus
-    m = BeamModel(seqs, abundances=abund, order=2)
+    m = small
     hi = m.accumulator_max()
     assert hi > 0
     s = m.spectrum(measure="counting", bins=512)

@@ -18,23 +18,26 @@ from _helpers import AA, J_MOTIFS, make_corpus
 
 def test_surprisal_range_brackets_every_sequence():
     """Exhaustive: no sequence may fall outside the reported range, and both
-    ends must be attained."""
+    ends must be attained.
+
+    "Every sequence" is every string over the whole alphabet up to
+    max_length, since the prior leaves none impossible -- so the space is
+    nucleotide and short enough to list (19,530 strings), and the top of the
+    range is junk the corpus never came near."""
     import itertools
-    seqs, abund = make_corpus(n=400, seed=5, lo=3, hi=4)
-    m = BeamModel(seqs, abundances=abund, order=2, max_length=6)
+    rng = random.Random(5)
+    seqs = ["TG" + "".join(rng.choice("ACGT") for _ in range(rng.randint(0, 3)))
+            + "C" for _ in range(400)]
+    abund = [rng.randint(1, 40) for _ in seqs]
+    m = BeamModel(seqs, abundances=abund, alphabet="nt", order=3, max_length=6)
     lo, hi = m.surprisal_range()
 
-    seen_lo, seen_hi = math.inf, -math.inf
-    for L in (3, 4):
-        for t in itertools.product(AA, repeat=L):
-            lp = m.log_pseq("".join(t))
-            if not math.isfinite(lp):
-                continue
-            u = -lp
-            seen_lo = min(seen_lo, u)
-            seen_hi = max(seen_hi, u)
-    assert lo == pytest.approx(seen_lo, rel=1e-9)
-    assert hi == pytest.approx(seen_hi, rel=1e-9)
+    every = ["".join(t) for L in range(1, 7)
+             for t in itertools.product("ACGTN", repeat=L)]
+    u = -np.asarray(m.log_pseq_batch(every), dtype=np.float64)
+    assert np.isfinite(u).all(), "the prior leaves no string impossible"
+    assert lo == pytest.approx(float(u.min()), rel=1e-9)
+    assert hi == pytest.approx(float(u.max()), rel=1e-9)
 
 
 def test_dynamic_range_is_positive(model):

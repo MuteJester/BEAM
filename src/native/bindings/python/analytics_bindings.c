@@ -236,6 +236,301 @@ PyObject *py_log_mellin_many(PyObject *self, PyObject *args) {
     PyMem_Free(out);
     return res;
 }
+/* log_gamma_ratio(w, z_re, z_im) -> bytes of nz * nw complex128, row i the
+ * ratio ln G(w_k) - ln G(w_k + z_i) at every w: the layout of a (nz, nw)
+ * complex128 array. Not a model's: a function the contour kernels call. */
+PyObject *py_log_gamma_ratio(PyObject *self, PyObject *args) {
+    (void)self;
+    PyObject *wobj, *reobj, *imobj;
+    if (!PyArg_ParseTuple(args, "OOO", &wobj, &reobj, &imobj)) return NULL;
+    Py_buffer wv, rv, iv;
+    if (!get_f64_buffer(wobj, &wv, 0, "w")) return NULL;
+    if (!get_f64_buffer(reobj, &rv, 0, "real parts")) { PyBuffer_Release(&wv); return NULL; }
+    if (!get_f64_buffer(imobj, &iv, 0, "imaginary parts")) {
+        PyBuffer_Release(&wv); PyBuffer_Release(&rv);
+        return NULL;
+    }
+    const Py_ssize_t nw = f64_buffer_count(&wv), nz = f64_buffer_count(&rv);
+    if (f64_buffer_count(&iv) != nz) {
+        PyBuffer_Release(&wv); PyBuffer_Release(&rv); PyBuffer_Release(&iv);
+        PyErr_Format(PyExc_ValueError, "%zd real parts but %zd imaginary parts",
+                     nz, f64_buffer_count(&iv));
+        return NULL;
+    }
+    const uint64_t cells = (uint64_t)nw * (uint64_t)nz;
+    double *out = (double *)beam_py_alloc(cells * 4u * sizeof(double),
+                                          "the log-gamma ratios", 0u, "cells");
+    if (!out) {
+        PyBuffer_Release(&wv); PyBuffer_Release(&rv); PyBuffer_Release(&iv);
+        return NULL;
+    }
+    double *ore = out, *oim = out + cells, *il = out + 2u * cells;
+    Py_BEGIN_ALLOW_THREADS
+    beam_log_gamma_ratio((const double *)wv.buf, (size_t)nw,
+                         (const double *)rv.buf, (const double *)iv.buf,
+                         (size_t)nz, ore, oim);
+    for (uint64_t x = 0; x < cells; ++x) { il[2 * x] = ore[x]; il[2 * x + 1] = oim[x]; }
+    Py_END_ALLOW_THREADS
+    PyBuffer_Release(&wv); PyBuffer_Release(&rv); PyBuffer_Release(&iv);
+    PyObject *res = edge_doubles_to_bytes(il, (size_t)cells * 2u);
+    PyMem_Free(out);
+    return res;
+}
+/* Several float64 buffers at once; on failure, those taken are released. */
+static int take_f64s(PyObject **objs, Py_buffer *bufs, const char **names, int n) {
+    for (int i = 0; i < n; ++i) {
+        if (!get_f64_buffer(objs[i], &bufs[i], 0, names[i])) {
+            for (int j = 0; j < i; ++j) PyBuffer_Release(&bufs[j]);
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static void release_f64s(Py_buffer *bufs, int n) {
+    for (int i = 0; i < n; ++i) PyBuffer_Release(&bufs[i]);
+}
+
+/* beta_contour_sums(zr, zi, lgr, lgi, lmr, lmi, wt, tt, dph, w, lnns) -> bytes
+ * of 3 * nk doubles: the values' sums, then the two rounding sums. */
+PyObject *py_beta_contour_sums(PyObject *self, PyObject *args) {
+    (void)self;
+    PyObject *o[11];
+    if (!PyArg_ParseTuple(args, "OOOOOOOOOOO", &o[0], &o[1], &o[2], &o[3], &o[4],
+                          &o[5], &o[6], &o[7], &o[8], &o[9], &o[10])) return NULL;
+    static const char *names[11] = {"zr", "zi", "lgr", "lgi", "lmr", "lmi", "wt",
+                                    "tt", "dph", "w", "lnns"};
+    Py_buffer b[11];
+    if (!take_f64s(o, b, names, 11)) return NULL;
+    const Py_ssize_t nt = f64_buffer_count(&b[0]), nk = f64_buffer_count(&b[9]);
+    for (int i = 1; i < 9; ++i)
+        if (f64_buffer_count(&b[i]) != nt) {
+            release_f64s(b, 11);
+            PyErr_Format(PyExc_ValueError, "%s has %zd entries, not %zd",
+                         names[i], f64_buffer_count(&b[i]), nt);
+            return NULL;
+        }
+    if (f64_buffer_count(&b[10]) != nk) {
+        release_f64s(b, 11);
+        PyErr_Format(PyExc_ValueError, "lnns has %zd entries, not %zd",
+                     f64_buffer_count(&b[10]), nk);
+        return NULL;
+    }
+    double *out = (double *)beam_py_alloc((uint64_t)nk * 3u * sizeof(double),
+                                          "the contour sums", 0u, "parameters");
+    if (!out) { release_f64s(b, 11); return NULL; }
+    Py_BEGIN_ALLOW_THREADS
+    beam_beta_contour_sums((size_t)nt, (const double *)b[0].buf, (const double *)b[1].buf,
+                           (const double *)b[2].buf, (const double *)b[3].buf,
+                           (const double *)b[4].buf, (const double *)b[5].buf,
+                           (const double *)b[6].buf, (const double *)b[7].buf,
+                           (const double *)b[8].buf, (size_t)nk,
+                           (const double *)b[9].buf, (const double *)b[10].buf,
+                           out, out + nk, out + 2 * nk);
+    Py_END_ALLOW_THREADS
+    release_f64s(b, 11);
+    PyObject *res = edge_doubles_to_bytes(out, (size_t)nk * 3u);
+    PyMem_Free(out);
+    return res;
+}
+
+/* log_gamma_ratio_shift(w, d, z_re, z_im) -> bytes of nz * nd complex128, row
+ * i the shift [ln G(w-d_k) - ln G(w-d_k+z_i)] - [ln G(w) - ln G(w+z_i)] at
+ * every d: the layout of a (nz, nd) complex128 array. */
+PyObject *py_log_gamma_ratio_shift(PyObject *self, PyObject *args) {
+    (void)self;
+    double w;
+    PyObject *o[3];
+    if (!PyArg_ParseTuple(args, "dOOO", &w, &o[0], &o[1], &o[2])) return NULL;
+    static const char *names[3] = {"d", "real parts", "imaginary parts"};
+    Py_buffer b[3];
+    if (!take_f64s(o, b, names, 3)) return NULL;
+    const Py_ssize_t nd = f64_buffer_count(&b[0]), nz = f64_buffer_count(&b[1]);
+    if (f64_buffer_count(&b[2]) != nz) {
+        release_f64s(b, 3);
+        PyErr_Format(PyExc_ValueError, "%zd real parts but %zd imaginary parts",
+                     nz, f64_buffer_count(&b[2]));
+        return NULL;
+    }
+    const uint64_t cells = (uint64_t)nd * (uint64_t)nz;
+    double *out = (double *)beam_py_alloc((cells ? cells : 1u) * 4u * sizeof(double),
+                                          "the log-gamma shifts", 0u, "cells");
+    if (!out) { release_f64s(b, 3); return NULL; }
+    double *ore = out, *oim = out + cells, *il = out + 2u * cells;
+    Py_BEGIN_ALLOW_THREADS
+    beam_log_gamma_ratio_shift(w, (const double *)b[0].buf, (size_t)nd,
+                               (const double *)b[1].buf, (const double *)b[2].buf,
+                               (size_t)nz, ore, oim);
+    for (uint64_t x = 0; x < cells; ++x) { il[2 * x] = ore[x]; il[2 * x + 1] = oim[x]; }
+    Py_END_ALLOW_THREADS
+    release_f64s(b, 3);
+    PyObject *res = edge_doubles_to_bytes(il, (size_t)cells * 2u);
+    PyMem_Free(out);
+    return res;
+}
+
+/* cohort_private_sums(zr, zi, lbr, lbi, lmr, lmi, wt, tt, dph, w, d, lnns) ->
+ * bytes of 3 * nk doubles: the values' sums, then the two rounding sums. */
+PyObject *py_cohort_private_sums(PyObject *self, PyObject *args) {
+    (void)self;
+    PyObject *o[11];
+    double w;
+    if (!PyArg_ParseTuple(args, "OOOOOOOOOdOO", &o[0], &o[1], &o[2], &o[3], &o[4],
+                          &o[5], &o[6], &o[7], &o[8], &w, &o[9], &o[10])) return NULL;
+    static const char *names[11] = {"zr", "zi", "lbr", "lbi", "lmr", "lmi", "wt",
+                                    "tt", "dph", "d", "lnns"};
+    Py_buffer b[11];
+    if (!take_f64s(o, b, names, 11)) return NULL;
+    const Py_ssize_t nt = f64_buffer_count(&b[0]), nk = f64_buffer_count(&b[9]);
+    for (int i = 1; i < 9; ++i)
+        if (f64_buffer_count(&b[i]) != nt) {
+            release_f64s(b, 11);
+            PyErr_Format(PyExc_ValueError, "%s has %zd entries, not %zd",
+                         names[i], f64_buffer_count(&b[i]), nt);
+            return NULL;
+        }
+    if (f64_buffer_count(&b[10]) != nk) {
+        release_f64s(b, 11);
+        PyErr_Format(PyExc_ValueError, "lnns has %zd entries, not %zd",
+                     f64_buffer_count(&b[10]), nk);
+        return NULL;
+    }
+    double *out = (double *)beam_py_alloc((uint64_t)(nk ? nk : 1) * 3u * sizeof(double),
+                                          "the contour sums", 0u, "parameters");
+    if (!out) { release_f64s(b, 11); return NULL; }
+    Py_BEGIN_ALLOW_THREADS
+    beam_cohort_private_sums((size_t)nt, (const double *)b[0].buf, (const double *)b[1].buf,
+                             (const double *)b[2].buf, (const double *)b[3].buf,
+                             (const double *)b[4].buf, (const double *)b[5].buf,
+                             (const double *)b[6].buf, (const double *)b[7].buf,
+                             (const double *)b[8].buf, w, (size_t)nk,
+                             (const double *)b[9].buf, (const double *)b[10].buf,
+                             out, out + nk, out + 2 * nk);
+    Py_END_ALLOW_THREADS
+    release_f64s(b, 11);
+    PyObject *res = edge_doubles_to_bytes(out, (size_t)nk * 3u);
+    PyMem_Free(out);
+    return res;
+}
+
+/* beta_contour_tail(zr, zi, lgr, ts, w) -> bytes of nk doubles. */
+PyObject *py_beta_contour_tail(PyObject *self, PyObject *args) {
+    (void)self;
+    PyObject *o[5];
+    if (!PyArg_ParseTuple(args, "OOOOO", &o[0], &o[1], &o[2], &o[3], &o[4])) return NULL;
+    static const char *names[5] = {"zr", "zi", "lgr", "ts", "w"};
+    Py_buffer b[5];
+    if (!take_f64s(o, b, names, 5)) return NULL;
+    const Py_ssize_t nt = f64_buffer_count(&b[0]), nk = f64_buffer_count(&b[4]);
+    for (int i = 1; i < 4; ++i)
+        if (f64_buffer_count(&b[i]) != nt) {
+            release_f64s(b, 5);
+            PyErr_Format(PyExc_ValueError, "%s has %zd entries, not %zd",
+                         names[i], f64_buffer_count(&b[i]), nt);
+            return NULL;
+        }
+    double *out = (double *)beam_py_alloc((uint64_t)(nk ? nk : 1) * sizeof(double),
+                                          "the contour tails", 0u, "parameters");
+    if (!out) { release_f64s(b, 5); return NULL; }
+    Py_BEGIN_ALLOW_THREADS
+    beam_beta_contour_tail((size_t)nt, (const double *)b[0].buf, (const double *)b[1].buf,
+                           (const double *)b[2].buf, (const double *)b[3].buf,
+                           (size_t)nk, (const double *)b[4].buf, out);
+    Py_END_ALLOW_THREADS
+    release_f64s(b, 5);
+    PyObject *res = edge_doubles_to_bytes(out, (size_t)nk);
+    PyMem_Free(out);
+    return res;
+}
+
+/* log_mellin_complex(cap, re, im) -> bytes of 2*nq doubles, interleaved
+ * (re, im) per order: the memory layout of numpy's complex128. */
+PyObject *py_log_mellin_complex(PyObject *self, PyObject *args) {
+    (void)self;
+    PyObject *cap, *reobj, *imobj;
+    if (!PyArg_ParseTuple(args, "OOO", &cap, &reobj, &imobj)) return NULL;
+    BeamModel *m = edge_from_capsule(cap);
+    if (!m) return NULL;
+    Py_buffer rv, iv;
+    if (!get_f64_buffer(reobj, &rv, 0, "real parts")) return NULL;
+    if (!get_f64_buffer(imobj, &iv, 0, "imaginary parts")) {
+        PyBuffer_Release(&rv);
+        return NULL;
+    }
+    const Py_ssize_t nq = f64_buffer_count(&rv);
+    if (f64_buffer_count(&iv) != nq) {
+        PyBuffer_Release(&rv); PyBuffer_Release(&iv);
+        PyErr_Format(PyExc_ValueError,
+                     "%zd real parts but %zd imaginary parts",
+                     nq, f64_buffer_count(&iv));
+        return NULL;
+    }
+    if ((uint64_t)nq > UINT32_MAX) {
+        PyBuffer_Release(&rv); PyBuffer_Release(&iv);
+        PyErr_Format(PyExc_ValueError,
+                     "%zd orders in one call; the limit is %u",
+                     nq, (unsigned)UINT32_MAX);
+        return NULL;
+    }
+    double *out = (double *)beam_py_alloc((uint64_t)nq * 2u * sizeof(double),
+                                          "the complex Mellin values",
+                                          (uint32_t)nq, "orders");
+    if (!out) { PyBuffer_Release(&rv); PyBuffer_Release(&iv); return NULL; }
+    double *ore = out, *oim = out + nq;
+    BeamError err;
+    Py_BEGIN_ALLOW_THREADS
+    err = beam_model_log_mellin_complex(m, (const double *)rv.buf,
+                                        (const double *)iv.buf, (size_t)nq,
+                                        ore, oim);
+    Py_END_ALLOW_THREADS
+    PyBuffer_Release(&rv); PyBuffer_Release(&iv);
+    if (err != BEAM_OK) { PyMem_Free(out); return set_beam_error(err); }
+    /* Interleave in a second buffer so the result is complex128 as-is. */
+    double *il = (double *)beam_py_alloc((uint64_t)nq * 2u * sizeof(double),
+                                         "the complex Mellin values",
+                                         (uint32_t)nq, "orders");
+    if (!il) { PyMem_Free(out); return NULL; }
+    for (Py_ssize_t j = 0; j < nq; ++j) {
+        il[2 * j] = ore[j];
+        il[2 * j + 1] = oim[j];
+    }
+    PyMem_Free(out);
+    PyObject *res = edge_doubles_to_bytes(il, (size_t)nq * 2u);
+    PyMem_Free(il);
+    return res;
+}
+/* log_mellin_line(cap, re, im0, dim, n) -> bytes of 2n doubles,
+ * interleaved (re, im): numpy complex128. */
+PyObject *py_log_mellin_line(PyObject *self, PyObject *args) {
+    (void)self;
+    PyObject *cap; double re, im0, dim; Py_ssize_t n;
+    if (!PyArg_ParseTuple(args, "Odddn", &cap, &re, &im0, &dim, &n)) return NULL;
+    BeamModel *m = edge_from_capsule(cap);
+    if (!m) return NULL;
+    if (n < 0) {
+        PyErr_Format(PyExc_ValueError, "n must be non-negative, got %zd", n);
+        return NULL;
+    }
+    if ((uint64_t)n > UINT32_MAX) {
+        PyErr_Format(PyExc_ValueError, "%zd orders in one call; the limit is %u",
+                     n, (unsigned)UINT32_MAX);
+        return NULL;
+    }
+    double *out = (double *)beam_py_alloc((uint64_t)n * 4u * sizeof(double),
+                                          "the line Mellin values",
+                                          (uint32_t)n, "orders");
+    if (!out) return NULL;
+    double *ore = out, *oim = out + n, *il = out + 2 * n;
+    BeamError err;
+    Py_BEGIN_ALLOW_THREADS
+    err = beam_model_log_mellin_line(m, re, im0, dim, (size_t)n, ore, oim);
+    Py_END_ALLOW_THREADS
+    if (err != BEAM_OK) { PyMem_Free(out); return set_beam_error(err); }
+    for (Py_ssize_t j = 0; j < n; ++j) { il[2 * j] = ore[j]; il[2 * j + 1] = oim[j]; }
+    PyObject *res = edge_doubles_to_bytes(il, (size_t)n * 2u);
+    PyMem_Free(out);
+    return res;
+}
 PyObject *py_surprisal_moments(PyObject *self, PyObject *args) {
     (void)self;
     PyObject *cap; double q; unsigned int order;

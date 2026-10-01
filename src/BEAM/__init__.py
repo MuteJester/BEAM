@@ -40,6 +40,9 @@ from .mixture import (BetaDiversity, EntropyBounds, EntropyEstimate,
                       MixtureTooLarge, SupportSize, UnsupportedOrder)
 from .diversity import (DepthMatchedProfiles, ResamplingBand,
                         depth_matched_hill_profiles)
+from .likelihood import (PairLikelihood, Piece, RepertoireLikelihood,
+                         pair_likelihood, repertoire_likelihood)
+from .model.fit import AlphaFit, fit_alpha
 from .query import BeamQuery, Condition
 from .query.errors import (ImpossibleCondition, QueryError, QueryTooLarge,
                            UnsupportedQuery)
@@ -64,5 +67,8 @@ __all__ = [
     "Mixture", "BetaDiversity", "EntropyBounds", "EntropyEstimate",
     "SupportSize",
     "depth_matched_hill_profiles", "DepthMatchedProfiles", "ResamplingBand",
+    "repertoire_likelihood", "pair_likelihood", "RepertoireLikelihood",
+    "PairLikelihood", "Piece",
+    "fit_alpha", "AlphaFit",
 ]
 __version__ = "0.1.0"

@@ -109,5 +109,14 @@ _Static_assert(BEAM_RESIDUE_INVALID > BEAM_MAX_RADIX,
 bool beam_encode(const BeamModel *m, const char *seq,
                  uint8_t *out, uint32_t *out_len);
 
+/**
+ * `beam_encode` for the `n` bytes at `seq`, which need not be NUL-terminated:
+ * a sequence inside a packed buffer. The same rules, byte for byte; a NUL
+ * byte is not a residue of any alphabet, so it makes the sequence unreadable
+ * rather than ending it.
+ */
+bool beam_encode_n(const BeamModel *m, const char *seq, size_t n,
+                   uint8_t *out, uint32_t *out_len);
+
 
 #endif /* BEAM_INTERNAL_ALPHABET_H */

@@ -86,7 +86,7 @@ spacing = accumulator_max * 1.02 / (bins - max_length - 9)
 bins >~ 5 * (length + 1) * accumulator_max / band_width
 ```
 
-Measured on the 927M-sequence foundation model (order 4, strict) at its modal length 15, with quartile bands about 2.4 nats wide:
+Measured on the 927M-sequence foundation model (order 4, built under the previous closed-world rule) at its modal length 15, with quartile bands about 2.4 nats wide:
 
 | bins | spacing | `resolution_error` | scratch | time |
 |---|---|---|---|---|

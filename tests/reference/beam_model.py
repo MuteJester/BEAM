@@ -222,16 +222,28 @@ class ReferenceBeamModel:
 # ── construction ─────────────────────────────────────────────────
 
 def reference_build(seqs, abundances=None, *, order=4, max_len=27,
-                    weights=(0.5, 0.5), strict=True, alphabet="aa"):
-    """Count, normalise, take logs. That is the whole model.
+                    weights=(0.5, 0.5), alpha=None, alpha_length=None,
+                    alphabet="aa"):
+    """Count, smooth by the hierarchical prior, take logs. The whole model.
 
-    The open world is a Laplace add-one at this one table rather than a
-    hierarchy: with no parent to fall back on, an unobserved row would
-    otherwise normalise to nothing and then floor to logs that do not sum to
-    one, which is not a distribution.
+    Every row is the posterior mean of a Dirichlet centred on its parent,
+
+        P_k(x) = (n_k(x) + alpha[k] * P_{k-1}(x)) / (n_k + alpha[k]),
+
+    level k keeping the k residues nearest the scored one, level 0 the depth
+    alone, and the uniform 1/R below that. Computed here the plain way, in
+    dense arrays: a level's counts are the top counts summed over the
+    residues it drops, and a parent is broadcast to its children by tiling.
+    It shares no code with the library's sparse, depth-by-depth build.
     """
-    alpha = ALPHABETS[alphabet] if isinstance(alphabet, str) else alphabet
-    A, R = alpha.radix, alpha.residues
+    if alpha is None:
+        alpha = 10.0
+    if isinstance(alpha, (int, float)):
+        alpha = (float(alpha),) * (order + 1)
+    alpha = tuple(float(a) for a in alpha)
+    alpha_length = 10.0 if alpha_length is None else float(alpha_length)
+    alph = ALPHABETS[alphabet] if isinstance(alphabet, str) else alphabet
+    A, R = alph.radix, alph.residues
     n_ctx = A ** order
     if abundances is None:
         abundances = [1.0] * len(seqs)
@@ -240,9 +252,9 @@ def reference_build(seqs, abundances=None, *, order=4, max_len=27,
     cnt_length = np.zeros(max_len + 1)
 
     for seq, w in zip(seqs, abundances):
-        if any(c not in alpha.code for c in seq):
+        if any(c not in alph.code for c in seq):
             continue
-        s = [alpha.code[c] for c in seq]
+        s = [alph.code[c] for c in seq]
         n = len(s)
         if n == 0 or n > max_len:
             continue
@@ -253,23 +265,24 @@ def reference_build(seqs, abundances=None, *, order=4, max_len=27,
             cnt[1][n - 1 - p][
                 ReferenceBeamModel.ctx_backward(s, p, order, A, n)][x] += w
 
-    add = 0.0 if strict else 1.0
     lp = []
     for d in range(2):
-        tab = cnt[d] + add
-        tot = tab.sum(axis=2, keepdims=True)
-        with np.errstate(divide="ignore", invalid="ignore"):
-            prob = np.where(tot > 0.0, tab / tot, 0.0)
-            tab = np.where(prob > 0.0, np.log(prob), -np.inf)
-        lp.append(tab)
+        # Contexts are packed most-distant-first, so a level-k context is the
+        # top context's LOW k digits: summing out the high digits is a reshape.
+        prev = np.full((max_len, 1, R), 1.0 / R)
+        for k in range(order + 1):
+            n_k = cnt[d].reshape(max_len, A ** (order - k), A ** k, R).sum(axis=1)
+            parent = np.tile(prev, (1, A, 1)) if k else prev
+            tot = n_k.sum(axis=2, keepdims=True)
+            prev = (n_k + alpha[k] * parent) / (tot + alpha[k])
+        lp.append(np.log(prev))
 
     tot = cnt_length.sum()
     log_pi = np.full(max_len + 1, -np.inf)
-    if tot > 0.0:
-        nz = cnt_length > 0.0
-        log_pi[nz] = np.log(cnt_length[nz] / tot)
+    log_pi[1:] = np.log((cnt_length[1:] + alpha_length / max_len)
+                        / (tot + alpha_length))
 
-    m = ReferenceBeamModel(order, max_len, weights, lp, log_pi, alpha)
+    m = ReferenceBeamModel(order, max_len, weights, lp, log_pi, alph)
 
     # Finalize renormalises the length prior over the lengths whose trellis is
     # non-empty, so a length the tables cannot spell does not keep its share.

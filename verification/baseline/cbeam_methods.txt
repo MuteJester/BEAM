@@ -2,7 +2,10 @@ accumulator_max
 add
 alphabet_info
 alphabets
+beta_contour_sums
+beta_contour_tail
 build
+cohort_private_sums
 compact
 config
 depth_occupancy
@@ -21,13 +24,18 @@ length_derivatives
 length_marginals
 live_cache_bytes
 load
+log_gamma_ratio
+log_gamma_ratio_shift
 log_length_prior
 log_mellin
+log_mellin_complex
+log_mellin_line
 log_mellin_many
 log_partition
 log_partition_by_layer
 log_pseq
 log_pseq_batch
+log_pseq_packed
 memory_budget
 memory_bytes
 mixture_check_shape
@@ -63,6 +71,7 @@ query_probability
 sample
 save
 set_memory_budget
+set_prior
 set_threads
 spectra_by_length
 spectrum
@@ -73,6 +82,7 @@ surprisal_cumulants
 surprisal_moments
 surprisal_range
 surprisal_tilt
+temper
 threads
 top_k
 topology

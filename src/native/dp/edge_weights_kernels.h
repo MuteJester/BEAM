@@ -199,9 +199,26 @@ static inline void BEAM_KFN(state_weights_sparse)(const BeamModel *m, uint32_t i
      */
     const uint32_t cw0 = beam_ctx_backward_finalized_from_state(
         s, 0u, m->state_shift, K, m->order, A);
+    /*
+     * The twenty rows differ only in x, their most DISTANT residue (the
+     * backward table is nearest-first), so every one that is unobserved has
+     * the same ancestor: the level order-1 row `cw0 / A`. Resolved once, on
+     * the first miss, instead of walking the hierarchy twenty times. The
+     * same row `beam_lp_row` would return, so the weights do not move.
+     */
+    BeamLogRow shared_parent;
+    bool have_parent = false;
     for (uint32_t x = 0; x < R; ++x) {
         if (row[x] == -INFINITY) continue;
-        const BeamLogRow bw = beam_lp_row(m, BEAM_BWD, r, cw0 + x);
+        BeamLogRow bw = beam_sparse_log_row(&m->sp_lp[BEAM_BWD],
+                                            beam_row(m, r, cw0 + x));
+        if (!bw.present) {
+            if (!have_parent) {
+                shared_parent = beam_lp_ancestor(m, BEAM_BWD, r, cw0 + x);
+                have_parent = true;
+            }
+            bw = shared_parent;
+        }
         const double b = !bw.present ? -INFINITY : beam_log_cell(&bw, scored);
         row[x] = (b == -INFINITY) ? -INFINITY
                                   : row[x] + m->cfg.weight_backward * b;
@@ -250,76 +267,18 @@ static double BEAM_KFN(layer_max)(const BeamModel *m, uint32_t i, uint32_t len) 
     const bool settle_back = (i >= K);
     const uint32_t r = settle_back ? (len - 1u - (i - K)) : 0u;
 
-    if (!m->cfg.sparse) {
-        double *w = (double *)malloc((size_t)S * R * sizeof(double));
-        if (!w) return NAN;
-        double hi = -INFINITY;
-        BEAM_KFN(layer_weights)(m, i, len, w, &hi);
-        free(w);
-        return hi;
-    }
-
     /*
-     * Rows carry the depth in their high digits, so this layer's rows are
-     * exactly the directory slice [i * nc, (i + 1) * nc). Walking the slice
-     * reaches the same rows in the same ascending order as filtering the whole
-     * slot -> row map did, and visits n_ctx entries instead of every occupied
-     * row in the table. Depth is exact now, so the slice is the layer's own
-     * and no longer shared with every deeper layer.
-     *
-     * That map was this function's only reader anywhere in the library, so
-     * reading the directory instead is also what lets a finalized table stop
-     * carrying one. The values are pinned in tests/native/test_layer_max.c
-     * against the DEFINITION -- every state, no shortcut -- rather than
-     * against whichever row source came before.
+     * Every state, built in full. The sparse form used to walk only the
+     * occupied forward rows, exact while a missing row read -inf; under the
+     * hierarchical prior a missing row is its ancestor's distribution and can
+     * carry the maximum, so there is no set to restrict to.
      */
-    const BeamSparseRows *fw = &m->sp_lp[BEAM_FWD];
-    const uint32_t base = i * nc;
-    if ((!fw->index && !fw->rank)
-        || (uint64_t)base + nc > (uint64_t)fw->n_dense_rows)
-        return -INFINITY;
-
-    const uint32_t stride = S / nc;      /* identically 1: state_order == order */
-
+    (void)K; (void)nc; (void)settle_back; (void)r;
+    double *w = (double *)malloc((size_t)S * R * sizeof(double));
+    if (!w) return NAN;
     double hi = -INFINITY;
-    /*
-     * Chunked rather than row-per-iteration, so the walk inside a chunk can
-     * be a bitmap scan: one word load offers sixty-four rows and `ctz` picks
-     * out the occupied ones, where asking row by row paid a load, a shift and
-     * a mask for every absence. Chunks are a multiple of 64 so each begins on
-     * a word boundary and no word is examined by two threads.
-     *
-     * `hi` is a max reduction, and max over doubles is exact and
-     * order-independent, so splitting the range differently cannot move a
-     * bit of the answer.
-     */
-    const uint32_t chunk = 4096u;                 /* 64 words */
-    const int64_t n_chunks = (int64_t)((nc + chunk - 1u) / chunk);
-#ifdef _OPENMP
-    #pragma omp parallel for schedule(static) reduction(max:hi) \
-            num_threads(beam_threads()) if(nc > 4096)
-#endif
-    for (int64_t ch = 0; ch < n_chunks; ++ch) {
-        const uint32_t lo   = (uint32_t)ch * chunk;
-        const uint32_t stop = (lo + chunk < nc) ? lo + chunk : nc;
-        BeamRowCursor cur;
-        beam_row_cursor_init(&cur, fw, base + lo, base + stop);
-        uint32_t got;
-        while (beam_row_cursor_next(&cur, &got)) {
-        const uint32_t ctx = got - base;
-        double buf[BEAM_MAX_RESIDUES];
-        /* One wide context can back several states when the state carries
-         * more residues than the context order. */
-        for (uint32_t rep = 0; rep < stride; ++rep) {
-            const uint32_t st = rep * nc + ctx;
-            if (st >= S) break;
-            /* The directory just said this row is present, so the sparse
-             * scorer needs no probe of its own here. */
-            BEAM_KFN(state_weights_sparse)(m, i, len, st, settle_back, r, buf);
-            for (uint32_t x = 0; x < R; ++x) if (buf[x] > hi) hi = buf[x];
-        }
-        }
-    }
+    BEAM_KFN(layer_weights)(m, i, len, w, &hi);
+    free(w);
     return hi;
 }
 

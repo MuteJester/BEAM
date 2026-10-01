@@ -5,6 +5,7 @@
 #include <stdio.h>
 
 #include "beam/internal.h"
+#include "beam/model_build.h"
 
 
 /* ── Bayesian posterior ──────────────────────────────────────── */
@@ -92,7 +93,7 @@ BeamError beam_model_posterior(BeamModel *m, const BeamModel *prior,
 
     for (uint32_t d = 0; d < BEAM_DIRS; ++d) {
         if (!m->cfg.sparse && !prior->cfg.sparse) {
-            /* Preserve the original dense/open-world path byte for byte. */
+            /* The dense path, kept byte for byte. */
             posterior_table(m->cnt[d], prior->cnt[d],
                             beam_n_table(m) / m->n_residues,
                             m->n_residues, kappa);
@@ -122,4 +123,31 @@ BeamError beam_model_posterior(BeamModel *m, const BeamModel *prior,
      */
     m->finalized = false;
     return BEAM_OK;
+}
+
+BeamError beam_model_set_prior(BeamModel *m, const double *alpha,
+                               uint32_t n_alpha, double alpha_length) {
+    if (!m) return BEAM_ENULL("model");
+    if (m->compacted)
+        return BEAM_FAIL(BEAM_ERR_NOT_BUILT,
+                         "set_prior: the model is compacted, so the counts the "
+                         "prior would be re-applied to are gone");
+    if (alpha && n_alpha != (uint32_t)m->order + 1u)
+        return BEAM_ERANGE("set_prior: %u strengths given, and an order-%u "
+                           "model has %u levels (0..order)", (unsigned)n_alpha,
+                           (unsigned)m->order, (unsigned)m->order + 1u);
+    BeamModelConfig c = m->cfg;
+    c.alpha_auto = (alpha == NULL);
+    if (alpha) for (uint32_t k = 0; k < n_alpha; ++k) c.alpha[k] = alpha[k];
+    c.alpha_length_auto = isnan(alpha_length);
+    if (!c.alpha_length_auto) c.alpha_length = alpha_length;
+    char why[BEAM_CONFIG_REASON_MAX];
+    const char *reason = beam_config_invalid_reason(&c, why, sizeof why);
+    if (reason)
+        return BEAM_ERANGE("set_prior: %s", reason);
+    const BeamModelConfig old = m->cfg;
+    m->cfg = c;
+    const BeamError e = beam_model_finalize(m);
+    if (e != BEAM_OK) m->cfg = old;     /* finalize left the old tables */
+    return e;
 }

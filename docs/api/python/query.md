@@ -151,7 +151,7 @@ q.cost(c)                          # one query
 q.cost(c, whole_matrix=True)       # a mutual-information matrix
 ```
 
-Returns `states`, `edges` and `bytes`. `states` is an upper bound on what the sweep visits, not the live count — on a closed-world model it is a very loose one. `bytes` is the figure checked against the memory budget.
+Returns `states`, `edges` and `bytes`. `states` is an upper bound on what the sweep visits, not the live count — on a model whose counts reach few contexts it is a loose one. `bytes` is the figure checked against the memory budget.
 
 The ladder is worth seeing before you run into it: a mask-only condition is one sweep, an automaton multiplies that by its state count, and `mutual_information` is one sweep per `(position, residue)` pair — 281 rather than 1 on a length-14 amino-acid model.
 

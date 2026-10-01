@@ -5,10 +5,13 @@ else in this group is an identity, an invariant or a smoke test; only here is
 each number computed a second time by a method that shares no code with the
 first -- a Python dict of probabilities and a plain sum over it.
 
-The models are deliberately tiny (four residues, length 3 to 5) so their entire
-support fits in memory. That is not a weaker test than one on a real model: a
-forward recursion that is wrong is wrong at every scale, and at this scale the
-answer can be checked rather than merely compared against itself.
+The models are deliberately tiny (nucleotides, order 2, lengths up to 6) so
+their entire support fits in memory. Under the prior that support is every
+string over the alphabet -- 19,530 of them, most never seen by the corpus --
+so the sums below run over prior-only mass as well as learned mass. That is
+not a weaker test than one on a real model: a forward recursion that is wrong
+is wrong at every scale, and at this scale the answer can be checked rather
+than merely compared against itself.
 """
 from __future__ import annotations
 
@@ -18,7 +21,7 @@ import numpy as np
 import pytest
 
 from BEAM import Mixture
-from _tiny import brute_entropy, brute_hill, mixture_pmf, support
+from _tiny import brute_entropy, brute_hill, mixture_pmf, whole_space
 
 
 # The enumeration underpins every assertion below, so it is checked first and
@@ -27,6 +30,10 @@ from _tiny import brute_entropy, brute_hill, mixture_pmf, support
 def test_the_enumeration_is_the_whole_support(tiny_a, sup_a):
     assert len(sup_a) == tiny_a.path_count()
     assert sum(sup_a.values()) == pytest.approx(1.0, abs=1e-12)
+    # And that support is every string the alphabet can spell, including the
+    # ones with an N the corpus never used: the prior leaves nothing at zero.
+    assert len(sup_a) == whole_space()
+    assert any("N" in s for s in sup_a)
 
 
 def test_the_mixture_pmf_is_a_distribution(sup_a, sup_b):
@@ -51,7 +58,8 @@ def test_log_pseq_batch_agrees_with_the_scalar_form(tiny_a, tiny_b, sup_a):
 
 
 def test_inner_product_matches_direct_summation(tiny_a, tiny_b, sup_a, sup_b):
-    """`<P_a, P_b> = sum_s P_a(s) P_b(s)`, over the sequences both spell."""
+    """`<P_a, P_b> = sum_s P_a(s) P_b(s)`, over the sequences both spell --
+    which is now every sequence, so the prior-only tail is in the sum too."""
     mix = Mixture([tiny_a, tiny_b])
     shared = set(sup_a) & set(sup_b)
     assert shared, "the fixtures must overlap for this to be a real test"

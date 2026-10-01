@@ -1,5 +1,28 @@
-__all__: ['Atoms', 'Attribution', 'BeamError', 'BeamModel', 'BeamQuery', 'BeamTypeError', 'BeamValueError', 'BetaDiversity', 'BudgetExceeded', 'Builder', 'Calibration', 'Condition', 'DepthMatchedProfiles', 'EntropyBounds', 'EntropyEstimate', 'Histogram', 'ImpossibleCondition', 'IncompatibleMembers', 'InternalError', 'InvalidSequence', 'Mixture', 'MixtureError', 'MixtureTooLarge', 'ModelFileError', 'ModelMismatch', 'NoLivePaths', 'NotFinalized', 'OutOfMemory', 'PseqAnalysis', 'PublicnessModel', 'QueryError', 'QueryTooLarge', 'ResamplingBand', 'ScaleIndex', 'SupportSize', 'UnsupportedOrder', 'UnsupportedQuery', 'attribute', 'depth_matched_hill_profiles', 'effective_threads', 'file_provenance_span', 'memory_budget', 'set_memory_budget', 'set_threads', 'threads']
+__all__: ['AlphaFit', 'Atoms', 'Attribution', 'BeamError', 'BeamModel', 'BeamQuery', 'BeamTypeError', 'BeamValueError', 'BetaDiversity', 'BudgetExceeded', 'Builder', 'Calibration', 'Condition', 'DepthMatchedProfiles', 'EntropyBounds', 'EntropyEstimate', 'Histogram', 'ImpossibleCondition', 'IncompatibleMembers', 'InternalError', 'InvalidSequence', 'Mixture', 'MixtureError', 'MixtureTooLarge', 'ModelFileError', 'ModelMismatch', 'NoLivePaths', 'NotFinalized', 'OutOfMemory', 'PairLikelihood', 'Piece', 'PseqAnalysis', 'PublicnessModel', 'QueryError', 'QueryTooLarge', 'RepertoireLikelihood', 'ResamplingBand', 'ScaleIndex', 'SupportSize', 'UnsupportedOrder', 'UnsupportedQuery', 'attribute', 'depth_matched_hill_profiles', 'effective_threads', 'file_provenance_span', 'fit_alpha', 'memory_budget', 'pair_likelihood', 'repertoire_likelihood', 'set_memory_budget', 'set_threads', 'threads']
 __version__: 0.1.0
+class AlphaFit:
+  def __delattr__(self, name)
+  def __dir__(self, /)
+  def __eq__(self, value, /)
+  def __format__(self, format_spec, /)
+  def __ge__(self, value, /)
+  def __getattribute__(self, name, /)
+  def __getstate__(self, /)
+  def __gt__(self, value, /)
+  def __hash__(self, /)
+  def __init__(self, alpha: 'tuple', alpha_length: 'float', held_out_log_lik: 'float', default_log_lik: 'float', split: 'str', fraction: 'float | None', seed: 'int | None', n_evaluations: 'int') -> None
+  def __init_subclass__(?)
+  def __le__(self, value, /)
+  def __lt__(self, value, /)
+  def __ne__(self, value, /)
+  def __new__(*args, **kwargs)
+  def __reduce__(self, /)
+  def __reduce_ex__(self, protocol, /)
+  def __repr__(self) -> 'str'
+  def __setattr__(self, name, value)
+  def __sizeof__(self, /)
+  def __str__(self, /)
+  def __subclasshook__(?)
 class Atoms:
   def __delattr__(self, name, /)
   def __dir__(self, /)
@@ -92,7 +115,7 @@ class BeamModel:
   def __getstate__(self, /)
   def __gt__(self, value, /)
   def __hash__(self, /)
-  def __init__(self, sequences: 'Iterable[str]', *, abundances: 'Iterable[float] | None' = None, alphabet: 'str' = 'aa', order: 'int | None' = None, weights: 'tuple[float, float]' = (0.5, 0.5), max_length: 'int | None' = None, strict: 'bool' = True, sparse: 'bool | None' = None) -> 'None'
+  def __init__(self, sequences: 'Iterable[str]', *, abundances: 'Iterable[float] | None' = None, alphabet: 'str' = 'aa', order: 'int | None' = None, weights: 'tuple[float, float]' = (0.5, 0.5), max_length: 'int | None' = None, alpha: 'float | Iterable[float] | None' = None, alpha_length: 'float | None' = None, sparse: 'bool | None' = None) -> 'None'
   def __init_subclass__(?)
   def __le__(self, value, /)
   def __len__(self) -> 'int'
@@ -137,10 +160,13 @@ class BeamModel:
   def log_clamp_probability(self, length: 'int', clamp: 'dict') -> 'float'
   def log_length_prior(self, length: 'int') -> 'float'
   def log_mellin(self, q: 'float') -> 'float'
+  def log_mellin_complex(self, orders: 'Iterable[complex]') -> 'np.ndarray'
+  def log_mellin_line(self, re: 'float', im_start: 'float', im_step: 'float', n: 'int') -> 'np.ndarray'
   def log_mellin_many(self, orders: 'Iterable[float]') -> 'np.ndarray'
   def log_partition(self, length: 'int') -> 'float'
   def log_partition_by_layer(self, length: 'int') -> 'np.ndarray'
   def log_pseq(self, sequence: 'str') -> 'float'
+  def log_pseq_arrow(self, array: 'Any') -> 'np.ndarray'
   def log_pseq_batch(self, sequences: 'Sequence[str]') -> 'np.ndarray'
   def log_pseq_by_position(self, sequence: 'str') -> 'np.ndarray'
   def log_pseq_chunks(self, sequences: 'Iterable[str]', *, chunk_size: 'int' = 1000000)
@@ -169,6 +195,7 @@ class BeamModel:
   def sample(self, n: 'int', *, length: 'int | None' = None, seed: 'int | None' = None) -> 'list[str]'
   def save(self, path: 'str | os.PathLike') -> 'None'
   def scale_score(self, sequence, calibration: 'Calibration', *, method: 'str' = 'pvalue')
+  def set_alpha(self, alpha: 'float | Iterable[float] | None' = None, alpha_length: 'float | None' = None) -> 'None'
   def simulate(self, n: 'int', *, length: 'int | None' = None, seed: 'int | None' = None) -> 'SimulationResult'
   def spectra_by_length(self, *, measure: 'str' = 'generated', max_length: 'int | None' = None, bins: 'int' = 1024, spacing: 'float | None' = None) -> 'dict[str, Any]'
   def spectrum(self, *, measure: 'str' = 'generated', length: 'int | None' = None, bins: 'int' = 1024, spacing: 'float | None' = None) -> 'dict[str, Any]'
@@ -182,6 +209,7 @@ class BeamModel:
   def surprisal_pdf(self, x) -> 'np.ndarray'
   def surprisal_range(self) -> 'tuple[float, float]'
   def surprisal_stats(self, *, q: 'float' = 1.0) -> 'dict[str, float]'
+  def tempered(self, t: 'float') -> 'BeamModel'
   property threads
   def top_k_sequences(self, k: 'int' = 20, *, length: 'int | None' = None) -> 'list[tuple[str, float]]'
   def topology(self, length: 'int') -> 'dict[str, Any]'
@@ -343,7 +371,7 @@ class Builder:
   def __getstate__(self, /)
   def __gt__(self, value, /)
   def __hash__(self, /)
-  def __init__(self, *, alphabet: 'str' = 'aa', order: 'int | None' = None, weights: 'tuple[float, float]' = (0.5, 0.5), max_length: 'int | None' = None, strict: 'bool' = True, sparse: 'bool | None' = None) -> 'None'
+  def __init__(self, *, alphabet: 'str' = 'aa', order: 'int | None' = None, weights: 'tuple[float, float]' = (0.5, 0.5), max_length: 'int | None' = None, alpha: 'float | Iterable[float] | None' = None, alpha_length: 'float | None' = None, sparse: 'bool | None' = None) -> 'None'
   def __init_subclass__(?)
   def __le__(self, value, /)
   def __lt__(self, value, /)
@@ -873,6 +901,54 @@ class OutOfMemory:
   def __subclasshook__(?)
   def add_note(?)
   def with_traceback(?)
+class PairLikelihood:
+  def __delattr__(self, name)
+  def __dir__(self, /)
+  def __eq__(self, value, /)
+  def __format__(self, format_spec, /)
+  def __ge__(self, value, /)
+  def __getattribute__(self, name, /)
+  def __getstate__(self, /)
+  def __gt__(self, value, /)
+  def __hash__(self, /)
+  def __init__(self, log_likelihood: 'float', poissonized_log_likelihood: 'float', log_prob_total_reads: 'float', pieces: 'tuple', n_reads: 'tuple', n_unique: 'tuple', n_unspellable: 'tuple', n_shared: 'int', shared_counts_log_prob: 'float', private_counts_log_prob: 'float', model_mass: 'float', bins: 'int | None', profile_edges: 'tuple') -> None
+  def __init_subclass__(?)
+  def __le__(self, value, /)
+  def __lt__(self, value, /)
+  def __ne__(self, value, /)
+  def __new__(*args, **kwargs)
+  def __reduce__(self, /)
+  def __reduce_ex__(self, protocol, /)
+  def __repr__(self) -> 'str'
+  def __setattr__(self, name, value)
+  def __sizeof__(self, /)
+  def __str__(self, /)
+  def __subclasshook__(?)
+  def piece(self, name: 'str') -> 'Piece'
+class Piece:
+  def __delattr__(self, name)
+  def __dir__(self, /)
+  def __eq__(self, value, /)
+  def __format__(self, format_spec, /)
+  def __ge__(self, value, /)
+  def __getattribute__(self, name, /)
+  def __getstate__(self, /)
+  def __gt__(self, value, /)
+  def __hash__(self, /)
+  def __init__(self, name: 'str', question: 'str', log_prob: 'float', exact: 'bool', method: 'str', error: 'float', observed: 'np.ndarray', expected: 'np.ndarray') -> None
+  def __init_subclass__(?)
+  def __le__(self, value, /)
+  def __lt__(self, value, /)
+  def __ne__(self, value, /)
+  def __new__(*args, **kwargs)
+  def __post_init__(self)
+  def __reduce__(self, /)
+  def __reduce_ex__(self, protocol, /)
+  def __repr__(self) -> 'str'
+  def __setattr__(self, name, value)
+  def __sizeof__(self, /)
+  def __str__(self, /)
+  def __subclasshook__(?)
 class PseqAnalysis:
   def __delattr__(self, name, /)
   def __dir__(self, /)
@@ -1000,6 +1076,30 @@ class QueryTooLarge:
   def __subclasshook__(?)
   def add_note(?)
   def with_traceback(?)
+class RepertoireLikelihood:
+  def __delattr__(self, name)
+  def __dir__(self, /)
+  def __eq__(self, value, /)
+  def __format__(self, format_spec, /)
+  def __ge__(self, value, /)
+  def __getattribute__(self, name, /)
+  def __getstate__(self, /)
+  def __gt__(self, value, /)
+  def __hash__(self, /)
+  def __init__(self, log_likelihood: 'float', poissonized_log_likelihood: 'float', log_prob_total_reads: 'float', pieces: 'tuple', n_reads: 'int', n_unique: 'int', n_unspellable: 'int', model_mass: 'float', bins: 'int | None', profile_edges: 'tuple') -> None
+  def __init_subclass__(?)
+  def __le__(self, value, /)
+  def __lt__(self, value, /)
+  def __ne__(self, value, /)
+  def __new__(*args, **kwargs)
+  def __reduce__(self, /)
+  def __reduce_ex__(self, protocol, /)
+  def __repr__(self) -> 'str'
+  def __setattr__(self, name, value)
+  def __sizeof__(self, /)
+  def __str__(self, /)
+  def __subclasshook__(?)
+  def piece(self, name: 'str') -> 'Piece'
 class ResamplingBand:
   def __delattr__(self, name)
   def __dir__(self, /)
@@ -1128,7 +1228,10 @@ def attribute(model, sequence) -> 'Attribution'
 def depth_matched_hill_profiles(repertoires: 'Sequence[Sequence[str]]', abundances: 'Sequence[Sequence[float]] | None' = None, *, n_bootstraps: 'int' = 20, orders: 'Iterable[float] | None' = None, seed: 'int | None' = None, weighting: 'str' = 'abundance', n_workers: 'int | None' = None, **config: 'Any') -> 'DepthMatchedProfiles'
 def effective_threads() -> 'int'
 def file_provenance_span() -> 'tuple[int, int]'
+def fit_alpha(sequences: 'Iterable[str]', abundances: 'Iterable[float] | None' = None, *, held_out: 'tuple | None' = None, fraction: 'float' = 0.5, seed: 'int' = 0, bounds: 'tuple[float, float]' = (0.001, 1000000000000.0), sweeps: 'int' = 2, tol: 'float' = 0.05, **config) -> 'AlphaFit'
 def memory_budget() -> 'int'
+def pair_likelihood(model, sequences_1: 'Sequence[str]', counts_1: 'Iterable', sequences_2: 'Sequence[str]', counts_2: 'Iterable', *, bins: 'int' = 2048, profile_edges: 'Sequence[int]' = (1, 2, 3, 4, 5, 6, 11, 101), atoms=None) -> 'PairLikelihood'
+def repertoire_likelihood(model, sequences: 'Sequence[str]', counts: 'Iterable', *, bins: 'int' = 2048, profile_edges: 'Sequence[int]' = (1, 2, 3, 4, 5, 6, 11, 101), atoms=None) -> 'RepertoireLikelihood'
 def set_memory_budget(nbytes: 'int') -> 'None'
 def set_threads(n: 'int') -> 'None'
 def threads() -> 'int'

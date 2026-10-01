@@ -6,12 +6,19 @@
  * here is a question answered when it should have been refused. So the tests
  * split in two, and the second half is the larger one.
  *
- * The correctness half is anchored on ENUMERATION. A strict nucleotide model
- * at length 5 has a support of twenty-one sequences, so the reference for a
- * logo is a direct sum over them with no dynamic program in it -- which is
- * the only kind of check that can catch a quantity that has been wrong since
- * the day it was written. Every other check here relates the answer to
- * another answer from the same machinery.
+ * The correctness half is anchored on ENUMERATION. Under the hierarchical
+ * prior every string over the alphabet has mass, so the support of a
+ * nucleotide model at length 5 is all 3,125 strings over ACGTN, and the
+ * reference for a logo is a direct sum over them with no dynamic program in
+ * it -- which is the only kind of check that can catch a quantity that has
+ * been wrong since the day it was written. Every other check here relates the
+ * answer to another answer from the same machinery.
+ *
+ * A banded logo can only be compared EXACTLY where no sequence sits within
+ * the grid's splitting reach of an edge. With every string in the support
+ * there is mass near almost any threshold, so every exact comparison of a
+ * band places its edges in a gap of the enumerated surprisals, and the
+ * checks that cannot enumerate use only edges that nothing can cross.
  *
  * Two things are deliberately NOT tested, and saying why is part of the
  * point. `height_bits == height_nats * log2(e)` is an identity of the
@@ -38,8 +45,6 @@ static int pass_count = 0, fail_count = 0;
 
 static char msg[512];
 
-#define LOG2E 1.4426950408889634074
-
 /* ── Fixtures ────────────────────────────────────────────────── */
 
 #define N_AA 24
@@ -65,10 +70,16 @@ static const double W_NT[N_NT] = {
     30, 22, 17, 13, 11, 9, 8, 7, 6, 5, 14, 12, 10, 9, 8, 7, 6, 5, 4, 3, 9, 8, 7, 6, 5,
 };
 
-static BeamModel *build_aa(uint32_t order, bool strict) {
+/*
+ * Order 2 or 3 at most. Every banded sweep carries a surprisal grid per live
+ * state, and under the prior every state is live: order 3 holds 8,000 states
+ * a layer where order 2 holds 400, which is gigabytes against megabytes at
+ * the grids used here.
+ */
+static BeamModel *build_aa(uint32_t order) {
     BeamModelConfig c;
     beam_model_config_default(&c);
-    c.order = order; c.max_length = 12u; c.strict = strict;
+    c.order = order; c.max_length = 10u;
     BeamModel *m = beam_model_new(&c);
     if (!m) return NULL;
     if (beam_model_observe(m, TRAIN_AA, W_AA, N_AA) != BEAM_OK
@@ -76,11 +87,18 @@ static BeamModel *build_aa(uint32_t order, bool strict) {
     return m;
 }
 
+/* Max length 6, so the whole model is enumerable, not only the length the
+ * tests read. */
 static BeamModel *build_nt(void) {
     BeamModelConfig c;
     beam_model_config_default(&c);
     c.alphabet = BEAM_ALPHABET_NT;
-    c.order = 2u; c.max_length = 8u; c.strict = true;
+    c.order = 2u; c.max_length = 6u;
+    /* Fixed strengths. The banded tests need gaps in the spectrum where the
+     * band edges fall, and chose the grid for this spectrum; strengths
+     * re-estimated from the counts would move the atoms under them. */
+    c.alpha_auto = false;
+    c.alpha_length_auto = false;
     BeamModel *m = beam_model_new(&c);
     if (!m) return NULL;
     if (beam_model_observe(m, TRAIN_NT, W_NT, N_NT) != BEAM_OK
@@ -95,6 +113,11 @@ typedef struct {
     uint8_t *letters;
 } Support;
 
+/*
+ * Every string of length `L` over the model's whole alphabet. Under the
+ * prior each one has mass, so a string that fails to score is itself a
+ * failure, reported by returning false with `s->n` short of R^L.
+ */
 static bool enumerate_support(const BeamModel *m, uint32_t L, Support *s) {
     const uint32_t R = beam_model_n_residues(m);
     uint64_t total = 1;
@@ -112,7 +135,7 @@ static bool enumerate_support(const BeamModel *m, uint32_t L, Support *s) {
         for (uint32_t i = 0; i < L; ++i) seq[i] = m->alpha->idx_to_char[idx[i]];
         seq[L] = '\0';
         const double lp = beam_model_log_pseq(m, seq);
-        if (!isfinite(lp)) continue;
+        if (!isfinite(lp)) return false;
         s->surprisal[s->n] = -lp;
         s->probability[s->n] = exp(lp);
         for (uint32_t i = 0; i < L; ++i) s->letters[(size_t)s->n * L + i] = (uint8_t)idx[i];
@@ -143,16 +166,97 @@ static void direct(const Support *s, double lo, double hi, bool counting,
     *out_mass = z;
 }
 
+/** The spacing the spectrum, and therefore an automatic logo grid, uses. */
+static double grid_spacing(const BeamModel *m, uint32_t L, uint32_t bins) {
+    double ds = 0.0;
+    double *g = (double *)calloc(bins, sizeof(double));
+    if (!g) return 0.0;
+    if (beam_model_spectrum(m, true, L, bins, 0.0, g, &ds) != BEAM_OK) ds = 0.0;
+    free(g);
+    return ds;
+}
+
+typedef struct { double s, p; } SurpProb;
+
+static int cmp_double(const void *a, const void *b) {
+    const double x = *(const double *)a, y = *(const double *)b;
+    return (x > y) - (x < y);
+}
+
+static int cmp_surp(const void *a, const void *b) {
+    const double x = ((const SurpProb *)a)->s, y = ((const SurpProb *)b)->s;
+    return (x > y) - (x < y);
+}
+
+/*
+ * Linear splitting spreads one sequence's mass over up to `L+1` adjacent
+ * bins; twice that is the distance from every sequence that a threshold has
+ * to keep for the classification to be exact rather than approximate.
+ */
+static double splitting_reach(uint32_t L, double ds) {
+    return (double)(2u * (L + 2u)) * ds;
+}
+
+/*
+ * A threshold in a gap of the support's surprisals wider than twice the
+ * splitting reach, chosen so the weight below it is as near `frac` of the
+ * whole as any such gap allows -- in the generated measure, or by count.
+ * Returns -1 when no gap is wide enough.
+ */
+static double gap_cut(const Support *s, double reach, bool counting,
+                      double frac) {
+    SurpProb *v = (SurpProb *)malloc((size_t)s->n * sizeof(SurpProb));
+    if (!v) return -1.0;
+    double total = 0.0;
+    for (uint32_t k = 0; k < s->n; ++k) {
+        v[k].s = s->surprisal[k];
+        v[k].p = counting ? 1.0 : s->probability[k];
+        total += v[k].p;
+    }
+    qsort(v, s->n, sizeof(SurpProb), cmp_surp);
+    double cut = -1.0, best = INFINITY, below = 0.0;
+    for (uint32_t k = 1; k < s->n; ++k) {
+        below += v[k - 1u].p;
+        if (v[k].s - v[k - 1u].s <= 2.0 * reach || v[k - 1u].s <= reach)
+            continue;
+        const double d = fabs(below / total - frac);
+        if (d < best) { best = d; cut = 0.5 * (v[k - 1u].s + v[k].s); }
+    }
+    free(v);
+    return cut;
+}
+
+/*
+ * The median surprisal of a length's generated mass, read off the spectrum
+ * at a bin boundary. For the checks whose claim does not depend on where a
+ * sequence falls, only on there being real mass either side.
+ */
+static double median_surprisal(const BeamModel *m, uint32_t L) {
+    const uint32_t B = 4096u;
+    double ds = 0.0;
+    double *g = (double *)calloc(B, sizeof(double));
+    if (!g) return -1.0;
+    if (beam_model_spectrum(m, false, L, B, 0.0, g, &ds) != BEAM_OK) {
+        free(g); return -1.0;
+    }
+    double total = 0.0, cum = 0.0;
+    for (uint32_t b = 0; b < B; ++b) total += g[b];
+    uint32_t b = 0;
+    for (; b < B; ++b) { cum += g[b]; if (cum >= 0.5 * total) break; }
+    free(g);
+    return (double)(b + 1u) * ds;
+}
+
 
 /* ── 1. Against enumeration ──────────────────────────────────── */
 
 /**
- * The unconditional logo, against a direct sum over every sequence the model
- * can produce at that length.
+ * The unconditional logo, against a direct sum over every sequence of that
+ * length.
  *
  * The reference shares nothing with the code under test: no trellis, no grid,
- * no dynamic program -- just `beam_model_log_pseq` over the whole support and
- * a running total. Everything else in this file compares one answer from this
+ * no dynamic program -- just `beam_model_log_pseq` over all R^L strings and a
+ * running total. Everything else in this file compares one answer from this
  * machinery against another from the same machinery, and would pass in
  * concert if the machinery were wrong.
  */
@@ -163,8 +267,9 @@ static void test_the_unconditional_logo_is_a_direct_sum_over_the_support(void) {
     ASSERT_MSG(beam_length_live(m, L), "the fixture does not reach length 5");
 
     Support s;
-    ASSERT_MSG(enumerate_support(m, L, &s), "allocation");
-    ASSERT_MSG(s.n >= 8u, "the fixture produces too few sequences");
+    ASSERT_MSG(enumerate_support(m, L, &s),
+               "a string of length 5 did not score; every readable string "
+               "has mass under the prior");
 
     double *ref = (double *)calloc((size_t)L * R, sizeof(double));
     double zref = 0.0;
@@ -206,68 +311,60 @@ static void test_the_unconditional_logo_is_a_direct_sum_over_the_support(void) {
 }
 
 /**
- * A conditioned logo, against the same enumeration filtered by surprisal.
+ * Conditioned logos, against the same enumeration filtered by surprisal.
  *
- * The threshold is placed in a GAP of the surprisal distribution, wider than
- * the `length + 1` bins linear splitting can smear a sequence across, so
- * every sequence falls wholly one side and the comparison is exact rather
- * than approximate. Both measures are checked; the counting measure has no
- * other reference in this file.
+ * Two thresholds, each in a GAP of the surprisal distribution wider than the
+ * `length + 1` bins linear splitting can smear a sequence across, so every
+ * sequence falls wholly one side and the comparison is exact rather than
+ * approximate. One gap is chosen to halve the generated mass, which sits
+ * among the few strings the corpus made likely; the other to halve the
+ * COUNT, which sits deep in the tail where the strings the corpus never saw
+ * are. Each measure therefore has one band split where its own weight is.
+ * Both measures are checked; the counting measure has no other reference in
+ * this file.
  */
 static void test_a_banded_logo_is_a_filtered_sum_over_the_support(void) {
     BeamModel *m = build_nt();
     ASSERT_MSG(m, "model did not build");
-    const uint32_t L = 5u, R = beam_model_n_residues(m), B = 4096u;
+    /* Fine enough that gaps exist near both medians: at 4,096 bins the
+     * count-balanced gap sits at 94% of the strings instead of half. */
+    const uint32_t L = 5u, R = beam_model_n_residues(m), B = 16384u;
 
     Support s;
-    ASSERT_MSG(enumerate_support(m, L, &s), "allocation");
+    ASSERT_MSG(enumerate_support(m, L, &s), "enumeration");
 
-    double ds = 0.0;
-    {
-        double *g = (double *)calloc(B, sizeof(double));
-        ASSERT_MSG(g, "allocation");
-        const BeamError e = beam_model_spectrum(m, true, L, B, 0.0, g, &ds);
-        free(g);
-        ASSERT_MSG(e == BEAM_OK, beam_error_message());
+    const double ds = grid_spacing(m, L, B);
+    ASSERT_MSG(ds > 0.0, beam_error_message());
+    const double reach = splitting_reach(L, ds);
+    const double by_mass  = gap_cut(&s, reach, false, 0.5);
+    const double by_count = gap_cut(&s, reach, true, 0.5);
+    if (!(by_mass > 0.0 && by_count > by_mass)) {
+        snprintf(msg, sizeof msg, "no pair of usable gaps: the mass cut is "
+                 "%.6g and the count cut %.6g, so this fixture no longer "
+                 "splits both measures exactly", by_mass, by_count);
+        support_free(&s); beam_model_destroy(m);
+        ASSERT_MSG(false, msg);
     }
-    /* The most balanced gap wide enough that splitting cannot cross it. */
-    double *sorted = (double *)malloc((size_t)s.n * sizeof(double));
-    ASSERT_MSG(sorted, "allocation");
-    memcpy(sorted, s.surprisal, (size_t)s.n * sizeof(double));
-    for (uint32_t i = 1; i < s.n; ++i)          /* insertion sort; n is 21 */
-        for (uint32_t j = i; j > 0 && sorted[j] < sorted[j - 1u]; --j) {
-            const double t = sorted[j]; sorted[j] = sorted[j - 1u]; sorted[j - 1u] = t;
-        }
-    const double margin = (double)(2u * (L + 2u)) * ds;
-    double cut = -1.0; uint32_t bal = 0;
-    for (uint32_t k = 1; k < s.n; ++k) {
-        if (sorted[k] - sorted[k - 1u] <= 2.0 * margin || sorted[k - 1u] <= margin)
-            continue;
-        const uint32_t d = (k > s.n / 2u) ? k - s.n / 2u : s.n / 2u - k;
-        if (cut < 0.0 || d < bal) { bal = d; cut = 0.5 * (sorted[k - 1u] + sorted[k]); }
-    }
-    free(sorted);
-    ASSERT_MSG(cut > 0.0, "no gap wide enough to split the support exactly");
 
-    const double edges[3] = { -INFINITY, 0.0, INFINITY };
-    double use[3] = { edges[0], cut, edges[2] };
+    double use[4] = { -INFINITY, by_mass, by_count, INFINITY };
+    const uint32_t NB = 3u;
 
     for (int counting = 0; counting <= 1; ++counting) {
         BeamLogoRequest req;
         beam_logo_request_default(&req);
-        req.length = L; req.edges = use; req.n_edges = 3u;
+        req.length = L; req.edges = use; req.n_edges = NB + 1u;
         req.counting = (bool)counting; req.bins = B; req.spacing = ds;
         BeamLogoSet set;
         const BeamError e = beam_insights_logos(m, &req, &set);
         ASSERT_MSG(e == BEAM_OK, beam_error_message());
-        ASSERT_MSG(set.n_logos == 2u, "expected two logos");
+        ASSERT_MSG(set.n_logos == NB, "expected three logos");
 
         double *ref = (double *)calloc((size_t)L * R, sizeof(double));
         ASSERT_MSG(ref, "allocation");
-        for (uint32_t j = 0; j < 2u; ++j) {
+        for (uint32_t j = 0; j < NB; ++j) {
             double zref = 0.0;
-            direct(&s, j == 0u ? 0.0 : cut, j == 0u ? cut : INFINITY,
-                   (bool)counting, ref, &zref);
+            direct(&s, j == 0u ? 0.0 : use[j], use[j + 1u], (bool)counting,
+                   ref, &zref);
             if (!(zref > 0.0)) {
                 snprintf(msg, sizeof msg, "band %u is empty in the reference, "
                          "so the cut proves nothing", (unsigned)j);
@@ -310,89 +407,114 @@ static void test_a_banded_logo_is_a_filtered_sum_over_the_support(void) {
 
 /* ── 2. The logo arithmetic ──────────────────────────────────── */
 
+/* Every stack of the exact logos of lengths `L_lo..L_hi`, or false with
+ * `msg` naming the first that fails. */
+static bool check_stacks(BeamModel *m, uint32_t L_lo, uint32_t L_hi,
+                         const char *name, uint32_t *checked) {
+    const uint32_t R = beam_model_n_residues(m);
+    for (uint32_t L = L_lo; L <= L_hi; ++L) {
+        if (!beam_length_live(m, L)) continue;
+        BeamLogoRequest req;
+        beam_logo_request_default(&req);
+        req.length = L;
+        BeamLogoSet set;
+        if (beam_insights_logos(m, &req, &set) != BEAM_OK) {
+            snprintf(msg, sizeof msg, "%s L %u: %s", name, (unsigned)L,
+                     beam_error_message());
+            return false;
+        }
+        const BeamLogo *g = &set.logo[0];
+        bool ok = true;
+        for (uint32_t i = 0; i < L && ok; ++i) {
+            double p = 0.0, hb = 0.0;
+            for (uint32_t a = 0; a < R; ++a) {
+                p  += g->probability[(size_t)i * R + a];
+                hb += g->height_bits[(size_t)i * R + a];
+            }
+            ++*checked;
+            const double info = g->information_bits[i];
+            if (fabs(p - 1.0) > 1e-12) {
+                snprintf(msg, sizeof msg, "%s L %u pos %u: probabilities sum "
+                         "to %.17g", name, (unsigned)L, (unsigned)i, p);
+                ok = false;
+            } else if (fabs(hb - info) > 1e-12) {
+                snprintf(msg, sizeof msg, "%s L %u pos %u: heights sum to "
+                         "%.17g but information is %.17g", name, (unsigned)L,
+                         (unsigned)i, hb, info);
+                ok = false;
+            } else if (fabs(g->information_bits[i]
+                            - (set.max_entropy_bits - g->entropy_bits[i])) > 1e-12) {
+                snprintf(msg, sizeof msg, "%s L %u pos %u: information is not "
+                         "max_entropy - entropy", name, (unsigned)L, (unsigned)i);
+                ok = false;
+            } else if (!(g->entropy_bits[i] >= -1e-12
+                         && g->entropy_bits[i] <= set.max_entropy_bits + 1e-12)) {
+                snprintf(msg, sizeof msg, "%s L %u pos %u: entropy %.17g is "
+                         "outside [0, %.17g]", name, (unsigned)L, (unsigned)i,
+                         g->entropy_bits[i], set.max_entropy_bits);
+                ok = false;
+            } else if (g->n_support[i] != R) {
+                snprintf(msg, sizeof msg, "%s L %u pos %u: %u residues carry "
+                         "probability, where the prior gives every one of the "
+                         "%u some", name, (unsigned)L, (unsigned)i,
+                         (unsigned)g->n_support[i], (unsigned)R);
+                ok = false;
+            }
+        }
+        beam_insights_logo_set_free(&set);
+        if (!ok) return false;
+    }
+    return true;
+}
+
 /**
  * The identities every stack must satisfy, over several models and lengths.
  *
  * `sum_a height[i][a] == information[i]` is the one that matters: it is what
  * makes a logo's total height READ as information, which is the entire point
- * of the Schneider-Stephens construction. The rest pin the definition.
+ * of the Schneider-Stephens construction. The rest pin the definition, and
+ * one pins the prior: no residue is impossible anywhere, so every position
+ * reports the whole alphabet as its support.
  */
 static void test_the_stack_identities_hold(void) {
     uint32_t checked = 0;
-    for (uint32_t order = 2; order <= 4; ++order) {
-        for (int strict = 0; strict <= 1; ++strict) {
-            BeamModel *m = build_aa(order, (bool)strict);
-            ASSERT_MSG(m, "model did not build");
-            const uint32_t R = beam_model_n_residues(m);
-            for (uint32_t L = 5; L <= 9; ++L) {
-                if (!beam_length_live(m, L)) continue;
-                BeamLogoRequest req;
-                beam_logo_request_default(&req);
-                req.length = L;
-                BeamLogoSet set;
-                if (beam_insights_logos(m, &req, &set) != BEAM_OK) continue;
-                const BeamLogo *g = &set.logo[0];
-                for (uint32_t i = 0; i < L; ++i) {
-                    double p = 0.0, hb = 0.0;
-                    for (uint32_t a = 0; a < R; ++a) {
-                        p  += g->probability[(size_t)i * R + a];
-                        hb += g->height_bits[(size_t)i * R + a];
-                    }
-                    ++checked;
-                    const double info = g->information_bits[i];
-                    if (fabs(p - 1.0) > 1e-12) {
-                        snprintf(msg, sizeof msg, "order %u strict %d L %u pos %u: "
-                                 "probabilities sum to %.17g", (unsigned)order,
-                                 strict, (unsigned)L, (unsigned)i, p);
-                        goto fail;
-                    }
-                    if (fabs(hb - info) > 1e-12) {
-                        snprintf(msg, sizeof msg, "order %u strict %d L %u pos %u: "
-                                 "heights sum to %.17g but information is %.17g",
-                                 (unsigned)order, strict, (unsigned)L,
-                                 (unsigned)i, hb, info);
-                        goto fail;
-                    }
-                    if (fabs(g->information_bits[i]
-                             - (set.max_entropy_bits - g->entropy_bits[i])) > 1e-12) {
-                        snprintf(msg, sizeof msg, "L %u pos %u: information is not "
-                                 "max_entropy - entropy", (unsigned)L, (unsigned)i);
-                        goto fail;
-                    }
-                    if (!(g->entropy_bits[i] >= -1e-12
-                          && g->entropy_bits[i] <= set.max_entropy_bits + 1e-12)) {
-                        snprintf(msg, sizeof msg, "L %u pos %u: entropy %.17g is "
-                                 "outside [0, %.17g]", (unsigned)L, (unsigned)i,
-                                 g->entropy_bits[i], set.max_entropy_bits);
-                        goto fail;
-                    }
-                }
-                beam_insights_logo_set_free(&set);
-                continue;
-            fail:
-                beam_insights_logo_set_free(&set);
-                beam_model_destroy(m);
-                ASSERT_MSG(false, msg);
-            }
-            beam_model_destroy(m);
-        }
+    for (uint32_t order = 2; order <= 3; ++order) {
+        BeamModel *m = build_aa(order);
+        ASSERT_MSG(m, "model did not build");
+        const bool ok = check_stacks(m, 4u, 10u, order == 2u ? "aa order 2"
+                                                            : "aa order 3",
+                                     &checked);
+        beam_model_destroy(m);
+        ASSERT_MSG(ok, msg);
     }
+    /* And a radix of 6, where N is a residue, every length of the model. */
+    BeamModel *m = build_nt();
+    ASSERT_MSG(m, "model did not build");
+    const bool ok = check_stacks(m, 1u, 6u, "nt", &checked);
+    beam_model_destroy(m);
+    ASSERT_MSG(ok, msg);
     ASSERT_MSG(checked > 100u, "too few positions were checked");
     PASS();
 }
 
 /**
- * A position the model can spell only one way carries the maximum, and its
- * support and consensus say so.
+ * A position the corpus always spelled one way is dominated by that residue,
+ * but it is not one-hot, and its logo must say both.
  *
- * Pinned on the EXACT route, so the assertion can be tight: every training
- * sequence of the amino-acid fixture begins with C, and in a strict model
- * that makes position 0 one-hot to the last bit rather than to the grid.
+ * Every training sequence of the amino-acid fixture begins with C. Under the
+ * prior that makes C the consensus at position 0 by a wide margin, while
+ * every other residue keeps some probability: the support is the whole
+ * alphabet, the entropy is above zero, and the information falls short of
+ * the maximum. A logo reporting one residue of support, or the maximum
+ * information, would be reporting the closed world the prior replaced.
+ *
+ * The consensus itself is checked against the probability row at every
+ * position, which is the only definition it has.
  */
-static void test_a_one_hot_position_carries_the_whole_alphabet(void) {
-    BeamModel *m = build_aa(3u, true);
+static void test_a_conserved_position_is_dominated_but_not_one_hot(void) {
+    BeamModel *m = build_aa(3u);
     ASSERT_MSG(m, "model did not build");
-    const uint32_t L = 9u;
+    const uint32_t L = 9u, R = beam_model_n_residues(m);
     BeamLogoRequest req;
     beam_logo_request_default(&req);
     req.length = L;
@@ -400,22 +522,42 @@ static void test_a_one_hot_position_carries_the_whole_alphabet(void) {
     ASSERT_MSG(beam_insights_logos(m, &req, &set) == BEAM_OK, beam_error_message());
     const BeamLogo *g = &set.logo[0];
 
+    bool consensus_ok = true;
+    for (uint32_t i = 0; i < L; ++i) {
+        uint32_t arg = 0;
+        for (uint32_t a = 1; a < R; ++a)
+            if (g->probability[(size_t)i * R + a] > g->probability[(size_t)i * R + arg])
+                arg = a;
+        if (g->consensus[i] != arg
+            || g->consensus_probability[i] != g->probability[(size_t)i * R + arg])
+            consensus_ok = false;
+    }
     const double h = g->entropy_bits[0], info = g->information_bits[0];
     const uint32_t sup = g->n_support[0];
+    const uint32_t cons = g->consensus[0];
     const double cp = g->consensus_probability[0];
     const double maxe = set.max_entropy_bits;
+    const uint32_t c_index = m->alpha->char_to_idx[(unsigned char)'C'];
     beam_insights_logo_set_free(&set);
     beam_model_destroy(m);
 
-    if (sup != 1u) {
-        snprintf(msg, sizeof msg, "position 0 spells %u residues, not 1; this "
-                 "fixture no longer covers the one-hot case", (unsigned)sup);
+    ASSERT_MSG(consensus_ok,
+               "a consensus is not the argmax of its probability row");
+    ASSERT_MSG(cons == c_index, "position 0 is not C, which every sequence "
+               "of the corpus begins with");
+    if (!(cp > 0.5 && cp < 1.0)) {
+        snprintf(msg, sizeof msg, "position 0 is C with probability %.17g; it "
+                 "should dominate without being certain", cp);
         ASSERT_MSG(false, msg);
     }
-    ASSERT_MSG(fabs(cp - 1.0) < 1e-15, "the consensus is not certain");
-    ASSERT_MSG(fabs(h) < 1e-15, "a one-hot position has entropy above zero");
-    ASSERT_MSG(fabs(info - maxe) < 1e-15,
-               "a one-hot position does not carry the maximum information");
+    if (sup != R) {
+        snprintf(msg, sizeof msg, "position 0 spells %u residues, not all %u",
+                 (unsigned)sup, (unsigned)R);
+        ASSERT_MSG(false, msg);
+    }
+    ASSERT_MSG(h > 0.0 && info < maxe,
+               "a position every residue can take cannot carry the maximum "
+               "information");
     ASSERT_MSG(fabs(maxe - log2(20.0)) < 1e-12,
                "the amino-acid maximum is not log2(20) bits");
     PASS();
@@ -473,11 +615,23 @@ static void test_the_reference_alphabet_sets_the_ceiling(void) {
  * sum to the whole by construction and a test that only checks that is
  * asserting an identity of the implementation. `positional_marginals` shares
  * none of it: no grid, no cumulative, no threshold.
+ *
+ * Recombining is exact only if every position of a band agrees on its mass,
+ * which the grid guarantees only where no sequence sits near the edge -- so
+ * the edge is placed in a gap of the enumerated surprisals, halving the mass.
  */
 static void test_two_bands_recombine_into_the_exact_logo(void) {
-    BeamModel *m = build_aa(3u, true);
+    BeamModel *m = build_nt();
     ASSERT_MSG(m, "model did not build");
-    const uint32_t L = 9u, R = beam_model_n_residues(m);
+    const uint32_t L = 5u, R = beam_model_n_residues(m), B = 4096u;
+
+    Support s;
+    ASSERT_MSG(enumerate_support(m, L, &s), "enumeration");
+    const double ds = grid_spacing(m, L, B);
+    const double cut = gap_cut(&s, splitting_reach(L, ds), false, 0.5);
+    support_free(&s);
+    ASSERT_MSG(ds > 0.0 && cut > 0.0,
+               "no gap wide enough to split the support exactly");
 
     BeamLogoRequest req;
     beam_logo_request_default(&req);
@@ -486,8 +640,8 @@ static void test_two_bands_recombine_into_the_exact_logo(void) {
     ASSERT_MSG(beam_insights_logos(m, &req, &exact) == BEAM_OK, beam_error_message());
     ASSERT_MSG(exact.exact, "the reference route is not the exact one");
 
-    const double edges[3] = { -INFINITY, 3.6, INFINITY };
-    req.edges = edges; req.n_edges = 3u; req.bins = 2048u;
+    const double edges[3] = { -INFINITY, cut, INFINITY };
+    req.edges = edges; req.n_edges = 3u; req.bins = B; req.spacing = ds;
     BeamLogoSet band;
     ASSERT_MSG(beam_insights_logos(m, &req, &band) == BEAM_OK, beam_error_message());
     ASSERT_MSG(band.n_logos == 2u, "expected two bands");
@@ -503,9 +657,9 @@ static void test_two_bands_recombine_into_the_exact_logo(void) {
             const double d = fabs(mix - exact.logo[0].probability[k]);
             if (d > worst) worst = d;
             for (uint32_t j = 0; j < 2u; ++j) {
-                const double s = fabs(band.logo[j].probability[k]
-                                      - exact.logo[0].probability[k]);
-                if (s > spread) spread = s;
+                const double sp = fabs(band.logo[j].probability[k]
+                                       - exact.logo[0].probability[k]);
+                if (sp > spread) spread = sp;
             }
         }
     const double on_grid = band.on_grid_total, whole = band.length_total;
@@ -543,7 +697,7 @@ static void test_two_bands_recombine_into_the_exact_logo(void) {
  * said otherwise would be a route label wearing the name of a property.
  */
 static void test_one_band_over_the_grid_is_exact(void) {
-    BeamModel *m = build_aa(3u, true);
+    BeamModel *m = build_aa(2u);
     ASSERT_MSG(m, "model did not build");
     const uint32_t L = 9u, R = beam_model_n_residues(m);
 
@@ -606,27 +760,19 @@ static void test_an_empty_band_is_refused_not_answered(void) {
      * The band has to sit INSIDE the surprisal this length attains, or it is
      * refused earlier and cheaper by the reachability check, which is a
      * different refusal testing different code. A gap between two sequences
-     * of the support is inside the range and holds nothing.
+     * of the support is inside the range and holds nothing -- and with every
+     * string in the support, the gaps wide enough are among the few likely
+     * strings at the bottom of the range.
      */
     Support s;
-    ASSERT_MSG(enumerate_support(m, L, &s), "allocation");
-    ASSERT_MSG(s.n >= 4u, "too few sequences to have a gap");
+    ASSERT_MSG(enumerate_support(m, L, &s), "enumeration");
     double *sorted = (double *)malloc((size_t)s.n * sizeof(double));
     ASSERT_MSG(sorted, "allocation");
     memcpy(sorted, s.surprisal, (size_t)s.n * sizeof(double));
-    for (uint32_t i = 1; i < s.n; ++i)
-        for (uint32_t j = i; j > 0 && sorted[j] < sorted[j - 1u]; --j) {
-            const double t = sorted[j]; sorted[j] = sorted[j - 1u]; sorted[j - 1u] = t;
-        }
-    double ds = 0.0;
-    {
-        double *g = (double *)calloc(B, sizeof(double));
-        ASSERT_MSG(g, "allocation");
-        const BeamError e = beam_model_spectrum(m, true, L, B, 0.0, g, &ds);
-        free(g);
-        ASSERT_MSG(e == BEAM_OK, beam_error_message());
-    }
-    const double margin = (double)(2u * (L + 2u)) * ds;
+    qsort(sorted, s.n, sizeof(double), cmp_double);
+    const double ds = grid_spacing(m, L, B);
+    ASSERT_MSG(ds > 0.0, beam_error_message());
+    const double margin = splitting_reach(L, ds);
     double lo = -1.0, hi = -1.0;
     for (uint32_t k = 1; k < s.n; ++k) {
         if (sorted[k] - sorted[k - 1u] <= 4.0 * margin) continue;
@@ -671,7 +817,7 @@ static void test_an_empty_band_is_refused_not_answered(void) {
  * negatives attributable.
  */
 static void test_what_a_malformed_request_gets(void) {
-    BeamModel *m = build_aa(3u, true);
+    BeamModel *m = build_aa(2u);
     ASSERT_MSG(m, "model did not build");
     const uint32_t L = 9u;
     ASSERT_MSG(beam_length_live(m, L), "the fixture does not generate length 9");
@@ -680,6 +826,8 @@ static void test_what_a_malformed_request_gets(void) {
     const double repeated[2]   = { 3.0, 3.0 };
     const double nan_edge[2]   = { 0.0, NAN };
     const double negative[2]   = { -8.0, -3.0 };
+    /* Far past the most improbable string of length 9, which is some tens of
+     * nats even though every string has mass. */
     const double far[2]        = { 900.0, 1000.0 };
     const double fine[2]       = { -INFINITY, INFINITY };
 
@@ -768,13 +916,15 @@ static void test_what_a_malformed_request_gets(void) {
  * always 1 and the second always looks short.
  */
 static void test_a_finite_top_edge_still_measures_the_whole_grid(void) {
-    BeamModel *m = build_aa(3u, true);
+    BeamModel *m = build_aa(2u);
     ASSERT_MSG(m, "model did not build");
     const uint32_t L = 9u;
 
     /* One band from the bottom of the grid to the middle of the mass, so
      * real mass is left above it. */
-    const double edges[2] = { -INFINITY, 3.6 };
+    const double mid = median_surprisal(m, L);
+    ASSERT_MSG(mid > 0.0, "could not place the median");
+    const double edges[2] = { -INFINITY, mid };
     BeamLogoRequest req;
     beam_logo_request_default(&req);
     req.length = L; req.edges = edges; req.n_edges = 2u; req.bins = 2048u;
@@ -816,9 +966,11 @@ static void test_a_finite_top_edge_still_measures_the_whole_grid(void) {
  * remember to read it.
  */
 static void test_a_grid_too_coarse_is_refused_on_request(void) {
-    BeamModel *m = build_aa(3u, true);
+    BeamModel *m = build_aa(2u);
     ASSERT_MSG(m, "model did not build");
-    const double edges[3] = { -INFINITY, 3.6, INFINITY };
+    const double mid = median_surprisal(m, 9u);
+    ASSERT_MSG(mid > 0.0, "could not place the median");
+    const double edges[3] = { -INFINITY, mid, INFINITY };
     BeamLogoRequest req;
     beam_logo_request_default(&req);
     req.length = 9u; req.edges = edges; req.n_edges = 3u; req.bins = 1024u;
@@ -854,7 +1006,7 @@ static void test_a_grid_too_coarse_is_refused_on_request(void) {
  * the grid.
  */
 static void test_the_cost_estimate_precedes_the_sweep(void) {
-    BeamModel *m = build_aa(3u, true);
+    BeamModel *m = build_aa(3u);
     ASSERT_MSG(m, "model did not build");
     const double edges[2] = { -INFINITY, INFINITY };
     BeamLogoRequest req;
@@ -868,10 +1020,10 @@ static void test_the_cost_estimate_precedes_the_sweep(void) {
 
     /*
      * The estimate must SEE the grid, and the way to show that is that it
-     * scales with it. Comparing a grid against the exact route does not show
-     * it: on a sparse strict model the live set is a few dozen slots, so the
-     * pool is smaller than the state-space arrays both routes pay for, and
-     * the grid barely registers. Linearity in `bins` is the property.
+     * scales with it. Comparing a grid against the exact route shows only
+     * that one number is larger than another, which an estimate charging a
+     * constant for "a grid" would also pass. Linearity in `bins` is the
+     * property.
      */
     uint64_t b[3];
     const uint32_t bins[3] = { 1024u, 2048u, 4096u };
@@ -906,7 +1058,7 @@ int main(void) {
     RUN_TEST(test_the_unconditional_logo_is_a_direct_sum_over_the_support);
     RUN_TEST(test_a_banded_logo_is_a_filtered_sum_over_the_support);
     RUN_TEST(test_the_stack_identities_hold);
-    RUN_TEST(test_a_one_hot_position_carries_the_whole_alphabet);
+    RUN_TEST(test_a_conserved_position_is_dominated_but_not_one_hot);
     RUN_TEST(test_the_reference_alphabet_sets_the_ceiling);
     RUN_TEST(test_two_bands_recombine_into_the_exact_logo);
     RUN_TEST(test_one_band_over_the_grid_is_exact);

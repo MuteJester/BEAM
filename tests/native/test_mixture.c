@@ -12,11 +12,19 @@
  * partition function in math/diversity.c -- so agreement is two independent
  * implementations of one quantity, not a routine agreeing with itself.
  *
- * The union sweep meets `beam_model_path_count_total` on cases where the
- * answer is arithmetic: identical members give one member's support, members
- * that share nothing give the sum, and a pair sharing exactly one sequence
- * gives the sum less one. The last is the one that matters -- an off-by-one in
- * how a shared sequence is attributed is invisible in a large total.
+ * Members trained on disjoint residue pools are held to a brute-force
+ * enumeration of every nucleotide string up to length 6: under the
+ * hierarchical prior each gives every one of those strings positive mass, so
+ * their inner product is finite -- small, since each puts almost all of its
+ * mass where the other puts almost none -- and has to be the exact sum.
+ *
+ * The union sweep meets `beam_model_path_count_total` and plain arithmetic.
+ * Every member's support is the whole space, every string over the alphabet
+ * up to max_length, so the union of any members is `sum_L R^L` whatever they
+ * were trained on, and the sweep must carry exactly one member bitmask per
+ * trellis state: a member wrongly dropped from a path it can spell shows as a
+ * second mask in the peak, and nowhere in the totals, since the member left
+ * behind still counts the path.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -33,8 +41,9 @@ static int pass_count = 0, fail_count = 0;
 
 #define CLOSE(a, b, rel) (fabs((a) - (b)) <= (rel) * fabs(b))
 
-/* Two corpora over disjoint residue pools, so the models built from them
- * cannot share a single sequence. */
+/* Two corpora over disjoint residue pools. The models built from them still
+ * share every sequence -- the prior gives every string mass -- but put almost
+ * all of it in different places. */
 #define N_A 8
 static const char *TRAIN_A[N_A] = {
     "CASF", "CASY", "CAGF", "CGSF", "CASL", "CTSF", "CASQ", "CAAF",
@@ -47,8 +56,9 @@ static const char *TRAIN_B[N_B] = {
 };
 static const double WEIGHT_B[N_B] = {33, 21, 17, 14, 11, 9, 8, 6};
 
-/* `TRAIN_A` plus one sequence from B's pool, and vice versa, so the two
- * supports meet in exactly that one sequence. */
+/* One sequence from B's pool, observed by a model of A's corpus: it moves
+ * mass toward B's corner of the space without changing the support, which is
+ * the whole space already. */
 static const char *SHARED = "WMNP";
 
 static BeamModel *build(const char **seqs, const double *w, uint32_t n,
@@ -67,7 +77,7 @@ static BeamModel *build(const char **seqs, const double *w, uint32_t n,
     return m;
 }
 
-/** `TRAIN_A` with `SHARED` appended, at abundance 1. */
+/** `base` with `SHARED` appended, at abundance 1. */
 static BeamModel *build_with_shared(const char **base, const double *w,
                                     uint32_t n, uint8_t order) {
     const char *seqs[N_A + N_B + 1];
@@ -76,6 +86,60 @@ static BeamModel *build_with_shared(const char **base, const double *w,
     seqs[n] = SHARED;
     wts[n] = 1.0;
     return build(seqs, wts, n + 1u, order);
+}
+
+/* The same pair of disjoint pools on the nucleotide alphabet, small enough
+ * that every string a model can emit -- 5 + 25 + ... + 5^6 = 19,530 of them,
+ * N included -- can be enumerated and scored one at a time. */
+#define N_NT 8
+static const char *NT_A[N_NT] = {
+    "ACCA", "ACAC", "CCAA", "ACCAC", "CAAC", "ACCCA", "AACC", "CACA",
+};
+static const char *NT_B[N_NT] = {
+    "GTTG", "GTGT", "TTGG", "GTTGT", "TGGT", "GTTTG", "GGTT", "TGTG",
+};
+static const double NT_WEIGHT[N_NT] = {40, 25, 18, 15, 12, 10, 9, 5};
+#define NT_MAX_LEN 6u
+
+static BeamModel *build_nt(const char **seqs) {
+    BeamModelConfig cfg;
+    beam_model_config_default_for(BEAM_ALPHABET_NT, &cfg);
+    cfg.order = 2;
+    cfg.max_length = NT_MAX_LEN;
+    BeamModel *m = beam_model_new(&cfg);
+    if (!m) return NULL;
+    if (beam_model_observe(m, seqs, NT_WEIGHT, N_NT) != BEAM_OK
+        || beam_model_finalize(m) != BEAM_OK) {
+        beam_model_destroy(m);
+        return NULL;
+    }
+    return m;
+}
+
+/**
+ * `sum_s P_a(s) P_b(s)` over every nucleotide string of each length up to
+ * NT_MAX_LEN, one `log_pseq` pair at a time. Shares nothing with the sweep
+ * but the model's own scoring. `by[L]` receives the length-L sum; long double,
+ * so twenty thousand positive terms add without drift worth mentioning.
+ */
+static void brute_inner_product(const BeamModel *a, const BeamModel *b,
+                                long double by[NT_MAX_LEN + 1]) {
+    static const char alphabet[] = "ACGTN";
+    char s[NT_MAX_LEN + 1];
+    by[0] = 0.0L;
+    for (uint32_t L = 1; L <= NT_MAX_LEN; ++L) {
+        uint32_t count = 1;
+        for (uint32_t k = 0; k < L; ++k) count *= 5u;
+        long double acc = 0.0L;
+        for (uint32_t i = 0; i < count; ++i) {
+            uint32_t v = i;
+            for (uint32_t k = 0; k < L; ++k) { s[k] = alphabet[v % 5u]; v /= 5u; }
+            s[L] = '\0';
+            acc += expl((long double)beam_model_log_pseq(a, s)
+                        + (long double)beam_model_log_pseq(b, s));
+        }
+        by[L] = acc;
+    }
 }
 
 
@@ -133,17 +197,51 @@ static void test_a_k_way_product_is_the_mellin_transform_at_k(void) {
     PASS();
 }
 
-static void test_disjoint_members_have_no_inner_product(void) {
-    BeamModel *a = build(TRAIN_A, WEIGHT_A, N_A, 2);
-    BeamModel *b = build(TRAIN_B, WEIGHT_B, N_B, 2);
+static void test_members_trained_apart_match_the_enumeration(void) {
+    /*
+     * Each member gives every string mass, so the product of two members
+     * trained on disjoint pools is a finite sum over the whole space, and the
+     * enumeration is that sum written out. Checked per length as well as in
+     * total, since the total is dominated by a few lengths and would hide a
+     * wrong term at another.
+     */
+    BeamModel *a = build_nt(NT_A);
+    BeamModel *b = build_nt(NT_B);
     ASSERT_MSG(a && b, "a model did not build");
-    const BeamModel *pair[2] = {a, b};
-    double lip = 0.0;
-    const BeamError e = beam_mixture_log_inner_product_by_length(pair, 2, NULL,
-                                                                 &lip);
+    const BeamModel *ab[2] = {a, b}, *aa[2] = {a, a}, *bb[2] = {b, b};
+    double by[NT_MAX_LEN + 1], lip = 0.0, self_a = 0.0, self_b = 0.0;
+    const BeamError e1 = beam_mixture_log_inner_product_by_length(ab, 2, by,
+                                                                  &lip);
+    const BeamError e2 = beam_mixture_log_inner_product_by_length(aa, 2, NULL,
+                                                                  &self_a);
+    const BeamError e3 = beam_mixture_log_inner_product_by_length(bb, 2, NULL,
+                                                                  &self_b);
+    long double want[NT_MAX_LEN + 1], total = 0.0L;
+    brute_inner_product(a, b, want);
     beam_model_destroy(a); beam_model_destroy(b);
-    ASSERT_MSG(e == BEAM_OK, "call failed");
-    ASSERT_MSG(lip == -INFINITY, "disjoint supports must give -inf, not 0");
+    ASSERT_MSG(e1 == BEAM_OK && e2 == BEAM_OK && e3 == BEAM_OK,
+               "a call failed");
+    ASSERT_MSG(isfinite(lip), "members trained apart share no mass, but "
+                              "every string has mass under both");
+
+    ASSERT_MSG(by[0] == -INFINITY, "length 0 carries mass");
+    for (uint32_t L = 1; L <= NT_MAX_LEN; ++L) {
+        total += want[L];
+        ASSERT_MSG(CLOSE(by[L], (double)logl(want[L]), 1e-12),
+                   "a per-length term disagrees with the enumeration");
+    }
+    ASSERT_MSG(CLOSE(lip, (double)logl(total), 1e-12),
+               "the inner product disagrees with the enumeration");
+
+    /* Small, as well as finite. Cauchy-Schwarz bounds <A,B> by the geometric
+     * mean of the self products, with equality only for proportional
+     * distributions; members trained apart overlap only through the prior's
+     * pseudo-mass, which puts them about 15.5 nats (a cosine of 1.8e-7)
+     * below that bound here. A thousandth still separates "trained apart"
+     * from "trained alike" by orders of magnitude on either side. */
+    const double log_cosine = lip - 0.5 * (self_a + self_b);
+    ASSERT_MSG(log_cosine < log(1e-3),
+               "members trained on disjoint pools overlap as if trained alike");
     PASS();
 }
 
@@ -186,49 +284,54 @@ static void test_identical_members_have_one_members_support(void) {
     PASS();
 }
 
-static void test_disjoint_members_have_the_summed_support(void) {
+static void test_the_union_of_any_members_is_the_whole_space(void) {
+    /*
+     * Members that share no training residue still have the same support:
+     * every string over the twenty residues up to max_length. So the union
+     * is that space, 20^L at each length, counted here by multiplication
+     * rather than by any sweep.
+     *
+     * The peak is the sharper half. Both members spell every path, so no
+     * member ever drops out of a bitmask, and the sweep holds exactly one
+     * (state, mask) pair per trellis state: 20^2 = 400 at order 2, the width
+     * of every layer from the second on. A member wrongly dropped from a
+     * path's mask shows there as a second mask at that state, whatever the
+     * totals say.
+     */
     BeamModel *a = build(TRAIN_A, WEIGHT_A, N_A, 2);
     BeamModel *b = build(TRAIN_B, WEIGHT_B, N_B, 2);
     ASSERT_MSG(a && b, "a model did not build");
     const BeamModel *pair[2] = {a, b};
-    double u = 0.0;
-    const BeamError e = beam_mixture_support_union_by_length(pair, 2, 0, NULL,
-                                                             &u, NULL);
-    const double want = beam_model_path_count_total(a)
-                      + beam_model_path_count_total(b);
+    double by[7], u = 0.0;
+    uint64_t peak = 0;
+    const BeamError e = beam_mixture_support_union_by_length(pair, 2, 0, by,
+                                                             &u, &peak);
+    const double own_a = beam_model_path_count_total(a);
+    const double own_b = beam_model_path_count_total(b);
     beam_model_destroy(a); beam_model_destroy(b);
     ASSERT_MSG(e == BEAM_OK, "call failed");
-    ASSERT_MSG(u == want, "disjoint supports must add");
-    PASS();
-}
 
-static void test_one_shared_sequence_is_counted_exactly_once(void) {
-    /*
-     * The case an off-by-one hides in. Each model is given the other's single
-     * sequence, so the supports meet in exactly one place and the union must be
-     * the sum less one -- not the sum, which is what dropping the shared mask
-     * gives, and not one less again, which is what double-counting gives.
-     */
-    BeamModel *a = build_with_shared(TRAIN_A, WEIGHT_A, N_A, 2);
-    BeamModel *b = build(TRAIN_B, WEIGHT_B, N_B, 2);
-    ASSERT_MSG(a && b, "a model did not build");
-    ASSERT_MSG(beam_model_log_pseq(a, SHARED) != -INFINITY,
-               "the shared sequence is not in A");
-    ASSERT_MSG(beam_model_log_pseq(b, SHARED) != -INFINITY,
-               "the shared sequence is not in B");
-    const BeamModel *pair[2] = {a, b};
-    double u = 0.0;
-    const BeamError e = beam_mixture_support_union_by_length(pair, 2, 0, NULL,
-                                                             &u, NULL);
-    const double sum = beam_model_path_count_total(a)
-                     + beam_model_path_count_total(b);
-    beam_model_destroy(a); beam_model_destroy(b);
-    ASSERT_MSG(e == BEAM_OK, "call failed");
-    ASSERT_MSG(u == sum - 1.0, "a shared sequence was not counted exactly once");
+    double space = 0.0, at_length = 1.0;
+    ASSERT_MSG(by[0] == 0.0, "the union counts a sequence of length 0");
+    for (uint32_t L = 1; L <= 6; ++L) {
+        at_length *= 20.0;
+        space += at_length;
+        ASSERT_MSG(by[L] == at_length,
+                   "the union at one length is not every string of it");
+    }
+    ASSERT_MSG(u == space, "the union is not the whole space");
+    ASSERT_MSG(own_a == space && own_b == space,
+               "a member's own support is not the whole space");
+    ASSERT_MSG(peak == 400u,
+               "the sweep carried more than one member mask per state, so a "
+               "member dropped out of a path it spells");
     PASS();
 }
 
 static void test_the_union_never_exceeds_the_pooled_model(void) {
+    /* Under the prior both are the whole space, so this holds with equality;
+     * the inequality is the relation that holds whatever the smoothing, and
+     * the test above pins the value itself. */
     BeamModel *a = build(TRAIN_A, WEIGHT_A, N_A, 2);
     BeamModel *b = build_with_shared(TRAIN_B, WEIGHT_B, N_B, 2);
     BeamModel *pooled = build(TRAIN_A, WEIGHT_A, N_A, 2);
@@ -384,9 +487,14 @@ static void test_both_union_entry_points_enforce_the_same_ceiling(void) {
     ASSERT_MSG(many, "allocation");
     for (uint32_t i = 0; i < over; ++i) many[i] = m;
 
+    /* Length 2, the shortest with a transition between layers. The ceiling
+     * is checked before any sweep, so no length refuses better than another;
+     * the call at the ceiling does sweep, though, sixty-four members of it,
+     * each member's layer built in a parallel region of its own, so the
+     * length is what sets this test's cost. */
     double one = 0.0;
     const BeamError per_length =
-        beam_mixture_support_union(many, over, 5u, 0, &one, NULL);
+        beam_mixture_support_union(many, over, 2u, 0, &one, NULL);
     static char msg_a[512];
     snprintf(msg_a, sizeof msg_a, "%s", beam_error_message());
 
@@ -400,7 +508,7 @@ static void test_both_union_entry_points_enforce_the_same_ceiling(void) {
      * `>=`: an off-by-one here costs a caller the largest mixture that fits. */
     const BeamError at = beam_mixture_support_union(many,
                                                     BEAM_MIXTURE_MAX_MEMBERS,
-                                                    5u, 0, &one, NULL);
+                                                    2u, 0, &one, NULL);
     free(many);
     beam_model_destroy(m);
 
@@ -470,13 +578,12 @@ int main(void) {
     RUN_TEST(test_a_model_against_itself_is_one_over_its_hill_number);
     RUN_TEST(test_one_member_sums_to_one);
     RUN_TEST(test_a_k_way_product_is_the_mellin_transform_at_k);
-    RUN_TEST(test_disjoint_members_have_no_inner_product);
+    RUN_TEST(test_members_trained_apart_match_the_enumeration);
     RUN_TEST(test_the_per_length_terms_sum_to_the_total);
 
     printf("\n[the union sweep against path counting]\n");
     RUN_TEST(test_identical_members_have_one_members_support);
-    RUN_TEST(test_disjoint_members_have_the_summed_support);
-    RUN_TEST(test_one_shared_sequence_is_counted_exactly_once);
+    RUN_TEST(test_the_union_of_any_members_is_the_whole_space);
     RUN_TEST(test_the_union_never_exceeds_the_pooled_model);
     RUN_TEST(test_a_ceiling_of_one_refuses_rather_than_undercounts);
     RUN_TEST(test_a_budget_too_small_refuses_both_sweeps);

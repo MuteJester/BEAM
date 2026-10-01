@@ -33,11 +33,15 @@ from BEAM import BudgetExceeded
 
 @pytest.fixture(scope="module")
 def model():
-    """Several live lengths, so pooling is strictly more work than one length."""
+    """Several live lengths, so pooling is strictly more work than one length.
+
+    max_length is the corpus's longest (15): every length up to it is live
+    under the prior, so a larger one would only add lengths the corpus never
+    had to every pooled sweep below."""
     rng = np.random.default_rng(11)
     seqs = ["CASS" + "".join(rng.choice(list("AGLSTY"), n)) + "EQYF"
             for n in (3, 4, 5, 6, 7) for _ in range(12)]
-    return BEAM.BeamModel(seqs, order=3, max_length=20, strict=False)
+    return BEAM.BeamModel(seqs, order=3, max_length=15)
 
 
 def test_the_working_set_is_reported_and_is_not_zero(model):
@@ -62,14 +66,24 @@ def test_the_working_set_covers_the_answer_it_returned(model):
 
 
 def test_the_working_set_tracks_the_work(model):
-    """Pooling reaches strictly more cells than any single length does.
+    """Pooling reaches strictly more cells than a shorter length does.
 
     A constant large enough to pass the two checks above would satisfy them and
     mean nothing; this is what makes the figure a measurement.
+
+    It used to be "than ANY single length", which the prior has made false.
+    Every string of every length is possible now, so the longest length alone
+    reaches every (depth, context) any shorter one does, and its figure is the
+    pooled one (measured equal). What moves the figure is how deep the cells
+    go, so the comparison is with the shortest length the corpus had (11),
+    four residues shallower than the pooled answer -- and the longest must
+    not exceed the pool it belongs to.
     """
-    one = model.expected_counts(length=model.observed_lengths[0])
+    short = model.expected_counts(length=11)
+    longest = model.expected_counts(length=max(model.observed_lengths))
     every = model.expected_counts()
-    assert every["working_set_bytes"] > one["working_set_bytes"]
+    assert every["working_set_bytes"] > short["working_set_bytes"]
+    assert longest["working_set_bytes"] <= every["working_set_bytes"]
 
 
 def test_the_working_set_does_not_move_with_the_budget(model):

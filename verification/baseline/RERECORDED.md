@@ -1695,3 +1695,650 @@ the one arbitrary choice in the vector.
 COST is one add inside a loop that already rescales and collects every
 surviving state, plus one forward sweep per call where `log_partition` reads a
 value cached at finalize.
+
+# Why five inventories were re-recorded for tempering
+
+Re-recorded 2026-09-29, for `BeamModel.tempered` -- the tempered law
+`P_t(s) proportional to P(s)^t` materialised as a model rather than carried
+inside a sweep.
+
+Five files, and every one of them gained lines without losing any. That is
+the whole claim, and it is checkable rather than asserted:
+
+    cbeam_methods.txt        +1  -0     temper
+    c_public_symbols.txt     +1  -0     beam_model_temper
+    c_symbols.txt            +1  -0     the same, newly external
+    python_api.txt           +1  -0     def tempered(self, t: 'float') -> 'BeamModel'
+    pytest_cases.txt        +14  -0     tests/python/model/test_tempering.py
+
+`git diff verification/baseline/` shows no `-` line in any of them.
+
+Nothing NUMERIC moved, which is the part worth stating plainly. `numeric`
+(78 keys, order 2/3/4 x open/strict), `exact against enumeration` (351
+quantities), `saved-model bytes` and `thread independence` all passed
+UNCHANGED against the recordings made before this work. Tempering adds an
+operation and alters no existing one: `beam_model_temper` is only ever
+reached through `tempered`, it is the only caller of the scaling it performs,
+and it runs on a COPY, so no model that existed before can observe it.
+
+The new C symbol is public rather than internal because the header declares
+it, which is deliberate: it is an operation on a model, of the same standing
+as `beam_model_add` and `beam_model_compact` beside it, and the note the gate
+prints about a symbol newly external is the honest description of a function
+that was written for this purpose rather than exposed by a file split.
+
+The fourteen cases are listed here so a later reader can tell an added test
+from a renamed one:
+
+    test_tempering_at_one_is_the_identity
+    test_the_defining_identity
+    test_the_tempered_mellin_transform_is_the_original_reparametrised
+    test_the_tempered_model_is_a_distribution
+    test_the_length_prior_is_the_tilted_share
+    test_tempering_reweights_the_support_without_widening_it
+    test_the_entropy_follows_the_mellin_derivative
+    test_raising_the_exponent_lowers_the_entropy
+    test_within_one_length_the_ranking_survives
+    test_what_tempering_refuses
+    test_the_result_has_no_counts_left
+    test_the_original_is_untouched
+    test_the_identity_holds_for_every_storage_and_world[cfg0]
+    test_the_identity_holds_for_every_storage_and_world[cfg1]
+
+None of them replaces anything. Each was also shown to FAIL against a
+deliberately broken implementation before being trusted: dropping `Z_t(L)`
+from the length prior fails 7, never recomputing `Z_t` fails 8, scaling only
+the N-anchored table fails 6, skipping the sparse dictionary branch fails 5,
+and leaving the length prior unnormalised fails 7. A test battery that has
+never failed pins nothing, and this one was made to.
+
+## What this re-record deliberately did NOT absorb
+
+`pytest_cases.txt` was recorded at 778 cases: the 764 the previous baseline
+held, plus the 14 above. The suite as it stands in this working tree collects
+**785**, and the seven-case difference is `tests/python/likelihood/
+test_lattice.py`.
+
+Those seven were left out on purpose. `tests/python/likelihood/` and
+`src/BEAM/likelihood/` are UNTRACKED -- `git ls-files` returns nothing for
+either -- so they are uncommitted work in the tree rather than part of the
+repository. Recording them would pin, in a tracked baseline, tests that no
+fresh clone and no `git clean` can produce, and the gate would then fail for
+everyone else with those seven under `missing`.
+
+So the gate's `pytest inventory` row FAILS on this branch, and it failed the
+same way before this work: the previous baseline's 764 contains no
+`test_lattice` case either, while the files were already present and already
+collectable. The row is a statement about the untracked likelihood work, not
+about tempering. Committing that work, or removing it, is what resolves the
+row; re-recording around it would only hide which of the two happened.
+
+# Why every baseline was re-recorded for the hierarchical prior
+
+Re-recorded 2026-09-29, tag `preprior`: the closed world (`strict=True`) and
+the open world (`strict=False`, a Laplace add-one) were REMOVED and replaced by
+one model, a hierarchical Bayesian prior. Every row of either table is now the
+posterior mean of a Dirichlet centred on its parent, the same depth with one
+residue less of context,
+
+    P_k(x) = (n_k(x) + alpha[k] * P_{k-1}(x)) / (n_k + alpha[k]),
+
+down to the depth alone and then the uniform 1/R, and the length prior is the
+same rule over lengths 1..max_length. Every string up to `max_length` is
+possible; an unobserved context predicts what its shorter context predicts.
+This is a change of MODEL, so every number moved, and every file below was
+re-recorded from one gate run (`check.py --record preprior`) with the previous
+copy kept beside it.
+
+## The independent witness passed before anything was recorded
+
+`exact.py` was moved to the new support first -- every length 1..max_length,
+168,420 amino-acid strings per configuration, orders 2/3/4 crossed with the
+default prior and an uneven one (strengths five orders of magnitude apart
+between levels) -- and passed all 351 quantities, worst 4.4% of its tolerance.
+The recorder refuses to write while it fails. Beyond the gate, the finalized
+tables match a plain-Python evaluation of the rule to ~1e-14, and
+`tests/reference/beam_model.py` (rewritten for the prior, with its own Z(L)
+sweep) matches whole-model scores to ~1e-13.
+
+## What moved
+
+    numeric.json      all 78 keys, relabelled o{2,3,4}/{default,uneven}
+                      from o{2,3,4}/{open,strict}; D0 is now sum_L 20^L
+                      exactly (3.449e19 at max_length 15); fixture sha256
+                      cba4c711.. -> 64c3b695.., 233,050 -> 233,082 bytes
+                      (format 8: the header carries the prior's strengths)
+    threads.json      re-recorded; identical at 1, 4 and 16 threads
+    python_api.txt    1135 -> 1234 lines: `strict=` removed from BeamModel
+                      and Builder; `alpha=`, `alpha_length=`, `set_alpha`,
+                      `fit_alpha`/`AlphaFit` added, and the likelihood
+                      package's public API (below)
+    pytest_cases.txt  778 -> 817: +142 -103, the migration of every test
+                      that asserted a closed-world fact, the new prior and
+                      format tests, and tests/python/likelihood
+    c_cases.txt       325 -> 331: +32 -26, the same migration in C
+    cbeam_methods     +set_prior
+    c_public_symbols  +beam_model_set_prior, -beam_model_is_legacy_file
+    c_symbols         the same, and -beam_to_log_inplace (the add-one's
+                      log conversion, dead with it)
+
+`beam_model_is_legacy_file` is removed on purpose: only the current file
+format (8) is read, and a file from an earlier development build -- EDGE's
+included -- is refused with its format number and "Rebuild the model from its
+sequences". There are no readers for formats 1-7 left to test.
+
+## What this re-record absorbs that the previous one declined
+
+The tempering section above left `tests/python/likelihood/` out of
+`pytest_cases.txt` because it was untracked. It is recorded now: the
+likelihood package is part of this branch's work and is to be committed with
+it. If it is not, this row fails for exactly that reason, which is the
+honest place for it to fail.
+
+# Why the default-prior baselines were re-recorded for estimated strengths
+
+Re-recorded 2026-09-29, tag `preauto`. A model built without `alpha=` no longer
+uses a fixed strength of 10: finalize estimates each level's strength, and the
+length prior's, as the maximum of the evidence of the model's own counts (the
+Dirichlet-multinomial marginal likelihood, exact) under a weak log-normal
+hyperprior centred on 10. So every quantity of a DEFAULT model moved, and
+nothing else did.
+
+    numeric.json      33 of 78 keys: exactly the o{2,3,4}/default ones, whose
+                      strengths are now estimated. The o{2,3,4}/uneven keys
+                      name their strengths and are bit-identical. The fixture
+                      grows 233,082 -> 233,090 bytes: format 9, whose header
+                      records which strengths were estimated.
+    threads.json      re-recorded; identical at 1, 4 and 16 threads, which is
+                      the property the estimate was written to keep (its sums
+                      run in fixed chunks, whatever the thread count).
+    python_api.txt    +1 -1: fit_alpha's search bound, 1e6 -> 1e12, the same
+                      range the estimate searches.
+    pytest_cases.txt  +6 -1: the evidence, thread-independence, round-trip
+                      and "auto" tests; the default-is-ten test is replaced
+                      by the one saying the default is estimated.
+    c_cases.txt       unchanged.
+
+`exact.py` passed before recording (351 quantities, worst 4.0%). The estimate
+itself is checked in `test_hierarchical_prior.py` against the evidence
+recomputed in plain Python with `math.lgamma`, level by level.
+
+# Why the baselines moved for complex Mellin orders
+
+Re-recorded 2026-09-30, tag `precomplex`. The power sum M(q) = sum_s P(s)^q is
+now computed at COMPLEX q, and a module computes occupancy quantities exactly
+from it, so the public surface grew and nothing that existed moved.
+
+    cbeam_methods.txt      +2 -0  log_mellin_complex, log_mellin_line
+    c_public_symbols.txt   +2 -0  beam_model_log_mellin_complex,
+                                  beam_model_log_mellin_line
+    c_symbols.txt          +4 -0  the two above, and the internal sweeps
+                                  jet_sweep_cfan and jet_sweep_line
+    python_api.txt         +2 -0  BeamModel.log_mellin_complex,
+                                  BeamModel.log_mellin_line
+    pytest_cases.txt      +58 -0  test_mellin_complex.py (19),
+                                  test_mellin_line.py (13),
+                                  analytics/test_exact_occupancy.py (26)
+    c_cases.txt            +6 -0  tests/native/test_mellin_complex.c
+    numeric.json           unchanged (re-written by the recorder, byte-identical)
+    threads.json           unchanged (likewise)
+
+`exact.py` passed before recording, now at 411 quantities (+60: complex
+orders and the vertical line, each against the enumerated sum as
+M / M(Re q)), worst 5.8% of its tolerance. The per-edge `exp` of
+`log_mellin_complex` was made shared across orders with an equal real part
+and shift, and held bit-identical to the build before it on 44 orders.
+
+# Why the test inventory moved for batched exact occupancy
+
+Re-recorded 2026-09-30, tag `prebatch`. `ExactOccupancy` gained batch
+methods, persisted contour lines and a planner that builds one line at a time;
+no C changed, so only the test inventory moved.
+
+    pytest_cases.txt      +20 -0  analytics/test_exact_occupancy.py, ten tests
+                                  on both alphabets: novelty (and its underflow
+                                  and unresolved cases), private_at_depth, the
+                                  vectorised richness, the line round trip,
+                                  merging saves, the longer of two lines, the
+                                  refusal of another model's file, and a batch
+                                  building no more lines than one depth at a
+                                  time
+    python_api.txt         unchanged (re-written by the recorder, byte-identical)
+    c_cases.txt            unchanged (likewise)
+    numeric.json           unchanged (likewise)
+    threads.json           unchanged (likewise)
+
+The gate passed on everything else before recording, `exact.py` at 411
+quantities, worst 5.8% of its tolerance. The full suite: 899 passed, 1
+skipped.
+
+# Why the test inventory moved for logged contour lines
+
+Re-recorded 2026-09-30, tag `preline4`. `ExactOccupancy` logs one INFO
+record per contour line it computes or extends -- its cost and how many of
+the values waiting on it it resolved -- so a long batch can be followed.
+
+    pytest_cases.txt       +2 -0  test_every_line_computed_is_logged, both
+                                  alphabets
+    python_api.txt         unchanged (re-written by the recorder, byte-identical)
+    c_cases.txt            unchanged (likewise)
+    numeric.json           unchanged (likewise)
+    threads.json           unchanged (likewise)
+
+Recorded with the four-orders-at-a-time line sweep of the next commit already
+built, which moved none of these: `numeric`, `thread independence` and
+`exact.py` (411 quantities, worst 5.8% of its tolerance, as before) passed
+unchanged. The full suite: 901 passed, 1 skipped; the C suite 337 passed.
+
+# Why the test inventory moved for the sampled Hill numbers
+
+Re-recorded 2026-09-30, tag `predeficit`. `ExactOccupancy` gained
+`sampling_deficit_many` -- S(N) = sum_s P D(N P), which makes a Poisson
+sample's expected Shannon entropy H - S(N) and so its Hill D1 exact -- and
+`poisson_richness_many`, its D0. No C changed.
+
+    pytest_cases.txt      +17 -0  analytics/test_exact_occupancy.py: the
+                                  deficit kernel against a 30-digit
+                                  reference; S(N) at six depths and deep in
+                                  N; Poisson richness; each on both alphabets
+                                  (the deep-N case skips the amino-acid model,
+                                  whose direct sum is too slow there)
+    python_api.txt         unchanged (re-written by the recorder, byte-identical)
+    c_cases.txt            unchanged (likewise)
+    numeric.json           unchanged (likewise)
+    threads.json           unchanged (likewise)
+
+The gate passed on everything else before recording, `exact.py` at 411
+quantities, worst 5.8% of its tolerance. The full suite: 917 passed, 2
+skipped.
+
+# Why the baselines moved for scoring straight from Arrow buffers
+
+Re-recorded 2026-09-30, tag `prepacked`. Scoring a parquet column spent most
+of its time making a Python string per sequence and a Python float per score.
+`beam_model_log_pseq_packed` scores sequences packed end to end in one buffer
+-- a string column's bytes and offsets, as Arrow holds them -- and
+`BeamModel.log_pseq_arrow` hands it a pyarrow column directly;
+`log_pseq_parquet` now uses it. Every score is bit-identical to
+`log_pseq_batch`. Nothing that existed moved.
+
+    cbeam_methods.txt      +1 -0  log_pseq_packed                 (by hand)
+    c_public_symbols.txt   +1 -0  beam_model_log_pseq_packed      (by hand)
+    c_symbols.txt          +2 -0  the above, and beam_encode_n,
+                                  the length-bounded encoder      (by hand)
+    python_api.txt         +1 -0  BeamModel.log_pseq_arrow
+    pytest_cases.txt       +6 -0  io/test_arrow_scoring.py: bit-identity on
+                                  string and large_string columns, a slice
+                                  starting mid-buffer, a chunked column,
+                                  nulls as NaN, log_pseq_parquet
+    c_cases.txt            +1 -0  test_packed_matches_scalar_and_refuses_bad_offsets
+    numeric.json           unchanged (re-written by the recorder, byte-identical)
+    threads.json           unchanged (likewise)
+
+The gate passed on everything else before recording and on everything after,
+`exact.py` at 411 quantities, worst 5.8% of its tolerance. The full suites:
+Python 923 passed, 2 skipped; C 338 passed.
+
+# Why the test inventory moved for a planner that knows when to stop
+
+Re-recorded 2026-09-30, tag `prefutile`. On the foundation, U(n) at n ~ 1e70
+and beyond is too small for any contour line to resolve to rel_tol, and the
+planner kept building finer lines that resolved nothing -- six of 3-4
+minutes each before the step was stopped. A parameter whose own new line does
+not improve its bound tenfold is now finished, and a batch stops after three
+new lines in a row resolve nothing; what is left is returned with the bound
+it has. No C changed.
+
+    pytest_cases.txt       +2 -0  test_a_value_no_line_can_resolve_stops_the_planner,
+                                  both alphabets
+    python_api.txt         unchanged (re-written by the recorder, byte-identical)
+    c_cases.txt            unchanged (likewise)
+    numeric.json           unchanged (likewise)
+    threads.json           unchanged (likewise)
+
+The gate passed on everything else before recording, `exact.py` at 411
+quantities. The full suite: 925 passed, 2 skipped.
+
+# Why the saved-model bytes moved for loading under the stored prior
+
+Re-recorded 2026-09-30, tag `prestoredprior`. A model whose prior strengths
+are estimated from its counts stores the estimates, and every load estimated
+them again from the same counts -- the same numbers, 48.5 of a 53 s load on
+the foundation. The header word that was written zero, `reserved`, is now
+`flags`: bit 0 says the model was finalized when written, so the strengths it
+stores fit its counts, and a load finalizes under them. A file without the bit
+-- every file written before today -- is re-derived as it always was, and
+readers from before today never read the word, so both directions still load.
+
+    numeric.json           fixture_sha256 7e036f72... -> 746ffe58..., and
+                           nothing else: the fixture is finalized when saved,
+                           so its flags word is now 1. fixture_bytes unchanged
+                           (the word was already there). The foundation, saved
+                           again, differs from its old file in exactly byte 28
+                           (this word) and the trailing CRC, loads in 7.7 s
+                           instead of 52.6, and scores 20,000 sequences
+                           bit-identically.
+    pytest_cases.txt       +2 -0  test_persistence.py: a finalized model loads
+                                  under the strength its file stores (one
+                                  planted in the header is used, not
+                                  re-estimated), and a file without the flag
+                                  still re-estimates
+    python_api.txt         unchanged (re-written by the recorder, byte-identical)
+    c_cases.txt            unchanged (likewise)
+    threads.json           unchanged (likewise)
+
+The gate passed on everything else before recording, `exact.py` at 411
+quantities. Full suites: Python 927 passed, 2 skipped; C 338 passed.
+
+# Why the test inventory moved for skipping lines below the rounding floor
+
+Re-recorded 2026-09-30, tag `prefloor`. The foundation's discovery curve
+spent 9.5 of its 12 minutes on three lines for U(n) at its 71 deepest depths
+that resolved nothing: those values are smaller than the rounding of the
+contour sum that forms them, and a finer or longer line repeats that. The
+engine now reports each value's rounding floor apart from its bound, and the
+planner builds no line for a value whose best floor already exceeds its
+tolerance; it keeps the bound it has. No C changed.
+
+    pytest_cases.txt       +4 -0  a value below its rounding floor builds no
+                                  new line (with lines present), and a fresh
+                                  batch of them at most one; both alphabets
+    python_api.txt         unchanged (re-written by the recorder, byte-identical)
+    c_cases.txt            unchanged (likewise)
+    numeric.json           unchanged (likewise)
+    threads.json           unchanged (likewise)
+
+The gate passed on everything else before recording, `exact.py` at 411
+quantities. The full suite: 931 passed, 2 skipped.
+
+# Why the test inventory moved for one lower-q line at the rounding floor
+
+Re-recorded 2026-09-30, tag `prelowq`. The pipeline showed the previous
+commit's skip was too eager: three lines at q ~0.17 resolved none of 17
+deficit values, and one at q = 0.12 then resolved 16. A value at its rounding
+floor is at the floor OF THAT q; the sum cancels less at a lower q. So a batch
+now gets one line at half the q of such a value's best line, its step scaled
+to keep the aliasing margin, before those values keep the bounds they have.
+One per batch, not per value: each halving doubles a line's cost. No C
+changed.
+
+    pytest_cases.txt       4 renamed, 0 added or dropped: "builds no new
+                           line" -> "builds at most one new line", "a fresh
+                           batch builds at most one line" -> "at most two"
+    python_api.txt         unchanged (re-written by the recorder, byte-identical)
+    c_cases.txt            unchanged (likewise)
+    numeric.json           unchanged (likewise)
+    threads.json           unchanged (likewise)
+
+The gate passed on everything else before recording. The full suite: 931
+passed, 2 skipped.
+
+# Why the C test inventory moved for a faster line sweep
+
+Re-recorded 2026-09-30, tag `prelinespeed`. Profiling a 2,048-order line on
+the foundation (887M complex multiply-adds per order) found a quarter of the
+time in the multiply-add itself. The rest went to 13 of 40 threads sitting
+idle, because stretches were sized for one thread per length; to rotations
+built one dependent multiply at a time; to libm's sincos, called edge by edge;
+and to a separate rescaling pass per layer. The line now keeps every thread
+busy, runs sixteen independent rotation chains fused into the multiply-add
+(eight lanes a register, with an AVX-512 copy), takes each target's sines and
+cosines four at a time from `beam_sincos_many`, and scales each layer by an
+exact power of two as it is written. 207 -> 62 ms per order on ig05.
+
+Line values move at the rounding level only: against the direct form on the
+foundation, 1e-24 of M(Re q) for t >= 0.1 (as before) and 7e-15 at t = 0,
+where the old line shared the direct form's divisions. The AVX-512 copy is
+bit-identical to the AVX2 copy on the foundation's 2,048 orders.
+
+    c_cases.txt            7 added, 0 renamed or dropped:
+                           test_a_long_line_keeps_every_thread_busy,
+                           test_line_plans_cover_the_line_within_the_budget
+                           (test_mellin_complex.c); test_random_angles_within_two_ulp,
+                           test_near_multiples_of_half_pi, test_zero_is_exact,
+                           test_bits_do_not_depend_on_the_call_size,
+                           test_beyond_the_reduction_range (test_vtrig.c, new)
+    python_api.txt         unchanged (re-written by the recorder, byte-identical)
+    pytest_cases.txt       unchanged (likewise)
+    numeric.json           unchanged (likewise)
+    threads.json           unchanged (likewise)
+
+`beam_line_plan` is newly external (internal header only). The gate passed on
+everything else before recording, `exact.py` at 411 quantities. The full
+suite: 931 passed, 2 skipped; C 345 passed.
+
+# Why the C test inventory moved for a line swept by all threads at once
+
+Re-recorded 2026-09-30, tag `prelinewide`. After `prelinespeed` a line was
+still split into many narrow stretches, one thread each, so every stretch
+repeated the per-edge work (the layer's weights, each edge's modulus and
+fixed rotations), a short line left threads idle, and each length's live
+frontier was built serially on a process's first line (11.7 s of a 20.7 s
+128-order line on the foundation). Each stretch of each length is now swept
+by all the threads together, sharing out a layer's targets in groups with
+the same sources, a tile of 256 orders at a time; a line is one stretch
+wherever the budget holds it; the frontiers are built in parallel first; one
+workspace serves the whole line. Each edge's sixteen-lane rotation pattern
+is taken once per layer and a block's seeds are its anchor times that
+pattern; the chains are held in named registers (as an indexed array they
+lived on the stack); rows are padded by a cache line (a 2,048-order row was
+32 KB, and that width ran 30% slower than 1,536); the next layer's rows are
+written with non-temporal stores. On ig05: 62 -> 33 ms per order at 2,048
+orders, 126 -> 65 at 128. The sweep is now bound by memory bandwidth.
+
+Line values move at the rounding level only (seeds taken as anchor times
+pattern; the sink summed over fixed chunks of end states, so the same bits
+at any thread count). Every build since was checked bit-identical to the
+one before it on the foundation's 128- and 2,048-order lines where only the
+schedule changed.
+
+    c_cases.txt            1 renamed, 0 added or dropped:
+                           test_a_long_line_keeps_every_thread_busy ->
+                           test_a_line_is_one_stretch_wherever_it_fits
+                           (the plan it checked no longer exists: a stretch
+                           now always has every thread)
+    python_api.txt         unchanged (re-written by the recorder, byte-identical)
+    pytest_cases.txt       unchanged (likewise)
+    numeric.json           unchanged (likewise)
+    threads.json           unchanged (likewise)
+
+`beam_line_work_new` and `beam_line_work_free` are newly external (internal
+header only). The gate passed on everything else before recording, `exact.py`
+at 411 quantities. The full suite: 931 passed, 2 skipped; C 345 passed.
+
+# Why the pytest inventory moved for power sums taken only when needed
+
+Re-recorded 2026-10-01, tag `prelazysums`. Profiling the figure steps on
+ig05 found the exact-occupancy engine spending a minute of every process on
+ninety real power sums M(1..90) at construction -- the series route's, which
+the pairwise, depth-sweep and partition workloads never reach -- and four
+more full sweeps on every save and load of its lines to recompute the
+model's fingerprint. The ninety are now taken on first use (checks that need
+only M(1) take that one order), and the fingerprint once per engine. No
+value changes.
+
+    pytest_cases.txt       4 added, 0 renamed or dropped:
+                           test_series_power_sums_are_taken_only_when_a_series_needs_them[aa|nt],
+                           test_the_fingerprint_is_taken_once[aa|nt]
+    python_api.txt         unchanged (re-written by the recorder, byte-identical)
+    c_cases.txt            unchanged (likewise)
+    numeric.json           unchanged (likewise)
+    threads.json           unchanged (likewise)
+
+The gate passed on everything else before recording, `exact.py` at 411
+quantities. The full suite: 935 passed, 2 skipped.
+
+# Why the moments and the C inventory moved for a new real-order sweep
+
+Re-recorded 2026-10-01, tag `prerealsweep`. Profiling the figure steps found
+real power sums M(q) -- the series route's ninety, the planner's grid, the
+lines' fingerprints, single orders -- at 40% of the exact work, from a
+per-length sweep that took libm's exp once per edge per order: 0.65 s an
+order on the foundation. `beam_mellin_terms` and `beam_model_log_mellin_many`
+now share one sweep (`jet_sweep_real`): all threads share out each layer's
+targets; an edge's factors exp(q w - shift) are taken eight orders at a time
+by a vectorised exp (`vm_exp8`, beam/vmath.h, within two ulp, exactly 1 at
+0); each order keeps the old fan's own shift -- its largest weight over the
+states still carrying its mass -- and an exact power-of-two scale. The ninety
+integer orders: 58 s -> 16 s on ig05.
+
+`log_mellin` and `log_mellin_many` still agree to the bit (test_mellin_many,
+560 values). Against the old sweep ln M moves by at most 3.2e-13 in absolute
+terms at q = 90. Checked against enumeration on the order-4 dense fixture
+(3.4M strings): ln M(1), M(0.5) and M(2) within 6e-15 -- which also showed that
+the model's stored normaliser is 3.6e-12 off there, something the old sweep
+hid by repeating finalize's own rounding (test_sparse now allows 1e-11 and
+says why).
+
+    numeric.json           6 keys moved, the surprisal moments at every
+                           order and prior (they take their length weights
+                           from beam_mellin_terms): at most 2.3e-15
+                           relative (10 ulp, o3/uneven), 1 to 4 ulp elsewhere
+    c_cases.txt            4 added: test_exp_within_two_ulp,
+                           test_exp_is_exact_at_zero_and_flushes_below_the_normals,
+                           test_exp_bits_do_not_depend_on_the_call_size
+                           (test_vtrig.c), test_large_orders_stay_finite_and_in_bounds
+                           (test_mellin_many.c)
+    python_api.txt         unchanged (re-written by the recorder, byte-identical)
+    pytest_cases.txt       unchanged (likewise)
+    threads.json           unchanged (likewise)
+
+Hill numbers, D0, entropy, scores and every other pinned number are
+unchanged: they come from other sweeps. The gate passed on everything else
+before recording, `exact.py` at 411 quantities. The full suite: 935 passed,
+2 skipped; C 349 passed.
+
+# Why the pytest inventory and the callables moved for a C log-gamma ratio
+
+Re-recorded 2026-10-01, tag `preloggamma`. Profiling the figure steps found
+the contour kernels' ln Gamma(w) - ln Gamma(w + z) -- a ninety-term polygamma
+series in numpy, a full matrix per term -- at a quarter to a half of the
+pairwise, depth-sweep and partition steps, most of it in the tail bound,
+which evaluates the kernel at 481 points per depth. It is now one C function
+(`beam_log_gamma_ratio`, math/lgamma_ratio.c, bound as
+`_cbeam.log_gamma_ratio`): Stirling's series for the difference, arranged so
+nothing cancels, shifted up below w = 15, on every thread. Against values
+taken to 30 significant digits it is within 2.1e-16 of its scale
+|z| ln(w + |z|) over the tested grid, where the numpy form was 5.8e-15; the
+numpy form stays in the module as the tests' second opinion.
+
+    pytest_cases.txt       3 added: test_log_gamma_ratio.py::
+                           test_matches_thirty_digits_everywhere_it_is_used,
+                           test_agrees_with_the_numpy_form_it_replaces,
+                           test_zero_is_zero
+    cbeam_methods.txt      1 added by hand: log_gamma_ratio (previous kept as
+                           cbeam_methods.preloggamma.txt)
+    python_api.txt         unchanged (re-written by the recorder, byte-identical)
+    c_cases.txt            unchanged (likewise)
+    numeric.json           unchanged (likewise)
+    threads.json           unchanged (likewise)
+
+The gate passed on everything else before recording, `exact.py` at 411
+quantities. The full suite: 938 passed, 2 skipped; C 349 passed.
+
+# Why the pytest inventory moved for a floor-aware line planner
+
+Re-recorded 2026-10-01, tag `prefloorplan`. Two planner changes found by
+profiling the figure steps:
+
+- A line's own value at t = 0 is M at its real part, so the bounds read it
+  there instead of sweeping that real order again -- a full sweep per line
+  per process (most of what remained of real power sums in the steps that
+  reuse saved lines).
+- The planner chose a line's q to balance its two aliasing tails, blind to
+  the rounding floor, which for a small value grows steeply with q: on the
+  foundation the discovery curve built three lines at q ~ 0.22 for 81 deep
+  values of U whose floor there was 1e-5 to 1e-2 of themselves (99 s, none
+  resolved). It now predicts a line's floor before building it -- from the
+  kernel's size along the line and the planning grid of M(q) -- takes the
+  highest q whose predicted floor clears the target, and builds nothing for
+  a value no allowed q could resolve. The discovery curve's U: one line at
+  q = 0.08 (70 s) resolving 28, the rest returned within 3.4e-6 instead of
+  1e-3; R unchanged to the bit.
+
+    pytest_cases.txt       4 added: test_a_line_carries_its_own_real_power_sum[aa|nt],
+                           test_a_value_no_allowed_q_can_resolve_builds_no_line[aa|nt]
+    python_api.txt         unchanged (re-written by the recorder, byte-identical)
+    c_cases.txt            unchanged (likewise)
+    numeric.json           unchanged (likewise)
+    threads.json           unchanged (likewise)
+
+The gate passed on everything else before recording, `exact.py` at 411
+quantities. The full suite: 942 passed, 2 skipped.
+
+# Why the pytest inventory and the callables moved for fused contour sums
+
+Re-recorded 2026-10-01, tag `prefused`. With the log-gamma ratio in C, the
+richness and novelty integrals were still a nodes-by-parameters complex
+matrix per line -- exp, abs and a matrix product over 77 million values on a
+2,000-node line at 38,538 depths, single-threaded -- and the tail bound
+another such matrix at 481 points. Both are now one C pass per parameter
+(`beam_beta_contour_sums`, `beam_beta_contour_tail`, math/lgamma_ratio.c),
+in log space, on every thread; the planner's small magnitude queries take
+the C ratio directly. The fused path drops the `extra` phase allowance,
+which was for the direct log-gamma difference below w = 200 that the C ratio
+never forms. Values agree with the matrix form to 1e-12 and both hold against
+enumeration (test_the_fused_contour_sums_agree_with_the_matrix_form).
+
+    pytest_cases.txt       2 added: test_the_fused_contour_sums_agree_with_the_matrix_form[aa|nt]
+    cbeam_methods.txt      2 added by hand: beta_contour_sums, beta_contour_tail
+                           (previous kept as cbeam_methods.prefused.txt)
+    python_api.txt         unchanged (re-written by the recorder, byte-identical)
+    c_cases.txt            unchanged (likewise)
+    numeric.json           unchanged (likewise)
+    threads.json           unchanged (likewise)
+
+The gate passed on everything else before recording, `exact.py` at 411
+quantities. The full suite: 944 passed, 2 skipped; C 349 passed.
+
+# Why the pytest inventory and the callables moved for the cohort private kernel
+
+Re-recorded 2026-10-01, tag `precohort`. `private_at_depth`'s kernel,
+-Gamma(z) Gamma(w)/Gamma(w+z) expm1(D) with D the ratio's shift when w drops
+by a repertoire's depth, was the last contour kernel built in numpy: D as a
+Taylor series in the depth, a polygamma matrix per power, then the nodes-by-
+depths matrix and its tail bound. D is now taken in C by Stirling's series
+differenced term by term so nothing cancels (`beam_log_gamma_ratio_shift`,
+within 2.2e-16 of |D| + d |z| / (w - d) against mpmath), and each line's
+three sums are one C pass per depth (`beam_cohort_private_sums`), on every
+thread; the tail is |B|'s, scaled. Values agree with the Taylor form to
+1e-12 and both hold against enumeration
+(test_the_cohort_private_sums_agree_with_the_taylor_form).
+
+    pytest_cases.txt       4 added: test_the_cohort_private_sums_agree_with_the_taylor_form[aa|nt],
+                           test_the_shifted_ratio_keeps_its_digits,
+                           test_the_shifted_ratio_refuses_a_small_shifted_argument
+    cbeam_methods.txt      2 added by hand: cohort_private_sums, log_gamma_ratio_shift
+                           (previous kept as cbeam_methods.precohort.txt)
+    python_api.txt         unchanged (re-written by the recorder, byte-identical)
+    c_cases.txt            unchanged (likewise)
+    numeric.json           unchanged (likewise)
+    threads.json           unchanged (likewise)
+
+The gate passed on everything else before recording, `exact.py` at 411
+quantities. The full suite: 948 passed, 2 skipped; C 349 passed.
+
+# Why the C test inventory moved for the grouped spectrum transport
+
+Re-recorded 2026-10-01, tag `prespectrum`. The spectrum DP's per-layer
+transport (math/spectrum.c) now runs a GROUP of targets at a time -- the up
+to R targets that share every source -- over 512-bin tiles, with a
+branch-free vector inner loop, so a source histogram comes from memory about
+once instead of once per target; the lengths of one call share their scratch
+instead of allocating and freeing tens of gigabytes per length; and the sink
+runs on every thread, each owning a slice of the output bins. Every bin is
+summed in the order the per-target, per-bin form summed it, so nothing moves:
+a new C test keeps that form as a sequential reference and holds every public
+route to it bit for bit, and on the foundation the pipeline's 16,384-bin
+`histogram_pair` and 8,192-bin per-length spectra reproduce the cached
+outputs bit for bit (915 -> 191 s and 282 -> 49 s on ig05).
+
+    c_cases.txt            2 added: test_every_route_matches_the_reference_bit_for_bit,
+                           test_the_fine_grid_loses_mass_off_its_top
+    python_api.txt         unchanged (re-written by the recorder, byte-identical)
+    pytest_cases.txt       unchanged (likewise)
+    numeric.json           unchanged (likewise; its atoms keys are spectrum outputs)
+    threads.json           unchanged (likewise)
+
+The gate passed on everything else before recording, `exact.py` at 411
+quantities. The full suite: 948 passed, 2 skipped; C 351 passed.

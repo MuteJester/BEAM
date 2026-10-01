@@ -290,11 +290,17 @@ c = json.loads((B / "corpus.json").read_text())
 seqs, ab = c["seqs"], c["ab"]
 want = json.loads((B / "numeric.json").read_text())
 got = {}
+# Three orders, each under the default prior and under strengths five orders
+# of magnitude apart between levels, so both extremes of borrowing are pinned.
+_UNEVEN = {2: (0.01, 50.0, 3.0), 3: (0.01, 50.0, 3.0, 400.0),
+           4: (0.01, 50.0, 3.0, 400.0, 0.2)}
 for order in (2, 3, 4):
-    for strict in (False, True):
-        m = BEAM.BeamModel(seqs, abundances=ab, order=order,
-                           max_length=15, strict=strict)
-        t = f"o{order}/{'strict' if strict else 'open'}"
+    for prior in ("default", "uneven"):
+        alpha = None if prior == "default" else _UNEVEN[order]
+        m = BEAM.BeamModel(seqs, abundances=ab, order=order, max_length=15,
+                           alpha=alpha,
+                           alpha_length=None if alpha is None else 0.5)
+        t = f"o{order}/{prior}"
         got[t + "/scores"]   = [float(m.log_pseq(s)).hex() for s in seqs[:30]]
         got[t + "/unseen"]   = float(m.log_pseq("CWWWWWWWWF")).hex()
         got[t + "/D0"]       = float(m.path_count()).hex()
@@ -354,11 +360,11 @@ if bad:
     for k in bad[:8]:
         print(f"          {k}")
 else:
-    print(f"  OK    numeric ({len(got)} keys, order 2/3/4 x open/strict; "
+    print(f"  OK    numeric ({len(got)} keys, order 2/3/4 x default/uneven prior; "
           f"publicness within {FFT_TOL:g} relative, being numpy's FFT)")
 
 # ── Persistence: the saved bytes themselves ────────────────────────────────
-m = BEAM.BeamModel(seqs, abundances=ab, order=4, max_length=15, strict=True)
+m = BEAM.BeamModel(seqs, abundances=ab, order=4, max_length=15)
 tmp = B / "_check_fixture.beam"
 m.save(str(tmp.with_suffix("")))
 _fixture_bytes = tmp.read_bytes()
@@ -384,7 +390,7 @@ tw = json.loads((B / "threads.json").read_text())
 tg = {}
 for n in (1, 4, 16):
     BEAM.set_threads(n)
-    mm = BEAM.BeamModel(seqs, abundances=ab, order=4, max_length=15, strict=True)
+    mm = BEAM.BeamModel(seqs, abundances=ab, order=4, max_length=15)
     tg[str(n)] = [[float(mm.log_pseq(s)).hex() for s in seqs[:40]],
                   float(mm.path_count()).hex(), float(mm.entropy()).hex(),
                   float(mm.hill_number(1)).hex()]

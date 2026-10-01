@@ -214,8 +214,7 @@ def test_provenance_is_the_only_thing_two_identical_builds_disagree_on(tmp_path)
     paths = []
     first_created = None
     for name in ("a", "b"):
-        m = BeamModel(seqs, abundances=ab, order=3, max_length=9,
-                      strict=True)
+        m = BeamModel(seqs, abundances=ab, order=3, max_length=9)
         if first_created is None:
             first_created = m.metadata(lengths=False)["created_unix"]
         p = tmp_path / name
@@ -249,11 +248,13 @@ def test_metadata_describes_a_compacted_model(small, tmp_path):
     `compact()` releases the raw counts, and `n_nonzero_cells` inspects them,
     so the first version of this raised and metadata was unavailable on
     exactly the models most worth asking about -- a large one is deployed
-    compacted. It now reports None for the two figures that genuinely cannot
-    be known and everything else as usual.
+    compacted. It now reports None for the figures that genuinely cannot be
+    known and everything else as usual.
 
-    The per-length coverage is the part that matters, and it is unaffected:
-    it is computed from the finalized tables, which compaction keeps.
+    The per-length coverage is among the unknowable ones: every finalized
+    cell is positive under the prior, so the counts were the only record of
+    which cells the corpus reached. What does not depend on them -- the
+    ceilings, the shares, Z(L) -- is reported exactly as before.
     """
     seqs, abund = make_corpus(n=300, seed=11, lo=9, hi=12)
     m = BeamModel(seqs, abundances=abund, order=2, max_length=14)
@@ -269,12 +270,15 @@ def test_metadata_describes_a_compacted_model(small, tmp_path):
     assert after["size"]["occupancy"] is None
     assert before["size"]["n_nonzero_cells"] is not None
 
-    # Coverage survives compaction for a STRICT model, which this is: an
-    # unobserved cell is -inf in the finalized tables and stays that way, so
-    # the counts are not the only record of it. An open-world model is the
-    # case that cannot, and `test_coverage_is_unavailable_on_a_compacted_open
-    # _model` is where that is pinned.
-    assert after["lengths"] == before["lengths"]
+    COUNTED = {"rows_observed", "row_coverage", "cells_observed",
+               "cell_coverage"}
+    assert after["lengths"].keys() == before["lengths"].keys()
+    for L, e in after["lengths"].items():
+        assert all(e[k] is None for k in COUNTED), L
+        assert all(before["lengths"][L][k] is not None for k in COUNTED), L
+        assert ({k: v for k, v in e.items() if k not in COUNTED}
+                == {k: v for k, v in before["lengths"][L].items()
+                    if k not in COUNTED}), L
     assert after["created_unix"] == before["created_unix"]
     assert after["build"] == before["build"]
     assert after["size"]["n_states"] == before["size"]["n_states"]
@@ -317,51 +321,39 @@ def test_a_streaming_snapshot_reports_the_time_it_spent():
 
 
 def test_coverage_measures_observation_not_finiteness():
-    """The two worlds must agree, because the question is about the corpus.
+    """Coverage is a question about the corpus, not about the tables.
 
-    This read the finalized tables and called a cell reached when its log
-    probability was not -inf. In the closed world that is the same set; in the
-    open world the Laplace add-one makes every cell finite, so a model built
-    from two sequences reported that it had discovered the WHOLE dictionary --
-    `row_coverage` 1.0000 -- while `n_nonzero_cells` in the same dict said 30.
-
-    Both models see the same sequences, so every coverage figure must match,
-    and `cells_observed` must equal `n_nonzero_cells` in both.
+    This once read the finalized tables and called a cell reached when its
+    log probability was not -inf. Under the prior every cell is finite, so a
+    model built from two sequences would report that it had discovered the
+    WHOLE dictionary -- `row_coverage` 1.0000 -- while `n_nonzero_cells` in
+    the same dict said 30. It must count what the corpus reached: the
+    longest length reads every depth any shorter one does, so its
+    `cells_observed` IS `n_nonzero_cells`, and the fractions stay tiny.
     """
     seqs, ab = ["CASSLGEQYF", "CASSQDTQYF"], [3.0, 1.0]
-    got = {}
-    for strict in (True, False):
-        m = BeamModel(seqs, abundances=ab, order=2, max_length=12,
-                      strict=strict)
-        meta = m.metadata()
-        got[strict] = meta
-        total = sum(e["cells_observed"] for e in meta["lengths"].values())
-        # One length here, so the per-length total is the whole model.
-        assert total == meta["size"]["n_nonzero_cells"]
-
-    # The coverage keys only. `log_partition` is Z(L) and SHOULD differ: the
-    # two worlds put different mass on the same corpus.
-    COVERAGE = ("rows_possible", "rows_observed", "row_coverage",
-                "cells_possible", "cells_observed", "cell_coverage")
-    for L, e in got[True]["lengths"].items():
-        o = got[False]["lengths"][L]
-        assert {k: e[k] for k in COVERAGE} == {k: o[k] for k in COVERAGE}, L
-    assert got[True]["lengths"].keys() == got[False]["lengths"].keys()
-
-    for e in got[False]["lengths"].values():
-        assert 0.0 < e["row_coverage"] < 0.01, e["row_coverage"]
+    m = BeamModel(seqs, abundances=ab, order=2, max_length=12)
+    meta = m.metadata()
+    per = [e["cells_observed"] for e in meta["lengths"].values()]
+    assert max(per) == meta["size"]["n_nonzero_cells"]
+    # At the corpus's own length and past it the dictionary is large; the
+    # shortest lengths have a handful of rows, which two sequences can fill.
+    for L in (10, 11, 12):
+        e = meta["lengths"][L]
+        assert 0.0 < e["row_coverage"] < 0.01, (L, e["row_coverage"])
+        assert 0.0 < e["cell_coverage"] < e["row_coverage"], L
 
 
-def test_coverage_is_unavailable_on_a_compacted_open_model():
+def test_coverage_is_unavailable_on_a_compacted_model():
     """Absent, not saturated. The one case that genuinely cannot be answered.
 
-    `compact()` releases the counts, and in the open world they were the only
-    record of which cells the corpus reached. A strict model is unaffected --
-    its finalized tables still carry it -- which is why the foundation model,
-    being strict, keeps the figure after compaction.
+    `compact()` releases the counts, and under the prior they are the only
+    record of which cells the corpus reached: every finalized cell is
+    positive, observed or not. So a compacted model reports None rather
+    than a coverage of 1.
     """
     seqs, ab = ["CASSLGEQYF", "CASSQDTQYF"], [3.0, 1.0]
-    m = BeamModel(seqs, abundances=ab, order=2, max_length=12, strict=False)
+    m = BeamModel(seqs, abundances=ab, order=2, max_length=12)
     L = sorted(m.metadata()["lengths"])[0]
     assert m.metadata()["lengths"][L]["rows_observed"] is not None
     m.compact()
@@ -393,9 +385,11 @@ def test_cells_observed_may_not_be_summed_over_lengths():
     """
     seqs, abund = make_corpus(n=3000, seed=17, lo=8, hi=12)
     got = {}
+    # Order 3 rather than the default 4: the dense twin materialises every
+    # row under the prior, which at order 4 is gigabytes and a slow build.
     for sparse in (True, False):
-        m = BeamModel(seqs, abundances=abund, order=4, max_length=14,
-                      strict=True, sparse=sparse)
+        m = BeamModel(seqs, abundances=abund, order=3, max_length=14,
+                      sparse=sparse)
         meta = m.metadata()
         per = {L: e["cells_observed"] for L, e in meta["lengths"].items()}
         assert len(per) > 1, "a single length would make this vacuous"

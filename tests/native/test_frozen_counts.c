@@ -18,6 +18,12 @@
  * fractional abundances, which `observe` accepts, and posterior
  * pseudo-counts, which are `kappa * normalise(prior)` and fractional in
  * general. Those must fall through to binary64 and survive unchanged.
+ *
+ * The models are order 3 or 2, not the default 4. Freezing is about the
+ * count tables, which do not care about the order, but every model here is
+ * also finalized, and under the hierarchical prior every state of the trellis
+ * is live, which makes each finalize's partition functions about twenty
+ * times dearer at order 4 than at 3.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -47,7 +53,7 @@ static uint32_t rnd(uint32_t n) {
     rs ^= rs << 13; rs ^= rs >> 7; rs ^= rs << 17; return (uint32_t)(rs % n);
 }
 
-/** `weights == NULL` means integer abundances; otherwise they are used. */
+/** Whole-number abundances, or fractional ones when `fractional` is set. */
 static BeamModel *build(uint32_t n_seqs, uint8_t order, uint32_t max_length,
                         bool fractional) {
     rs = 88172645463325252ull;
@@ -149,7 +155,7 @@ static bool round_trips(BeamModel *m, const char *what, uint64_t *saved,
 }
 
 static void test_integer_counts_round_trip(void) {
-    BeamModel *m = build(4000u, 4u, 12u, false);
+    BeamModel *m = build(4000u, 3u, 12u, false);
     ASSERT_MSG(m != NULL, "model did not build");
     uint64_t tables = 0, before = 0, after = 0;
     const bool ok = round_trips(m, "integer", &tables, &before, &after);
@@ -169,7 +175,7 @@ static void test_integer_counts_round_trip(void) {
  * back bit-for-bit, or fractional abundances would be silently rounded.
  */
 static void test_fractional_counts_round_trip(void) {
-    BeamModel *m = build(3000u, 4u, 12u, true);
+    BeamModel *m = build(3000u, 3u, 12u, true);
     ASSERT_MSG(m != NULL, "model did not build");
     uint64_t tables = 0, before = 0, after = 0;
     const bool ok = round_trips(m, "fractional", &tables, &before, &after);
@@ -186,8 +192,8 @@ static void test_fractional_counts_round_trip(void) {
  * would break an integer-only representation on a model a user really has.
  */
 static void test_posterior_counts_round_trip(void) {
-    BeamModel *m = build(2500u, 4u, 12u, false);
-    BeamModel *prior = build(2500u, 4u, 12u, false);
+    BeamModel *m = build(2500u, 3u, 12u, false);
+    BeamModel *prior = build(2500u, 3u, 12u, false);
     ASSERT_MSG(m != NULL && prior != NULL, "models did not build");
     ASSERT_MSG(beam_model_posterior(m, prior, 100.0) == BEAM_OK,
                "posterior failed");
@@ -314,15 +320,22 @@ done:
  *
  * Finalize freezes, so every model here arrives frozen; the control is thawed
  * by hand first. Both must agree to the bit.
+ *
+ * Order 2 here, where the rest of the file is order 3: this test finalizes
+ * twenty-two times, and what it checks -- that each operation thaws before
+ * it reads or writes a count -- does not depend on the order. The row space is
+ * small enough that these counts freeze as a bitmap; the saving test below
+ * uses a sparse corpus whose counts freeze as a list, so both forms are
+ * exercised beyond the bare round trip.
  */
 static void test_every_lifecycle_operation_survives_frozen_counts(void) {
     static const char *PROBE[6] = { "CASSF", "CASSYW", "CAGSFK",
                                     "CGSSFP", "CASSLNM", "CASSQEV" };
     const char *step = "";
     for (int op = 0; op < 4; ++op) {
-        BeamModel *frozen = build(2500u, 4u, 12u, false);
-        BeamModel *thawed = build(2500u, 4u, 12u, false);
-        BeamModel *other  = build(2000u, 4u, 12u, false);
+        BeamModel *frozen = build(2500u, 2u, 12u, false);
+        BeamModel *thawed = build(2500u, 2u, 12u, false);
+        BeamModel *other  = build(2000u, 2u, 12u, false);
         if (!frozen || !thawed || !other) {
             printf("FAIL: models did not build\n"); fail_count++; return;
         }
@@ -408,11 +421,16 @@ static void test_every_lifecycle_operation_survives_frozen_counts(void) {
  * by the corpus and is still compared.
  */
 static void test_saving_a_frozen_model_writes_the_same_bytes(void) {
-    BeamModel *frozen = build(2500u, 4u, 12u, false);
-    BeamModel *thawed = build(2500u, 4u, 12u, false);
+    /* Few enough sequences that the order-3 row space is barely touched and
+     * the counts freeze as a list -- the form a small per-repertoire model's
+     * counts take, and the one the lifecycle test above does not reach. */
+    BeamModel *frozen = build(300u, 3u, 12u, false);
+    BeamModel *thawed = build(300u, 3u, 12u, false);
     ASSERT_MSG(frozen && thawed, "models did not build");
     ASSERT_MSG(beam_model_thaw_counts(thawed) == BEAM_OK, "control did not thaw");
     ASSERT_MSG(frozen->counts_frozen, "finalize did not freeze");
+    ASSERT_MSG(beam_model_frozen_table(frozen, BEAM_FWD)->row_id != NULL,
+               "the counts froze as a bitmap, so the list form is not saved");
 
     const char *pa = "/tmp/beam_frozen_a.beam", *pb = "/tmp/beam_frozen_b.beam";
     ASSERT_MSG(beam_model_save(frozen, pa) == BEAM_OK, "frozen save failed");
@@ -469,10 +487,12 @@ static void test_rows_are_identified_the_cheaper_way(void) {
      * Saturated: a small row space well filled -> a bitmap must win. */
     struct { const char *label; BeamModel *m; } cases[2];
     /* The helper emits sequences of seven to thirteen residues, so
-     * max_length must admit them. Order 4 over a barely-touched row space
-     * against order 2 over a much smaller one, well filled. */
+     * max_length must admit them. Order 3 over a barely-touched row space --
+     * 129,654 dense rows, so a 16,208-byte bitmap against four bytes for each
+     * of the fifteen hundred or so rows 200 sequences reach -- against order
+     * 2 over a much smaller one, 6,174 rows, well filled. */
     struct { uint32_t n; uint8_t order; uint32_t ml; } cfg[2] =
-        { { 200u, 4u, 14u }, { 20000u, 2u, 14u } };
+        { { 200u, 3u, 14u }, { 20000u, 2u, 14u } };
     cases[0].label = "sparse";
     cases[0].m = build(cfg[0].n, cfg[0].order, cfg[0].ml, false);
     cases[1].label = "saturated";

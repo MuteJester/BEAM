@@ -15,10 +15,12 @@
  * `realloc` and `free`, measures the true live-byte peak of the call from the
  * allocator's side, and requires the reported figure to cover it.
  *
- * IT COVERS THE WHOLE PATH, which is the point: the backward field, the six
+ * IT COVERS THE WHOLE PATH, which is the point: the backward field, the two
  * accumulator maps, both of their doubling paths, the directories the
- * doublings replace, and the six blocks emitted at the end. An allocation
+ * doublings replace, and the two blocks emitted at the end. An allocation
  * added to any of them later without a charge fails this and nothing else.
+ * That the doubling paths really run on the model here is asserted, not
+ * assumed.
  *
  * One charge it does NOT pin is the blocks', because that one provably cannot
  * set the peak -- see the note in `rowmap_emit`. It is kept as a guard against
@@ -42,8 +44,8 @@
 
 static int pass_count = 0, fail_count = 0;
 
-/** The wide model, built once for the binary. See `build_wide`. */
-static BeamModel *g_wide = NULL;
+/** The model, built once for the binary. See `build`. */
+static BeamModel *g_model = NULL;
 
 #include "test_utils.h"
 
@@ -66,6 +68,15 @@ static struct { void *p; size_t n; } track[TRACK_SLOTS];
 static bool armed = false, overflowed = false;
 static uint64_t live = 0, peak = 0;
 
+/*
+ * What a freed slot holds. Emptying it to NULL would be wrong under linear
+ * probing: a pointer that collided and was placed past it would stop being
+ * found, its free would go unrecorded, and its bytes would stay "live" for the
+ * rest of the measurement. So a lookup walks past this and only an insertion
+ * reuses it. No allocation can be at address 1, so it is never a real key.
+ */
+#define TRACK_GONE ((void *)(uintptr_t)1u)
+
 static uint32_t slot_of(void *p) {
     return (uint32_t)(((uintptr_t)p >> 4) * 2654435761u) % TRACK_SLOTS;
 }
@@ -75,7 +86,7 @@ static void note(void *p, size_t n) {
     uint32_t h = slot_of(p);
     for (uint32_t i = 0; i < TRACK_SLOTS; ++i) {
         const uint32_t s = (h + i) % TRACK_SLOTS;
-        if (!track[s].p) {
+        if (!track[s].p || track[s].p == TRACK_GONE) {
             track[s].p = p; track[s].n = n;
             live += n;
             if (live > peak) peak = live;
@@ -91,12 +102,10 @@ static size_t forget(void *p) {
     uint32_t h = slot_of(p);
     for (uint32_t i = 0; i < TRACK_SLOTS; ++i) {
         const uint32_t s = (h + i) % TRACK_SLOTS;
+        if (!track[s].p) return 0;          /* the end of p's probe chain */
         if (track[s].p == p) {
             const size_t n = track[s].n;
-            /* Tombstone-free removal is wrong under linear probing, so the
-             * slot keeps its key with a zero size and is reused by `note`
-             * only after a full pass fails -- which the slack prevents. */
-            track[s].p = NULL; track[s].n = 0;
+            track[s].p = TRACK_GONE; track[s].n = 0;
             live -= n;
             return n;
         }
@@ -148,42 +157,40 @@ static uint64_t disarm(void) { armed = false; return peak; }
 /* ── The model ───────────────────────────────────────────────── */
 
 /*
- * The same wide model `test_expected_counts_budget.c` uses, and for the same
- * reason: it is the one that drives the accumulators past their starting
- * capacity, so the doubling paths -- where an uncharged allocation would hide
- * -- actually run. Nucleotides for the runtime reason given there: what these
- * tests need is many distinct rows, and what costs the time is `n_states`.
+ * The model `test_expected_counts_budget.c` uses, and for the same reason: it
+ * drives the accumulators past their starting capacity, so the doubling paths
+ * -- where an uncharged allocation would hide -- actually run.
+ *
+ * Under the hierarchical prior every string up to `max_length` has mass, so
+ * the sweep reaches every `(depth, context)` the trellis can form and the row
+ * count is fixed by the shape: at order 2 over 20 residues, one row at depth
+ * 0, 20 at depth 1 and 400 at every depth after, 4,021 per map at
+ * `max_length` 12, where `rowmap_init` starts with room for 512. Each map's rows double three times and its key
+ * directory is rehashed three times. A separate wide nucleotide model used to
+ * stand here only to make the maps grow; this one does that on its own.
+ *
+ * Sparse storage, the default: the accumulators do not depend on how the
+ * tables are stored, and sparse is the form a per-repertoire model is in.
  */
-#define N_WIDE 240
-#define WIDE_MAX_LEN 24u
-static char wide_buf[N_WIDE][WIDE_MAX_LEN + 1u];
-static const char *wide_seq[N_WIDE];
-static double wide_wt[N_WIDE];
+#define N_TRAIN 20
+static const char *TRAIN[N_TRAIN] = {
+    "CASSF", "CASSY", "CAGSF", "CGSSF", "CASSL",
+    "CTSSF", "CASSQ", "CASRW", "CAWSF", "CAYSL",
+    "CASSFGHK", "CASSYWMQ", "CAGSFKPD", "CGSSFPDE", "CASSLNRT",
+    "CTSSFRWY", "CASSQEVI", "CASRWMTL", "CAWSFGNE", "CAYSLKQD",
+};
+static const double WEIGHT[N_TRAIN] = {
+    40, 25, 18, 15, 12, 10, 9, 8, 7, 6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4,
+};
 
-static BeamModel *build_wide_once(uint32_t order) {
-    static const char *NT = "ACGT";
-    uint32_t s = 12345u;
-    for (uint32_t i = 0; i < N_WIDE; ++i) {
-        const uint32_t len = 4u + (i % 21u);
-        for (uint32_t j = 0; j < len; ++j) {
-            s = s * 1103515245u + 12345u;
-            wide_buf[i][j] = NT[(s >> 16) % 4u];
-        }
-        wide_buf[i][len] = '\0';
-        wide_seq[i] = wide_buf[i];
-        wide_wt[i] = 1.0 + (double)(i % 7u);
-    }
+static BeamModel *build_once(void) {
     BeamModelConfig cfg;
     beam_model_config_default(&cfg);
-    cfg.alphabet = BEAM_ALPHABET_NT;
-    cfg.order = order;
-    cfg.max_length = WIDE_MAX_LEN;
-    cfg.strict = false;
-    /* No `sparse`: the nt alphabet refuses it, and these tests are about the
-     * accumulators, which do not depend on how the model stores its tables. */
+    cfg.order = 2u;
+    cfg.max_length = 12u;
     BeamModel *m = beam_model_new(&cfg);
     if (!m) return NULL;
-    if (beam_model_observe(m, wide_seq, wide_wt, N_WIDE) != BEAM_OK
+    if (beam_model_observe(m, TRAIN, WEIGHT, N_TRAIN) != BEAM_OK
         || beam_model_finalize(m) != BEAM_OK) {
         beam_model_destroy(m);
         return NULL;
@@ -191,16 +198,14 @@ static BeamModel *build_wide_once(uint32_t order) {
     return m;
 }
 
-
-/*
- * Built once for the binary. `beam_model_finalize` on this shape costs more
- * than every expected-count call in the file put together, and each test wants
- * the same model, so rebuilding it per test was most of the runtime.
- */
-static BeamModel *build_wide(uint32_t order) {
-    if (!g_wide) g_wide = build_wide_once(order);
-    return g_wide;
+/* Built once for the binary: every test wants the same model. */
+static BeamModel *build(void) {
+    if (!g_model) g_model = build_once();
+    return g_model;
 }
+
+/** Rows `rowmap_init` gives a map before its first doubling. */
+#define MAP_START_ROWS 512u
 
 /* ── The tests ───────────────────────────────────────────────── */
 
@@ -215,8 +220,8 @@ static BeamModel *build_wide(uint32_t order) {
  * and that is what the assertion pins.
  */
 static void test_the_reported_working_set_covers_every_allocation(void) {
-    BeamModel *m = build_wide(2u);
-    ASSERT_MSG(m, "wide model did not build");
+    BeamModel *m = build();
+    ASSERT_MSG(m, "model did not build");
     beam_model_set_memory_budget(0);
 
     BeamExpectedCounts ec;
@@ -229,6 +234,12 @@ static void test_the_reported_working_set_covers_every_allocation(void) {
                             "measured peak is an undercount");
     ASSERT_MSG(measured > 0, "no allocation was seen at all, so the wrappers "
                              "are not reaching the library");
+    /* A map that never outgrew its first allocation never ran a doubling
+     * path, and those are the allocations this test most needs to have seen. */
+    ASSERT_MSG(ec.block[0].n_rows > MAP_START_ROWS
+               && ec.block[1].n_rows > MAP_START_ROWS,
+               "a map never grew past its starting capacity, so the doubling "
+               "paths were not measured");
 
     static char msg[256];
     if (ec.working_set_bytes < measured) {
@@ -240,7 +251,6 @@ static void test_the_reported_working_set_covers_every_allocation(void) {
         ASSERT_MSG(false, msg);
     }
     beam_model_expected_counts_free(&ec);
-    if (m != g_wide) beam_model_destroy(m);
     PASS();
 }
 
@@ -253,8 +263,8 @@ static void test_the_reported_working_set_covers_every_allocation(void) {
  * with nothing behind it fails.
  */
 static void test_the_reported_working_set_is_not_a_meaningless_ceiling(void) {
-    BeamModel *m = build_wide(2u);
-    ASSERT_MSG(m, "wide model did not build");
+    BeamModel *m = build();
+    ASSERT_MSG(m, "model did not build");
     beam_model_set_memory_budget(0);
 
     BeamExpectedCounts ec;
@@ -273,7 +283,6 @@ static void test_the_reported_working_set_is_not_a_meaningless_ceiling(void) {
         ASSERT_MSG(false, msg);
     }
     beam_model_expected_counts_free(&ec);
-    if (m != g_wide) beam_model_destroy(m);
     PASS();
 }
 
@@ -281,14 +290,16 @@ static void test_the_reported_working_set_is_not_a_meaningless_ceiling(void) {
  * The figure tracks the work, rather than being a constant that happens to be
  * large enough.
  *
- * Pooling over every live length reaches strictly more `(depth, context)`
- * pairs than any single length does, so its accumulators are strictly larger.
- * A reported figure that did not move between the two would satisfy both
- * assertions above and mean nothing.
+ * Pooling over every live length reaches every `(depth, context)` the trellis
+ * can form, 4,021 per map here, where the shortest length reaches only the
+ * rows at its own few depths -- and it sweeps the longest field rather than
+ * the shortest. So its working set is strictly larger. A reported figure that
+ * did not move between the two would satisfy both assertions above and mean
+ * nothing.
  */
 static void test_the_reported_figure_tracks_the_work(void) {
-    BeamModel *m = build_wide(2u);
-    ASSERT_MSG(m, "wide model did not build");
+    BeamModel *m = build();
+    ASSERT_MSG(m, "model did not build");
     beam_model_set_memory_budget(0);
 
     uint32_t shortest = 0;
@@ -310,7 +321,6 @@ static void test_the_reported_figure_tracks_the_work(void) {
 
     beam_model_expected_counts_free(&one);
     beam_model_expected_counts_free(&all);
-    if (m != g_wide) beam_model_destroy(m);
     PASS();
 }
 
@@ -331,7 +341,7 @@ int main(void) {
     RUN_TEST(test_the_reported_working_set_covers_every_allocation);
     RUN_TEST(test_the_reported_working_set_is_not_a_meaningless_ceiling);
     RUN_TEST(test_the_reported_figure_tracks_the_work);
-    if (g_wide) beam_model_destroy(g_wide);
+    if (g_model) beam_model_destroy(g_model);
     beam_model_set_threads(threads_before);
     printf("  %d passed, %d failed\n", pass_count, fail_count);
     return fail_count ? 1 : 0;

@@ -91,18 +91,21 @@ def test_it_agrees_with_a_second_model_of_the_same_corpus(model):
 def test_the_vector_sums_to_log_pseq(model):
     """The defining property: stack K of these and the row sums ARE the K
     models' scores for that sequence."""
-    for s in SEQS + ["CASSLGEQYW", "CGSSLGEQYF"]:
+    for s in SEQS + ["CASSLGEQYW", "CGSSLGEQYF", "WWWWWWWW"]:
         v = model.log_pseq_by_position(s)
         assert v.shape == (len(s),)
-        ref = model.log_pseq(s)
-        if np.isneginf(ref):
-            assert np.isneginf(v.sum())
-        else:
-            assert v.sum() == pytest.approx(ref, abs=1e-12)
+        assert np.isfinite(v).all(), s
+        assert v.sum() == pytest.approx(model.log_pseq(s), abs=1e-12)
 
 
 def test_stacking_k_models_gives_the_matrix(model):
-    """What the whole thing is for: K x L, row sums = each model's score."""
+    """What the whole thing is for: K x L, row sums = each model's score.
+
+    Each panel member sees five of the seven sequences, so a member may never
+    have seen the one scored. Under the prior that is a finite row like any
+    other, which is what lets the matrix be analysed without a -inf cell to
+    special-case.
+    """
     rng = np.random.default_rng(3)
     panel = []
     for k in range(4):
@@ -113,37 +116,45 @@ def test_stacking_k_models_gives_the_matrix(model):
     s = "CASSLGEQYF"
     M = np.vstack([m.log_pseq_by_position(s) for m in panel])
     assert M.shape == (4, len(s))
+    assert np.isfinite(M).all()
     for k, m in enumerate(panel):
-        ref = m.log_pseq(s)
-        if np.isneginf(ref):
-            assert np.isneginf(M[k].sum())
-        else:
-            assert M[k].sum() == pytest.approx(ref, abs=1e-12)
+        assert M[k].sum() == pytest.approx(m.log_pseq(s), abs=1e-12)
 
 
-def test_an_unspellable_position_is_minus_inf_and_kills_the_row():
-    """`-inf` marks WHICH position the model cannot spell, and the row total
-    agrees with `log_pseq`. A dead cell must never come back as nan."""
+def test_an_unseen_residue_is_finite_and_charged_where_it_sits():
+    """A residue the corpus never emitted at a place is priced by the prior,
+    not killed, and the vector says WHERE the price is paid.
+
+    The length is unchanged, so Z(L) and its split are too, and the vector
+    moves only through the per-residue terms: most at the substituted
+    position, a little at the positions whose order-3 context reads it, and
+    not at all anywhere else. Nothing may come back as nan.
+    """
     m = BeamModel(["CASSLGEQYF", "CASSLGEQYW"], abundances=[3.0, 1.0],
-                  order=3, max_length=12, strict=True)
-    dead = "CASSLGEQYQ"          # a terminal residue the corpus never shows
-    v = m.log_pseq_by_position(dead)
-    assert not np.isnan(v).any(), "a dead position became nan"
-    assert np.isneginf(v).any(), "nothing was reported unspellable"
-    assert np.isneginf(v.sum())
-    assert np.isneginf(m.log_pseq(dead))
+                  order=3, max_length=12)
+    base = "CASSLGEQYF"
+    seen = m.log_pseq_by_position(base)
+    for p in (9, 4):                 # a terminal residue, and a central one
+        s = base[:p] + "Q" + base[p + 1:]
+        v = m.log_pseq_by_position(s)
+        assert np.isfinite(v).all(), s
+        assert v.sum() == pytest.approx(m.log_pseq(s), abs=1e-12)
+        d = v - seen
+        assert int(np.argmin(d)) == p, (s, d)
+        far = [i for i in range(len(s)) if abs(i - p) > 3]
+        assert np.array_equal(d[far], np.zeros(len(far))), (s, d)
 
 
 def test_a_length_the_model_never_saw(model):
-    """No length prior means no score, and the breakdown says so rather than
-    inventing a partition function to share out."""
+    """A length the corpus never had still has a share of the length prior
+    and a partition function, so its breakdown is shared out and sums to its
+    score like any other rather than reporting a zero."""
     short = "CAS"
-    if short in [s for s in SEQS]:
-        pytest.skip("length is observed in this fixture")
+    assert len(short) not in {len(s) for s in SEQS}
     v = model.log_pseq_by_position(short)
     assert v.shape == (3,)
-    assert not np.isnan(v).any()
-    assert np.isneginf(v.sum()) == np.isneginf(model.log_pseq(short))
+    assert np.isfinite(v).all()
+    assert v.sum() == pytest.approx(model.log_pseq(short), abs=1e-12)
 
 
 def test_an_empty_sequence_is_refused(model):

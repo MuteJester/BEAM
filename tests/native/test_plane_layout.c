@@ -27,6 +27,7 @@
 
 static int pass_count = 0, fail_count = 0;
 
+#define BEAM_TEST_PRIOR_REFERENCE
 #include "test_utils.h"
 
 static const char AA[] = "ACDEFGHIKLMNPQRSTVWY";
@@ -34,6 +35,13 @@ static uint64_t rs;
 static uint32_t rnd(uint32_t n){ rs^=rs<<13; rs^=rs>>7; rs^=rs<<17;
                                  return (uint32_t)(rs % n); }
 
+/*
+ * Random CDR3-shaped sequences with weights 1..40. Under the prior their
+ * finalized values barely repeat, so no table packs and the backward top
+ * table is transposed instead -- which is what the model-level tests below
+ * need. Order 3 is enough for that and finalizes in a fraction of order 4's
+ * time.
+ */
 static BeamModel *build(uint32_t n_seqs, uint8_t order, uint32_t max_length) {
     rs = 88172645463325252ull;
     char **seqs = (char **)malloc(n_seqs * sizeof(char *));
@@ -58,18 +66,6 @@ static BeamModel *build(uint32_t n_seqs, uint8_t order, uint32_t max_length) {
     for (uint32_t k = 0; k < n_seqs; ++k) free(seqs[k]);
     free(seqs); free(w);
     return m;
-}
-
-static BeamSparseRows *table_of(BeamModel *m, uint32_t i) {
-    const uint32_t d = i / 3u, k = i % 3u;
-    if (k == 0u) return &m->sp_lp[d];
-    if (k == 1u) return &m->sp_lp[d];
-    return &m->sp_lp[d];
-}
-static const char *name_of(uint32_t i) {
-    static const char *n[6] = { "fwd wide","fwd mid","fwd len",
-                                "bwd wide","bwd mid","bwd len" };
-    return n[i];
 }
 
 #define DENSE 4000u
@@ -113,8 +109,9 @@ static void build_repetitive(BeamSparseRows *t, uint32_t n, uint32_t step) {
  *
  * On a hand-built table rather than a finalized one, because whether a real
  * backward table stays plain depends on whether its values repeat enough to
- * be worth a dictionary -- a per-repertoire model's do, so its backward
- * tables are packed and this never fires there. The foundation's do not.
+ * be worth a dictionary -- unit-weight corpora's do, and their backward
+ * tables are packed instead, while weighted ones' do not. The model-level
+ * check below covers the transposed table finalize actually produces.
  * Testing the primitive directly is what makes this independent of that.
  */
 static void test_a_transposed_table_reads_back_identically(void) {
@@ -196,38 +193,98 @@ static void test_the_transpose_actually_moves_the_cells(void) {
 }
 
 /**
- * Finalize never transposes a forward table, AND says why not on this fixture.
+ * Finalize transposes the backward top table and nothing else, AND this
+ * fixture shows it doing so.
  *
- * The assertion on its own was passing for the wrong reason. On this model
- * every table -- forward and backward alike -- comes out PACKED, and the
- * transpose declines for a packed table, so nothing anywhere was transposed
- * and "no forward table was transposed" could not have failed. A test that
- * cannot fail for the reason it names is not testing that reason.
+ * The forward top table is read whole, and so is every lower level of the
+ * prior -- the resolver hands the kernel a whole ancestor row -- so only the
+ * backward top table, read one residue from each of twenty rows, is laid out
+ * by residue.
  *
- * So the fixture's actual outcome is pinned too: the backward tables are
- * packed, which is what excludes them from the transpose. If packing ever
- * stops applying here, this fails and says so, and the forward assertion
- * becomes load-bearing again rather than silently vacuous.
+ * The forward half of this used to pass for the wrong reason. Under the old
+ * closed world every table of this fixture came out PACKED, the transpose
+ * declines for a packed table, and "no forward table was transposed" could
+ * not have failed. Under the prior the values stop repeating enough to pack,
+ * so the backward table is transposed here, and that outcome is pinned: it is
+ * what makes the assertions about every other table load-bearing. If packing
+ * ever takes this fixture back, this fails and says so.
  */
-static void test_finalize_never_transposes_a_forward_table(void) {
-    BeamModel *m = build(400u, 4u, 14u);
+static void test_finalize_transposes_only_the_backward_top_table(void) {
+    BeamModel *m = build(400u, 3u, 14u);
     ASSERT_MSG(m != NULL, "model did not build");
-    for (uint32_t t = 0; t < 3u; ++t)
-        if (table_of(m, t)->plane_step != 1u) {
-            printf("FAIL: %s was transposed; forward rows are read whole\n",
-                   name_of(t));
-            fail_count++; beam_model_destroy(m); return;
-        }
+    if (m->sp_lp[BEAM_FWD].plane_step != 1u) {
+        beam_model_destroy(m);
+        ASSERT_MSG(false, "the forward top table was transposed; its rows are "
+                          "read whole");
+    }
+    for (uint32_t dir = 0; dir < 2u; ++dir)
+        for (uint32_t k = 0; k < m->order; ++k)
+            if (m->sp_lo[dir][k].plane_step != 1u) {
+                printf("FAIL: %s level %u was transposed; ancestor rows are "
+                       "read whole\n", dir == BEAM_FWD ? "forward" : "backward", k);
+                fail_count++; beam_model_destroy(m); return;
+            }
     const bool packed = m->sp_lp[BEAM_BWD].cell_mask != NULL;
     const bool moved  = m->sp_lp[BEAM_BWD].plane_step > 1u;
     beam_model_destroy(m);
     ASSERT_MSG(packed != moved,
-               "the backward wide table is neither packed nor transposed, or "
+               "the backward top table is neither packed nor transposed, or "
                "somehow both; they are alternatives and exactly one applies");
-    ASSERT_MSG(packed,
-               "the backward table is no longer packed on this fixture, so "
-               "the forward assertion above has stopped being vacuous for a "
-               "reason worth looking at rather than asserting");
+    ASSERT_MSG(moved,
+               "the backward top table was packed rather than transposed on "
+               "this fixture, so the assertions above are vacuous again");
+    PASS();
+}
+
+/**
+ * Every cell of a transposed finalized table is still the prior of its counts.
+ *
+ * The primitive tests above use hand-built tables; this is the same claim on
+ * the table finalize actually transposed, checked against the DEFINITION --
+ * each row recomputed from the counts it came from -- rather than against a
+ * row-major copy, which would only prove the two layouts agree about being
+ * wrong. The backward rows are packed nearest-first; the counts are not.
+ */
+static void test_a_transposed_table_holds_the_prior_of_its_counts(void) {
+    BeamModel *m = build(400u, 3u, 14u);
+    ASSERT_MSG(m != NULL, "model did not build");
+    const BeamSparseRows *tab = &m->sp_lp[BEAM_BWD];
+    if (tab->plane_step <= 1u) {
+        beam_model_destroy(m);
+        ASSERT_MSG(false, "the backward table was not transposed: nothing to check");
+    }
+    ASSERT_MSG(beam_model_thaw_counts(m) == BEAM_OK, "counts did not thaw");
+    const uint32_t R = m->n_residues, nc = m->n_ctx;
+    uint64_t compared = 0;
+    for (uint32_t d = 0; d < m->max_len; ++d) {
+        PriorRef pr;
+        ASSERT_MSG(prior_ref_build(&pr, m, BEAM_BWD, d), "out of memory");
+        for (uint32_t j = 0; j < nc; ++j) {
+            const BeamLogRow lr = beam_sparse_log_row(tab, d * nc + j);
+            if (!lr.present) continue;
+            double want[BEAM_MAX_RESIDUES];
+            const bool observed = prior_ref_top_log(
+                &pr, beam_ctx_reverse(j, m->order, m->n_alphabet), want);
+            for (uint32_t x = 0; x < R && observed; ++x) {
+                const double got = beam_log_cell(&lr, x);
+                if (memcmp(&got, &want[x], sizeof got) != 0) {
+                    printf("FAIL: backward row %u residue %u: %.17g want %.17g\n",
+                           d * nc + j, x, got, want[x]);
+                    fail_count++; prior_ref_free(&pr);
+                    beam_model_destroy(m); return;
+                }
+            }
+            if (!observed) {
+                printf("FAIL: backward row %u is stored but was never observed\n",
+                       d * nc + j);
+                fail_count++; prior_ref_free(&pr); beam_model_destroy(m); return;
+            }
+            compared++;
+        }
+        prior_ref_free(&pr);
+    }
+    beam_model_destroy(m);
+    ASSERT_MSG(compared > 1000u, "far too few rows were compared");
     PASS();
 }
 
@@ -370,15 +427,18 @@ static void test_the_compaction_report_matches_what_the_table_became(void) {
 static void test_scores_are_bit_identical_with_planes(void) {
     static const char *PROBE[6] = { "CASSF", "CASSYW", "CAGSFK",
                                     "CGSSFP", "CASSLNM", "CASSQEV" };
-    BeamModel *a = build(400u, 4u, 14u);
+    BeamModel *a = build(400u, 3u, 14u);
     ASSERT_MSG(a != NULL, "model did not build");
     /* Undo the layout by hand and require the same answers: a plain row-major
      * copy of the same table is the control. */
     double before[6];
     for (uint32_t k = 0; k < 6u; ++k) before[k] = beam_model_log_pseq(a, PROBE[k]);
-    for (uint32_t t = 3u; t < 6u; ++t) {
-        BeamSparseRows *tab = table_of(a, t);
-        if (tab->plane_step <= 1u) continue;
+    BeamSparseRows *tab = &a->sp_lp[BEAM_BWD];
+    if (tab->plane_step <= 1u) {
+        beam_model_destroy(a);
+        ASSERT_MSG(false, "the backward table was not transposed: nothing to undo");
+    }
+    {
         const uint32_t rows = tab->n_pool ? tab->n_pool : tab->size[0];
         double *back = (double *)malloc((size_t)rows * tab->stride * sizeof(double));
         ASSERT_MSG(back != NULL, "out of memory");
@@ -403,7 +463,7 @@ static void test_scores_are_bit_identical_with_planes(void) {
 
 /** What cannot be transposed is left alone, and twice is a no-op. */
 static void test_what_cannot_be_transposed_is_left_alone(void) {
-    BeamModel *m = build(400u, 4u, 14u);
+    BeamModel *m = build(400u, 3u, 14u);
     ASSERT_MSG(m != NULL, "model did not build");
     ASSERT_MSG(beam_model_thaw_counts(m) == BEAM_OK, "counts did not thaw");
 
@@ -411,8 +471,9 @@ static void test_what_cannot_be_transposed_is_left_alone(void) {
     ASSERT_MSG(beam_sparse_plane_transpose(cnt) == BEAM_OK, "mutable errored");
     ASSERT_MSG(cnt->plane_step == 1u, "a mutable table was transposed");
 
-    BeamSparseRows *bw = table_of(m, 3u);
-    if (bw->plane_step > 1u) {
+    BeamSparseRows *bw = &m->sp_lp[BEAM_BWD];
+    ASSERT_MSG(bw->plane_step > 1u, "the backward table was not transposed");
+    {
         const double *first = bw->values0;
         ASSERT_MSG(beam_sparse_plane_transpose(bw) == BEAM_OK, "second errored");
         ASSERT_MSG(bw->values0 == first, "transposing twice rebuilt the payload");
@@ -472,7 +533,8 @@ int main(void) {
     printf("\nplane-major backward tables\n");
     RUN_TEST(test_a_transposed_table_reads_back_identically);
     RUN_TEST(test_the_transpose_actually_moves_the_cells);
-    RUN_TEST(test_finalize_never_transposes_a_forward_table);
+    RUN_TEST(test_finalize_transposes_only_the_backward_top_table);
+    RUN_TEST(test_a_transposed_table_holds_the_prior_of_its_counts);
     RUN_TEST(test_the_compaction_report_matches_what_the_table_became);
     RUN_TEST(test_the_table_accessors_refuse_what_they_cannot_read);
     RUN_TEST(test_scores_are_bit_identical_with_planes);

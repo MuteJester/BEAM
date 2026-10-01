@@ -34,18 +34,20 @@ beam_model_file_provenance_span
 beam_model_finalize
 beam_model_hill_number
 beam_model_is_finalized
-beam_model_is_legacy_file
 beam_model_length_derivatives
 beam_model_length_marginals
 beam_model_live_cache_bytes
 beam_model_load
 beam_model_log_length_prior
 beam_model_log_mellin
+beam_model_log_mellin_complex
+beam_model_log_mellin_line
 beam_model_log_mellin_many
 beam_model_log_partition
 beam_model_log_partition_by_layer
 beam_model_log_pseq
 beam_model_log_pseq_batch
+beam_model_log_pseq_packed
 beam_model_memory_budget
 beam_model_memory_bytes
 beam_model_n_cells
@@ -66,6 +68,7 @@ beam_model_radix
 beam_model_sample
 beam_model_save
 beam_model_set_memory_budget
+beam_model_set_prior
 beam_model_set_threads
 beam_model_spectra_by_length
 beam_model_spectrum
@@ -76,6 +79,7 @@ beam_model_surprisal_cumulants
 beam_model_surprisal_moments
 beam_model_surprisal_range
 beam_model_surprisal_tilt
+beam_model_temper
 beam_model_threads
 beam_model_top_k
 beam_model_topology

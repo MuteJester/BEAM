@@ -10,10 +10,11 @@
  * the last bit and not to a tolerance. Anything looser would pass while the
  * new engine quietly drifted from the one already in the verification gate.
  *
- * The second is enumeration. For a short length the whole support is walkable,
- * so a constrained probability can be checked against the brute-force sum it
- * is defined as. That is the only check here that cannot be passed by
- * accident.
+ * The second is enumeration. Under the hierarchical prior every string of a
+ * length has mass, so the support at a length is every string over the whole
+ * alphabet -- and at a short length that is walkable, so a constrained
+ * probability can be checked against the brute-force sum it is defined as.
+ * That is the only check here that cannot be passed by accident.
  *
  * The third is an algebraic identity that ties the genuinely new capability to
  * the old one: conditioning on a residue SET must equal the mixture of the
@@ -61,7 +62,9 @@ static int pass_count = 0, fail_count = 0;
 
 /* ── Corpora ─────────────────────────────────────────────────── */
 
-/* CDR3-shaped, for the reproduction and identity checks. */
+/* CDR3-shaped, for the reproduction and identity checks. Built at order 2:
+ * nothing checked of it depends on the order, and each of the many sweeps
+ * taken over it is then cheap. */
 #define N_TRAIN 12
 static const char *TRAIN[N_TRAIN] = {
     "CASSLGEQYF",  "CASSLGEQFF",  "CASSQGEQYF",  "CASSPGEQYF",
@@ -72,23 +75,41 @@ static const double WEIGHT[N_TRAIN] = {
     50, 30, 20, 15, 12, 25, 18, 22, 9, 7, 11, 6
 };
 
-/* Short enough that length 4 has a walkable support: 20^4 = 160,000. */
+/*
+ * Short enough that the whole support is walkable. Every string over the
+ * twenty residues has mass now, so that means every one of them: 20^3 = 8,000
+ * at length 3, and 8,420 over all the lengths a max_length of 3 allows.
+ */
 #define N_SHORT 10
+#define SHORT_L 3u
 static const char *SHORT_TRAIN[N_SHORT] = {
-    "CASF", "CASY", "CAGF", "CGSF", "CASL",
-    "CTSF", "CASQ", "CVSF", "CASE", "CAAF",
+    "CSF", "CSY", "CGF", "CAS", "CSL",
+    "CTF", "CSQ", "CAF", "CSE", "CAA",
 };
 static const double SHORT_WEIGHT[N_SHORT] = {
     40, 25, 18, 15, 12, 10, 9, 7, 6, 5
 };
 
+/*
+ * One pin per position of a length-10 TRAIN query, alternating the corpus's
+ * own residue there (even positions) with one it never puts there (odd), W
+ * and Y among them to reach the top of the mask. Under the prior both kinds
+ * have mass, orders of magnitude apart.
+ */
+#define N_PINS 10u
+static const char PIN_AT[N_PINS + 1] = "CWSYLHEKYM";
+
+static uint8_t pin_residue(uint32_t position) {
+    return beam_alphabet_info(BEAM_ALPHABET_AA)
+        ->char_to_idx[(unsigned char)PIN_AT[position]];
+}
+
 static BeamModel *build(const char **seqs, const double *w, uint32_t n,
-                        uint8_t order, uint8_t max_length, bool open_world) {
+                        uint8_t order, uint8_t max_length) {
     BeamModelConfig cfg;
     beam_model_config_default(&cfg);
     cfg.order = order;
     cfg.max_length = max_length;
-    if (open_world) cfg.strict = 0;
     BeamModel *m = beam_model_new(&cfg);
     if (!m) return NULL;
     if (beam_model_observe(m, seqs, w, n) != BEAM_OK
@@ -102,7 +123,8 @@ static BeamModel *build(const char **seqs, const double *w, uint32_t n,
 /* ── Independent reference: enumerate the support ────────────── */
 
 /**
- * `P(C | length)` by walking every string of that length and summing the ones
+ * `P(C | length)` by walking every string of that length -- over the whole
+ * alphabet, since under the prior each one has mass -- and summing the ones
  * the constraint admits.
  *
  * Deliberately built from `beam_model_log_pseq` and nothing the engine
@@ -276,7 +298,7 @@ static void test_an_unconstrained_query_reproduces_the_marginals(void) {
      * accumulated by the same streaming log-sum-exp in the same order, so
      * there is no rounding for them to differ over.
      */
-    BeamModel *m = build(TRAIN, WEIGHT, N_TRAIN, 3u, 14u, false);
+    BeamModel *m = build(TRAIN, WEIGHT, N_TRAIN, 2u, 14u);
     ASSERT_MSG(m != NULL, "model built");
     const uint32_t L = 10u;
 
@@ -306,7 +328,8 @@ static void test_an_unconstrained_query_reproduces_the_marginals(void) {
 }
 
 /**
- * Every pin, compared cell by cell against the clamp that denotes the same
+ * Each pin in `pins` (one residue per position, BEAM_RESIDUE_INVALID to skip
+ * a position), compared cell by cell against the clamp that denotes the same
  * thing, and each disagreement classified.
  *
  * `*n_live` counts pins compared; `*n_old_broken` pins where they disagree
@@ -321,140 +344,134 @@ static void test_an_unconstrained_query_reproduces_the_marginals(void) {
  * to be a wrong answer.
  *
  * That third case is real and was found while fixing this engine. Under a
- * clamp, `beam_model_positional_marginals` rescales each layer by the whole
+ * clamp, `beam_model_positional_marginals` rescaled each layer by the whole
  * layer's maximum, which can be attained by an edge no surviving path uses;
- * every path that IS admitted then underflows. On an open-world model at
- * length 10, pinning position 3 leaves row 7 summing to 5.9e-264 instead of
- * 1. This engine takes its rescale over edges a live path can actually use
- * and returns 1, which an independent log-space route -- exp(ln P(both) -
- * ln P(pin)), where nothing can underflow -- confirms is right.
+ * every path that IS admitted then underflowed. On the add-one smoothed model
+ * this library used to build, at length 10, pinning position 3 left row 7
+ * summing to 5.9e-264 instead of 1. This engine takes its rescale over edges a live path
+ * can actually use and returns 1, which an independent log-space route --
+ * exp(ln P(both) - ln P(pin)), where nothing can underflow -- confirms is
+ * right.
  */
-static void compare_every_pin(BeamModel *m, uint32_t L, uint32_t *n_live,
-                              uint32_t *n_bad, uint32_t *n_old_broken,
-                              uint32_t *n_identical) {
+static void compare_pins(BeamModel *m, uint32_t L, const uint8_t *pins,
+                         uint32_t *n_live, uint32_t *n_bad,
+                         uint32_t *n_old_broken, uint32_t *n_identical) {
     double *want = (double *)malloc((size_t)L * R * sizeof(double));
     double *got  = (double *)malloc((size_t)L * R * sizeof(double));
     uint8_t *clamp = (uint8_t *)malloc(L);
     *n_live = 0u; *n_bad = 0u; *n_old_broken = 0u; *n_identical = 0u;
     if (!want || !got || !clamp) { *n_bad = UINT32_MAX; return; }
 
-    /*
-     * Every pin is attempted, including those whose unconstrained marginal is
-     * exactly 0.0. In an open-world model that zero is an underflow, not an
-     * absence -- log_pseq("AAAAAAAAAA") is about -6908 -- so those pins
-     * condition on something 6,900 nats below the mode, which is precisely
-     * where two implementations of one recursion part company.
-     */
     for (uint32_t i = 0; i < L; ++i) {
-        for (uint32_t a = 0; a < R; ++a) {
-            memset(clamp, BEAM_RESIDUE_INVALID, L);
-            clamp[i] = (uint8_t)a;
-            double zw = 0.0, zg = 0.0;
-            const BeamError ref =
-                beam_model_positional_marginals(m, L, clamp, want, &zw);
-            BeamConstraint *c = beam_query_constraint_new(L, R);
-            beam_query_constrain_position(c, i, a);
-            const BeamError qry = beam_query_marginals(m, c, got, &zg);
-            beam_query_constraint_free(c);
+        const uint32_t a = pins[i];
+        if (a >= R) continue;
+        memset(clamp, BEAM_RESIDUE_INVALID, L);
+        clamp[i] = (uint8_t)a;
+        double zw = 0.0, zg = 0.0;
+        const BeamError ref =
+            beam_model_positional_marginals(m, L, clamp, want, &zw);
+        BeamConstraint *c = beam_query_constraint_new(L, R);
+        beam_query_constrain_position(c, i, a);
+        const BeamError qry = beam_query_marginals(m, c, got, &zg);
+        beam_query_constraint_free(c);
 
-            /* They must agree about whether the question has an answer,
-             * before they are asked to agree about what it is. */
-            if (ref != qry) { (*n_bad)++; continue; }
-            if (ref != BEAM_OK) continue;
-            (*n_live)++;
+        /* They must agree about whether the question has an answer,
+         * before they are asked to agree about what it is. */
+        if (ref != qry) { (*n_bad)++; continue; }
+        if (ref != BEAM_OK) continue;
+        (*n_live)++;
 
-            bool same = (zw == zg);
-            for (uint32_t k = 0; same && k < L * R; ++k)
-                if (want[k] != got[k]) same = false;
-            if (same) { (*n_identical)++; continue; }
+        bool same = (zw == zg);
+        for (uint32_t k = 0; same && k < L * R; ++k)
+            if (want[k] != got[k]) same = false;
+        if (same) { (*n_identical)++; continue; }
 
-            /* Disagreement. Whose rows are still distributions, and by how
-             * much do the cells actually differ? */
-            bool old_ok = true, new_ok = true;
-            double worst = 0.0;
-            for (uint32_t r = 0; r < L; ++r) {
-                double sw = 0.0, sg = 0.0;
-                for (uint32_t k = 0; k < R; ++k) {
-                    sw += want[(size_t)r * R + k];
-                    sg += got[(size_t)r * R + k];
-                    const double d = fabs(want[(size_t)r * R + k]
-                                          - got[(size_t)r * R + k]);
-                    if (d > worst) worst = d;
-                }
-                if (fabs(sw - 1.0) > 1e-9) old_ok = false;
-                if (fabs(sg - 1.0) > 1e-9) new_ok = false;
+        /* Disagreement. Whose rows are still distributions, and by how
+         * much do the cells actually differ? */
+        bool old_ok = true, new_ok = true;
+        double worst = 0.0;
+        for (uint32_t r = 0; r < L; ++r) {
+            double sw = 0.0, sg = 0.0;
+            for (uint32_t k = 0; k < R; ++k) {
+                sw += want[(size_t)r * R + k];
+                sg += got[(size_t)r * R + k];
+                const double d = fabs(want[(size_t)r * R + k]
+                                      - got[(size_t)r * R + k]);
+                if (d > worst) worst = d;
             }
-            if (!old_ok && new_ok) { (*n_old_broken)++; continue; }
-            if (old_ok && new_ok && worst < 1e-9) continue;   /* rounding */
-            (*n_bad)++;
+            if (fabs(sw - 1.0) > 1e-9) old_ok = false;
+            if (fabs(sg - 1.0) > 1e-9) new_ok = false;
         }
+        if (!old_ok && new_ok) { (*n_old_broken)++; continue; }
+        if (old_ok && new_ok && worst < 1e-9) continue;   /* rounding */
+        (*n_bad)++;
     }
     free(want); free(got); free(clamp);
 }
 
 static void test_a_pinned_position_reproduces_a_clamp(void) {
     /*
-     * Bit for bit, on every pin, in both worlds. The two are separate
-     * implementations of one recursion -- this engine's over a residue SET and
-     * `positional_marginals`' over a residue RANGE -- and both now carry their
-     * forward values as logarithms accumulated in the same order, so agreement
-     * to the last bit is the right expectation and anything less is a defect.
+     * Bit for bit. The two are separate implementations of one recursion --
+     * this engine's over a residue SET and `positional_marginals`' over a
+     * residue RANGE -- and both now carry their forward values as logarithms
+     * accumulated in the same order, so agreement to the last bit is the
+     * right expectation and anything less is a defect.
      *
      * It was not always so. While both rescaled each layer by a single factor
      * the claim held on amino acids and failed on nucleotides, and while only
-     * one of them had been fixed it failed on 160 open-world cells -- every
-     * one of them `positional_marginals` returning a row that summed to
-     * 5.9e-264 instead of 1. The classification below survives from that
-     * period deliberately: if the two ever diverge again it says WHICH is
-     * wrong, rather than only that they differ.
+     * one of them had been fixed it failed on 160 cells -- every one of them
+     * `positional_marginals` returning a row that summed to 5.9e-264 instead
+     * of 1. The classification survives from that period deliberately: if the
+     * two ever diverge again it says WHICH is wrong, rather than only that
+     * they differ.
+     *
+     * One pin at every position, from PIN_AT. Under the prior every pin is
+     * answered, including those on residues the corpus never spells there,
+     * which are paid for at the price the shorter contexts lend them. A pin
+     * per position AND residue would be two hundred pairs of sweeps, each
+     * asking the same code the same question of a different residue.
      */
+    BeamModel *m = build(TRAIN, WEIGHT, N_TRAIN, 2u, 14u);
+    ASSERT_MSG(m != NULL, "model built");
+    uint8_t pins[N_PINS];
+    for (uint32_t i = 0; i < N_PINS; ++i) pins[i] = pin_residue(i);
+
     uint32_t live = 0u, bad = 0u, old_broken = 0u, identical = 0u;
-
-    BeamModel *shut = build(TRAIN, WEIGHT, N_TRAIN, 3u, 14u, false);
-    ASSERT_MSG(shut != NULL, "closed-world model built");
-    compare_every_pin(shut, 10u, &live, &bad, &old_broken, &identical);
-    beam_model_destroy(shut);
-    ASSERT_MSG(bad == 0u, "no closed-world pin disagreed with its clamp");
+    compare_pins(m, N_PINS, pins, &live, &bad, &old_broken, &identical);
+    beam_model_destroy(m);
+    ASSERT_MSG(bad == 0u, "no pin disagreed with its clamp");
     ASSERT_MSG(old_broken == 0u, "and neither engine lost a distribution");
-    ASSERT_MSG(identical == live, "every closed-world pin is bit-identical");
-    ASSERT_MSG(live == 17u, "the 17 the corpus spells were all compared");
-
-    BeamModel *open = build(TRAIN, WEIGHT, N_TRAIN, 3u, 14u, true);
-    ASSERT_MSG(open != NULL, "open-world model built");
-    compare_every_pin(open, 10u, &live, &bad, &old_broken, &identical);
-    beam_model_destroy(open);
-    ASSERT_MSG(bad == 0u, "no open-world pin disagreed either");
-    ASSERT_MSG(old_broken == 0u,
-               "and the underflow that used to lose six rows here is gone");
-    ASSERT_MSG(identical == live,
-               "every open-world pin is bit-identical too, across a trellis "
-               "spanning thousands of nats");
-    ASSERT_MSG(live == 10u * R,
-               "the open world carries a path for all 200 pins");
+    ASSERT_MSG(live == N_PINS, "every pin has mass, so all were compared");
+    ASSERT_MSG(identical == live, "and every one is bit-identical");
     PASS();
 }
 
 static void test_a_pinned_probability_reproduces_log_clamp_probability(void) {
-    BeamModel *m = build(TRAIN, WEIGHT, N_TRAIN, 3u, 14u, false);
+    BeamModel *m = build(TRAIN, WEIGHT, N_TRAIN, 2u, 14u);
     ASSERT_MSG(m != NULL, "model built");
     const uint32_t L = 10u;
     uint8_t *clamp = (uint8_t *)malloc(L);
     double *sink = (double *)malloc((size_t)L * R * sizeof(double));
     ASSERT_MSG(clamp && sink, "alloc");
 
-    for (uint32_t a = 0; a < R; ++a) {
+    /* The pins of PIN_AT, one per position, since this route is a backward
+     * sweep alone and where the pin sits is what varies its work. Under the
+     * prior none is a zero-mass pin to be skipped, so every one is compared. */
+    for (uint32_t i = 0; i < N_PINS; ++i) {
+        const uint8_t a = pin_residue(i);
         memset(clamp, BEAM_RESIDUE_INVALID, L);
-        clamp[3] = (uint8_t)a;
+        clamp[i] = a;
         double zc = 0.0;
-        if (beam_model_positional_marginals(m, L, clamp, sink, &zc) != BEAM_OK)
-            continue;                                    /* zero-mass pin */
+        ASSERT_MSG(beam_model_positional_marginals(m, L, clamp, sink, &zc)
+                   == BEAM_OK, "every pin has mass");
         const double want = zc - beam_model_log_partition(m, L);
 
         BeamConstraint *c = beam_query_constraint_new(L, R);
-        beam_query_constrain_position(c, 3u, a);
+        beam_query_constrain_position(c, i, a);
         double got = 0.0;
         ASSERT_MSG(beam_query_log_probability(m, c, &got) == BEAM_OK, "query");
         beam_query_constraint_free(c);
+        ASSERT_MSG(isfinite(got), "and a finite log probability");
         ASSERT_MSG(want == got, "log P identical to the clamped route");
     }
     free(clamp); free(sink);
@@ -465,11 +482,16 @@ static void test_a_pinned_probability_reproduces_log_clamp_probability(void) {
 /* ── Enumeration ─────────────────────────────────────────────── */
 
 static void test_a_constrained_probability_matches_enumeration(void) {
-    BeamModel *m = build(SHORT_TRAIN, SHORT_WEIGHT, N_SHORT, 2u, 6u, true);
+    BeamModel *m = build(SHORT_TRAIN, SHORT_WEIGHT, N_SHORT, 2u, SHORT_L);
     ASSERT_MSG(m != NULL, "model built");
-    const uint32_t L = 4u;
+    const uint32_t L = SHORT_L;
 
-    /* A pin, a set, and a two-position conjunction: three shapes of mask. */
+    /*
+     * A pin, a set, and a two-position conjunction: three shapes of mask.
+     * Each is required to keep a real fraction of the mass. Under the prior
+     * every mask keeps SOME, but a fraction of 1e-14 would match anything to
+     * within the tolerance below and test nothing.
+     */
     struct { uint32_t pos; BeamResidueMask set; } cases[] = {
         {1u, (BeamResidueMask)1u << 0},
         {1u, 0x0Du},
@@ -483,7 +505,7 @@ static void test_a_constrained_probability_matches_enumeration(void) {
         ASSERT_MSG(beam_query_log_probability(m, c, &got) == BEAM_OK, "query");
         const double want = enumerate_probability(m, L, c->mask);
         beam_query_constraint_free(c);
-        ASSERT_MSG(want > 0.0, "the reference found mass");
+        ASSERT_MSG(want > 0.01, "the reference found real mass");
         ASSERT_MSG(fabs(exp(got) - want) < 1e-12,
                    "constrained probability matches the enumerated sum");
     }
@@ -491,12 +513,12 @@ static void test_a_constrained_probability_matches_enumeration(void) {
     /* Two positions at once, which no single-position shortcut can fake. */
     BeamConstraint *c = beam_query_constraint_new(L, R);
     beam_query_constrain_set(c, 1u, 0x0Du);
-    beam_query_constrain_set(c, 3u, 0x30u);
+    beam_query_constrain_set(c, 2u, 0x30u);
     double got = 0.0;
     ASSERT_MSG(beam_query_log_probability(m, c, &got) == BEAM_OK, "query");
     const double want = enumerate_probability(m, L, c->mask);
     beam_query_constraint_free(c);
-    ASSERT_MSG(want > 0.0, "the reference found mass");
+    ASSERT_MSG(want > 0.01, "the reference found real mass");
     ASSERT_MSG(fabs(exp(got) - want) < 1e-12,
                "a two-position conjunction matches enumeration");
 
@@ -507,7 +529,7 @@ static void test_a_constrained_probability_matches_enumeration(void) {
 /* ── The identity that ties sets to singletons ───────────────── */
 
 static void test_a_set_conditions_as_the_mixture_of_its_members(void) {
-    BeamModel *m = build(TRAIN, WEIGHT, N_TRAIN, 3u, 14u, false);
+    BeamModel *m = build(TRAIN, WEIGHT, N_TRAIN, 2u, 14u);
     ASSERT_MSG(m != NULL, "model built");
     const uint32_t L = 10u, PIN = 4u;
 
@@ -519,16 +541,20 @@ static void test_a_set_conditions_as_the_mixture_of_its_members(void) {
     ASSERT_MSG(beam_model_positional_marginals(m, L, NULL, base, NULL)
                == BEAM_OK, "unconstrained marginals");
 
-    /* The first three residues that carry mass at PIN. */
+    /*
+     * Two residues the corpus spells at PIN and one it never does. Under the
+     * prior all three carry mass, and they carry it in very different
+     * amounts, so the mixture weights span orders of magnitude.
+     */
+    const uint32_t member[3] = {AA_L, AA_P, AA_W};
     BeamResidueMask set = 0u;
     double weight_total = 0.0;
-    uint32_t members = 0u;
-    for (uint32_t a = 0; a < R && members < 3u; ++a) {
+    for (uint32_t t = 0; t < 3u; ++t) {
+        const uint32_t a = member[t];
         const double pa = base[(size_t)PIN * R + a];
-        if (pa <= 0.0) continue;
+        ASSERT_MSG(pa > 0.0, "every member carries mass");
         set |= (BeamResidueMask)1u << a;
         weight_total += pa;
-        members++;
 
         BeamConstraint *c = beam_query_constraint_new(L, R);
         beam_query_constrain_position(c, PIN, a);
@@ -536,7 +562,6 @@ static void test_a_set_conditions_as_the_mixture_of_its_members(void) {
         beam_query_constraint_free(c);
         for (uint32_t k = 0; k < L * R; ++k) mix[k] += pa * one[k];
     }
-    ASSERT_MSG(members == 3u, "found three live residues to mix");
 
     BeamConstraint *c = beam_query_constraint_new(L, R);
     ASSERT_MSG(beam_query_constrain_set(c, PIN, set) == BEAM_OK, "set");
@@ -554,10 +579,10 @@ static void test_a_set_conditions_as_the_mixture_of_its_members(void) {
 }
 
 static void test_a_set_probability_is_the_sum_over_its_members(void) {
-    BeamModel *m = build(TRAIN, WEIGHT, N_TRAIN, 3u, 14u, false);
+    BeamModel *m = build(TRAIN, WEIGHT, N_TRAIN, 2u, 14u);
     ASSERT_MSG(m != NULL, "model built");
     /* Position 4, which spells five residues; a position with one would make
-     * the sum trivially 1.0 and the test vacuous. */
+     * the sum all but 1.0 and the test close to vacuous. */
     const uint32_t L = 10u, PIN = 4u;
 
     double *base = (double *)malloc((size_t)L * R * sizeof(double));
@@ -583,15 +608,16 @@ static void test_a_set_probability_is_the_sum_over_its_members(void) {
 }
 
 static void test_marginal_rows_sum_to_one_under_a_constraint(void) {
-    BeamModel *m = build(TRAIN, WEIGHT, N_TRAIN, 3u, 14u, false);
+    BeamModel *m = build(TRAIN, WEIGHT, N_TRAIN, 2u, 14u);
     ASSERT_MSG(m != NULL, "model built");
     const uint32_t L = 10u;
     double *out = (double *)malloc((size_t)L * R * sizeof(double));
     ASSERT_MSG(out != NULL, "alloc");
 
     /* Position 4 carries D L P Q V and position 8 carries F Y, so this asks
-     * for something the corpus spells; a set drawn from residues the layer
-     * cannot emit would be refused, and rightly. */
+     * for something the corpus spells. A set of residues it never spells
+     * there would be answered too -- under the prior every layer can emit
+     * every residue -- only with far less mass behind it. */
     BeamConstraint *c = beam_query_constraint_new(L, R);
     beam_query_constrain_set(c, 4u, (1u << AA_L) | (1u << AA_Q) | (1u << AA_V));
     beam_query_constrain_exclude(c, 8u, AA_F);
@@ -609,7 +635,7 @@ static void test_marginal_rows_sum_to_one_under_a_constraint(void) {
 }
 
 static void test_the_probability_of_everything_is_exactly_one(void) {
-    BeamModel *m = build(TRAIN, WEIGHT, N_TRAIN, 3u, 14u, false);
+    BeamModel *m = build(TRAIN, WEIGHT, N_TRAIN, 2u, 14u);
     ASSERT_MSG(m != NULL, "model built");
     BeamConstraint *c = beam_query_constraint_new(10u, R);
     double got = 1.0;
@@ -626,7 +652,7 @@ static void test_the_probability_of_everything_is_exactly_one(void) {
 /* ── Impossible constraints ──────────────────────────────────── */
 
 static void test_an_impossible_constraint_has_probability_zero(void) {
-    BeamModel *m = build(TRAIN, WEIGHT, N_TRAIN, 3u, 14u, false);
+    BeamModel *m = build(TRAIN, WEIGHT, N_TRAIN, 2u, 14u);
     ASSERT_MSG(m != NULL, "model built");
     BeamConstraint *c = beam_query_constraint_new(10u, R);
     beam_query_constrain_position(c, 2u, 1u);
@@ -641,7 +667,7 @@ static void test_an_impossible_constraint_has_probability_zero(void) {
 }
 
 static void test_conditioning_on_the_impossible_is_refused(void) {
-    BeamModel *m = build(TRAIN, WEIGHT, N_TRAIN, 3u, 14u, false);
+    BeamModel *m = build(TRAIN, WEIGHT, N_TRAIN, 2u, 14u);
     ASSERT_MSG(m != NULL, "model built");
     const uint32_t L = 10u;
     double *out = (double *)malloc((size_t)L * R * sizeof(double));
@@ -657,17 +683,43 @@ static void test_conditioning_on_the_impossible_is_refused(void) {
                "and the message says why");
     beam_query_constraint_free(c);
 
-    /* Satisfiable as a mask, unsatisfiable in this trellis: a closed-world
-     * model does not spell every letter at every position. */
+    /*
+     * Under the prior every string has mass, so a mask with no empty position
+     * always admits something and the trellis never refuses it. The only
+     * other way to ask about nothing is a language with no strings in it:
+     * "exactly one residue drawn from the empty set" leaves every position
+     * mask full and accepts nothing, which reaches the sweep's own refusal
+     * rather than the empty-mask shortcut above.
+     */
     BeamConstraint *d = beam_query_constraint_new(L, R);
-    beam_query_constrain_position(d, 0u, 0u);
-    beam_query_constrain_position(d, 1u, 0u);
-    beam_query_constrain_position(d, 2u, 0u);
-    beam_query_constrain_position(d, 3u, 0u);
-    const BeamError e = beam_query_marginals(m, d, out, NULL);
-    ASSERT_MSG(e == BEAM_ERR_NO_LIVE_PATHS,
-               "a mask the trellis cannot satisfy is refused too");
+    ASSERT_MSG(beam_query_constrain_automaton(
+                   d, beam_query_automaton_count(L, R, 0u, 1u, 1u)) == BEAM_OK,
+               "attached");
+    ASSERT_MSG(beam_query_empty_position(d) == L, "no position is empty");
+    double lp = 0.0;
+    ASSERT_MSG(beam_query_log_probability(m, d, &lp) == BEAM_OK
+               && lp == -INFINITY, "the empty language has probability zero");
+    ASSERT_MSG(beam_query_marginals(m, d, out, NULL) == BEAM_ERR_NO_LIVE_PATHS,
+               "and conditioning on it is refused too");
+    ASSERT_MSG(strstr(beam_error_message(), "cannot produce") != NULL,
+               "by the sweep, which found no path, rather than by the mask");
     beam_query_constraint_free(d);
+
+    /* Four leading alanines, which the corpus never spells: satisfiable as a
+     * mask and now satisfiable in the trellis too, so the conditional exists
+     * and pins its rows. */
+    BeamConstraint *e = beam_query_constraint_new(L, R);
+    for (uint32_t i = 0; i < 4u; ++i) beam_query_constrain_position(e, i, AA_A_);
+    ASSERT_MSG(beam_query_marginals(m, e, out, NULL) == BEAM_OK,
+               "a prefix the corpus never spells is conditioned on");
+    /* One-hot: every other residue exactly zero, since the mask rules it
+     * out, and the pinned one 1 to within the row's normalisation. */
+    for (uint32_t i = 0; i < 4u; ++i)
+        for (uint32_t a = 0; a < R; ++a)
+            ASSERT_MSG(a == AA_A_ ? fabs(out[(size_t)i * R + a] - 1.0) < 1e-12
+                                  : out[(size_t)i * R + a] == 0.0,
+                       "each pinned row comes back one-hot");
+    beam_query_constraint_free(e);
 
     free(out);
     beam_model_destroy(m);
@@ -677,7 +729,7 @@ static void test_conditioning_on_the_impossible_is_refused(void) {
 /* ── Shape and alphabet mismatches ───────────────────────────── */
 
 static void test_a_constraint_over_the_wrong_alphabet_is_refused(void) {
-    BeamModel *m = build(TRAIN, WEIGHT, N_TRAIN, 3u, 14u, false);
+    BeamModel *m = build(TRAIN, WEIGHT, N_TRAIN, 2u, 14u);
     ASSERT_MSG(m != NULL, "model built");
     double out[10 * R];
     BeamConstraint *c = beam_query_constraint_new(10u, BEAM_NT_RESIDUES);
@@ -692,13 +744,30 @@ static void test_a_constraint_over_the_wrong_alphabet_is_refused(void) {
 }
 
 static void test_a_length_the_model_never_generates_is_refused(void) {
-    BeamModel *m = build(TRAIN, WEIGHT, N_TRAIN, 3u, 14u, false);
+    BeamModel *m = build(TRAIN, WEIGHT, N_TRAIN, 2u, 14u);
     ASSERT_MSG(m != NULL, "model built");
-    double out[3 * R];
-    BeamConstraint *c = beam_query_constraint_new(3u, R);
+    /*
+     * The corpus spells lengths 9 to 11, but the length prior gives every
+     * length from 1 to max_length mass, so the only length the model never
+     * generates is one past it.
+     */
+    double out[15 * R];
+    BeamConstraint *c = beam_query_constraint_new(15u, R);
     ASSERT_MSG(beam_query_marginals(m, c, out, NULL)
                == BEAM_ERR_PARAM_OUT_OF_RANGE, "refused");
+    ASSERT_MSG(strstr(beam_error_message(), "length 15") != NULL,
+               "and the message names the length");
     beam_query_constraint_free(c);
+
+    BeamConstraint *d = beam_query_constraint_new(3u, R);
+    ASSERT_MSG(beam_query_marginals(m, d, out, NULL) == BEAM_OK,
+               "while a length the corpus never spells is answered");
+    for (uint32_t i = 0; i < 3u; ++i) {
+        double s = 0.0;
+        for (uint32_t a = 0; a < R; ++a) s += out[(size_t)i * R + a];
+        ASSERT_MSG(fabs(s - 1.0) < 1e-12, "with rows that are distributions");
+    }
+    beam_query_constraint_free(d);
     beam_model_destroy(m);
     PASS();
 }
@@ -773,7 +842,7 @@ static BeamAutomaton *accept_all(uint32_t length) {
 }
 
 static void test_a_universal_automaton_reproduces_the_mask_sweep(void) {
-    BeamModel *m = build(TRAIN, WEIGHT, N_TRAIN, 3u, 14u, false);
+    BeamModel *m = build(TRAIN, WEIGHT, N_TRAIN, 2u, 14u);
     ASSERT_MSG(m != NULL, "model built");
     const uint32_t L = 10u;
     double *want = (double *)malloc((size_t)L * R * sizeof(double));
@@ -839,9 +908,9 @@ static void test_a_universal_automaton_reproduces_the_mask_sweep(void) {
 }
 
 static void test_a_motif_probability_matches_enumeration(void) {
-    BeamModel *m = build(SHORT_TRAIN, SHORT_WEIGHT, N_SHORT, 2u, 6u, true);
+    BeamModel *m = build(SHORT_TRAIN, SHORT_WEIGHT, N_SHORT, 2u, SHORT_L);
     ASSERT_MSG(m != NULL, "model built");
-    const uint32_t L = 4u;
+    const uint32_t L = SHORT_L;
 
     const uint8_t motifs[3][2] = {{AA_A_, AA_S_}, {AA_S_, AA_F}, {AA_C, AA_A_}};
     const uint32_t lens[3] = {2u, 2u, 2u};
@@ -856,7 +925,10 @@ static void test_a_motif_probability_matches_enumeration(void) {
 
         struct motif_ctx ctx = {motifs[t], lens[t]};
         const double want = enumerate_predicate(m, L, keep_contains, &ctx);
-        ASSERT_MSG(want > 0.0 && want < 1.0,
+        /* Under the prior every event short of everything lies strictly
+         * between 0 and 1, so that alone would prove nothing; a real fraction
+         * is what makes the 1e-12 comparison below able to fail. */
+        ASSERT_MSG(want > 0.01 && want < 0.99,
                    "the reference found a non-trivial fraction");
         ASSERT_MSG(fabs(exp(got) - want) < 1e-12,
                    "P(contains motif) matches the enumerated sum");
@@ -866,9 +938,9 @@ static void test_a_motif_probability_matches_enumeration(void) {
 }
 
 static void test_a_count_probability_matches_enumeration(void) {
-    BeamModel *m = build(SHORT_TRAIN, SHORT_WEIGHT, N_SHORT, 2u, 6u, true);
+    BeamModel *m = build(SHORT_TRAIN, SHORT_WEIGHT, N_SHORT, 2u, SHORT_L);
     ASSERT_MSG(m != NULL, "model built");
-    const uint32_t L = 4u;
+    const uint32_t L = SHORT_L;
 
     struct count_ctx cases[3] = {
         {(1u << AA_S_), 1u, 1u},
@@ -886,7 +958,7 @@ static void test_a_count_probability_matches_enumeration(void) {
         beam_query_constraint_free(c);
 
         const double want = enumerate_predicate(m, L, keep_count, &cases[t]);
-        ASSERT_MSG(want > 0.0 && want < 1.0, "non-trivial");
+        ASSERT_MSG(want > 0.01 && want < 0.99, "non-trivial");
         ASSERT_MSG(fabs(exp(got) - want) < 1e-12,
                    "P(count in range) matches the enumerated sum");
     }
@@ -902,9 +974,9 @@ static bool keep_both(const uint8_t *s, uint32_t n, const void *ctx) {
 }
 
 static void test_masks_and_an_automaton_compose(void) {
-    BeamModel *m = build(SHORT_TRAIN, SHORT_WEIGHT, N_SHORT, 2u, 6u, true);
+    BeamModel *m = build(SHORT_TRAIN, SHORT_WEIGHT, N_SHORT, 2u, SHORT_L);
     ASSERT_MSG(m != NULL, "model built");
-    const uint32_t L = 4u;
+    const uint32_t L = SHORT_L;
     const uint8_t motif[2] = {AA_A_, AA_S_};
 
     BeamConstraint *c = beam_query_constraint_new(L, R);
@@ -919,7 +991,7 @@ static void test_masks_and_an_automaton_compose(void) {
 
     struct both_ctx ctx = {{motif, 2u}, (1u << AA_C) | (1u << AA_V), 0u};
     const double want = enumerate_predicate(m, L, keep_both, &ctx);
-    ASSERT_MSG(want > 0.0 && want < 1.0, "non-trivial");
+    ASSERT_MSG(want > 0.01 && want < 0.99, "non-trivial");
     ASSERT_MSG(fabs(exp(got) - want) < 1e-12,
                "the two tiers intersect rather than one overriding the other");
     beam_model_destroy(m);
@@ -927,7 +999,7 @@ static void test_masks_and_an_automaton_compose(void) {
 }
 
 static void test_a_language_and_its_complement_partition_the_mass(void) {
-    BeamModel *m = build(TRAIN, WEIGHT, N_TRAIN, 3u, 14u, false);
+    BeamModel *m = build(TRAIN, WEIGHT, N_TRAIN, 2u, 14u);
     ASSERT_MSG(m != NULL, "model built");
     const uint32_t L = 10u;
     const uint8_t motif[2] = {AA_L, AA_G};
@@ -968,7 +1040,7 @@ static double prob_of(BeamModel *m, uint32_t L, BeamAutomaton *a) {
 }
 
 static void test_union_obeys_inclusion_exclusion(void) {
-    BeamModel *m = build(TRAIN, WEIGHT, N_TRAIN, 3u, 14u, false);
+    BeamModel *m = build(TRAIN, WEIGHT, N_TRAIN, 2u, 14u);
     ASSERT_MSG(m != NULL, "model built");
     const uint32_t L = 10u;
     const uint8_t u[2] = {AA_L, AA_G};
@@ -994,24 +1066,52 @@ static void test_union_obeys_inclusion_exclusion(void) {
     PASS();
 }
 
-static void test_a_motif_the_model_cannot_spell_is_impossible(void) {
-    BeamModel *m = build(TRAIN, WEIGHT, N_TRAIN, 3u, 14u, false);
+static void test_a_motif_the_corpus_never_spells_is_improbable_but_possible(void) {
+    BeamModel *m = build(TRAIN, WEIGHT, N_TRAIN, 2u, 14u);
     ASSERT_MSG(m != NULL, "model built");
     const uint32_t L = 10u;
     double *out = (double *)malloc((size_t)L * R * sizeof(double));
     ASSERT_MSG(out != NULL, "alloc");
-    /* The closed-world corpus spells no run of four tryptophans. */
+    /*
+     * The corpus spells no tryptophan at all, let alone a run of four. Under
+     * the prior that makes the run improbable rather than impossible: an
+     * unseen context predicts what its shorter contexts predict, and they
+     * lend W a little mass at every depth.
+     */
     const uint8_t motif[4] = {AA_W, AA_W, AA_W, AA_W};
 
     BeamConstraint *c = beam_query_constraint_new(L, R);
     beam_query_constrain_automaton(c,
         beam_query_automaton_motif(L, R, motif, 4u));
-    double p = 1.0;
+    double p = -INFINITY;
     ASSERT_MSG(beam_query_log_probability(m, c, &p) == BEAM_OK,
                "asking is not an error");
-    ASSERT_MSG(p == -INFINITY, "and the answer is zero");
-    ASSERT_MSG(beam_query_marginals(m, c, out, NULL) == BEAM_ERR_NO_LIVE_PATHS,
-               "but conditioning on it has no answer");
+    ASSERT_MSG(isfinite(p), "and the answer is not zero");
+
+    /*
+     * Bracketed by two independent routes through the scorer, P(s | L) being
+     * P(s) / P(L). From below by one string the event contains, WWWWWWWWWW.
+     * From above by every sequence of this length the corpus does spell:
+     * hundreds of millions of strings containing the run weigh less, all
+     * together, than the least-observed of them.
+     */
+    const double lpl = beam_model_log_length_prior(m, L);
+    ASSERT_MSG(p >= beam_model_log_pseq(m, "WWWWWWWWWW") - lpl,
+               "at least the mass of the all-W string it contains");
+    for (uint32_t k = 0; k < N_TRAIN; ++k) {
+        if (strlen(TRAIN[k]) != L) continue;
+        ASSERT_MSG(p < beam_model_log_pseq(m, TRAIN[k]) - lpl,
+                   "and less than any one sequence the corpus spells");
+    }
+
+    /* With mass behind it, conditioning on the run has an answer too. */
+    ASSERT_MSG(beam_query_marginals(m, c, out, NULL) == BEAM_OK,
+               "conditioning on it is answered");
+    for (uint32_t i = 0; i < L; ++i) {
+        double s = 0.0;
+        for (uint32_t a = 0; a < R; ++a) s += out[(size_t)i * R + a];
+        ASSERT_MSG(fabs(s - 1.0) < 1e-12, "with rows that are distributions");
+    }
     beam_query_constraint_free(c);
     free(out);
     beam_model_destroy(m);
@@ -1019,9 +1119,9 @@ static void test_a_motif_the_model_cannot_spell_is_impossible(void) {
 }
 
 static void test_a_motif_conditional_matches_enumeration(void) {
-    BeamModel *m = build(SHORT_TRAIN, SHORT_WEIGHT, N_SHORT, 2u, 6u, true);
+    BeamModel *m = build(SHORT_TRAIN, SHORT_WEIGHT, N_SHORT, 2u, SHORT_L);
     ASSERT_MSG(m != NULL, "model built");
-    const uint32_t L = 4u;
+    const uint32_t L = SHORT_L;
     const uint8_t motif[2] = {AA_A_, AA_S_};
 
     BeamConstraint *c = beam_query_constraint_new(L, R);
@@ -1057,7 +1157,7 @@ static void test_a_motif_conditional_matches_enumeration(void) {
         }
     }
 done:
-    ASSERT_MSG(mass > 0.0, "the reference found mass");
+    ASSERT_MSG(mass > 0.01, "the reference found real mass");
     for (uint32_t k = 0; k < L * R; ++k)
         ASSERT_MSG(fabs(got[k] - want[k] / mass) < 1e-12,
                    "every conditional cell matches the enumerated one");
@@ -1074,17 +1174,17 @@ static bool keep_either(const uint8_t *s, uint32_t n, const void *ctx) {
 }
 
 static void test_a_layer_indexed_automaton_answers_a_disjunction(void) {
-    BeamModel *m = build(SHORT_TRAIN, SHORT_WEIGHT, N_SHORT, 2u, 6u, true);
+    BeamModel *m = build(SHORT_TRAIN, SHORT_WEIGHT, N_SHORT, 2u, SHORT_L);
     ASSERT_MSG(m != NULL, "model built");
-    const uint32_t L = 4u;
-    /* Positions 1 and 3 both vary across the corpus. Position 0 does not --
+    const uint32_t L = SHORT_L;
+    /* Positions 1 and 2 both vary across the corpus. Position 0 does not --
      * it is C in every training sequence -- so a disjunction naming it would
      * be satisfied by almost all the mass and would test nothing. */
     const BeamResidueMask sa = (1u << AA_G) | (1u << AA_T);
     const BeamResidueMask sb = (1u << AA_Y) | (1u << AA_L);
 
     /*
-     * "position 0 is C or V, OR position 2 is S or A" is not a per-position
+     * "position 1 is G or T, OR position 2 is Y or L" is not a per-position
      * restriction and no mask can express it: the union of two restrictions is
      * not a restriction. Lifting each to an automaton and taking their
      * disjunction gives a LAYER-INDEXED transition function, which is the
@@ -1093,7 +1193,7 @@ static void test_a_layer_indexed_automaton_answers_a_disjunction(void) {
     BeamConstraint *ca = beam_query_constraint_new(L, R);
     BeamConstraint *cb = beam_query_constraint_new(L, R);
     beam_query_constrain_set(ca, 1u, sa);
-    beam_query_constrain_set(cb, 3u, sb);
+    beam_query_constrain_set(cb, 2u, sb);
     BeamAutomaton *aa = beam_query_automaton_from_masks(ca);
     BeamAutomaton *ab = beam_query_automaton_from_masks(cb);
     ASSERT_MSG(aa && ab, "lifted");
@@ -1114,7 +1214,7 @@ static void test_a_layer_indexed_automaton_answers_a_disjunction(void) {
     ASSERT_MSG(beam_query_marginals(m, c, gm, NULL) == BEAM_OK, "marginals");
     beam_query_constraint_free(c);
 
-    struct or_ctx ctx = {1u, 3u, sa, sb};
+    struct or_ctx ctx = {1u, 2u, sa, sb};
     const double want = enumerate_predicate(m, L, keep_either, &ctx);
     ASSERT_MSG(want > 0.05 && want < 0.95,
                "the disjunction selects a real fraction of the mass, so the "
@@ -1200,7 +1300,7 @@ static void test_the_streaming_log_sum_exp_matches_a_two_pass_reference(void) {
 }
 
 static void test_the_estimate_grows_with_the_automaton(void) {
-    BeamModel *m = build(TRAIN, WEIGHT, N_TRAIN, 3u, 14u, false);
+    BeamModel *m = build(TRAIN, WEIGHT, N_TRAIN, 2u, 14u);
     ASSERT_MSG(m != NULL, "model built");
     const uint32_t L = 10u;
     const uint8_t motif[3] = {AA_L, AA_G, AA_E};
@@ -1237,8 +1337,11 @@ static void test_the_estimate_grows_with_the_automaton(void) {
 static void test_a_dominant_rejected_path_cannot_collapse_the_answer(void) {
     /*
      * Regression for a defect found by review. Three sequences, the rejected
-     * one weighted a hundred times the two accepted ones, with mixing weights
-     * and backoff strengths turned up so the trellis spans thousands of nats.
+     * one weighted a hundred times the two accepted ones, with the anchor
+     * weights turned up so the trellis spans thousands of nats. Order 2 and
+     * max_length 4, because the defect needs a dominant rejected edge and not
+     * a large trellis, and the default order-4 model costs seconds to finalize
+     * for nothing.
      *
      * The forward sweep used to rescale each layer by the layer's own maximum
      * whenever the mask was full, on the reasoning that an automaton removes
@@ -1251,11 +1354,17 @@ static void test_a_dominant_rejected_path_cannot_collapse_the_answer(void) {
     const double w[3] = {1.0, 1.0, 100.0};
     BeamModelConfig cfg;
     beam_model_config_default(&cfg);
+    cfg.order = 2;
+    cfg.max_length = 4;
     cfg.weight_forward = cfg.weight_backward = 100.0;
     BeamModel *m = beam_model_new(&cfg);
     ASSERT_MSG(m != NULL, "model built");
     ASSERT_MSG(beam_model_observe(m, seqs, w, 3u) == BEAM_OK, "observed");
     ASSERT_MSG(beam_model_finalize(m) == BEAM_OK, "finalized");
+    /* The premise, checked rather than assumed: the rejected path outweighs
+     * the accepted ones by more than a double's exponent can span. */
+    ASSERT_MSG(beam_model_log_pseq(m, "CCCC") - beam_model_log_pseq(m, "AAAA")
+               > 745.0, "the rejected path dominates beyond exp()'s reach");
 
     const uint32_t L = 4u;
     /* Accept exactly AAAA or TTTT: two all-pinned masks, disjoined. */
@@ -1286,9 +1395,9 @@ static void test_a_dominant_rejected_path_cannot_collapse_the_answer(void) {
     ASSERT_MSG(beam_query_position_entropy(m, c, h) == BEAM_OK, "entropy");
     ASSERT_MSG(beam_query_information_matrix(m, c, mi) == BEAM_OK, "matrix");
 
-    /* The two admitted sequences are equally weighted, so every position is
-     * an even split between A and T -- including the last, which is the one
-     * that used to come back empty. */
+    /* The two admitted sequences are equally weighted and the prior treats A
+     * and T alike, so every position is an even split between them --
+     * including the last, which is the one that used to come back empty. */
     for (uint32_t i = 0; i < L; ++i) {
         double s = 0.0;
         for (uint32_t x = 0; x < R; ++x) s += marg[(size_t)i * R + x];
@@ -1325,147 +1434,144 @@ static void test_a_dominant_rejected_path_cannot_collapse_the_answer(void) {
  *
  * The alphabet was almost untested across this subsystem before review: five
  * residues instead of twenty, a radix of six instead of twenty-one, and case
- * folding on input. `5^5` is 3,125 sequences, so the entire support is
- * walkable and nothing has to be taken on trust.
+ * folding on input. `5^5` is 3,125 sequences, every one of which has mass
+ * under the prior, so the entire support is walkable and nothing has to be
+ * taken on trust.
  */
 static void test_the_whole_engine_on_a_nucleotide_model(void) {
     const char *seqs[6] = {"ACGTA","ACGTT","AGGTA","ACCTA","ACGAA","TCGTA"};
     const double w[6] = {40.0, 25.0, 18.0, 12.0, 9.0, 6.0};
     const uint32_t NR = BEAM_NT_RESIDUES, L = 5u;
 
-    for (uint32_t world = 0; world < 2u; ++world) {
-        BeamModelConfig cfg;
-        beam_model_config_default(&cfg);
-        cfg.alphabet = BEAM_ALPHABET_NT;
-        cfg.order = 2; cfg.max_length = 8;
-        cfg.strict = (world == 0);
-        BeamModel *m = beam_model_new(&cfg);
-        ASSERT_MSG(m != NULL, "nucleotide model built");
-        ASSERT_MSG(beam_model_observe(m, seqs, w, 6u) == BEAM_OK, "observed");
-        ASSERT_MSG(beam_model_finalize(m) == BEAM_OK, "finalized");
-        ASSERT_MSG(beam_model_n_residues(m) == NR, "five residues");
+    BeamModelConfig cfg;
+    beam_model_config_default(&cfg);
+    cfg.alphabet = BEAM_ALPHABET_NT;
+    cfg.order = 2; cfg.max_length = 6;
+    BeamModel *m = beam_model_new(&cfg);
+    ASSERT_MSG(m != NULL, "nucleotide model built");
+    ASSERT_MSG(beam_model_observe(m, seqs, w, 6u) == BEAM_OK, "observed");
+    ASSERT_MSG(beam_model_finalize(m) == BEAM_OK, "finalized");
+    ASSERT_MSG(beam_model_n_residues(m) == NR, "five residues");
 
-        /* Brute force: every string of length 5 over ACGTN. */
-        const BeamAlphabetInfo *ai = beam_alphabet_info(BEAM_ALPHABET_NT);
-        double *pm = (double *)calloc((size_t)L * NR, sizeof(double));
-        ASSERT_MSG(pm != NULL, "alloc");
-        char buf[8];
-        uint8_t idx[8];
-        double total = 0.0, kept = 0.0, hseq = 0.0;
-        const BeamResidueMask keep = (1u << 0) | (1u << 2);   /* A or G at 1 */
-        for (uint32_t i = 0; i < L; ++i) idx[i] = 0u;
-        buf[L] = '\0';
-        for (;;) {
-            for (uint32_t i = 0; i < L; ++i) buf[i] = ai->idx_to_char[idx[i]];
-            const double p = exp(beam_model_log_pseq(m, buf));
-            if (p > 0.0) {
-                total += p;
-                for (uint32_t i = 0; i < L; ++i) pm[(size_t)i * NR + idx[i]] += p;
-                if ((keep >> idx[1]) & 1u) kept += p;
-            }
-            uint32_t k = L;
-            while (k-- > 0u) {
-                if (++idx[k] < NR) break;
-                idx[k] = 0u;
-                if (k == 0u) goto done;
-            }
+    /* Brute force: every string of length 5 over ACGTN. */
+    const BeamAlphabetInfo *ai = beam_alphabet_info(BEAM_ALPHABET_NT);
+    double *pm = (double *)calloc((size_t)L * NR, sizeof(double));
+    ASSERT_MSG(pm != NULL, "alloc");
+    char buf[8];
+    uint8_t idx[8];
+    double total = 0.0, kept = 0.0, hseq = 0.0;
+    uint32_t massless = 0u;
+    const BeamResidueMask keep = (1u << 0) | (1u << 2);   /* A or G at 1 */
+    for (uint32_t i = 0; i < L; ++i) idx[i] = 0u;
+    buf[L] = '\0';
+    for (;;) {
+        for (uint32_t i = 0; i < L; ++i) buf[i] = ai->idx_to_char[idx[i]];
+        const double p = exp(beam_model_log_pseq(m, buf));
+        if (!(p > 0.0)) massless++;
+        total += p;
+        for (uint32_t i = 0; i < L; ++i) pm[(size_t)i * NR + idx[i]] += p;
+        if ((keep >> idx[1]) & 1u) kept += p;
+        uint32_t k = L;
+        while (k-- > 0u) {
+            if (++idx[k] < NR) break;
+            idx[k] = 0u;
+            if (k == 0u) goto done;
         }
+    }
 done:
-        ASSERT_MSG(total > 0.0, "the support is non-empty");
-        for (uint32_t i = 0; i < L; ++i)
-            for (uint32_t a = 0; a < NR; ++a) pm[(size_t)i * NR + a] /= total;
-        /* Sequence entropy, from the same walk. */
-        for (uint32_t i = 0; i < L; ++i) idx[i] = 0u;
-        for (;;) {
-            for (uint32_t i = 0; i < L; ++i) buf[i] = ai->idx_to_char[idx[i]];
-            const double p = exp(beam_model_log_pseq(m, buf)) / total;
-            if (p > 0.0) hseq -= p * log(p);
-            uint32_t k = L;
-            while (k-- > 0u) {
-                if (++idx[k] < NR) break;
-                idx[k] = 0u;
-                if (k == 0u) goto done2;
-            }
+    ASSERT_MSG(massless == 0u, "every string of the length has mass");
+    for (uint32_t i = 0; i < L; ++i)
+        for (uint32_t a = 0; a < NR; ++a) pm[(size_t)i * NR + a] /= total;
+    /* Sequence entropy, from the same walk. */
+    for (uint32_t i = 0; i < L; ++i) idx[i] = 0u;
+    for (;;) {
+        for (uint32_t i = 0; i < L; ++i) buf[i] = ai->idx_to_char[idx[i]];
+        const double p = exp(beam_model_log_pseq(m, buf)) / total;
+        hseq -= p * log(p);
+        uint32_t k = L;
+        while (k-- > 0u) {
+            if (++idx[k] < NR) break;
+            idx[k] = 0u;
+            if (k == 0u) goto done2;
         }
+    }
 done2:;
 
-        BeamConstraint *c = beam_query_constraint_new(L, NR);
-        double *got = (double *)malloc((size_t)L * NR * sizeof(double));
-        double *h   = (double *)malloc((size_t)L * sizeof(double));
-        double *mi  = (double *)malloc((size_t)L * L * sizeof(double));
-        ASSERT_MSG(got && h && mi, "alloc");
+    BeamConstraint *c = beam_query_constraint_new(L, NR);
+    double *got = (double *)malloc((size_t)L * NR * sizeof(double));
+    double *h   = (double *)malloc((size_t)L * sizeof(double));
+    double *mi  = (double *)malloc((size_t)L * L * sizeof(double));
+    ASSERT_MSG(got && h && mi, "alloc");
 
-        ASSERT_MSG(beam_query_marginals(m, c, got, NULL) == BEAM_OK, "marginals");
-        for (uint32_t k2 = 0; k2 < L * NR; ++k2)
-            ASSERT_MSG(fabs(got[k2] - pm[k2]) < 1e-12,
-                       "every marginal matches the enumerated one");
+    ASSERT_MSG(beam_query_marginals(m, c, got, NULL) == BEAM_OK, "marginals");
+    for (uint32_t k2 = 0; k2 < L * NR; ++k2)
+        ASSERT_MSG(fabs(got[k2] - pm[k2]) < 1e-12,
+                   "every marginal matches the enumerated one");
 
-        double hs = 0.0;
-        ASSERT_MSG(beam_query_entropy(m, c, &hs, NULL) == BEAM_OK, "H(seq)");
-        ASSERT_MSG(fabs(hs - hseq) < 1e-12, "and so does the sequence entropy");
+    double hs = 0.0;
+    ASSERT_MSG(beam_query_entropy(m, c, &hs, NULL) == BEAM_OK, "H(seq)");
+    ASSERT_MSG(fabs(hs - hseq) < 1e-12, "and so does the sequence entropy");
 
-        ASSERT_MSG(beam_query_position_entropy(m, c, h) == BEAM_OK, "H per pos");
-        for (uint32_t i = 0; i < L; ++i) {
-            double want = 0.0;
-            for (uint32_t a = 0; a < NR; ++a)
-                if (pm[(size_t)i * NR + a] > 0.0)
-                    want -= pm[(size_t)i * NR + a] * log(pm[(size_t)i * NR + a]);
-            ASSERT_MSG(fabs(h[i] - want) < 1e-12, "per-position entropy too");
-        }
-        ASSERT_MSG(beam_query_information_matrix(m, c, mi) == BEAM_OK, "matrix");
-        for (uint32_t i = 0; i < L; ++i)
-            ASSERT_MSG(fabs(mi[(size_t)i * L + i] - h[i]) < 1e-12,
-                       "and the matrix diagonal is the position entropy");
-        beam_query_constraint_free(c);
-
-        /* A set mask, and a motif automaton, both against the same walk. */
-        BeamConstraint *d = beam_query_constraint_new(L, NR);
-        ASSERT_MSG(beam_query_constrain_set(d, 1u, keep) == BEAM_OK, "mask");
-        double lp = 0.0;
-        ASSERT_MSG(beam_query_log_probability(m, d, &lp) == BEAM_OK, "P(mask)");
-        ASSERT_MSG(fabs(exp(lp) - kept / total) < 1e-12,
-                   "a residue set over five residues matches enumeration");
-        beam_query_constraint_free(d);
-
-        const uint8_t motif[2] = {0u, 2u};        /* AG */
-        BeamConstraint *e = beam_query_constraint_new(L, NR);
-        ASSERT_MSG(beam_query_constrain_automaton(
-                       e, beam_query_automaton_motif(L, NR, motif, 2u))
-                   == BEAM_OK, "motif over nucleotides");
-        double lm = 0.0;
-        ASSERT_MSG(beam_query_log_probability(m, e, &lm) == BEAM_OK, "P(motif)");
-        double wantm = 0.0;
-        for (uint32_t i = 0; i < L; ++i) idx[i] = 0u;
-        for (;;) {
-            bool has = false;
-            for (uint32_t i = 0; i + 1u < L; ++i)
-                if (idx[i] == 0u && idx[i + 1u] == 2u) has = true;
-            if (has) {
-                for (uint32_t i = 0; i < L; ++i) buf[i] = ai->idx_to_char[idx[i]];
-                wantm += exp(beam_model_log_pseq(m, buf));
-            }
-            uint32_t k = L;
-            while (k-- > 0u) {
-                if (++idx[k] < NR) break;
-                idx[k] = 0u;
-                if (k == 0u) goto done3;
-            }
-        }
-done3:
-        ASSERT_MSG(fabs(exp(lm) - wantm / total) < 1e-12,
-                   "and so does a motif on the product engine");
-        beam_query_constraint_free(e);
-
-        free(pm); free(got); free(h); free(mi);
-        beam_model_destroy(m);
+    ASSERT_MSG(beam_query_position_entropy(m, c, h) == BEAM_OK, "H per pos");
+    for (uint32_t i = 0; i < L; ++i) {
+        double want = 0.0;
+        for (uint32_t a = 0; a < NR; ++a)
+            want -= pm[(size_t)i * NR + a] * log(pm[(size_t)i * NR + a]);
+        ASSERT_MSG(fabs(h[i] - want) < 1e-12, "per-position entropy too");
     }
+    ASSERT_MSG(beam_query_information_matrix(m, c, mi) == BEAM_OK, "matrix");
+    for (uint32_t i = 0; i < L; ++i)
+        ASSERT_MSG(fabs(mi[(size_t)i * L + i] - h[i]) < 1e-12,
+                   "and the matrix diagonal is the position entropy");
+    beam_query_constraint_free(c);
+
+    /* A set mask, and a motif automaton, both against the same walk. */
+    BeamConstraint *d = beam_query_constraint_new(L, NR);
+    ASSERT_MSG(beam_query_constrain_set(d, 1u, keep) == BEAM_OK, "mask");
+    double lp = 0.0;
+    ASSERT_MSG(beam_query_log_probability(m, d, &lp) == BEAM_OK, "P(mask)");
+    ASSERT_MSG(fabs(exp(lp) - kept / total) < 1e-12,
+               "a residue set over five residues matches enumeration");
+    beam_query_constraint_free(d);
+
+    const uint8_t motif[2] = {0u, 2u};        /* AG */
+    BeamConstraint *e = beam_query_constraint_new(L, NR);
+    ASSERT_MSG(beam_query_constrain_automaton(
+                   e, beam_query_automaton_motif(L, NR, motif, 2u))
+               == BEAM_OK, "motif over nucleotides");
+    double lm = 0.0;
+    ASSERT_MSG(beam_query_log_probability(m, e, &lm) == BEAM_OK, "P(motif)");
+    double wantm = 0.0;
+    for (uint32_t i = 0; i < L; ++i) idx[i] = 0u;
+    for (;;) {
+        bool has = false;
+        for (uint32_t i = 0; i + 1u < L; ++i)
+            if (idx[i] == 0u && idx[i + 1u] == 2u) has = true;
+        if (has) {
+            for (uint32_t i = 0; i < L; ++i) buf[i] = ai->idx_to_char[idx[i]];
+            wantm += exp(beam_model_log_pseq(m, buf));
+        }
+        uint32_t k = L;
+        while (k-- > 0u) {
+            if (++idx[k] < NR) break;
+            idx[k] = 0u;
+            if (k == 0u) goto done3;
+        }
+    }
+done3:
+    ASSERT_MSG(fabs(exp(lm) - wantm / total) < 1e-12,
+               "and so does a motif on the product engine");
+    beam_query_constraint_free(e);
+
+    free(pm); free(got); free(h); free(mi);
+    beam_model_destroy(m);
     PASS();
 }
 
 /* ── Cost estimation ─────────────────────────────────────────── */
 
 static void test_the_estimate_matches_what_the_sweep_allocates(void) {
-    BeamModel *m = build(TRAIN, WEIGHT, N_TRAIN, 3u, 14u, false);
+    BeamModel *m = build(TRAIN, WEIGHT, N_TRAIN, 2u, 14u);
     ASSERT_MSG(m != NULL, "model built");
     BeamConstraint *c = beam_query_constraint_new(10u, R);
     BeamQueryCost cost;
@@ -1496,7 +1602,7 @@ static void test_the_estimate_matches_what_the_sweep_allocates(void) {
 }
 
 static void test_a_pinned_layer_is_estimated_cheaper_than_a_free_one(void) {
-    BeamModel *m = build(TRAIN, WEIGHT, N_TRAIN, 3u, 14u, false);
+    BeamModel *m = build(TRAIN, WEIGHT, N_TRAIN, 2u, 14u);
     ASSERT_MSG(m != NULL, "model built");
     BeamConstraint *free_c = beam_query_constraint_new(10u, R);
     BeamConstraint *pin_c  = beam_query_constraint_new(10u, R);
@@ -1559,7 +1665,7 @@ int main(void) {
     RUN_TEST(test_a_motif_conditional_matches_enumeration);
     RUN_TEST(test_a_language_and_its_complement_partition_the_mass);
     RUN_TEST(test_union_obeys_inclusion_exclusion);
-    RUN_TEST(test_a_motif_the_model_cannot_spell_is_impossible);
+    RUN_TEST(test_a_motif_the_corpus_never_spells_is_improbable_but_possible);
     RUN_TEST(test_a_layer_indexed_automaton_answers_a_disjunction);
     RUN_TEST(test_the_streaming_log_sum_exp_matches_a_two_pass_reference);
     RUN_TEST(test_the_estimate_grows_with_the_automaton);

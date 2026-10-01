@@ -37,7 +37,7 @@ for each repertoire, in the order given:             # repertoire-major
 The deeper repertoires are thinned to the shallowest; the shallowest is never padded. Three properties are guaranteed and tested:
 
 - **The draws are exactly the plain loop's**, given the same seed. They are numpy's, from one generator, in the order above, and every draw is made before any fit starts.
-- **Every replicate is a fresh model** of exactly the sequences drawn, with exactly the drawn counts. Nothing — no count table, no support, no trellis — is shared between replicates. In the closed world the support is part of the answer, differs between replicates, and is `D0`.
+- **Every replicate is a fresh model** of exactly the sequences drawn, with exactly the drawn counts. Nothing -- no count table, no trellis -- is shared between replicates.
 - **The profiles do not depend on `n_workers`**, bit for bit: the draws are fixed before the threads start, each replicate is fitted on its own, and every result lands in its own slot.
 
 `weighting="presence"` fits each resample with weight 1 per distinct sequence drawn instead of the drawn counts. The draw is abundance-proportional either way.

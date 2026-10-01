@@ -1,9 +1,15 @@
 """SCALE attribution and the three-channel index.
 
 The claims under test are the ones the figure rests on: the two anchored
-profiles reconstruct the score exactly, an ``-inf`` in a profile CERTIFIES a
-window around the error, two anchors localise without the bias that one anchor
-cannot escape, and the index's threshold is a false-positive rate.
+profiles reconstruct the score exactly, two anchors localise without the bias
+that one anchor cannot escape, a corruption is visible to the one-edit
+neighbourhood, and the index's threshold is a false-positive rate.
+
+The certified bracket -- an ``-inf`` in a profile proving a window around the
+error -- has nothing to certify any more: under the prior every string over
+the alphabet is spellable, a corrupted one included, so no profile is ever
+``-inf`` and the bracket is never issued. What is left of "unspellable" is a
+string past max_length, and the index still scores that infinite.
 """
 from __future__ import annotations
 
@@ -40,24 +46,11 @@ def strong(strong_corpus):
     produces a sequence the model considers equally likely. These tests need a
     middle drawn from a small motif vocabulary, so that a corrupted residue is
     genuinely improbable and the dipole has something to point at.
+
+    Every corruption is spellable under the prior, so the profiles are the
+    only thing deciding where an error is.
     """
     return BeamModel(strong_corpus, abundances=None, order=3, max_length=24)
-
-
-@pytest.fixture(scope="module")
-def dense(strong_corpus):
-    """The same corpus in the OPEN world, where every corruption is spellable.
-
-    The two mechanisms are separable and must be tested separately. In a strict
-    model of this size almost every single-residue edit falls off the support
-    entirely -- which is what the certified bracket is for -- leaving too few
-    finite cases to measure the dipole on. The open world keeps every sequence
-    finite, so the profiles are the only thing deciding, which is the regime
-    the 927M foundation is actually in: there only 5.9% of substitutions are
-    unspellable.
-    """
-    return BeamModel(strong_corpus, abundances=None, order=3, max_length=24,
-                     strict=False)
 
 
 def _corrupt(seq, rng, kind="sub"):
@@ -91,15 +84,15 @@ def test_anchor_profile_is_indexed_on_gaps(strong):
     assert g[0] == 0.0
 
 
-def test_clean_sequences_have_no_dipole(dense):
+def test_clean_sequences_have_no_dipole(strong):
     """The whole attribution rests on the disagreement being centred at zero
     for a sequence with no error. If clean draws had a systematic dipole the
     crossing would point at that instead."""
-    draws = dense.sample(400, seed=8)
-    amps = np.array([crossing_amplitude(dense, s) for s in draws])
+    draws = strong.sample(400, seed=8)
+    amps = np.array([crossing_amplitude(strong, s) for s in draws])
     amps = amps[np.isfinite(amps)]
     rng = random.Random(2)
-    errs = [v for v in (crossing_amplitude(dense, _corrupt(s, rng)[0])
+    errs = [v for v in (crossing_amplitude(strong, _corrupt(s, rng)[0])
                         for s in draws) if np.isfinite(v)]
     assert len(errs) > 50 and len(amps) > 50
     assert np.median(errs) > np.median(amps), (np.median(errs),
@@ -123,7 +116,7 @@ def test_attribution_localises_far_better_than_chance(strong):
     assert hit / tot > 4 * chance, (hit / tot, chance)
 
 
-def test_two_anchors_remove_the_single_anchor_bias(dense):
+def test_two_anchors_remove_the_single_anchor_bias(strong):
     """The decisive claim for the architecture. One anchor is contaminated
     ONLY downstream of the error, so its estimate is systematically biased;
     the mixture is not.
@@ -143,19 +136,19 @@ def test_two_anchors_remove_the_single_anchor_bias(dense):
     because it is the contamination itself.
     """
     rng = random.Random(33)
-    k = int(dense.config["order"])
+    k = int(strong.config["order"])
     right, left = [], []
-    for s in dense.sample(500, seed=14):
-        if not np.isfinite(dense.log_pseq(s)):
+    for s in strong.sample(500, seed=14):
+        if not np.isfinite(strong.log_pseq(s)):
             continue
         # Away from both termini, so the window on each side is full.
         i = rng.randrange(k, len(s) - k)
         c = rng.choice([x for x in AA if x != s[i]])
         bad = s[:i] + c + s[i + 1:]
-        if not np.isfinite(dense.log_pseq(bad)):
+        if not np.isfinite(strong.log_pseq(bad)):
             continue
-        f0 = np.asarray(dense.explain(s)["forward"], dtype=np.float64)
-        f1 = np.asarray(dense.explain(bad)["forward"], dtype=np.float64)
+        f0 = np.asarray(strong.explain(s)["forward"], dtype=np.float64)
+        f1 = np.asarray(strong.explain(bad)["forward"], dtype=np.float64)
         excess = f0 - f1                  # surprise the corruption added
         right.append(float(excess[i + 1:i + 1 + k].sum()))
         left.append(float(excess[i - k:i].sum()))
@@ -165,56 +158,58 @@ def test_two_anchors_remove_the_single_anchor_bias(dense):
     assert max(abs(v) for v in left) == 0.0
     assert np.mean(right) > 1.0, np.mean(right)
     # And the two anchors together are less biased than one alone.
-    wf, wb = dense.config["weights"]
+    wf, wb = strong.config["weights"]
     assert wf > 0.0 and wb > 0.0
-
-def test_bracket_is_a_certificate_not_an_estimate(strong):
-    """When the model cannot spell a sequence, the -inf positions in the two
-    anchored profiles PROVE a window. A single-edit corruption whose bracket
-    exists must have its true site inside it, every time."""
-    rng = random.Random(44)
-    draws = [s for s in strong.sample(600, seed=15)
-             if np.isfinite(strong.log_pseq(s))]
-    checked = 0
-    for s in draws:
-        bad, i = _corrupt(s, rng)
-        if np.isfinite(strong.log_pseq(bad)):
-            continue
-        a = attribute(strong, bad)
-        if a.bracket is None:
-            continue
-        lo, hi = a.bracket
-        checked += 1
-        assert lo <= i <= hi, (bad, i, a.bracket)
-        assert lo <= a.site <= hi
-    assert checked > 20, "the fixture must produce unspellable corruptions"
 
 
 def test_attribute_reports_spellability(strong):
+    """A draw is spellable, and so is its corruption: under the prior every
+    string over the alphabet is, so no profile is -inf and there is never a
+    bracket to certify."""
     s = strong.sample(1, seed=9)[0]
     a = attribute(strong, s)
     assert isinstance(a, Attribution)
     assert a.spellable is True
     assert a.bracket is None
     assert repr(a).startswith("Attribution(")
+    bad, _ = _corrupt(s, random.Random(44))
+    b = attribute(strong, bad)
+    assert b.spellable is True and b.bracket is None
+    assert np.isfinite(b.residue).all()
 
 
 # The three-channel index
 # ═══════════════════════════════════════════════════════════════
 
-def test_neighbourhood_ratio_is_infinite_for_a_rescuable_unspellable(strong):
-    """A sequence the model cannot spell, one edit from one it can, is the
-    strongest possible point-error evidence."""
-    s = strong.sample(1, seed=19)[0]
-    bad = s[:-1] + ("W" if s[-1] != "W" else "P")
-    if np.isfinite(strong.log_pseq(bad)):
-        pytest.skip("fixture did not produce an unspellable neighbour")
-    assert neighbourhood_ratio(strong, bad) == float("inf")
+def test_a_corruption_raises_the_neighbourhood_ratio(strong):
+    """The one-edit Bayes factor is the channel that sees a point error: a
+    corrupted draw has its clean original one edit away, so the mass next to
+    it dwarfs its own.
+
+    This used to be stated at its limit -- a corruption the model could not
+    spell, one edit from one it could, scored infinite. Under the prior every
+    corruption is spellable and the ratio is finite, so the claim is the
+    comparison: corrupted above clean, draw by draw. Measured on this fixture
+    that holds for all 200 pairs, with medians of 0.19 and 22.7 nats.
+    """
+    rng = random.Random(2)
+    draws = strong.sample(200, seed=8)
+    clean = np.array([neighbourhood_ratio(strong, s) for s in draws])
+    bad = np.array([neighbourhood_ratio(strong, _corrupt(s, rng)[0])
+                    for s in draws])
+    assert np.isfinite(clean).all() and np.isfinite(bad).all()
+    assert np.mean(bad > clean) > 0.9
+    assert np.median(bad) > np.median(clean) + 5.0
 
 
 @pytest.fixture(scope="module")
-def index(strong):
-    return ScaleIndex.build(strong, n_sim=600, seed=3)
+def index(strong, strong_corpus):
+    """Built over the lengths the corpus has. The calibration covers every
+    length up to max_length now, and the ones the corpus never had are the
+    length prior's pseudo-count; simulating a null for each would multiply the
+    cost by six to cover lengths no draw below lands on."""
+    return ScaleIndex.build(strong, n_sim=600, seed=3,
+                            lengths=sorted(set(map(len, strong_corpus))))
 
 
 def test_index_threshold_is_a_false_positive_rate(strong, index):
@@ -229,9 +224,17 @@ def test_index_threshold_is_a_false_positive_rate(strong, index):
 
 
 def test_index_is_infinite_exactly_when_unspellable(strong, index):
+    """Junk over the alphabet is spellable now, so it scores finite -- and
+    far above a draw. What the model cannot spell is a string past
+    max_length, and zero probability is not a small p-value."""
     s = [x for x in strong.sample(20, seed=21) if len(x) in index.lengths][0]
-    assert np.isfinite(index.score(strong, s))
-    assert index.score(strong, "W" * len(s)) == float("inf")
+    drawn = index.score(strong, s)
+    junk = index.score(strong, "W" * len(s))
+    assert np.isfinite(drawn) and np.isfinite(junk)
+    assert junk > drawn
+    too_long = "C" + "A" * int(strong.config["max_length"]) + "F"
+    assert not np.isfinite(strong.log_pseq(too_long))
+    assert index.score(strong, too_long) == float("inf")
 
 
 def test_channels_are_valid_probabilities(strong, index):

@@ -13,6 +13,22 @@ from BEAM import BeamModel
 
 from _helpers import (AA, J_MOTIFS, make_corpus, ANALYSIS_BINS, CALIBRATION_BINS)
 
+
+def _lengths_with_data(m):
+    """The lengths the training corpus actually had.
+
+    Every length up to max_length is generated now, but one the corpus never
+    had is generated only through the length prior's pseudo-count --
+    8e-5 of the mass each on `small` -- and its whole distribution is backoff.
+    At lengths 1 and 5 that distribution is a handful of heavy atoms, so a
+    p-value cannot be uniform there however exact the null is. The rate and
+    ranking claims below are about lengths with a real distribution, which is
+    what `observed_lengths` used to mean.
+    """
+    pmf = m.length_pmf()
+    return [L for L in m.observed_lengths if pmf[L] > 0.01]
+
+
 # Length-conditioned calibration
 # ═══════════════════════════════════════════════════════════════
 
@@ -38,38 +54,35 @@ def test_calibration_pvalues_are_uniform_under_its_own_null(small):
     assert 0.05 < np.mean(p < 0.1) < 0.2
 
 
-def test_calibration_flags_an_implausible_sequence(open_small):
+def test_calibration_flags_an_implausible_sequence(small):
     """A sequence ending in a residue the corpus never terminates on must score
     as an outlier against its own length's null.
 
     The comparative claim is the one that matters and it is exact: the
-    corrupted sequence sits further into the tail than the drawn one. The
-    absolute level is stated as what it measures rather than as a round
-    number, because it moved and the reason is worth recording.
+    corrupted sequence sits further into the tail than the uncorrupted one.
 
-    Under the previous open world a single wrong terminal residue reached
-    p < 0.05. The open world is now a Laplace add-one at one table rather
-    than a backoff hierarchy running orders 3, 2 and 1 with strengths of 20
-    and a length-conditioned 200, and add-one hands an unseen residue MORE
-    mass than that hierarchy did. So one wrong terminus is a weaker outlier:
-    measured p = 0.073, converged against the grid (0.07306 at 1024 bins,
-    0.07312 at 65536), so this is the model's answer and not a resolution
-    artefact.
+    The absolute level is a statement about how much ONE residue is worth.
+    Under the hierarchical prior an unseen terminal residue backs off through
+    rows in which the corpus ends on F every time, so its probability is the
+    prior's share of a share: measured p = 3.2e-10 against 3.1e-5 for the
+    uncorrupted sequence, which is itself in its length's tail (the claim is
+    comparative for that reason). The bar below is 1e-3, the same one the
+    wholly implausible sequence has to clear, and not a recording of the
+    measured value.
 
-    The tail itself is unaffected, which is what the third case checks. A
-    wholly implausible sequence still reaches p = 0.0002, so the threshold
-    below is a statement about how much ONE residue is worth, not evidence
-    that the calibration has gone flat.
+    A wholly implausible sequence is possible now -- every string is -- but
+    it must sit far out in the tail (measured p = 6.8e-25), or the
+    calibration has gone flat.
     """
-    cal = open_small.calibrate(bins=1024)
+    cal = small.calibrate(bins=1024)
     good = next(s for s in make_corpus(n=20, seed=31, lo=8, hi=8)[0])
     bad = good[:-1] + "W"
-    pg = cal.pvalue(len(good), -open_small.log_pseq(good))
-    pb = cal.pvalue(len(bad), -open_small.log_pseq(bad))
+    pg = cal.pvalue(len(good), -small.log_pseq(good))
+    pb = cal.pvalue(len(bad), -small.log_pseq(bad))
     assert pb < pg
-    assert pb < 0.08
+    assert pb < 1e-3
     hopeless = "W" * len(good)
-    assert cal.pvalue(len(hopeless), -open_small.log_pseq(hopeless)) < 1e-3
+    assert cal.pvalue(len(hopeless), -small.log_pseq(hopeless)) < 1e-3
 
 
 
@@ -129,7 +142,7 @@ def test_scale_score_rate_is_flat_across_lengths(small, calibration):
     the p-value form is 10% at every length by construction."""
     cal = calibration
     rates_p, rates_robust = [], []
-    for L in small.observed_lengths:
+    for L in _lengths_with_data(small):
         drawn = small.sample(4000, length=L, seed=100 + L)
         if len(drawn) < 500:
             continue
@@ -180,7 +193,7 @@ def test_scale_methods_rank_identically_within_a_length(small, calibration):
 def test_scale_score_ranks_an_implausible_sequence_above_a_drawn_one(
         small, calibration):
     cal = calibration
-    L = max(small.observed_lengths)
+    L = max(_lengths_with_data(small))
     drawn = [s for s in small.sample(500, seed=5) if len(s) == L][:50]
     assert drawn, "the fixture must produce its longest length"
     worst = "W" * L                      # the residue the corpus never favours
@@ -195,7 +208,11 @@ def test_scale_score_is_length_normalised(small, calibration):
     lengths = np.array([len(s) for s in drawn])
     z = small.scale_score(drawn, cal)
     u = -small.log_pseq_batch(drawn)
-    per_length = sorted(set(lengths.tolist()))
+    # A length drawn once or twice (the prior's pseudo-count lengths) has a
+    # median that is one draw, which says nothing about normalisation.
+    per_length = [L for L in _lengths_with_data(small)
+                  if (lengths == L).sum() >= 200]
+    assert len(per_length) >= 3
     raw = [float(np.median(u[lengths == L])) for L in per_length]
     scaled = [float(np.median(z[lengths == L])) for L in per_length]
     assert max(raw) - min(raw) > 1.0

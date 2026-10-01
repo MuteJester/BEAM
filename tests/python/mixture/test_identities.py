@@ -3,13 +3,22 @@
 Three of them, and between them they pin the whole beta-diversity apparatus:
 
   - a model mixed with ITSELF is that model, at every order;
-  - members that share nothing are M effectively distinct repertoires;
+  - members that share (almost) nothing are M effectively distinct
+    repertoires;
   - members that are the same distribution are 1.
 
 The last two are the endpoints of `1 <= D_beta <= M`, so a formula that is
 wrong anywhere in between is very likely to be wrong at one of them -- and the
 particular error this guards against, averaging the members' diversities
 arithmetically instead of by the power mean of order 1-q, IS wrong at both.
+
+"Share nothing" can no longer be exact: the prior gives every member every
+string. The far fixtures are built over disjoint residue pools with a weak
+prior instead, which leaves them sharing ~4e-20 of mass -- below what a double
+can register next to the ~1e-2 each shares with itself -- so the upper endpoint
+still holds to double precision, and that overlap is measured by enumeration
+rather than assumed. At q=0 the endpoint moves: every member's support is the
+whole space, so beta_0 is exactly 1 for every mixture.
 """
 from __future__ import annotations
 
@@ -19,7 +28,8 @@ import numpy as np
 import pytest
 
 from BEAM import Mixture
-from _tiny import brute_entropy, mixture_pmf, support, tiny_model
+from _tiny import (FAR_ALPHA, brute_entropy, mixture_pmf, support, tiny_model,
+                   whole_space)
 
 
 # ── A model mixed with itself ───────────────────────────────────
@@ -52,36 +62,68 @@ def test_a_model_mixed_with_itself_has_the_entropy_it_had(tiny_a):
     assert abs((est.value - tiny_a.entropy()) / est.stderr) < 4.0
 
 
-# ── Members that share nothing ──────────────────────────────────
+# ── Members that share (almost) nothing ─────────────────────────
 
-def test_the_disjoint_fixtures_really_are_disjoint(far_a, far_b):
+def _overlap_is_below_double_precision(*sups):
+    """Every cross inner product, by enumeration, against the self ones.
+
+    Returns nothing; asserts. The far fixtures share every string, so what the
+    endpoint tests below lean on is that the SHARED MASS is negligible, and
+    that is measured rather than assumed.
+    """
+    for i, si in enumerate(sups):
+        assert len(si) == whole_space(), "every member spells every string"
+        self_i = sum(p * p for p in si.values())
+        for sj in sups[i + 1:]:
+            cross = sum(p * si[s] for s, p in sj.items())
+            assert 0.0 < cross < 1e-16 * self_i
+
+
+def test_the_far_fixtures_share_every_string_but_almost_no_mass(sup_far_a,
+                                                                sup_far_b):
     """Asserted, not assumed: the tests below mean nothing without it."""
-    sa, sb = support(far_a), support(far_b)
-    assert sa and sb
-    assert not (set(sa) & set(sb))
+    _overlap_is_below_double_precision(sup_far_a, sup_far_b)
 
 
-@pytest.mark.parametrize("q", [0.0, 2.0])
-def test_disjoint_members_give_beta_equal_to_M(far_a, far_b, q):
-    """The upper end of `1 <= D_beta <= M`, exactly.
+def test_far_members_give_beta_equal_to_M_at_q2(far_a, far_b):
+    """The upper end of `1 <= D_beta <= M`, to double precision.
 
-    Exact at these orders because gamma is exact at these orders. The naive
-    arithmetic mean of the members' D_q would put beta strictly below 2 here
-    whenever the members differ in diversity; see the test below.
+    Exact in the sense that matters: the only departure from 2 is the shared
+    mass, which the enumeration above puts below a double's resolution. The
+    naive arithmetic mean of the members' D_2 would put beta well below 2
+    here, because the members differ in diversity; see the test below.
     """
     mix = Mixture([far_a, far_b])
-    r = mix.beta_diversity(q)
+    r = mix.beta_diversity(2.0)
     assert r.exact
     assert r.beta == pytest.approx(2.0, rel=1e-10)
+    assert r.beta <= 2.0 + 1e-12
 
 
-def test_disjoint_members_give_beta_equal_to_M_at_q1(far_a, far_b):
+def test_every_mixture_has_beta_equal_to_one_at_q0(far_a, far_b, tiny_a,
+                                                   tiny_b):
+    """At q=0 the far pair is at the LOWER end, and so is every mixture.
+
+    `D_0` counts strings, and every member's support is the whole space, so
+    gamma and every member's alpha are the same number. That is the one order
+    where the prior makes two unrelated repertoires look identical, and why
+    q=0 is no use for telling repertoires apart any more.
+    """
+    for members in ([far_a, far_b], [tiny_a, tiny_b], [far_a, tiny_b, far_b]):
+        r = Mixture(members).beta_diversity(0.0)
+        assert r.exact
+        assert r.beta == 1.0
+
+
+def test_far_members_give_beta_equal_to_M_at_q1(far_a, far_b, sup_far_a,
+                                                sup_far_b):
     """At q=1 gamma has no closed form, so the EXACT statement is the bound.
 
-    For disjoint members `H(pbar) = sum_i w_i H_i + H(w)` exactly -- the upper
-    bound is attained -- so `beta = exp(H(w)) = M`. That is checked three ways:
-    the bound equals M, brute-force enumeration lands on the bound, and the
-    sampled estimate agrees within its own error bar.
+    For members that share nothing `H(pbar) = sum_i w_i H_i + H(w)` -- the
+    upper bound is attained -- so `beta = exp(H(w)) = M`. The far pair shares
+    too little to move that at double precision. Checked three ways: the bound
+    equals M, brute-force enumeration lands on the bound, and the sampled
+    estimate agrees within its own error bar.
     """
     mix = Mixture([far_a, far_b])
     r = mix.beta_diversity(1.0, samples=40000, seed=23)
@@ -89,34 +131,41 @@ def test_disjoint_members_give_beta_equal_to_M_at_q1(far_a, far_b):
     assert r.upper == pytest.approx(2.0, rel=1e-12)
 
     b = mix.entropy_bounds()
-    pmf = mixture_pmf([support(far_a), support(far_b)], (0.5, 0.5))
+    pmf = mixture_pmf([sup_far_a, sup_far_b], (0.5, 0.5))
     assert brute_entropy(pmf) == pytest.approx(b.upper, rel=1e-12)
 
     assert abs((r.estimate - 2.0) / r.stderr) < 4.0
 
 
-def test_disjoint_members_give_a_zero_inner_product(far_a, far_b):
-    """`-inf` in the log domain, exactly 0.0 on the linear one. An answer."""
+def test_far_members_have_a_tiny_but_real_inner_product(far_a, far_b,
+                                                        sup_far_a, sup_far_b):
+    """Not zero -- every member spells every string -- and not lost either.
+
+    The cross term is ~4e-20, eighteen orders below either self term; the log
+    domain has to carry it to full relative precision: rounding it to 0.0 would
+    be the closed-world answer, and it is wrong now.
+    """
     mix = Mixture([far_a, far_b])
-    assert mix.log_inner_product(0, 1) == -math.inf
-    assert mix.inner_product(0, 1) == 0.0
+    want = sum(p * sup_far_b[s] for s, p in sup_far_a.items())
+    assert 0.0 < want < 1e-16
+    assert mix.log_inner_product(0, 1) == pytest.approx(math.log(want),
+                                                        rel=1e-12)
+    assert mix.inner_product(0, 1) == pytest.approx(want, rel=1e-11)
 
 
-def test_three_disjoint_members_give_beta_equal_to_three():
+def test_three_far_members_give_beta_equal_to_three():
     """M = 3, to show the 2 above is not a coincidence of pairs.
 
     Built from its own three-way split of the residues rather than from the
     module fixtures: `far_a` and `far_b` use two pools between them, and a
-    third member disjoint from both needs a third pool.
+    third member far from both needs a third pool.
     """
-    a = tiny_model(41, letters="AC")
-    b = tiny_model(42, letters="DG")
-    c = tiny_model(43, letters="FH")
-    sa, sb, sc = support(a), support(b), support(c)
-    assert not (set(sa) & set(sb)) and not (set(sa) & set(sc))
-    assert not (set(sb) & set(sc))
+    a = tiny_model(41, letters="AC", alpha=FAR_ALPHA)
+    b = tiny_model(42, letters="GT", alpha=FAR_ALPHA)
+    c = tiny_model(43, letters="N", alpha=FAR_ALPHA)
+    _overlap_is_below_double_precision(support(a), support(b), support(c))
     mix = Mixture([a, b, c])
-    assert mix.beta_diversity(0.0).beta == pytest.approx(3.0, rel=1e-10)
+    assert mix.beta_diversity(0.0).beta == 1.0
     assert mix.beta_diversity(2.0).beta == pytest.approx(3.0, rel=1e-10)
     assert mix.beta_diversity(1.0).upper == pytest.approx(3.0, rel=1e-12)
 
@@ -157,7 +206,8 @@ def test_alpha_is_the_power_mean_of_order_one_minus_q(tiny_a, tiny_b, q, name):
 def test_the_naive_arithmetic_mean_would_understate_beta(far_a, far_b):
     """Why `alpha_diversity` exists rather than being left to the caller.
 
-    On disjoint members beta must be exactly 2. Averaging the members' D2
+    On the far members beta must be 2 to double precision. Averaging the
+    members' D2
     arithmetically instead of harmonically returns something strictly smaller
     whenever they differ in diversity, and it looks entirely plausible -- a
     measured two-donor case returned 1.325. The point of this test is that the

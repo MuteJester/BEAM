@@ -88,31 +88,35 @@ def test_pseq_accepts_a_list_and_a_log_flag(model, corpus):
 #: below every tolerance asserted against it.
 
 
+#: Every string of length 1 to 3: the whole support of a max_length-3 model.
+TINY_SUPPORT = 20 + 20 ** 2 + 20 ** 3
+
+
 @pytest.fixture(scope="module")
 def tiny():
-    """A model whose ENTIRE support can be enumerated: 20**3 + 20**4 = 168,000
-    sequences. Small enough that every spectrum quantity has an exact
-    brute-force counterpart to check against.
+    """A model whose ENTIRE support can be enumerated: every string of length
+    1 to 3, 8,420 of them. Small enough that every spectrum quantity has an
+    exact brute-force counterpart to check against.
 
-    Open-world, and it has to be: the enumeration is only the whole support
-    while backoff keeps every cell positive. Under the closed-world default
-    the support is whatever 500 short sequences happen to spell, which is not
-    a set an exhaustive product enumerates."""
+    The prior keeps every cell positive and gives every length up to
+    max_length a share, so the support is the whole product over the
+    alphabet -- including the length the corpus never had."""
     rng = random.Random(3)
-    seqs = ["".join(rng.choice(AA) for _ in range(rng.choice([3, 4])))
+    seqs = ["".join(rng.choice(AA) for _ in range(rng.choice([2, 3])))
             for _ in range(500)]
     abund = [rng.randint(1, 9) for _ in seqs]
-    return BeamModel(seqs, abundances=abund, order=2,
-                     max_length=4, strict=False)
+    return BeamModel(seqs, abundances=abund, order=2, max_length=3)
 
 
 @pytest.fixture(scope="module")
 def tiny_exact(tiny):
     """Every sequence the tiny model can produce, with its exact probability."""
     import itertools
-    every = ["".join(t) for L in (3, 4)
+    every = ["".join(t) for L in (1, 2, 3)
              for t in itertools.product(AA, repeat=L)]
+    assert len(every) == TINY_SUPPORT
     p = np.exp(tiny.log_pseq_batch(every).astype(np.longdouble))
+    assert float(p.sum()) == pytest.approx(1.0, abs=1e-12)
     return every, p
 
 
@@ -161,7 +165,7 @@ def test_histograms_by_length_respects_max_length(small):
     assert got and max(got) <= 7
 
 
-def test_atom_mass_is_exactly_one_where_exp_surprisal_is_not(open_small):
+def test_atom_mass_is_exactly_one_where_exp_surprisal_is_not(small):
     """The atom probability is `generated / counting`, not `exp(-surprisal)`.
 
     Both spectra are transported on the same grid with the same linear
@@ -172,13 +176,13 @@ def test_atom_mass_is_exactly_one_where_exp_surprisal_is_not(open_small):
     down: at a coarse grid the naive route is out by tens of percent, and
     every discovery curve built on it inherits that.
     """
-    a = open_small.pseq_analysis()
-    for bins in (128, ANALYSIS_BINS):
+    a = small.pseq_analysis()
+    for bins in (128, 1024):
         atoms = a.atoms(bins)
         # Exact at EVERY grid. That is the whole claim, and it is the half
         # that does not depend on the model's surprisal span.
         assert atoms.mass == pytest.approx(1.0, rel=1e-12)
-        assert atoms.support_size == pytest.approx(open_small.path_count(), rel=1e-9)
+        assert atoms.support_size == pytest.approx(small.path_count(), rel=1e-9)
 
         h = a.histogram(bins, measure="counting")
         keep = h.weights > 0
@@ -191,8 +195,9 @@ def test_atom_mass_is_exactly_one_where_exp_surprisal_is_not(open_small):
         #
         # This used to demand bias at BOTH grids. That held only because the
         # surprisal span happened to make ANALYSIS_BINS coarse enough; the
-        # span is a property of the model and it moved. Measured here:
-        # 1.094 at 128 bins, 1.005 at 512, 1.0003 at 2048.
+        # span is a property of the model and it moved, and moved again when
+        # the prior gave junk sequences mass. Measured here: 1.33 at 128
+        # bins, 1.029 at 384, 1.004 at 1024, 1.0002 at 4096.
         if bins == 128:
             assert naive > 1.01, (
                 "the naive exp(-surprisal) route is supposed to be biased at "
@@ -207,7 +212,7 @@ def test_atom_mass_is_exactly_one_where_exp_surprisal_is_not(open_small):
 
 def test_discovery_curve_matches_exhaustive_enumeration(tiny, tiny_exact):
     """R(n) and U(n) from the grid spectrum against the same sums taken over
-    every one of the 168,000 sequences the model can produce.
+    every one of the 8,420 sequences the model can produce.
 
     This is the check that the atoms really describe the distribution rather
     than merely being self-consistent: the right-hand side never touches a
@@ -215,7 +220,7 @@ def test_discovery_curve_matches_exhaustive_enumeration(tiny, tiny_exact):
     """
     _, p = tiny_exact
     atoms = tiny.pseq_analysis().atoms(4096)
-    assert atoms.support_size == pytest.approx(20 ** 3 + 20 ** 4, rel=1e-9)
+    assert atoms.support_size == pytest.approx(TINY_SUPPORT, rel=1e-9)
 
     for n, tol in ((1, 1e-9), (10, 1e-5), (1_000, 1e-4),
                    (100_000, 1e-3), (10 ** 8, 1e-3)):

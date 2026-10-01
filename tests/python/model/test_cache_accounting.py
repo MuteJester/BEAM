@@ -23,10 +23,13 @@ AA = "ACDEFGHIKLMNPQRSTVWY"
 
 @pytest.fixture(scope="module")
 def model():
+    """Order 3 and short sequences. What is under test is the accounting,
+    which is the same at any size; an order-4 model's analytics sweep every
+    length of a 21**4-state trellis under the prior and cost a minute here."""
     random.seed(11)
-    seqs = ["C" + "".join(random.choice(AA) for _ in range(random.randint(8, 15))) + "F"
-            for _ in range(8000)]
-    b = Builder(order=4, max_length=20)
+    seqs = ["C" + "".join(random.choice(AA) for _ in range(random.randint(6, 10))) + "F"
+            for _ in range(2000)]
+    b = Builder(order=3, max_length=14)
     b.observe(seqs, [1.0 + random.randint(0, 20) for _ in seqs])
     return b.build()
 
@@ -73,7 +76,7 @@ def test_dropping_before_any_analytic_is_safe():
     random.seed(3)
     seqs = ["C" + "".join(random.choice(AA) for _ in range(10)) + "F"
             for _ in range(200)]
-    b = Builder(order=3, max_length=20)
+    b = Builder(order=3, max_length=14)
     b.observe(seqs, [1.0] * len(seqs))
     m = b.build()
     m.drop_caches()                       # never analysed: no cache exists

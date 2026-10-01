@@ -53,9 +53,38 @@ static inline bool beam_count_erase(BeamModel *m, uint32_t dir,
 }
 
 /*
- * One row of the finalized log table. `present` is false only in the sparse
- * form, where an unobserved row is absent rather than twenty cells of -inf.
- * A caller must test it before reading: that test is the closed world.
+ * The row an unobserved top row IS under the hierarchical prior: its nearest
+ * observed ancestor, dropping the most distant residue one level at a time,
+ * and the uniform row below level 0.
+ *
+ * The forward table is packed most-distant-first, so a level-k context is the
+ * top context's low k digits; the backward table is packed nearest-first, so
+ * each level up drops the LAST digit. Kept out of line: it runs only on a
+ * miss, and inlining it into every kernel that reads a row would double their
+ * size for the path that stored rows never take.
+ */
+static BeamLogRow beam_lp_ancestor(const BeamModel *m, uint32_t dir,
+                                   uint32_t depth, uint32_t ctx)
+    __attribute__((unused, noinline));
+static BeamLogRow beam_lp_ancestor(const BeamModel *m, uint32_t dir,
+                                   uint32_t depth, uint32_t ctx) {
+    uint32_t c = ctx;
+    for (uint32_t k = m->order; k-- > 0; ) {
+        c = (dir == BEAM_BWD) ? c / m->n_alphabet : c % m->lo_ctx[k];
+        const BeamLogRow r = beam_sparse_log_row(&m->sp_lo[dir][k],
+                                                 depth * m->lo_ctx[k] + c);
+        if (r.present) return r;
+    }
+    BeamLogRow u = { .dense = m->base_row, .step = 1u, .present = true };
+    return u;
+}
+
+/*
+ * One row of the finalized log table. Always `present`: under the
+ * hierarchical prior every row is a distribution, a stored one or the
+ * ancestor it resolves to. The flag survives because the kernels still test
+ * it, and a row that could not be resolved at all would be a bug they should
+ * keep reading as dead rather than as a distribution.
  *
  * BEAM_INLINE, not plain `static inline`. At -O2 GCC declined to inline the
  * three-expert ancestors of this function and emitted real calls, measured at
@@ -67,7 +96,11 @@ static inline bool beam_count_erase(BeamModel *m, uint32_t dir,
 BEAM_INLINE BeamLogRow beam_lp_row(const BeamModel *m, uint32_t dir,
                                    uint32_t depth, uint32_t ctx) {
     const uint32_t row = beam_row(m, depth, ctx);
-    if (m->cfg.sparse) return beam_sparse_log_row(&m->sp_lp[dir], row);
+    if (m->cfg.sparse) {
+        const BeamLogRow r = beam_sparse_log_row(&m->sp_lp[dir], row);
+        if (__builtin_expect(r.present, 1)) return r;
+        return beam_lp_ancestor(m, dir, depth, ctx);
+    }
     BeamLogRow r = { .dense = m->lp[dir] + (size_t)row * m->n_residues,
                      .step = 1u, .present = true };
     return r;

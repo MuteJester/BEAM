@@ -131,7 +131,7 @@ BeamError beam_model_add(BeamModel *m, const BeamModel *o) {
                         (unsigned)o->order, (unsigned)o->max_len);
 
     if (!m->cfg.sparse && !o->cfg.sparse) {
-        /* Preserve the original dense/open-world traversal exactly. */
+        /* The dense traversal, kept exactly. */
         #define ADD(dst, src, count)                                    \
             do { size_t _n = (count);                                   \
                  for (size_t _i = 0; _i < _n; ++_i)                     \

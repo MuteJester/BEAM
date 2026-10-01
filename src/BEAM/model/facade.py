@@ -25,7 +25,7 @@ from ..constants import (BEAM_ALPHABET, BEAM_MAX_LENGTH,
 from . import alphabets
 from .validation import _check_int, _is_scalar_arg
 from .config import _config_args, _config_args_from_dict
-from ..io.readers import _column, _iter_delimited, _iter_parquet
+from ..io.readers import _column, _iter_delimited, _iter_parquet, _iter_parquet_column
 from ..math.saddlepoint import _normal_pdf, _normal_cdf
 from ..runtime import effective_threads, memory_budget, set_threads, threads
 
@@ -127,25 +127,30 @@ class BeamModel:
             wrecking global ranking.
         max_length: Longest sequence the model represents. Defaults to 27 for
             amino acids and 81 for nucleotides, three bases to the residue.
-        strict: Closed-world support, and the default. The model holds what
-            the training sequences and their abundances actually spell: the
-            order-0 add-one and the probability floor are removed, the five
-            smoothing strengths default to zero, and a sequence no path
-            supports scores ``-inf`` rather than a small positive number.
-            ``path_count()`` is then the number of sequences the data can
-            spell, not the size of the whole lattice.
+        alpha: Prior strengths of the hierarchical Bayesian smoothing, one
+            per context level 0..order, or one number for all of them.
+            Every sequence up to ``max_length`` has positive probability, and
+            a row nothing was observed at predicts exactly what its shorter
+            context predicts::
 
-            Pass ``strict=False`` for the open world: a Laplace add-one
-            leaves every cell of the table positive, so every sequence over
-            the alphabet gets a finite probability and the support becomes all
-            of sequence space. That is a different model, useful for
-            comparison and for scoring sequences the corpus never saw, but it
-            is no longer what you get without asking.
-        sparse: Store only occupied rows. ``None`` selects sparse storage
-            exactly when ``strict`` is true; ``False`` forces the equivalent
-            dense representation. ``True`` in the open world is rejected,
-            because the add-one gives every row mass and a sparse table would
-            have nowhere to put the rows nothing was observed at.
+                P_k(x) = (n_k(x) + alpha[k] * P_{k-1}(x)) / (n_k + alpha[k])
+
+            with level 0 the depth alone and the uniform ``1/20`` below it.
+            ``alpha[k]`` is how many pseudo-observations the shorter context
+            is worth. ``None`` (the default) or ``"auto"`` estimates them from
+            the model's own counts at every finalize, as the strengths that
+            maximise the counts' evidence -- the Dirichlet-multinomial
+            marginal likelihood -- level by level from the bottom. The
+            estimates are reported in :attr:`config`. Pass numbers to fix
+            them, or :func:`BEAM.fit_alpha` to fit them to held-out reads.
+        alpha_length: Prior strength of the length distribution,
+            ``P(L) = (n_L + alpha_length / max_length) / (N + alpha_length)``,
+            so a length the corpus never produced is improbable rather than
+            impossible. Estimated the same way unless given.
+        sparse: Store only the rows something was observed at, and resolve
+            every other row through its parent. ``False`` materialises every
+            row -- the same model, bit for bit, at gigabytes for order 4 --
+            and exists for equivalence checks.
 
     Example:
         >>> model = BeamModel(sequences, abundances=counts)
@@ -164,7 +169,8 @@ class BeamModel:
         order: int | None = None,
         weights: tuple[float, float] = (0.5, 0.5),
         max_length: int | None = None,
-        strict: bool = True,
+        alpha: float | Iterable[float] | None = None,
+        alpha_length: float | None = None,
         sparse: bool | None = None,
     ) -> None:
         seqs = list(sequences)
@@ -179,7 +185,8 @@ class BeamModel:
                     f"{len(seqs)}")
         cargs = _config_args(alphabet=alphabet, order=order,
                              max_length=max_length, weights=weights,
-                             strict=strict, sparse=sparse)
+                             alpha=alpha, alpha_length=alpha_length,
+                             sparse=sparse)
         max_length = cargs[1]
 
         try:
@@ -612,11 +619,10 @@ class BeamModel:
         if not lengths:
             return out
 
-        # A compacted OPEN-WORLD model cannot answer this: the add-one made
-        # every finalized cell finite and compact() released the counts that
-        # knew which were reached. Every other model can, including a
-        # compacted strict one. Reported as absent rather than as a refusal,
-        # because the rest of the per-length entry is still exact.
+        # A compacted model cannot answer this: the prior made every finalized
+        # cell positive and compact() released the counts that knew which were
+        # reached. Reported as absent rather than as a refusal, because the
+        # rest of the per-length entry is still exact.
         try:
             rows, cell_counts = _c.depth_occupancy(self._g)
         except Exception:
@@ -885,6 +891,40 @@ class BeamModel:
         return np.asarray(_c.log_pseq_batch(self._g, list(sequences)),
                           dtype=np.float64)
 
+    def log_pseq_arrow(self, array: Any) -> np.ndarray:
+        """:meth:`log_pseq_batch` for a pyarrow string column, read straight
+        from its buffers.
+
+        Takes a ``string`` or ``large_string`` array, a slice of one, or a
+        ``ChunkedArray``. No Python string is made per sequence and no Python
+        float per score, which is where scoring a large column spent most of
+        its time. Every score is bit-identical to :meth:`log_pseq_batch` on
+        the same sequences. A null is not a sequence and scores NaN.
+        """
+        import pyarrow as pa
+        if isinstance(array, pa.ChunkedArray):
+            parts = [self.log_pseq_arrow(c) for c in array.chunks]
+            return np.concatenate(parts) if parts else np.empty(0, dtype=np.float64)
+        if pa.types.is_string(array.type):
+            off_t = np.int32
+        elif pa.types.is_large_string(array.type):
+            off_t = np.int64
+        else:
+            raise TypeError(f"log_pseq_arrow needs a string column, got {array.type}")
+        n = len(array)
+        out = np.empty(n, dtype=np.float64)
+        if n == 0:
+            return out
+        _, offsets_buf, data_buf = array.buffers()
+        # A slice keeps the parent's buffers and starts `array.offset` into
+        # its offsets; the offsets stay absolute positions in the data.
+        offsets = np.frombuffer(offsets_buf, dtype=off_t)[
+            array.offset:array.offset + n + 1].astype(np.int64)
+        _c.log_pseq_packed(self._g, data_buf, offsets, out)
+        if array.null_count:
+            out[~array.is_valid().to_numpy(zero_copy_only=False)] = np.nan
+        return out
+
     def pseq(self, sequence, *, log: bool = False):
         """Sequence probability, for one sequence or many.
 
@@ -984,9 +1024,11 @@ class BeamModel:
             dtype: Element type when ``out`` is ``None``.
         """
         column = _default_column(column, {"alphabet": self.alphabet})
+        # Straight from the Arrow buffers (log_pseq_arrow): the same scores
+        # as log_pseq_batch, without a Python string per row.
         return self._collect(
-            (self.log_pseq_batch(chunk)
-             for chunk, _ in _iter_parquet(path, column, None, batch_size)),
+            (self.log_pseq_arrow(chunk)
+             for chunk in _iter_parquet_column(path, column, batch_size)),
             out, dtype)
 
     @staticmethod
@@ -1207,12 +1249,10 @@ class BeamModel:
         """Distinct sequences the model can produce, by exact path counting.
 
         .. warning::
-           Under ``strict=False`` this will be ``20 ** length``, and that is
-           not a bug: the Laplace add-one leaves every table cell strictly
-           positive, so the number describes the smoothing rather than the
-           grammar. Under ``strict=True``, which is the DEFAULT, dead
-           transitions stay dead and this is instead the exact support of the
-           observed-transition DAG. Sparse and dense storage agree.
+           This is exactly ``R ** length`` for ``R`` residues: under the
+           hierarchical prior every table cell is positive, so every string of
+           the length is possible, and the number describes the alphabet
+           rather than the corpus. Sparse and dense storage agree.
 
            It is kept because it is the exact ``q=0`` corner of the Hill
            family and because it is what the counting spectrum integrates to,
@@ -1475,6 +1515,93 @@ class BeamModel:
         return np.frombuffer(_c.log_mellin_many(self._g, q),
                              dtype=np.float64).copy()
 
+    def log_mellin_complex(self, orders: Iterable[complex]) -> np.ndarray:
+        """``ln sum_s P(s)**q`` at COMPLEX orders, exactly.
+
+        ``P(s)**q`` factors along the sequence at any complex ``q``, so the
+        power sum ``M(q)`` is an exact dynamic program everywhere in the
+        plane, not only on the real line :meth:`log_mellin` covers. On a
+        vertical line it is what a Mellin-Barnes integral needs: a sum over
+        every sequence of a function of ``P(s)`` with a Mellin transform --
+        expected richness ``sum_s 1 - e^{-n P(s)}``, occupancy counts,
+        pairwise sharing -- is a one-dimensional contour integral of ``M``,
+        with no binned spectrum and so no grid error.
+
+        Returns a complex128 array the length of ``orders``: the real part is
+        ``ln |M(q)|`` and the imaginary part ``arg M(q)`` in ``(-pi, pi]``, so
+        ``np.exp(result)`` is ``M(q)``. ``M(conj(q)) = conj(M(q))``.
+
+        EXACT TO ROUNDING, with one caveat that is arithmetic rather than
+        approximation: sequences of different probability carry different
+        phases and cancel, so ``|M(q)|`` can sit far below ``M(Re q)``, the
+        sum of the moduli, and the relative error of the result grows by that
+        ratio. The absolute error stays at rounding relative to ``M(Re q)``.
+
+        Deterministic like :meth:`log_mellin_many`: the same bits for an order
+        whatever the thread count, the memory budget or which other orders
+        share the call, and one traversal per length for all of them. At a
+        real order it agrees with :meth:`log_mellin` to rounding.
+
+        Orders must be finite. Real input is accepted as orders with zero
+        imaginary part; an empty sequence returns an empty array.
+        """
+        if isinstance(orders, (str, bytes)):
+            raise BeamTypeError("orders must be a sequence of numbers, not a string")
+        try:
+            seq = orders if isinstance(orders, np.ndarray) else list(orders)
+            q = np.array(seq, dtype=np.complex128)
+        except (TypeError, ValueError):
+            raise BeamTypeError(
+                f"orders must be a sequence of numbers, got "
+                f"{type(orders).__name__}") from None
+        if q.ndim != 1:
+            raise BeamValueError(
+                f"orders must be one-dimensional, got shape {q.shape}")
+        bad = q[~np.isfinite(q)]
+        if bad.size:
+            raise BeamValueError(
+                f"orders must be finite, got {bad[:3].tolist()}")
+        if q.size == 0:
+            return np.empty(0, dtype=np.complex128)
+        # Fresh arrays: the C side reads them with the GIL released.
+        re = np.array(q.real, dtype=np.float64)
+        im = np.array(q.imag, dtype=np.float64)
+        return np.frombuffer(_c.log_mellin_complex(self._g, re, im),
+                             dtype=np.complex128).copy()
+
+    def log_mellin_line(self, re: float, im_start: float, im_step: float,
+                        n: int) -> np.ndarray:
+        """:meth:`log_mellin_complex` along one vertical line.
+
+        The orders are ``re + 1j * (im_start + k * im_step)`` for
+        ``k = 0 .. n-1``: equally spaced on the line ``Re q = re``, which is how
+        a Mellin-Barnes contour is sampled. Returns complex128, ``ln|M| + i
+        arg M``, as :meth:`log_mellin_complex` does.
+
+        FASTER BY WHAT THE LINE SHARES. Every order has the same real part,
+        so each edge's modulus factor is taken once for all of them. Each
+        order's rotation is the one sixteen before times a fixed factor,
+        recomputed directly every 128 orders, so a few cosines and sines per
+        edge replace one per edge per order.
+
+        EXACT TO ROUNDING, NOT TO THE BIT, against :meth:`log_mellin_complex`:
+        the recurrence reaches the same rotation by different operations.
+        Order ``k``'s bits depend on the line and on ``k`` alone -- not on
+        ``n``, the thread count or the memory budget.
+        """
+        for name, v in (("re", re), ("im_start", im_start), ("im_step", im_step)):
+            if not math.isfinite(float(v)):
+                raise BeamValueError(f"{name} must be finite, got {v!r}")
+        n = operator.index(n)
+        if n < 0:
+            raise BeamValueError(f"n must be non-negative, got {n}")
+        if n == 0:
+            return np.empty(0, dtype=np.complex128)
+        return np.frombuffer(
+            _c.log_mellin_line(self._g, float(re), float(im_start),
+                               float(im_step), n),
+            dtype=np.complex128).copy()
+
     def power_sum(self, q: float) -> float:
         """``sum_s P(s)**q`` on the linear scale.
 
@@ -1515,7 +1642,7 @@ class BeamModel:
         NEAR ``q = 1`` THE RELATIVE DIFFERENCE GROWS as ``1 / |1 - q|``,
         because ``D_q = exp(ln M / (1 - q))`` magnifies any rounding in
         ``ln M`` by that factor on both routes: 1.3e-12 was measured at
-        ``q = 1.001`` on an open-world model. Neither route is the more
+        ``q = 1.001`` on a model with every sequence in its support. Neither route is the more
         accurate one there. Use :meth:`hill_numbers` where a profile has to
         reproduce one already published from it to the last bit.
 
@@ -2034,10 +2161,9 @@ class BeamModel:
         rather than a placeholder: given that position 4 is ``G``, the
         probability that it is ``G`` is 1.
 
-        Zero-probability residues come back as exactly ``0.0``. No floor is
-        applied. In a strict model a residue the corpus never spells at a
-        position is information, and flooring it would replace a fact with a
-        number too small to notice but large enough to rank.
+        No floor is applied. Under the hierarchical prior no residue is
+        impossible, so one the corpus never put at a position comes back
+        small, at the probability its shorter contexts give it.
 
         Raises:
             ValueError: if the model generates no sequences of this length --
@@ -2122,14 +2248,15 @@ class BeamModel:
         model fitted to hundreds of millions of sequences is a continuum and
         every edge cuts through mass.
 
-        Backoff makes the first much worse, because an unobserved transition
-        sits near ``ln(1e-300)`` and drags ``accumulator_max`` hundreds of
-        nats past anything real. But a STRICT model is not therefore safe:
-        the foundation below is strict and still needs eight times the
-        default. ``resolution_error`` is what settles it either way.
+        The prior widens the first: a context the corpus never saw can still
+        be spelled, improbably, and the grid has to reach it. But a model
+        without that tail is not therefore safe: the foundation below, built
+        before the prior, still needed eight times the default.
+        ``resolution_error`` is what settles it either way.
 
         How many bins a band needs, measured on the 927M-sequence foundation
-        (order 4, strict) at its modal length 15, with quartile bands about
+        (order 4, built under the previous closed-world rule) at its modal length 15,
+        with quartile bands about
         2.4 nats wide::
 
             bins   spacing   resolution_error   scratch   time
@@ -2599,6 +2726,32 @@ class BeamModel:
             raise ValueError(f"kappa must be non-negative, got {kappa!r}")
         _c.posterior(self._g, prior._g, float(kappa))
 
+    def set_alpha(self, alpha: float | Iterable[float] | None = None,
+                  alpha_length: float | None = None) -> None:
+        """Change the hierarchical prior's strengths in place, and re-finalize.
+
+        Nothing is re-observed: the counts are the only state the prior reads,
+        so this is what makes fitting the strengths cheap -- one model, many
+        re-finalizes. ``None`` keeps the current setting; ``"auto"`` hands the
+        strength back to the data (estimated by the evidence of the counts);
+        numbers fix it. See :func:`BEAM.fit_alpha`.
+        """
+        if self._compacted:
+            raise RuntimeError(
+                "set_alpha() is unavailable after compact(): the counts the "
+                "prior is re-applied to have been released")
+        from .config import _alpha_length, _alpha_levels
+        cfg = self.config
+        if alpha is None:
+            levels = None if cfg["alpha_auto"] else cfg["alpha"]
+        else:
+            levels = _alpha_levels(alpha, cfg["order"])
+        if alpha_length is None:
+            al = None if cfg["alpha_length_auto"] else cfg["alpha_length"]
+        else:
+            al = _alpha_length(alpha_length)
+        _c.set_prior(self._g, levels, al)
+
     def with_prior(self, prior: BeamModel, kappa: float = 100.0) -> BeamModel:
         """A NEW model equal to this one updated toward ``prior``.
 
@@ -2628,6 +2781,39 @@ class BeamModel:
         dst = _c.new(*_config_args_from_dict(self.config))
         _c.add(dst, self._g)
         return BeamModel._from_capsule(dst)
+
+    def tempered(self, t: float) -> BeamModel:
+        """A NEW model holding ``P_t(s) proportional to P(s)**t``.
+
+        The tempered law already drives :meth:`surprisal_moments`, the spectrum
+        and :meth:`saddlepoint`, where it is a measure a sweep carries. This
+        makes it a model, so everything the ordinary one answers it answers
+        too. ``t > 1`` concentrates the distribution on its likeliest
+        sequences and ``t < 1`` flattens it toward the rare ones; the SUPPORT
+        is unchanged either way, so :meth:`path_count` does not move.
+
+        Exact. The result satisfies
+        ``log_pseq_t(s) == t * log_pseq(s) - log_mellin(t)`` identically, and
+        its whole Mellin transform follows from this model's:
+        ``log_mellin_t(q) == log_mellin(t*q) - q*log_mellin(t)``.
+
+        ``t`` must be finite and strictly positive. At ``t = 0`` every finite
+        log weight becomes zero and every ``-inf`` becomes NaN, and a negative
+        ``t`` turns an unspellable edge into the likeliest one.
+
+        The result arrives with its COUNTS RELEASED, as after
+        :meth:`compact`, and that is a correctness guard rather than a saving:
+        a tempered model's distribution is not a function of its counts, so
+        :meth:`add`, :meth:`subtract`, :meth:`posterior` and :meth:`copy`
+        would each silently rebuild the untempered tables. They refuse
+        instead. It is also why tempering does not yet compose by chaining --
+        ``tempered`` on a tempered model is refused, not approximated -- and
+        carrying the exponent in the configuration is what would lift that.
+        """
+        out = self.copy()
+        _c.temper(out._g, float(t))
+        out._compacted = True
+        return out
 
     def merged(self, other: BeamModel) -> BeamModel:
         """A NEW model holding this model's counts plus ``other``'s.
@@ -2667,7 +2853,8 @@ class BeamModel:
             other = BeamModel(
                 list(other), abundances=abundances, order=cfg["order"],
                 max_length=cfg["max_length"], weights=cfg["weights"],
-                strict=cfg["strict"], sparse=cfg["sparse"])
+                alpha=cfg["alpha"], alpha_length=cfg["alpha_length"],
+                sparse=cfg["sparse"])
         elif abundances is not None:
             raise TypeError(
                 "abundances applies only when `other` is a list of sequences; "
