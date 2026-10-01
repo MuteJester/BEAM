@@ -2235,3 +2235,33 @@ numpy form stays in the module as the tests' second opinion.
 
 The gate passed on everything else before recording, `exact.py` at 411
 quantities. The full suite: 938 passed, 2 skipped; C 349 passed.
+
+# Why the pytest inventory moved for a floor-aware line planner
+
+Re-recorded 2026-10-01, tag `prefloorplan`. Two planner changes found by
+profiling the figure steps:
+
+- A line's own value at t = 0 is M at its real part, so the bounds read it
+  there instead of sweeping that real order again -- a full sweep per line
+  per process (most of what remained of real power sums in the steps that
+  reuse saved lines).
+- The planner chose a line's q to balance its two aliasing tails, blind to
+  the rounding floor, which for a small value grows steeply with q: on the
+  foundation the discovery curve built three lines at q ~ 0.22 for 81 deep
+  values of U whose floor there was 1e-5 to 1e-2 of themselves (99 s, none
+  resolved). It now predicts a line's floor before building it -- from the
+  kernel's size along the line and the planning grid of M(q) -- takes the
+  highest q whose predicted floor clears the target, and builds nothing for
+  a value no allowed q could resolve. The discovery curve's U: one line at
+  q = 0.08 (70 s) resolving 28, the rest returned within 3.4e-6 instead of
+  1e-3; R unchanged to the bit.
+
+    pytest_cases.txt       4 added: test_a_line_carries_its_own_real_power_sum[aa|nt],
+                           test_a_value_no_allowed_q_can_resolve_builds_no_line[aa|nt]
+    python_api.txt         unchanged (re-written by the recorder, byte-identical)
+    c_cases.txt            unchanged (likewise)
+    numeric.json           unchanged (likewise)
+    threads.json           unchanged (likewise)
+
+The gate passed on everything else before recording, `exact.py` at 411
+quantities. The full suite: 942 passed, 2 skipped.

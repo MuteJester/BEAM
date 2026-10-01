@@ -71,6 +71,8 @@ from scipy.special import gammaln, loggamma, polygamma
 
 from .. import _cbeam as _c
 
+_trapezoid = getattr(np, "trapezoid", None) or np.trapz
+
 __all__ = ["BoundedValue", "ExactOccupancy"]
 
 #: One INFO record per contour line computed or extended: its cost, and how
@@ -444,9 +446,23 @@ class ExactOccupancy:
         return [(ln.q, ln.h, ln.t.size) for ln in self._lines]
 
     def _log_mreal(self, q: float) -> float:
+        """ln M(q) at a real q: from a line at that q where there is one (see
+        `_line_log_mreal`), otherwise one sweep, kept."""
         if q not in self._real:
-            self._real[q] = float(self._m.log_mellin(q))
+            on_line = [ln for ln in self._lines
+                       if ln.q == q and ln.t.size and ln.t[0] == 0.0]
+            self._real[q] = (float(on_line[0].log_m[0].real) if on_line
+                             else float(self._m.log_mellin(q)))
         return self._real[q]
+
+    def _line_log_mreal(self, ln) -> float:
+        """ln M(Re q) of a line: its own value at t = 0, where every line
+        starts and where it IS the real power sum -- to rounding, which is all
+        the bounds that read it need -- rather than a sweep of that real order
+        per line per process."""
+        if ln.t.size and ln.t[0] == 0.0:
+            return float(ln.log_m[0].real)
+        return self._log_mreal(ln.q)
 
     @property
     def _log_mk(self) -> np.ndarray:
@@ -611,7 +627,7 @@ class ExactOccupancy:
         xl = math.exp(-ln.q * D)
         xr = math.exp(-(rate_right - ln.q) * D)
         alias = amp_left * xl / (1 - xl) + amp_right * xr / (1 - xr)
-        m_real = math.exp(self._log_mreal(ln.q))       # sum of the moduli
+        m_real = math.exp(self._line_log_mreal(ln))       # sum of the moduli
         absK = np.abs(K)
         # KERNEL rounding: the phase t ln n (and, on the direct path, the
         # log-gammas' own size) is carried to eps of its size.
@@ -994,7 +1010,7 @@ class ExactOccupancy:
         D = _TWO_PI / ln.h
         xl = math.exp(-ln.q * D)
         xr = math.exp(-(rate_right - ln.q) * D)
-        m_real = math.exp(self._log_mreal(ln.q))
+        m_real = math.exp(self._line_log_mreal(ln))
         dphase = (self._max_len + ln.t * self.s_max)[:, None]
         Mv = np.exp(ln.log_m)[:, None]
         vals = np.empty(idx.size)
@@ -1144,6 +1160,27 @@ class ExactOccupancy:
             est = abs(best_v[j]) if np.isfinite(best_r[j]) else guess[i]
             est = max(est, abs_floor)
             q, h = self._design_qh(est, amp_left[i], amp_right[i], rate_right, strict)
+            # The rounding floor, which the aliasing balance does not see: the
+            # highest q whose predicted floor clears the target, or -- where
+            # none does even at a hundred times the target, est being a guess
+            # good to a factor of ten -- no line at all.
+            tol_e = self.rel_tol * max(est, abs_floor)
+            qf = self._floor_q(kabs_mat, idx[[j]], 0.1 * tol_e, q)
+            if qf is None:
+                q_lo = self._floor_q(kabs_mat, idx[[j]], 10.0 * tol_e, q)
+                if q_lo is None:
+                    tries[j] = 4
+                    skipped += 1
+                    continue
+                qf = q_lo
+            if qf < q:
+                q, h = self._design_qh(est, amp_left[i], amp_right[i], rate_right,
+                                       strict, q=qf)
+                # That q is already as low as the floor asks for this value;
+                # halving it again for what this line leaves would double the
+                # cost for values deeper still (on the foundation: 137 s for 9
+                # values of U beyond n = 1e77, against 70 s for 28 here).
+                lowered = True
             T = self._design_T_many(kabs_mat, q, idx[[j]], np.array([est]), strict)
             ln = self._line(q, h, T)
             cost = self._last_cost
@@ -1158,8 +1195,8 @@ class ExactOccupancy:
                 if unresolved()[j] and not best_r[j] < 0.1 * before:
                     tries[j] = 4
         if skipped:
-            _log.info("%d %s values are below the rounding floor of the lines "
-                      "that serve them; returned with the bounds they have",
+            _log.info("%d %s values are below the rounding floor of any line "
+                      "that could serve them; returned with the bounds they have",
                       skipped, label)
         if futile >= self._FUTILE_LINES:
             _log.info("stopped: %d new lines in a row resolved no %s value; %d "
@@ -1176,16 +1213,58 @@ class ExactOccupancy:
             out.append(BoundedValue(float(best_v[j]), float(best_r[j]), m))
         return out
 
-    def _design_qh(self, value_est, amp_left, amp_right, rate_right, strict):
+    def _design_qh(self, value_est, amp_left, amp_right, rate_right, strict,
+                   q=None):
+        """(q, h) balancing the two aliasing tails for a value of about
+        `value_est`; with `q` given, the step for that q."""
         target = max(self.rel_tol * 0.05 * strict, 1e-16) * max(value_est, 1e-300)
         L = max(math.log(amp_left / target), 1.0)
         Rr = max(math.log(max(amp_right, 1e-300) / target), 1.0)
         a = rate_right
-        q = a * L / (L + Rr)
-        q = min(max(round(q / 0.02) * 0.02, 0.02), min(a - 0.02, 0.98))
+        if q is None:
+            q = a * L / (L + Rr)
+            q = min(max(round(q / 0.02) * 0.02, 0.02), min(a - 0.02, 0.98))
         D = 1.35 * max(L / q, Rr / (a - q))
         k = math.ceil(math.log((_TWO_PI / D) / 0.12) / math.log(0.92))
         return q, 0.12 * 0.92 ** max(k, 0)
+
+    #: Where the predicted rounding floor is compared: the line's nodes up to
+    #: t = 60, past which every kernel here has fallen by e^-90 or more.
+    _FLOOR_TS = np.linspace(0.0, 60.0, 241)
+
+    def _predicted_floor(self, kabs_mat, params, q: float) -> float:
+        """The rounding floor a line at q would have for the parameters
+        `params`, before it is built: `_integrate_many`'s floor with |M| at
+        most M(q) -- EPS (1/pi) int |K| M(q) (dphase + kphase) dt -- the
+        kernel's size taken along the line and ln M(q) interpolated on the
+        planning grid. A planning figure, within a small factor of the floor
+        the line then has; it never enters a bound."""
+        ts = self._FLOOR_TS
+        with np.errstate(all="ignore"):
+            mags = np.asarray(kabs_mat(-q + 1j * ts, params), dtype=float)
+        mags = np.where(np.isfinite(mags), mags, np.inf).max(axis=1)
+        lnm = float(np.interp(q, self._Q_EST, self._log_mgrid()))
+        phase = 2.0 * self._max_len + ts * (self.s_max + 200.0)
+        return EPS / math.pi * math.exp(lnm) * float(_trapezoid(mags * phase, ts))
+
+    def _floor_q(self, kabs_mat, params, target: float, q_hi: float):
+        """The largest q at most `q_hi`, on the planner's 0.02 grid, whose
+        predicted rounding floor is below `target`; None if there is none.
+
+        WHY. A line's q is chosen to balance its two aliasing tails, and
+        nothing in that choice sees the rounding floor, which for a small
+        value grows steeply with q: on the foundation, U(1e82) has a floor of
+        3e-6 of itself at q = 0.08 and 1e-2 at q = 0.22 -- where the balance
+        put three lines that resolved nothing (99 s). Lower is better there
+        only down to a point (the richness kernel has a pole at q = 0), so
+        the grid is walked down from the balanced q and the first that
+        clears is taken."""
+        q = round(q_hi / 0.02) * 0.02
+        while q >= 0.02 - 1e-12:
+            if self._predicted_floor(kabs_mat, params, q) <= target:
+                return round(q, 2)
+            q = round(q - 0.02, 2)
+        return None
 
     def _design_T_many(self, kabs_mat, q, params, est, strict):
         """The reach that brings every parameter's tail below its target."""

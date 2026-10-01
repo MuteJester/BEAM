@@ -539,3 +539,47 @@ def test_the_fingerprint_is_taken_once(case, tmp_path):
         eo.save_lines(path)
     eo.load_lines(path)
     assert cm.many.count(4) == 1
+
+
+class _CountingSingles(_CountingModel):
+    """Also records each single real order asked of the model."""
+
+    def __init__(self, m):
+        super().__init__(m)
+        self.singles = []
+
+    def log_mellin(self, q):
+        self.singles.append(float(q))
+        return self._m.log_mellin(q)
+
+
+def test_a_line_carries_its_own_real_power_sum(case, tmp_path):
+    """Every line starts at t = 0, where it IS M at its real part; the bounds
+    read it from there rather than sweeping that real order again -- a full
+    sweep per line per process on the foundation."""
+    m, p, eo = case
+    eo.richness_many([1e9, 1e12])
+    path = tmp_path / "lines.npz"
+    eo.save_lines(path)
+    cm = _CountingSingles(m)
+    fresh = ExactOccupancy(cm, rel_tol=1e-10)
+    fresh.load_lines(path)
+    qs = {ln[0] for ln in fresh.lines}
+    for n, v in zip([1e9, 1e12], fresh.richness_many([1e9, 1e12])):
+        _held(v, float(np.sum(_seen(p, n))))
+    assert not qs & set(cm.singles), (qs, cm.singles)
+
+
+def test_a_value_no_allowed_q_can_resolve_builds_no_line(case):
+    """Where even the best allowed q leaves a line's rounding floor above the
+    tolerance, the planner predicts it -- from the kernel's size along the
+    line and the planning grid of M(q) -- and builds nothing: three lines
+    that could resolve nothing cost the foundation's discovery curve 99 s.
+    Every value still comes back with a bound that holds."""
+    m, p, eo = case
+    fresh = ExactOccupancy(m, rel_tol=1e-24)
+    ns = np.geomspace(1e2, 1e6, 5)
+    out = fresh.richness_many(ns)
+    for n, v in zip(ns, out):
+        _held(v, float(np.sum(_seen(p, n))), tol=math.inf)
+    assert fresh.lines == [], fresh.lines
