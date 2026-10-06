@@ -343,8 +343,9 @@ static BeamError resolve_edges(const BeamLogoRequest *req, uint32_t bins,
  * Refuse a band that lies outside what this length can attain, before the
  * multi-gigabyte sweep rather than after it.
  *
- * `beam_surprisal_range_at` is two sweeps over the state space; the pool it
- * saves is `sum_i n_live[i] * bins * 8`. The margin is the splitting width,
+ * `beam_surprisal_range_at` is two sweeps over the state space; what it
+ * saves is the sweep's backward rows, gigabytes on an order-4 model. The
+ * margin is the splitting width,
  * because a band just outside the exact extremes can still catch mass the
  * grid smeared past them -- so this refuses only what is CLEARLY empty and
  * leaves the borderline to the zero-mass check after the sweep.
@@ -545,22 +546,26 @@ BeamError beam_insights_logo_cost(const BeamModel *m,
     const BeamError e = beam_live_acquire(m, req->length, &lh);
     if (e != BEAM_OK) return e;
     uint64_t slots = 0;
-    uint32_t maxlive = 0;
-    for (uint32_t i = 0; i <= req->length; ++i) {
-        slots += lh.L->n_live[i];
-        if (lh.L->n_live[i] > maxlive) maxlive = lh.L->n_live[i];
-    }
-    const uint32_t n_thr = (req->n_edges > 1u ? req->n_edges : 2u) + 1u;
+    for (uint32_t i = 0; i <= req->length; ++i) slots += lh.L->n_live[i];
     out->states = slots;
     out->edges  = slots * m->n_residues;
-    /*
-     * `bins` for the padded width, which underestimates: the backward grid's
-     * origin offset is only known once the sink weights are built, and it is
-     * typically a few dozen bins out of thousands. An estimate that ran that
-     * sweep would not be an estimate.
-     */
-    out->bytes = beam_positional_banded_bytes(m, bins, bins, slots, maxlive,
-                                              req->length, n_thr);
     beam_live_release(&lh);
-    return BEAM_OK;
+
+    /*
+     * The spacing and the edges exactly as `run_banded` resolves them, so the
+     * figure below is the one the sweep's guard will check: the backward rows
+     * are stored at their own widths, and the plan that measures them is what
+     * the estimate runs.
+     */
+    double ds = 0.0;
+    BeamError err = beam_spectrum_spacing(m, bins, req->spacing, &ds);
+    if (err != BEAM_OK) return err;
+    double *edges = NULL;
+    uint32_t n_edges = 0, first = 0;
+    err = resolve_edges(req, bins, ds, &edges, &n_edges, &first);
+    if (err != BEAM_OK) return err;
+    free(edges);
+    (void)first;
+    return beam_positional_banded_cost(m, req->length, bins, ds, n_edges,
+                                       &out->bytes);
 }

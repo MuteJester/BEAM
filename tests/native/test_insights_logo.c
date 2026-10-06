@@ -1002,8 +1002,8 @@ static void test_a_grid_too_coarse_is_refused_on_request(void) {
 }
 
 /**
- * The cost estimate is reported before the sweep and does not lie low about
- * the grid.
+ * The cost estimate is reported before the sweep, and it is the figure the
+ * sweep's guard checks -- not a bound on it.
  */
 static void test_the_cost_estimate_precedes_the_sweep(void) {
     BeamModel *m = build_aa(3u);
@@ -1018,13 +1018,7 @@ static void test_the_cost_estimate_precedes_the_sweep(void) {
     ASSERT_MSG(e == BEAM_OK, beam_error_message());
     ASSERT_MSG(c0.bytes > 0u, "the exact route costs nothing");
 
-    /*
-     * The estimate must SEE the grid, and the way to show that is that it
-     * scales with it. Comparing a grid against the exact route shows only
-     * that one number is larger than another, which an estimate charging a
-     * constant for "a grid" would also pass. Linearity in `bins` is the
-     * property.
-     */
+    /* The estimate must SEE the grid: a finer grid costs more. */
     uint64_t b[3];
     const uint32_t bins[3] = { 1024u, 2048u, 4096u };
     req.edges = edges; req.n_edges = 2u;
@@ -1035,19 +1029,45 @@ static void test_the_cost_estimate_precedes_the_sweep(void) {
         ASSERT_MSG(e == BEAM_OK, beam_error_message());
         b[k] = c.bytes;
     }
-    beam_model_destroy(m);
-
     if (!(b[2] > b[1] && b[1] > b[0])) {
+        beam_model_destroy(m);
         snprintf(msg, sizeof msg, "the estimate does not grow with bins: "
                  "%llu, %llu, %llu", (unsigned long long)b[0],
                  (unsigned long long)b[1], (unsigned long long)b[2]);
         ASSERT_MSG(false, msg);
     }
-    const double d1 = (double)(b[1] - b[0]), d2 = (double)(b[2] - b[1]);
-    if (fabs(d2 / d1 - 2.0) > 1e-6) {
-        snprintf(msg, sizeof msg,
-                 "doubling the bins should double the grid term, but the "
-                 "increments are %.0f and %.0f (ratio %.6f)", d1, d2, d2 / d1);
+
+    /*
+     * And it is EXACTLY the guard's figure. Growth alone would pass an
+     * estimate charging every backward row the full grid, which is what this
+     * one did before the rows were stored at their own widths -- three to
+     * five times what the sweep holds. A budget of the reported bytes must
+     * run the sweep, and one byte less must refuse it: nothing looser pins
+     * that the two come from one expression.
+     */
+    req.bins = bins[1];
+    const uint64_t was = beam_model_memory_budget();
+    BeamLogoSet set;
+    memset(&set, 0, sizeof set);
+    beam_model_set_memory_budget(b[1]);
+    const BeamError at = beam_insights_logos(m, &req, &set);
+    beam_insights_logo_set_free(&set);
+    beam_model_set_memory_budget(b[1] - 1u);
+    const BeamError under = beam_insights_logos(m, &req, &set);
+    beam_insights_logo_set_free(&set);
+    beam_model_set_memory_budget(was);
+    beam_model_destroy(m);
+
+    if (at != BEAM_OK) {
+        snprintf(msg, sizeof msg, "a budget of exactly the estimate (%llu "
+                 "bytes) was refused with %d", (unsigned long long)b[1],
+                 (int)at);
+        ASSERT_MSG(false, msg);
+    }
+    if (under != BEAM_ERR_BUDGET) {
+        snprintf(msg, sizeof msg, "a budget one byte under the estimate was "
+                 "answered with %d rather than refused, so the estimate "
+                 "overstates what the sweep holds", (int)under);
         ASSERT_MSG(false, msg);
     }
     PASS();

@@ -209,10 +209,12 @@ def cost(model, length, *, pseq_above=None, pseq_below=None,
     """What :func:`logos` will cost, without running it.
 
     ``bytes`` is the figure that will be checked against the memory budget,
-    from the same expression -- so a caller can compare against
-    :func:`BEAM.memory_budget` and warn, rather than catch a refusal. It
-    slightly UNDERSTATES a banded sweep: the backward grid carries an origin
-    offset that is only known once the sink weights are built.
+    so a caller can compare against :func:`BEAM.memory_budget` and warn,
+    rather than catch a refusal. For a banded sweep it is exact -- a budget
+    of ``bytes`` runs it and one byte less refuses it -- because it is
+    measured rather than bounded: the backward rows are stored at their own
+    widths, and this runs the sweep's integer pass over the edges that sizes
+    them.
     """
     e = _edges_from(pseq_above, pseq_below, surprisal_above, surprisal_below,
                     edges, length)

@@ -106,7 +106,7 @@ model.insights.cost(15, pseq_below=1e-9, bins=4096)
 # {'states': ..., 'edges': ..., 'bytes': 61_000_000_000}
 ```
 
-`bytes` is the figure that will be checked against `BEAM.memory_budget()`, from the same expression — so compare and warn rather than catch a refusal. It slightly understates a banded sweep: the backward grid carries an origin offset that is only known once the sink weights are built.
+`bytes` is the figure that will be checked against `BEAM.memory_budget()`, so compare and warn rather than catch a refusal. For a banded sweep it is exact: a budget of `bytes` runs it and one byte less refuses it. That is because it is measured, not bounded. The backward rows are stored at their own widths, and the estimate runs the sweep's integer pass over the edges to size them.
 
 ## Nucleotides
 
