@@ -442,7 +442,7 @@ eo.richness_many(ns)             # R at many depths, one batch per line
 eo.novelty_many(ns)              # U(n) = sum_s P (1-P)**(n-1), n >= 1
 eo.private_at_depth(depths, total_depth=T)
                                  # per repertoire: R(d_i) and R(T) - R(T - d_i)
-eo.save_lines(path); eo.load_lines(path)   # reuse lines across processes
+eo.save_lines(path); eo.load_lines(path)   # reuse lines and power sums across processes
 
 eo.poisson_richness_many(ns)     # sum_s 1 - exp(-N P): a Poisson sample's richness
 eo.sampling_deficit_many(ns)     # S(N); a Poisson sample's expected entropy is H - S(N)
@@ -464,7 +464,7 @@ The `atoms` family above, computed **exactly** rather than on a grid. Every meth
 | kernel rounding | carried in the phase `t ln n`, which reaches thousands of radians. |
 | DP rounding | exact relative to `M(Re q)`, the sum of the moduli, not to `|M|`. |
 
-The relative form divides by `|value| - bound`, never by the value itself. Lines are designed from those terms, computed on demand and cached; `eo.lines` lists them. A batch plans one line at a time: each is designed for the smallest depth still unresolved, and every pending depth is tried on it before the next is planned, so one line serves the whole band it can. `save_lines` writes them with a fingerprint of the model's power sums, and `load_lines` refuses a file made by any other model.
+The relative form divides by `|value| - bound`, never by the value itself. Lines are designed from those terms, computed on demand and cached; `eo.lines` lists them. A batch plans one line at a time: each is designed for the smallest depth still unresolved, and every pending depth is tried on it before the next is planned, so one line serves the whole band it can. `save_lines` writes them with a fingerprint of the model's power sums, and `load_lines` refuses a file made by any other model. The file also keeps every real power sum swept so far, so a later process sweeps none of them again: one is a full sweep, and the series route's ninety take a minute on the foundation. Within one object, real orders are swept together where they are known together. D0, the fingerprint and the planning grid take one sweep at construction, because a sweep costs the same for one order as for eight.
 
 **The sampled Hill numbers.** Draw a Poisson sample of depth `N`, each sequence's count `Y ~ Poisson(N P(s))`, and take its Shannon entropy. Its expectation is `H - S(N)`, where `H` is the model's own entropy and
 

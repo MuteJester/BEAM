@@ -438,6 +438,9 @@ class ExactOccupancy:
     #: Integer power sums kept for the series route.
     _K_SERIES = 90
 
+    #: The real orders that identify the model in a lines file.
+    _FINGERPRINT_Q = (0.0, 0.37, 1.73, 3.0)
+
     #: Take Beta-type kernels' line integrals and tails in one C pass per
     #: parameter (`_beta_sums`, `_beta_tail`) rather than as numpy matrices.
     #: False only to compare the two.
@@ -448,8 +451,13 @@ class ExactOccupancy:
         self.rel_tol = float(rel_tol)
         self._lines: list[_Line] = []
         self._real: dict[float, float] = {}
+        self._swept: dict[float, float] = {}  # real power sums a sweep produced
         self._last_cost = None           # (kind, orders, seconds) of the last line built
-        self.log_d0 = float(model.log_mellin(0.0))
+        # Everything any use takes first -- D0, the fingerprint a lines file
+        # is checked against, the planning grid -- in one sweep. Fourteen
+        # orders cost what one does plus one more pass of eight.
+        self._sweep(self._FINGERPRINT_Q + tuple(float(q) for q in self._Q_EST))
+        self.log_d0 = self._swept[0.0]
         lo, hi = model.surprisal_range()
         self.p_max = math.exp(-lo)
         self.p_min = math.exp(-hi)
@@ -465,14 +473,34 @@ class ExactOccupancy:
         """The contour lines computed so far: (Re q, step h, number of orders)."""
         return [(ln.q, ln.h, ln.t.size) for ln in self._lines]
 
+    def _sweep(self, qs) -> None:
+        """Sweep every real order of `qs` not yet swept, in ONE call.
+
+        Orders are swept eight at a time, so one costs what eight do: on the
+        foundation 6.5 s for one, 10.5 s for fourteen, 56 s for ninety. And an
+        order's value depends on the model and q alone -- not on the orders
+        beside it (`log_mellin_many` is held to `log_mellin` bit for bit) --
+        so taking them together changes no value. Kept in `_swept`, and saved
+        with the lines, so a later process sweeps none of them again.
+        """
+        miss = sorted({float(q) for q in qs} - self._swept.keys())
+        if len(miss) == 1:
+            self._swept[miss[0]] = float(self._m.log_mellin(miss[0]))
+        elif miss:
+            for q, v in zip(miss, self._m.log_mellin_many(np.array(miss))):
+                self._swept[q] = float(v)
+
     def _log_mreal(self, q: float) -> float:
         """ln M(q) at a real q: from a line at that q where there is one (see
         `_line_log_mreal`), otherwise one sweep, kept."""
         if q not in self._real:
             on_line = [ln for ln in self._lines
                        if ln.q == q and ln.t.size and ln.t[0] == 0.0]
-            self._real[q] = (float(on_line[0].log_m[0].real) if on_line
-                             else float(self._m.log_mellin(q)))
+            if on_line:
+                self._real[q] = float(on_line[0].log_m[0].real)
+            else:
+                self._sweep([q])
+                self._real[q] = self._swept[float(q)]
         return self._real[q]
 
     def _line_log_mreal(self, ln) -> float:
@@ -491,8 +519,9 @@ class ExactOccupancy:
         foundation -- and a workload that only ever reaches the contours never
         needs them."""
         if self._log_mk_taken is None:
-            ks = np.arange(1, self._K_SERIES + 1, dtype=float)
-            self._log_mk_taken = np.asarray(self._m.log_mellin_many(ks), dtype=float)
+            ks = [float(k) for k in range(1, self._K_SERIES + 1)]
+            self._sweep(ks)
+            self._log_mk_taken = np.array([self._swept[k] for k in ks])
         return self._log_mk_taken
 
     @property
@@ -505,10 +534,11 @@ class ExactOccupancy:
     _Q_EST = np.round(np.linspace(0.0, 1.0, 11), 2)
 
     def _log_mgrid(self) -> np.ndarray:
-        miss = [q for q in self._Q_EST if float(q) not in self._real]
+        miss = [float(q) for q in self._Q_EST if float(q) not in self._real]
         if miss:
-            for q, v in zip(miss, self._m.log_mellin_many(np.array(miss))):
-                self._real[float(q)] = float(v)
+            self._sweep(miss)
+            for q in miss:
+                self._real[q] = self._swept[q]
         return np.array([self._real[float(q)] for q in self._Q_EST])
 
     def _estimate(self, kind: str, ns: np.ndarray) -> np.ndarray:
@@ -573,15 +603,18 @@ class ExactOccupancy:
         orders and the config's max_length and order. Taken once: every save
         and load checks it, and each check was four full sweeps."""
         if self._fingerprint_taken is None:
-            qs = np.array([0.0, 0.37, 1.73, 3.0])
+            self._sweep(self._FINGERPRINT_Q)
             self._fingerprint_taken = np.concatenate(
-                [np.asarray(self._m.log_mellin_many(qs), dtype=float),
+                [[self._swept[q] for q in self._FINGERPRINT_Q],
                  [self._max_len, float(self._m.config["order"])]])
         return self._fingerprint_taken
 
     def save_lines(self, path) -> None:
         """Write the computed lines to `path` (npz), with the model's
-        fingerprint, for `load_lines` in a later process.
+        fingerprint and the real power sums swept so far, for `load_lines` in
+        a later process. Each power sum is a full sweep -- the series route's
+        ninety are a minute on the foundation -- and a process that loads them
+        sweeps none of them again.
 
         Lines already in the file are MERGED in first, under a lock, and the
         file is replaced atomically: processes sharing one file each add what
@@ -592,9 +625,12 @@ class ExactOccupancy:
         with _locked(path):
             if path.exists():
                 self.load_lines(path)
+            qs = sorted(self._swept)
             arrays = {"fingerprint": self._fingerprint(),
                       "meta": np.array([[ln.q, ln.h, ln.t.size] for ln in self._lines]
-                                       ).reshape(-1, 3)}
+                                       ).reshape(-1, 3),
+                      "swept_q": np.array(qs, dtype=float),
+                      "swept_log_m": np.array([self._swept[q] for q in qs], dtype=float)}
             for k, ln in enumerate(self._lines):
                 arrays[f"logm_{k}"] = ln.log_m
             fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name, suffix=".tmp")
@@ -614,6 +650,11 @@ class ExactOccupancy:
         z = np.load(path)
         if not np.array_equal(z["fingerprint"], self._fingerprint()):
             raise ValueError(f"{path} holds lines of a different model")
+        # Power sums a sweep of this same model produced: the values a sweep
+        # here would produce. Files written before they were kept have none.
+        if "swept_q" in z.files:
+            for q, v in zip(z["swept_q"], z["swept_log_m"]):
+                self._swept.setdefault(float(q), float(v))
         for k, (q, h, n) in enumerate(z["meta"]):
             n = int(n)
             same = [ln for ln in self._lines if ln.q == q and ln.h == h]

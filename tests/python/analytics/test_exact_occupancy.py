@@ -495,18 +495,20 @@ def test_a_fresh_batch_below_its_rounding_floor_builds_at_most_two_lines(case):
 
 
 class _CountingModel:
-    """The model, with a record of how many real orders each
-    `log_mellin_many` call asked for: each order is a full sweep."""
+    """The model, with a record of the real orders each `log_mellin_many`
+    call asked for: each call is a full sweep, eight orders at a time."""
 
     def __init__(self, m):
         self._m = m
         self.many = []
+        self.orders = []
 
     def __getattr__(self, name):
         return getattr(self._m, name)
 
     def log_mellin_many(self, qs):
         self.many.append(int(np.asarray(qs).size))
+        self.orders += [float(q) for q in np.asarray(qs).ravel()]
         return self._m.log_mellin_many(qs)
 
 
@@ -521,10 +523,12 @@ def test_series_power_sums_are_taken_only_when_a_series_needs_them(case):
     assert not eo._series_ok(deep)
     _held(eo.richness_many([deep])[0], float(np.sum(_seen(p, deep))))
     _held(eo.novelty_many([deep])[0], float(np.sum(p * _miss(p, deep - 1))))
-    assert ExactOccupancy._K_SERIES not in cm.many
+    ks = [float(k) for k in range(1, ExactOccupancy._K_SERIES + 1)]
+    # 1 and 3 are planning and fingerprint orders, taken up front anyway
+    assert not set(ks) - {1.0, 3.0} & set(cm.orders)
     small = 3.0
     _held(eo.richness(small), float(np.sum(_seen(p, small))))
-    assert cm.many.count(ExactOccupancy._K_SERIES) == 1
+    assert all(cm.orders.count(k) == 1 for k in ks)
 
 
 def test_the_fingerprint_is_taken_once(case, tmp_path):
@@ -538,7 +542,55 @@ def test_the_fingerprint_is_taken_once(case, tmp_path):
     for _ in range(3):
         eo.save_lines(path)
     eo.load_lines(path)
-    assert cm.many.count(4) == 1
+    assert all(cm.orders.count(q) == 1 for q in ExactOccupancy._FINGERPRINT_Q)
+
+
+def test_the_power_sums_every_use_needs_are_one_sweep(case, tmp_path):
+    """D0, the fingerprint and the planning grid are needed by nearly every
+    use, and a sweep costs the same for one order as for eight: they are
+    taken together, once, not as three sweeps."""
+    m, p, _ = case
+    cm = _CountingModel(m)
+    eo = ExactOccupancy(cm, rel_tol=1e-10)
+    eo.richness_many([1e9])
+    eo.save_lines(tmp_path / "lines.npz")
+    assert len(cm.many) == 1 and len(set(cm.orders)) == len(cm.orders)
+    assert eo.log_d0 == m.log_mellin(0.0)
+
+
+def test_power_sums_saved_with_the_lines_are_not_swept_again(case, tmp_path):
+    """A later process loads the real power sums an earlier one swept --
+    the series route's ninety are a minute on the foundation -- and gets
+    the same values to the bit."""
+    m, p, _ = case
+    first = ExactOccupancy(m, rel_tol=1e-10)
+    ns = [3.0, 1e9]
+    want = first.richness_many(ns)
+    path = tmp_path / "lines.npz"
+    first.save_lines(path)
+    cm = _CountingSingles(m)
+    later = ExactOccupancy(cm, rel_tol=1e-10)
+    swept_at_start = list(cm.orders)
+    later.load_lines(path)
+    got = later.richness_many(ns)
+    assert cm.orders == swept_at_start and not cm.singles
+    for a, b in zip(want, got):
+        assert a.value == b.value and a.bound == b.bound
+
+
+def test_a_lines_file_without_power_sums_still_loads(case, tmp_path):
+    """Files written before the power sums were kept hold only lines."""
+    m, p, eo = case
+    eo.richness_many([1e9])
+    path = tmp_path / "lines.npz"
+    eo.save_lines(path)
+    z = dict(np.load(path))
+    del z["swept_q"], z["swept_log_m"]
+    old = tmp_path / "old.npz"
+    np.savez(old, **z)
+    fresh = ExactOccupancy(m, rel_tol=1e-10)
+    fresh.load_lines(old)
+    assert fresh.lines == eo.lines
 
 
 class _CountingSingles(_CountingModel):
