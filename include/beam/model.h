@@ -664,13 +664,17 @@ BeamError beam_model_spectrum(const BeamModel *m,
 double beam_model_accumulator_max(const BeamModel *m);
 
 /**
- * Both spectrum measures through ONE transport.
+ * Both spectrum measures on ONE grid, split by the SAME fractions.
  *
  * `counting_weights` receives the measure that gives every producible
  * sequence weight 1, `generated_weights` the one that gives it its own
- * probability. Identical to calling `beam_model_spectrum` twice, at half
- * the cost — and, unlike calling it twice, guaranteed to put both on the same
- * grid with the same splitting fractions.
+ * probability. Bit-identical to calling `beam_model_spectrum` twice, and
+ * about as long: the two measures run one after the other over one shared
+ * scratch, because carrying both through one transport doubled the memory
+ * and saved no time. What this call adds over two calls is the guarantee
+ * that both are on the same grid with the same splitting fractions: the
+ * spacing is computed once and both passes split every edge by fractions
+ * computed from the same weight.
  *
  * That guarantee is the reason this exists rather than being a convenience.
  * Linear splitting spreads each sequence across adjacent bins, and only if

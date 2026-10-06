@@ -328,9 +328,9 @@ The exact surprisal spectrum by forward grid transport.
 spectrum_pair(*, length=None, bins=1024, spacing=None) -> dict
 # keys: surprisal, counting, generated, spacing
 ```
-Both measures through **one** transport. About 1.5x faster than two `spectrum` calls, and bit-identical to them — `max|delta|` is exactly 0, which the tests assert rather than approximate.
+Both measures on **one** grid, split by the same fractions. Bit-identical to two `spectrum` calls — `max|delta|` is exactly 0, which the tests assert rather than approximate — and about as long: the measures run one after the other over one shared scratch, which holds half the memory of carrying both at once (on the order-4 foundation at 16,384 bins, about 19 GB rather than 67).
 
-Speed is the smaller reason it exists. Linear splitting spreads each sequence over adjacent bins, and `generated[b] / counting[b]` is the exact mass-weighted mean probability of the sequences in bin `b` **only if both measures were split by the same fractions**. Two separate calls agree today because they recompute the same arithmetic from the same inputs; nothing holds them together, and [`atoms`](#atoms) depends on it entirely. One transport makes it structural.
+Why it exists. Linear splitting spreads each sequence over adjacent bins, and `generated[b] / counting[b]` is the exact mass-weighted mean probability of the sequences in bin `b` **only if both measures were split by the same fractions**. Two separate calls agree because they recompute the same arithmetic from the same inputs; nothing holds them together, and [`atoms`](#atoms) depends on it entirely. One call computes the spacing once and splits every edge of both passes by fractions taken from the same weight, which makes it structural.
 
 ### spectra_by_length
 

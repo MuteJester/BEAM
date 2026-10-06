@@ -1366,20 +1366,24 @@ class BeamModel:
         bins: int = 1024,
         spacing: float | None = None,
     ) -> dict[str, Any]:
-        """Both spectrum measures through ONE transport.
+        """Both spectrum measures on ONE grid, split by the SAME fractions.
 
         Returns ``surprisal``, ``counting``, ``generated``, ``spacing``.
-        About 1.5x faster than two :meth:`spectrum` calls, and bit-identical
-        to them.
+        Bit-identical to two :meth:`spectrum` calls and about as long: the
+        measures run one after the other over one shared scratch, which needs
+        half the memory of carrying both at once (on the order-4 foundation at
+        16,384 bins, about 19 GB rather than 67) and costs no time, since the
+        work is per bin per measure either way.
 
-        Speed is the smaller reason it exists. Linear splitting spreads each
-        sequence over adjacent bins, and ``generated[b] / counting[b]`` is the
-        exact mass-weighted mean probability of the sequences in bin ``b``
-        **only if both measures were split by the same fractions**. Two
-        separate calls agree today because they recompute the same arithmetic
-        from the same inputs; nothing holds them together, and everything
-        downstream of that ratio — see :meth:`PseqAnalysis.atoms` —
-        assumes they are. One transport makes it structural.
+        Why it exists. Linear splitting spreads each sequence over adjacent
+        bins, and ``generated[b] / counting[b]`` is the exact mass-weighted
+        mean probability of the sequences in bin ``b`` **only if both measures
+        were split by the same fractions**. Two separate calls agree because
+        they recompute the same arithmetic from the same inputs; nothing holds
+        them together, and everything downstream of that ratio — see
+        :meth:`PseqAnalysis.atoms` — assumes they are. This call computes the
+        grid spacing once and splits every edge of both passes by fractions
+        taken from the same weight, which makes it structural.
         """
         bins = self._check_bins(bins, spacing)
         if spacing is not None and not (float(spacing) > 0.0):
