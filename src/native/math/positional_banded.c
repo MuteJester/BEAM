@@ -103,8 +103,15 @@
  * and 2.9 GB into 916 MB at 2,048. The frontier already stores each layer's
  * live list, so this costs nothing to exploit.
  *
+ * That is the ADDRESS SPACE. What is resident is less: each backward row is
+ * written only over its occupied range -- its running total is constant
+ * beyond, and is read as such -- so pages past it are never touched. On the
+ * order-4 foundation at length 16 the occupied ranges average under a fifth
+ * of the grid (a third at layer 4, nothing at layer 16).
+ *
  * It goes through the memory budget and is REFUSED BEFORE ALLOCATING, like
- * every other sweep here.
+ * every other sweep here. The budget is charged the address space, the one
+ * bound that is known before the sweep runs.
  */
 #include "beam/internal.h"
 #include "beam/grid.h"
@@ -152,16 +159,20 @@ uint64_t beam_positional_banded_bytes(const BeamModel *m, uint32_t bins,
  * only falls, so the loop stops at the first prefix bin that admits none.
  */
 static inline double below_threshold(const double *src, const double *cum,
-                                     uint32_t bbins, BeamBinRange sr,
+                                     uint32_t chi, BeamBinRange sr,
                                      int64_t jc) {
-    const double all = cum[bbins - 1u];
+    /* A running total is constant from its row's last occupied bin on, so it
+     * is stored only up to `chi` (backward_grids) and read as its total
+     * beyond. The stored form held that same total in every later bin -- it
+     * kept adding zeros -- so this reads exactly the values it read before. */
+    const double all = cum[chi - 1u];
     double sum = 0.0;
     for (uint32_t p = sr.lo; p < sr.hi; ++p) {
         const int64_t j = jc - (int64_t)p;
         if (j <= 0) break;               /* and none of the later bins do */
         const double v = src[p];
         if (v == 0.0) continue;
-        sum += v * ((j >= (int64_t)bbins) ? all : cum[j - 1]);
+        sum += v * ((j >= (int64_t)chi) ? all : cum[j - 1]);
     }
     return sum;
 }
@@ -250,7 +261,12 @@ static void backward_grids(const BeamModel *m, uint32_t len, bool counting,
         }
 
         /* Layer `i+1` has been consumed raw; turn it into the running total
-         * the accumulation reads. Bins below `lo` are zero and stay zero. */
+         * the accumulation reads. Bins below `lo` are zero and stay zero, and
+         * the total is constant from `hi` on, so only [lo, hi) is written:
+         * the rest of the row is never touched and its pages are never
+         * mapped. Writing the constant out to the end of every row cost the
+         * full grid for every layer -- 95% of 158 GB at 8,192 bins on the
+         * foundation -- where the occupied ranges average under a fifth. */
         const uint32_t n_n = L->n_live[i + 1];
 #ifdef _OPENMP
         #pragma omp parallel for schedule(static) num_threads(beam_threads())
@@ -259,7 +275,7 @@ static void backward_grids(const BeamModel *m, uint32_t len, bool counting,
             double *g = pool + off[i + 1] + (size_t)kk * bbins;
             const BeamBinRange r = rng[base_n + kk];
             double acc = 0.0;
-            for (uint32_t b = (r.lo < bbins ? r.lo : bbins); b < bbins; ++b) {
+            for (uint32_t b = r.lo; b < r.hi; ++b) {
                 acc += g[b];
                 g[b] = acc;
             }
@@ -351,7 +367,8 @@ static BeamError forward_accumulate(const BeamModel *m, uint32_t len,
                     const uint32_t t = rest + x;
                     if (!live_bit_get(mk_next, t)) continue;
                     const uint32_t kt = sn[t];
-                    if (rng[base_n + kt].lo >= rng[base_n + kt].hi) continue;
+                    const BeamBinRange cr = rng[base_n + kt];
+                    if (cr.lo >= cr.hi) continue;
                     const double *cum = pool + off[i + 1] + (size_t)kt * bbins;
                     const double fac = counting ? 1.0 : exp(row[x]);
                     const double e = -row[x];      /* the edge's surprisal */
@@ -374,7 +391,7 @@ static BeamError forward_accumulate(const BeamModel *m, uint32_t len,
                                 ? (int64_t)(2u * (uint64_t)bbins)
                                 : (jd <= 0.0 ? 0 : (int64_t)jd);
                         part[(size_t)tt * R + x] +=
-                            fac * below_threshold(src, cum, bbins, sr, jc);
+                            fac * below_threshold(src, cum, cr.hi, sr, jc);
                     }
                 }
             }
