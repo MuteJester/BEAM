@@ -2465,3 +2465,18 @@ against `expected` instead.
 
 The gate passed on everything else before recording. The full suite: 1018
 passed, 2 skipped; C 351 passed.
+
+## 2026-10-05: fingerprint search and pending power-product inventories
+
+Added the fingerprint C entry points, Python binding, and new test cases to
+the surface inventories. The contract run also found additive power-product,
+Bhattacharyya and Hellinger APIs/tests already present in the working tree but
+not yet recorded. These inventories were reconciled with a check that no
+existing declaration, signature or test was removed. The related Python
+regression tests and all 28 native mixture tests passed.
+
+No numerical baselines were rewritten. The 78 numerical keys, saved-model
+bytes, thread independence and 411 independent enumeration checks passed
+before reconciling the inventories; the surface checks then passed separately.
+The fingerprint pilot's validation logs and exact additions are recorded under
+`.private/likelihood_studies/56_gapped_fingerprint/`.

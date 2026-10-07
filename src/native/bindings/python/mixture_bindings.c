@@ -114,6 +114,180 @@ PyObject *py_mixture_inner_product(PyObject *self, PyObject *args) {
     return Py_BuildValue("(dN)", total, b);
 }
 
+/**
+ * The exponents behind a sequence of floats, or NULL with an exception set.
+ *
+ * `k` is the member count they must match. The library validates the VALUES;
+ * this only has to land them in a C array of the right length, and say which
+ * entry was not a number if one was not.
+ */
+static double *borrow_exponents(PyObject *seq, uint32_t k) {
+    PyObject *fast = PySequence_Fast(seq, "expected a sequence of exponents");
+    if (!fast) return NULL;
+    const Py_ssize_t n = PySequence_Fast_GET_SIZE(fast);
+    if (n != (Py_ssize_t)k) {
+        Py_DECREF(fast);
+        PyErr_Format(PyExc_ValueError,
+                     "one exponent per member is needed: %u members and %zd "
+                     "exponents", (unsigned)k, n);
+        return NULL;
+    }
+    double *a = (double *)PyMem_Malloc((size_t)k * sizeof(double));
+    if (!a) { Py_DECREF(fast);
+              return beam_py_nomem("the exponents",
+                                   (uint64_t)k * sizeof(double)); }
+    for (Py_ssize_t i = 0; i < n; ++i) {
+        const double v =
+            PyFloat_AsDouble(PySequence_Fast_GET_ITEM(fast, i));
+        if (v == -1.0 && PyErr_Occurred()) {
+            PyMem_Free(a); Py_DECREF(fast);
+            PyErr_Format(PyExc_TypeError,
+                         "exponent %zd is not a number", i);
+            return NULL;
+        }
+        a[i] = v;
+    }
+    Py_DECREF(fast);
+    return a;
+}
+
+PyObject *py_mixture_power_position(PyObject *self, PyObject *args) {
+    (void)self;
+    PyObject *seq, *exp_seq;
+    unsigned int len = 0;
+    if (!PyArg_ParseTuple(args, "OOI", &seq, &exp_seq, &len)) return NULL;
+    uint32_t n = 0;
+    const BeamModel **v = borrow_models(seq, &n);
+    if (!v) return NULL;
+    double *a = NULL;
+    if (exp_seq != Py_None) {
+        a = borrow_exponents(exp_seq, n);
+        if (!a) { PyMem_Free(v); return NULL; }
+    }
+
+    /* `len` entries, and never zero: a zero-size allocation may legitimately
+     * return NULL and would be misread as exhaustion. */
+    const size_t want = len ? (size_t)len : 1u;
+    double *by = (double *)PyMem_Malloc(want * sizeof(double));
+    if (!by) { PyMem_Free(v); PyMem_Free(a);
+               return beam_py_nomem("the per-position results",
+                                    (uint64_t)want * sizeof(double)); }
+
+    double total = 0.0, sink = 0.0, konst = 0.0;
+    BeamError err;
+    Py_BEGIN_ALLOW_THREADS
+    err = beam_mixture_log_power_product_by_position(v, a, n, (uint32_t)len,
+                                                     by, &sink, &konst,
+                                                     &total);
+    Py_END_ALLOW_THREADS
+    PyMem_Free(v); PyMem_Free(a);
+    if (err != BEAM_OK) { PyMem_Free(by); return set_beam_error(err); }
+
+    PyObject *b = edge_doubles_to_bytes(by, len);
+    PyMem_Free(by);
+    if (!b) return NULL;
+    return Py_BuildValue("(dNdd)", total, b, sink, konst);
+}
+
+
+PyObject *py_mixture_power_product(PyObject *self, PyObject *args) {
+    (void)self;
+    PyObject *seq, *exp_seq;
+    if (!PyArg_ParseTuple(args, "OO", &seq, &exp_seq)) return NULL;
+    uint32_t n = 0;
+    const BeamModel **v = borrow_models(seq, &n);
+    if (!v) return NULL;
+    double *a = borrow_exponents(exp_seq, n);
+    if (!a) { PyMem_Free(v); return NULL; }
+
+    const uint32_t slots = len_slots(v[0]);
+    double *by = (double *)PyMem_Malloc((size_t)slots * sizeof(double));
+    if (!by) { PyMem_Free(v); PyMem_Free(a);
+               return beam_py_nomem("the per-length results",
+                                    (uint64_t)slots * sizeof(double)); }
+
+    double total = 0.0;
+    BeamError err;
+    Py_BEGIN_ALLOW_THREADS
+    err = beam_mixture_log_power_product_by_length(v, a, n, by, &total);
+    Py_END_ALLOW_THREADS
+    PyMem_Free(v); PyMem_Free(a);
+    if (err != BEAM_OK) { PyMem_Free(by); return set_beam_error(err); }
+
+    PyObject *b = edge_doubles_to_bytes(by, slots);
+    PyMem_Free(by);
+    if (!b) return NULL;
+    return Py_BuildValue("(dN)", total, b);
+}
+
+PyObject *py_mixture_power_gram(PyObject *self, PyObject *args) {
+    (void)self;
+    PyObject *seq;
+    double a = 0.0;
+    if (!PyArg_ParseTuple(args, "Od", &seq, &a)) return NULL;
+    uint32_t n = 0;
+    const BeamModel **v = borrow_models(seq, &n);
+    if (!v) return NULL;
+
+    double *g = (double *)beam_py_alloc((uint64_t)n * n * sizeof(double),
+                                        "the Gram matrix", n, "members");
+    if (!g) { PyMem_Free(v); return NULL; }
+
+    BeamError err;
+    Py_BEGIN_ALLOW_THREADS
+    err = beam_mixture_power_gram(v, n, a, g);
+    Py_END_ALLOW_THREADS
+    PyMem_Free(v);
+    if (err != BEAM_OK) { PyMem_Free(g); return set_beam_error(err); }
+
+    PyObject *b = edge_doubles_to_bytes(g, (size_t)n * n);
+    PyMem_Free(g);
+    return b;
+}
+
+PyObject *py_mixture_power_pairs(PyObject *self, PyObject *args) {
+    (void)self;
+    PyObject *seq;
+    double a = 0.0;
+    Py_buffer pb;
+    /* The pair list arrives as a buffer of uint32 rather than a Python
+     * sequence: a cohort study names thousands of pairs, and converting them
+     * one `PyLong` at a time inside the GIL is the only part of this call that
+     * would not scale. `y*` accepts any read-only buffer, which a
+     * `numpy.uint32` array satisfies. */
+    if (!PyArg_ParseTuple(args, "Ody*", &seq, &a, &pb)) return NULL;
+    if (pb.len % (Py_ssize_t)(2 * sizeof(uint32_t)) != 0) {
+        PyBuffer_Release(&pb);
+        PyErr_Format(PyExc_ValueError,
+                     "the pair list is %zd bytes, which is not a whole number "
+                     "of uint32 pairs", pb.len);
+        return NULL;
+    }
+    const uint64_t n_pairs = (uint64_t)pb.len / (2 * sizeof(uint32_t));
+
+    uint32_t n = 0;
+    const BeamModel **v = borrow_models(seq, &n);
+    if (!v) { PyBuffer_Release(&pb); return NULL; }
+
+    double *out = (double *)beam_py_alloc(
+        (uint64_t)(n_pairs ? n_pairs : 1) * sizeof(double),
+        "the pairwise results", (uint32_t)n_pairs, "pairs");
+    if (!out) { PyMem_Free(v); PyBuffer_Release(&pb); return NULL; }
+
+    BeamError err;
+    Py_BEGIN_ALLOW_THREADS
+    err = beam_mixture_power_pairs(v, n, a, (const uint32_t *)pb.buf,
+                                   n_pairs, out);
+    Py_END_ALLOW_THREADS
+    PyMem_Free(v);
+    PyBuffer_Release(&pb);
+    if (err != BEAM_OK) { PyMem_Free(out); return set_beam_error(err); }
+
+    PyObject *b = edge_doubles_to_bytes(out, (size_t)n_pairs);
+    PyMem_Free(out);
+    return b;
+}
+
 PyObject *py_mixture_support_union(PyObject *self, PyObject *args) {
     (void)self;
     PyObject *seq;

@@ -237,6 +237,7 @@ class BeamModel:
   def top_k_sequences(self, k: 'int' = 20, *, length: 'int | None' = None) -> 'list[tuple[str, float]]'
   def topology(self, length: 'int') -> 'dict[str, Any]'
   property total_weight
+  def transition_rows(self, length: 'int', position: 'int', *, log: 'bool' = False) -> 'np.ndarray'
   property variant
   def with_prior(self, prior: 'BeamModel', kappa: 'float' = 100.0) -> 'BeamModel'
   def without(self, other: 'Any', *, abundances: 'Iterable[float] | None' = None) -> 'BeamModel'
@@ -720,16 +721,25 @@ class Mixture:
   def __subclasshook__(?)
   def alpha_diversity(self, q: 'float') -> 'float'
   def beta_diversity(self, q: 'float', *, samples: 'int' = 0, seed: 'int | None' = None) -> 'BetaDiversity'
+  def bhattacharyya_coefficient(self, i: 'int', j: 'int') -> 'float'
+  def bhattacharyya_matrix(self) -> 'np.ndarray'
   property config
   def entropy_bounds(self) -> 'EntropyBounds'
   def entropy_estimate(self, n: 'int' = 10000, seed: 'int | None' = None) -> 'EntropyEstimate'
   def gram_matrix(self) -> 'np.ndarray'
+  def hellinger_distance(self, i: 'int', j: 'int') -> 'float'
   def hill_number(self, q: 'float') -> 'float'
   def hill_numbers(self, orders: 'Iterable[float]') -> 'np.ndarray'
   def inner_product(self, *members: 'int') -> 'float'
   property length_distribution
+  def log_bhattacharyya(self, i: 'int', j: 'int') -> 'float'
+  def log_bhattacharyya_matrix(self) -> 'np.ndarray'
+  def log_bhattacharyya_pairs(self, pairs) -> 'np.ndarray'
   def log_gram_matrix(self) -> 'np.ndarray'
   def log_inner_product(self, *members: 'int') -> 'float'
+  def log_power_product(self, *members: 'int', exponents: 'Iterable[float] | None' = None) -> 'float'
+  def log_power_product_by_length(self, *members: 'int', exponents: 'Iterable[float] | None' = None) -> 'np.ndarray'
+  def log_power_product_by_position(self, *members: 'int', length: 'int', exponents: 'Iterable[float] | None' = None)
   def log_power_sum(self, q: 'float') -> 'float'
   def log_pseq(self, sequence: 'str') -> 'float'
   def log_pseq_batch(self, sequences: 'Sequence[str]') -> 'np.ndarray'

@@ -79,7 +79,11 @@ PyObject *py_log_pseq_packed(PyObject *self, PyObject *args);
 PyObject *py_memory_budget(PyObject *self, PyObject *arg);
 PyObject *py_mixture_check_shape(PyObject *self, PyObject *arg);
 PyObject *py_mixture_inner_product(PyObject *self, PyObject *args);
+PyObject *py_mixture_power_product(PyObject *self, PyObject *args);
+PyObject *py_mixture_power_position(PyObject *self, PyObject *args);
 PyObject *py_mixture_gram(PyObject *self, PyObject *args);
+PyObject *py_mixture_power_gram(PyObject *self, PyObject *args);
+PyObject *py_mixture_power_pairs(PyObject *self, PyObject *args);
 PyObject *py_mixture_support_union(PyObject *self, PyObject *args);
 PyObject *py_memory_bytes(PyObject *self, PyObject *arg);
 PyObject *py_live_cache_bytes(PyObject *self, PyObject *arg);
@@ -99,6 +103,7 @@ PyObject *py_observe(PyObject *self, PyObject *args);
 PyObject *py_path_count(PyObject *self, PyObject *args);
 PyObject *py_path_count_total(PyObject *self, PyObject *arg);
 PyObject *py_positional_marginals(PyObject *self, PyObject *args);
+PyObject *py_transition_rows(PyObject *self, PyObject *args);
 PyObject *py_positional_banded(PyObject *self, PyObject *args);
 
 /* insights_bindings.c */
@@ -138,5 +143,6 @@ PyObject *py_query_position_entropy(PyObject *self, PyObject *args);
 PyObject *py_query_probability(PyObject *self, PyObject *args);
 void release_f64_buffers(Py_buffer *views, int n);
 PyObject *set_beam_error(BeamError err);
+PyObject *py_fingerprint_search(PyObject *self, PyObject *args);
 
 #endif /* BEAM_INTERNAL_PYTHON_BINDINGS_H */

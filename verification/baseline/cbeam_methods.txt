@@ -16,6 +16,7 @@ expected_counts
 explain
 file_provenance_span
 finalize
+fingerprint_search
 hill_number
 insights_logo_cost
 insights_logos
@@ -41,6 +42,10 @@ memory_bytes
 mixture_check_shape
 mixture_gram
 mixture_inner_product
+mixture_power_gram
+mixture_power_pairs
+mixture_power_position
+mixture_power_product
 mixture_support_union
 n_cells
 n_nonzero_cells
@@ -87,6 +92,7 @@ threads
 top_k
 topology
 total_weight
+transition_rows
 ztp_bin_expect
 ztp_bin_reduce
 ztp_count_spectrum

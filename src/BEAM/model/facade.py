@@ -2196,6 +2196,61 @@ class BeamModel:
         w, n_res, _logz = _c.positional_marginals(self._g, length, buf)
         return np.frombuffer(w, dtype=np.float64).reshape(length, n_res).copy()
 
+    def transition_rows(self, length: int, position: int, *,
+                        log: bool = False) -> np.ndarray:
+        """All normalized next-residue conditionals at a fixed position.
+
+        Row ``h`` is ``P(X_position=a | preceding context h, length)``
+        under the final normalized sequence law. These are not the stored
+        forward expert rows: backward completion weights and terminal
+        factors are included.
+
+        Returns a float64 array of shape
+        ``(n_residues ** min(order, position), n_residues)``. Columns follow
+        ``BEAM.model.alphabets.symbols(model.alphabet)``. Rows enumerate
+        contexts in that alphabet order, oldest residue first (base
+        ``n_residues``). At position zero there is one row, the empty context.
+        Near the start, contexts contain only preceding residues; sentinel
+        padding is internal and is never an output symbol or row.
+
+        Args:
+            length: Fixed sequence length, from 1 to ``max_length``.
+            position: Zero-based position of the residue being predicted.
+            log: Return natural log probabilities. This avoids underflow
+                when a conditional probability is too small for float64.
+
+        This is a finite exact DP up to floating-point arithmetic, with no
+        probability grid or support pruning. A call holds two rolling suffix
+        vectors, one edge-weight layer, and the returned table. It recomputes
+        the suffix for this position; repeated calls do not cache all lengths
+        or all transition layers. The normal memory budget applies.
+
+        Under BEAM's positive prior every row sums to one (or exponentiates
+        to one in log mode). A context with no completing path in a model
+        with structural zeros returns all zeros, or all ``-inf`` in log mode.
+
+        After a streamed order-k context distribution ``mass`` has reached
+        position ``t >= k``, its next window distribution is
+        ``mass[:, None] * model.transition_rows(length, t)``. Marginalizing
+        the oldest residue advances the context distribution.
+        """
+        try:
+            length = operator.index(length)
+        except TypeError:
+            raise BeamTypeError("length must be an integer") from None
+        length = self._check_length(length)
+        if length < 1:
+            raise BeamValueError("transition rows need length >= 1")
+        try:
+            position = operator.index(position)
+        except TypeError:
+            raise BeamTypeError("position must be an integer") from None
+        if not 0 <= position < length:
+            raise BeamValueError(
+                f"position must be between 0 and {length - 1}, got {position}")
+        buf, rows, n_res = _c.transition_rows(self._g, length, position, log)
+        return np.frombuffer(buf, dtype=np.float64).reshape(rows, n_res).copy()
+
     def positional_banded(self, length: int, edges, *,
                           counting: bool = False, bins: int = 512,
                           spacing: float = 0.0) -> BandedMarginals:

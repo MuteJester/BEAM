@@ -23,6 +23,7 @@ const char *BEAM_CAPSULE_NAME = "BeamModel";
 
 
 static PyMethodDef module_methods[] = {
+    {"fingerprint_search", py_fingerprint_search, METH_VARARGS, NULL},
     {"publicness_moments",      py_publicness_moments,                 METH_VARARGS, NULL},
     {"publicness_pgf",          py_publicness_pgf,                     METH_VARARGS, NULL},
     {"publicness_accumulate",   py_publicness_accumulate,              METH_VARARGS, NULL},
@@ -91,7 +92,11 @@ static PyMethodDef module_methods[] = {
     {"log_mellin_line",    py_log_mellin_line,               METH_VARARGS, NULL},
     {"mixture_check_shape", py_mixture_check_shape,            METH_O, NULL},
     {"mixture_inner_product", py_mixture_inner_product,        METH_VARARGS, NULL},
+    {"mixture_power_product", py_mixture_power_product,        METH_VARARGS, NULL},
+    {"mixture_power_position", py_mixture_power_position,      METH_VARARGS, NULL},
     {"mixture_gram",        py_mixture_gram,                  METH_VARARGS, NULL},
+    {"mixture_power_gram",  py_mixture_power_gram,            METH_VARARGS, NULL},
+    {"mixture_power_pairs", py_mixture_power_pairs,           METH_VARARGS, NULL},
     {"mixture_support_union", py_mixture_support_union,        METH_VARARGS, NULL},
     {"surprisal_moments",  py_surprisal_moments,             METH_VARARGS, NULL},
     {"surprisal_cumulants", py_surprisal_cumulants,          METH_VARARGS, NULL},
@@ -102,6 +107,7 @@ static PyMethodDef module_methods[] = {
     {"surprisal_by_depth", py_surprisal_by_depth,            METH_VARARGS, NULL},
     {"topology",           py_topology,                      METH_VARARGS, NULL},
     {"positional_marginals", py_positional_marginals,        METH_VARARGS, NULL},
+    {"transition_rows",    py_transition_rows,              METH_VARARGS, NULL},
     {"positional_banded",    py_positional_banded,           METH_VARARGS, NULL},
     {"insights_logos",       py_insights_logos,              METH_VARARGS, NULL},
     {"insights_logo_cost",   py_insights_logo_cost,          METH_VARARGS, NULL},

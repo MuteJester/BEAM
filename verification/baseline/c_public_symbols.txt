@@ -4,6 +4,8 @@ beam_crc32c
 beam_crc32c_software
 beam_crc32c_update
 beam_error_message
+beam_fingerprint_free
+beam_fingerprint_search
 beam_insights_logo_cost
 beam_insights_logo_set_free
 beam_insights_logos
@@ -13,6 +15,11 @@ beam_mixture_check_shape
 beam_mixture_gram
 beam_mixture_log_inner_product
 beam_mixture_log_inner_product_by_length
+beam_mixture_log_power_product
+beam_mixture_log_power_product_by_length
+beam_mixture_log_power_product_by_position
+beam_mixture_power_gram
+beam_mixture_power_pairs
 beam_mixture_support_union
 beam_mixture_support_union_by_length
 beam_model_accumulator_max
@@ -84,6 +91,7 @@ beam_model_threads
 beam_model_top_k
 beam_model_topology
 beam_model_total_weight
+beam_model_transition_rows
 beam_publicness_accumulate
 beam_publicness_accumulate_grouped
 beam_publicness_moments

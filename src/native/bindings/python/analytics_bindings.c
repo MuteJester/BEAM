@@ -862,6 +862,49 @@ PyObject *py_positional_marginals(PyObject *self, PyObject *args) {
     return Py_BuildValue("(NId)", b, R, logz);
 }
 
+/* Actual final-law transitions for every real-residue context at (L, t). */
+PyObject *py_transition_rows(PyObject *self, PyObject *args) {
+    (void)self;
+    PyObject *cap, *length_obj, *position_obj;
+    int log_space;
+    if (!PyArg_ParseTuple(args, "OOOp", &cap, &length_obj, &position_obj,
+                          &log_space)) return NULL;
+    BeamModel *m = edge_from_capsule(cap);
+    if (!m) return NULL;
+    const BeamModelConfig *cfg = beam_model_config(m);
+    uint32_t length, position;
+    if (beam_py_count_max(length_obj, "length", cfg->max_length, &length) < 0)
+        return NULL;
+    if (length == 0u) {
+        PyErr_SetString(PyExc_ValueError, "transition rows need length >= 1");
+        return NULL;
+    }
+    if (beam_py_count_max(position_obj, "position", length - 1u,
+                           &position) < 0) return NULL;
+
+    const uint32_t R = beam_model_n_residues(m);
+    const uint32_t width = position < cfg->order ? position : cfg->order;
+    uint32_t rows = 1u;
+    for (uint32_t j = 0; j < width; ++j) rows *= R;
+    const size_t n = (size_t)rows * R;
+    const uint64_t bytes = (uint64_t)n * sizeof(double);
+    /* The native sweep charges its scratch plus this output. After it
+     * returns, conversion briefly holds both this buffer and the bytes. */
+    if (beam_py_budget(2u * bytes, rows, "transition rows") < 0) return NULL;
+    double *out = beam_py_alloc(bytes, "the transition rows", rows,
+                                "transition rows");
+    if (!out) return NULL;
+    BeamError err;
+    Py_BEGIN_ALLOW_THREADS
+    err = beam_model_transition_rows(m, length, position, log_space != 0, out);
+    Py_END_ALLOW_THREADS
+    if (err != BEAM_OK) { PyMem_Free(out); return set_beam_error(err); }
+    PyObject *b = edge_doubles_to_bytes(out, n);
+    PyMem_Free(out);
+    if (!b) return NULL;
+    return Py_BuildValue("(NII)", b, rows, R);
+}
+
 /**
  * `positional_banded(cap, length, counting, bins, spacing, edges) ->
  *  (marginals, band_mass, position_mass, n_residues, n_bands, spacing)`

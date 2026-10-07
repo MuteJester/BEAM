@@ -147,6 +147,96 @@ BeamError beam_mixture_log_inner_product_by_length(
         double *out_by_length, double *out_total);
 
 /**
+ * `ln sum_s prod_f P_f(s)^a_f` over every sequence of length `len`, exactly.
+ *
+ * The inner product with a PER-MEMBER EXPONENT. `expo` holds `k` of them;
+ * NULL is all ones and is exactly `beam_mixture_log_inner_product`, bit for
+ * bit, since the scaling is a multiply by 1.0.
+ *
+ * This is the whole Chernoff family. `expo = (1/2, 1/2)` is the Bhattacharyya
+ * coefficient `BC(P_0, P_1) = sum_s sqrt(P_0 P_1)`, whose complement
+ * `1 - BC` is the squared Hellinger distance -- a true metric between two
+ * models over the WHOLE sequence space, owing nothing to which sequences
+ * either donor happened to be sequenced deeply enough to show.
+ *
+ * Why it is the same sweep: a power of a product is the product of the powers,
+ * so `a_f` scales member `f`'s edge weights and its per-length constant and
+ * nothing else moves. One multiply per edge.
+ *
+ * REFUSED: a negative exponent, since `sum_s P(s)^-a` diverges over a support
+ * this large and would come back as `inf`; a non-finite one; and an all-zero
+ * vector, which asks for `sum_s 1` over the whole space -- a support count,
+ * which `beam_mixture_support_union` answers properly.
+ *
+ * An exponent of exactly 0 DROPS that member rather than zeroing its weights.
+ * `P^0 = 1` at every sequence including the ones that member cannot spell, so
+ * it must not go on constraining the support; `<P_A^1, P_B^0>` is
+ * `sum_s P_A(s) = 1` whatever `B` is.
+ */
+BeamError beam_mixture_log_power_product(const BeamModel *const *models,
+                                         const double *expo, uint32_t k,
+                                         uint32_t len, double *out);
+
+/**
+ * `beam_mixture_log_power_product` at every length, and their total.
+ *
+ * Same contract as `beam_mixture_log_inner_product_by_length`, to which this
+ * delegates when `expo` is NULL. The per-length breakdown is what separates
+ * the two halves of a Bhattacharyya coefficient: the part that is merely the
+ * two donors' CDR3 LENGTH distributions overlapping, and the part that is the
+ * sequences within a length. The first has a model-free analogue; the second
+ * does not.
+ */
+BeamError beam_mixture_log_power_product_by_length(
+        const BeamModel *const *models, const double *expo, uint32_t k,
+        double *out_by_length, double *out_total);
+
+/**
+ * `beam_mixture_log_power_product` at one length, split BY POSITION.
+ *
+ * The sweep already walks the coupled trellis position by position; this
+ * reports what each position contributed instead of discarding it. The
+ * identity, which `tests/native/test_mixture.c` asserts, is
+ *
+ *     *out_total == *out_const + sum_i out_by_position[i] + *out_sink
+ *
+ * with `out_by_position` receiving exactly `len` doubles. `*out_total` is
+ * `beam_mixture_log_power_product`'s answer BIT FOR BIT: this function adds
+ * accumulators and changes no existing arithmetic, so a caller may read the
+ * decomposition without wondering whether the number moved.
+ *
+ * WHAT THE TERMS ARE, and why they are not the sweep's rescaling increments.
+ * Writing `m_i` for the total forward mass over the frontier after `i`
+ * residues, position `i`'s term is
+ *
+ *     out_by_position[i] = log(m_{i+1} / m_i)
+ *
+ * a ratio of SUMS. The sweep's own per-layer increments are `wmax + log nmax`,
+ * maxima chosen for numerical range, so splitting the total along them is
+ * GAUGE-DEPENDENT: it would sum correctly while carrying no invariant meaning,
+ * and three sweeps rescaled by three different maxima could not be compared
+ * term by term. That is the defect recorded against the score-share
+ * decomposition in `.private/divergence_geometry/04_refuted.md`, which summed
+ * correctly and told a different mechanistic story from the chain rule on the
+ * same models. A ratio of sums depends on nothing but the model.
+ *
+ * `*out_sink` is the final edge into the sink, which closes the last residue's
+ * backward term and is NOT commensurable with the positions: report it apart.
+ * `*out_const` is `sum_f a_f (log_pi[len] - log_z[len])`, the length prior and
+ * partition function -- the part that is not positional at all, and which
+ * `05_next.md` item 4 asks to be computable on its own, since a positional
+ * signature reproduced by it alone would be the length prior in disguise.
+ *
+ * Any of `out_by_position`, `out_sink` and `out_const` may be NULL. A length
+ * no member can produce, or one whose supports never meet, sets every term to
+ * `-INFINITY`, matching the total.
+ */
+BeamError beam_mixture_log_power_product_by_position(
+        const BeamModel *const *models, const double *expo, uint32_t k,
+        uint32_t len, double *out_by_position, double *out_sink,
+        double *out_const, double *out_total);
+
+/**
  * Every pairwise log inner product, computed one pair per thread.
  *
  * `out` receives `k * k` doubles, row-major; `out[i * k + j]` is
@@ -158,6 +248,38 @@ BeamError beam_mixture_log_inner_product_by_length(
  */
 BeamError beam_mixture_gram(const BeamModel *const *models, uint32_t k,
                             double *out);
+
+/**
+ * Every pairwise `ln sum_s (P_i(s) P_j(s))^a`, one pair per thread.
+ *
+ * `beam_mixture_gram` with one exponent applied to BOTH members of each pair,
+ * which is the only form a symmetric matrix admits. `a = 1/2` is the pairwise
+ * Bhattacharyya coefficient of a cohort and is what this is for; the diagonal
+ * is then exactly `ln 1 = 0`.
+ *
+ * `a` must be finite and strictly positive: 0 would drop both members of every
+ * pair and leave the size of the whole space on every entry.
+ */
+BeamError beam_mixture_power_gram(const BeamModel *const *models, uint32_t k,
+                                  double a, double *out);
+
+/**
+ * `ln sum_s (P_i(s) P_j(s))^a` for a NAMED LIST of pairs, one pair per thread.
+ *
+ * `pairs` holds `2 * n_pairs` member indices -- `i` then `j` -- and `out`
+ * receives `n_pairs` values in the same order. Out-of-range indices are
+ * refused before any sweep opens.
+ *
+ * This exists because the Gram matrix is the wrong shape for a cohort: its
+ * cost is `k(k+1)/2` sweeps, so doubling the cohort quadruples the bill, while
+ * a study that wants a thinning null plus a sample of cross-donor pairs needs
+ * a few hundred NAMED pairs out of the tens of thousands available. A pair may
+ * name one member twice, which at `a = 1/2` must return exactly `ln 1 = 0` and
+ * is therefore a check the caller can put anywhere in the list.
+ */
+BeamError beam_mixture_power_pairs(const BeamModel *const *models, uint32_t k,
+                                   double a, const uint32_t *pairs,
+                                   uint64_t n_pairs, double *out);
 
 /**
  * Sequences of length `len` that AT LEAST ONE member can produce, exactly.

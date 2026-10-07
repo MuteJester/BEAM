@@ -93,7 +93,8 @@ class Mixture:
         EntropyBounds(lower=..., upper=..., ...)
     """
 
-    __slots__ = ("_models", "_caps", "_w", "_logw", "_ip_cache", "_hill_cache")
+    __slots__ = ("_models", "_caps", "_w", "_logw", "_ip_cache",
+                 "_bc_cache", "_hill_cache")
 
     def __init__(self, models: Sequence[Any],
                  weights: Iterable[float] | None = None) -> None:
@@ -141,6 +142,7 @@ class Mixture:
             raise _translate(exc) from None
 
         self._ip_cache: dict[tuple[int, ...], float] = {}
+        self._bc_cache: dict[tuple[int, int], float] = {}
         self._hill_cache: dict[float, np.ndarray] = {}
 
     # ── Identity ────────────────────────────────────────────────
@@ -323,6 +325,260 @@ class Mixture:
     def inner_product(self, *members: int) -> float:
         """:meth:`log_inner_product` on the linear scale. Exactly 0.0 when disjoint."""
         return math.exp(self.log_inner_product(*members))
+
+    def _exponents(self, n: int,
+                   exponents: Iterable[float] | None) -> np.ndarray | None:
+        """Validate an exponent vector, or ``None`` for all ones.
+
+        Refused rather than clipped, and refused HERE rather than in the sweep,
+        so the message names the position in the caller's own tuple.
+        """
+        if exponents is None:
+            return None
+        a = np.asarray(list(exponents), dtype=np.float64)
+        if a.shape != (n,):
+            raise BeamValueError(
+                f"one exponent per named member is needed: {n} members named "
+                f"and {a.size} exponents")
+        if not np.all(np.isfinite(a)):
+            raise BeamValueError(
+                f"exponents must all be finite, got {a.tolist()!r}")
+        if np.any(a < 0.0):
+            raise BeamValueError(
+                f"exponents must be non-negative, got {a.min()!r}; "
+                f"sum_s P(s)^-a diverges over this support and would come "
+                f"back as inf with nothing to act on")
+        if not np.any(a > 0.0):
+            raise BeamValueError(
+                "at least one exponent must be positive: with every exponent "
+                "0 the product is 1 at every sequence and the sum is the size "
+                "of the whole space, which support_size() answers properly")
+        return a
+
+    def log_power_product(self, *members: int,
+                          exponents: Iterable[float] | None = None) -> float:
+        """``ln sum_s prod_f P_f(s)^a_f`` over the members named, exactly.
+
+        :meth:`log_inner_product` with a per-member exponent, which is the
+        whole Chernoff family. ``exponents=(0.5, 0.5)`` is the Bhattacharyya
+        coefficient and has its own method; ``(a, 1 - a)`` is the Chernoff
+        coefficient at that tilt.
+
+        It is the same single sweep: a power of a product is the product of the
+        powers, so ``a_f`` scales member ``f``'s edge weights and its
+        per-length constant and nothing else about the recursion moves.
+
+        ``exponents`` lines up with the POSITIONS NAMED, not with the member
+        indices, so ``log_power_product(3, 1, exponents=(0.25, 0.75))`` raises
+        member 3 to 0.25.
+
+        An exponent of exactly 0 drops that member: ``P^0 = 1`` at every
+        sequence, including ones that member cannot spell, so it stops
+        constraining the support as well as the value. ``exponents=(1, 0)``
+        therefore returns ``ln sum_s P(s) = 0``.
+
+        Returns ``-inf`` when the members with positive exponents share no
+        sequence. That is an answer.
+        """
+        idx = tuple(self._check_member(i) for i in members)
+        if not idx:
+            raise BeamValueError("name at least one member")
+        a = self._exponents(len(idx), exponents)
+        if a is None:
+            return self.log_inner_product(*idx)
+        try:
+            total, _by = _c.mixture_power_product(
+                [self._caps[i] for i in idx], a.tolist())
+        except (ValueError, RuntimeError, MemoryError) as exc:
+            raise _translate(exc) from None
+        return float(total)
+
+    def log_power_product_by_length(
+            self, *members: int,
+            exponents: Iterable[float] | None = None) -> np.ndarray:
+        """:meth:`log_power_product` split by sequence length.
+
+        ``out[L]`` is ``ln sum_{|s| = L} prod_f P_f(s)^a_f`` and ``out[0]`` is
+        always ``-inf``, there being no length-zero sequence. The entries
+        include each member's length prior, so they sum (in the log domain) to
+        the total rather than being conditional on the length.
+
+        That split is the one control a Bhattacharyya coefficient between two
+        repertoires needs: how much of the overlap is the two donors' CDR3
+        length distributions agreeing -- a quantity with a model-free analogue
+        -- and how much is the sequences within a length, which has none.
+        """
+        idx = tuple(self._check_member(i) for i in members)
+        if not idx:
+            raise BeamValueError("name at least one member")
+        a = self._exponents(len(idx), exponents)
+        caps = [self._caps[i] for i in idx]
+        try:
+            if a is None:
+                _total, by = _c.mixture_inner_product(caps)
+            else:
+                _total, by = _c.mixture_power_product(caps, a.tolist())
+        except (ValueError, RuntimeError, MemoryError) as exc:
+            raise _translate(exc) from None
+        return np.frombuffer(by, dtype=np.float64).copy()
+
+    def log_power_product_by_position(
+            self, *members: int, length: int,
+            exponents: Iterable[float] | None = None):
+        """:meth:`log_power_product` at one length, split BY POSITION.
+
+        Returns ``(by_position, sink, const, total)``. ``by_position`` holds
+        ``length`` entries and the identity, asserted in the C tests, is
+
+            total == const + by_position.sum() + sink
+
+        with ``total`` equal to :meth:`log_power_product`'s answer bit for bit.
+
+        Position ``i``'s entry is ``log(m_{i+1} / m_i)``, the log ratio of the
+        total forward mass over the frontier either side of that layer. It is
+        **not** the sweep's rescaling increment: those are maxima chosen for
+        numerical range, so a split along them would sum correctly while
+        depending on the gauge, and three sweeps rescaled by three different
+        maxima could not be compared term by term. A ratio of sums depends on
+        the model alone, which is what lets the dissimilarity profile
+
+            d_jk(i) = (1/2)[g_jj(i) + g_kk(i)] - g_jk(i)
+
+        combine terms from three separate calls.
+
+        ``sink`` is the final edge into the sink, which carries one more edge
+        than any position and is not commensurable with them. ``const`` is the
+        length prior and partition function, the part that is not positional;
+        it is returned separately because a positional signature reproduced by
+        it alone would be the length prior in disguise.
+
+        A raw profile is NOT flat even for a model against itself: BEAM's layer
+        weights carry a backward term, so the forward mass is not conserved
+        along the receptor and the sink closes the accounting. The profile to
+        read is the difference above, in which that common structure cancels.
+        """
+        idx = tuple(self._check_member(i) for i in members)
+        if not idx:
+            raise BeamValueError("name at least one member")
+        if length < 1:
+            raise BeamValueError(f"length must be at least 1, got {length}")
+        a = self._exponents(len(idx), exponents)
+        caps = [self._caps[i] for i in idx]
+        try:
+            total, by, sink, konst = _c.mixture_power_position(
+                caps, a.tolist() if a is not None else None, int(length))
+        except (ValueError, RuntimeError, MemoryError) as exc:
+            raise _translate(exc) from None
+        return np.frombuffer(by, dtype=np.float64).copy(), sink, konst, total
+
+    # ── Bhattacharyya and Hellinger ─────────────────────────────
+
+    def log_bhattacharyya(self, i: int, j: int) -> float:
+        """``ln sum_s sqrt(P_i(s) P_j(s))``, exactly.
+
+        The Bhattacharyya coefficient of two members, on the log scale. It is
+        1 (log 0) only when the two distributions are identical and falls
+        towards 0 (log -inf) as they separate, by ``sqrt(pq) <= (p + q)/2``
+        termwise.
+
+        What makes it worth having over any overlap statistic computed from
+        counts: the sum runs over the WHOLE sequence space, so it owes nothing
+        to which sequences either donor was sequenced deeply enough to show.
+        Two repertoires with no sequence in common can still have a large
+        coefficient if the processes that generated them agree.
+
+        The log scale is the useful one at cohort size: members whose supports
+        do not meet read ``-inf`` here and exactly ``0.0`` in
+        :meth:`bhattacharyya_coefficient`.
+        """
+        key = (self._check_member(i), self._check_member(j))
+        key = (min(key), max(key))
+        hit = self._bc_cache.get(key)
+        if hit is not None:
+            return hit
+        v = self.log_power_product(i, j, exponents=(0.5, 0.5))
+        self._bc_cache[key] = v
+        return v
+
+    def bhattacharyya_coefficient(self, i: int, j: int) -> float:
+        """:meth:`log_bhattacharyya` on the linear scale, in ``[0, 1]``."""
+        return math.exp(self.log_bhattacharyya(i, j))
+
+    def hellinger_distance(self, i: int, j: int) -> float:
+        """``sqrt(1 - BC(P_i, P_j))``: a true metric between two members.
+
+        Symmetric, zero only on identical distributions, and it satisfies the
+        triangle inequality -- which the Bhattacharyya coefficient itself does
+        not. In ``[0, 1]``, 1 for distributions that share no mass.
+
+        Clamped at 0 from below, because ``BC`` of a member with itself is 1 up
+        to the sweep's own rounding and ``sqrt`` of ``-1e-16`` is a NaN rather
+        than the 0 that is meant.
+        """
+        bc = self.bhattacharyya_coefficient(i, j)
+        return math.sqrt(max(0.0, 1.0 - bc))
+
+    def log_bhattacharyya_matrix(self) -> np.ndarray:
+        """``ln BC(P_i, P_j)`` for every pair, ONE PAIR PER THREAD.
+
+        :meth:`log_gram_matrix` at exponent 1/2. The same reasoning applies to
+        the parallelism and to the mirroring, and the same caching: every entry
+        is kept, so :meth:`log_bhattacharyya` is free afterwards.
+
+        The diagonal is exactly ``ln sum_s P_i(s) = 0`` up to rounding, which
+        is a free correctness check on every row.
+        """
+        n = self.n_members
+        try:
+            raw = _c.mixture_power_gram(self._caps, 0.5)
+        except (ValueError, RuntimeError, MemoryError) as exc:
+            raise _translate(exc) from None
+        g = np.frombuffer(raw, dtype=np.float64).reshape(n, n).copy()
+        for i in range(n):
+            for j in range(i, n):
+                self._bc_cache[(i, j)] = float(g[i, j])
+        return g
+
+    def bhattacharyya_matrix(self) -> np.ndarray:
+        """:meth:`log_bhattacharyya_matrix` on the linear scale, in ``[0, 1]``."""
+        return np.exp(self.log_bhattacharyya_matrix())
+
+    def log_bhattacharyya_pairs(self, pairs) -> np.ndarray:
+        """``ln BC`` for a NAMED LIST of pairs, one pair per thread.
+
+        ``pairs`` is anything that reads as an ``(n, 2)`` array of member
+        indices; the result is one value per row, in the same order.
+
+        The matrix is the wrong shape for a cohort. Its cost is ``K(K+1)/2``
+        sweeps, so doubling the cohort quadruples the bill, while a study that
+        wants a thinning null -- one pair per donor -- plus a sample of
+        cross-donor pairs needs a few hundred specific pairs out of the tens of
+        thousands available. Naming them costs one sweep each.
+
+        A row may name one member twice; ``ln BC(P_i, P_i)`` is exactly
+        ``ln 1 = 0``, so such a row is a correctness check the caller can put
+        anywhere in the list. Every entry is cached, as the matrix's are.
+        """
+        idx = np.asarray(pairs, dtype=np.uint32)
+        if idx.ndim != 2 or idx.shape[1] != 2:
+            raise BeamValueError(
+                f"pairs must be an (n, 2) array of member indices, got shape "
+                f"{idx.shape}")
+        if idx.size and int(idx.max()) >= self.n_members:
+            raise BeamValueError(
+                f"a pair names member {int(idx.max())}, which is outside "
+                f"0..{self.n_members - 1}")
+        if idx.shape[0] == 0:
+            return np.empty(0, dtype=np.float64)
+        try:
+            raw = _c.mixture_power_pairs(self._caps, 0.5,
+                                         np.ascontiguousarray(idx))
+        except (ValueError, RuntimeError, MemoryError) as exc:
+            raise _translate(exc) from None
+        out = np.frombuffer(raw, dtype=np.float64).copy()
+        for (i, j), v in zip(idx.tolist(), out.tolist()):
+            self._bc_cache[(min(i, j), max(i, j))] = float(v)
+        return out
 
     def log_gram_matrix(self) -> np.ndarray:
         """``ln <P_i, P_j>`` for every pair, computed ONE PAIR PER THREAD.

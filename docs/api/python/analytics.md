@@ -1,5 +1,67 @@
 # Scoring detail, per-length quantities, spectra, distributions, calibration
 
+## Gapped repertoire fingerprints
+
+```python
+from BEAM.analytics.fingerprint import compare
+
+result = compare(model_a, model_b, lengths=[14], max_leaves=12,
+                 max_depth=4, lookahead=2, beam_width=16, max_queries=64)
+print(result.distance, result.coverage, result.within_coverage)
+for leaf in sorted(result.by_length[14].leaves,
+                   key=lambda x: x.contribution, reverse=True):
+    print(leaf.pattern, leaf.conditional_p, leaf.conditional_q,
+          leaf.contribution)
+counts = result.counts(observed_sequences)
+```
+
+The C search builds a shared tree of residue questions. Its disjoint leaves
+are gapped sequence families, including exclusions such as `[^G]`. Every
+bracket expression occupies one position; `_` accepts any residue. A sequence
+belongs to exactly one category. `counts` returns a dictionary keyed by
+`(length, node)` and rejects unsupported lengths or characters. Duplicates
+count repeatedly; supply distinct sequences for a presence-weighted comparison.
+
+For joint category masses `p_j, q_j`, the squared dissimilarity is
+`0.5 * sum((sqrt(p_j) - sqrt(q_j))**2)`. `leaf.p/q` include length probability;
+`conditional_p/q` condition on that leaf's length. Contributions add to
+`result.squared_distance`. `length_squared_distance` reports length separation
+and `within_squared_distance` reports the remainder.
+
+`coverage` is the fraction of **whole-sequence squared Hellinger separation**
+retained by the categories. `within_coverage` excludes the length contribution
+from both numerator and denominator. `residual` gives the unresolved squared
+separation. Coverage is `None` when its denominator is at most `1e-12` or when
+`compute_full=False`. It does not measure explained biology or coverage of the
+earlier local five-block distance.
+
+The native kernel caches compact reachable-context edge tables for one length,
+then reuses log-space conditional forward/backward sweeps. Memory is checked
+against `BEAM.set_memory_budget` before allocating the cache and search state;
+each length's cache is freed before the next. `by_length[L].scratch_bytes`
+reports the conservative scratch estimate, excluding the existing models.
+Search runs with the GIL released and respects `BEAM.set_threads`.
+
+`lengths` restricts the search, **not the probability law**: unsearched lengths
+retain their unsplit category. The default searches every supported length, so
+start with an explicit length to measure cost. Current Python compatibility
+requires matching alphabet, order and maximum length, as the mixture API does.
+
+Budgets are per length: `max_leaves` includes remainders, `max_depth` counts all
+binary questions on a path, and `max_queries` counts pairs of conditional
+sweeps. `lookahead` is 1, 2 or 3. Candidate conjunctions can span arbitrary
+positions. Half the candidate beam ranks gain per added leaf; the exploratory
+half favors positional diversity and support, allowing zero-gain intermediate
+patterns. This is a heuristic search, not exhaustive pair enumeration or a
+global optimum. The result records actual queries and `budget_exhausted`.
+
+For a fixed tree the score is Hellinger between category-probability vectors.
+A tree learned separately for each pair does not have an established triangle
+inequality. Probabilities are exact under fitted models, up to floating-point
+rounding. Validate selected patterns on independent data and compare empirical
+counts of the same gapped categories before making a biological or estimation
+advantage claim.
+
 ## Scoring
 
 ### log_pseq
@@ -105,6 +167,70 @@ raw + model.log_length_prior(L) - model.log_partition(L)   # == e["log_pseq"]
 
 !!! note "One exception, and it is flagged"
     A sequence of a length the model never observed has `log_pseq == -inf` while its per-residue terms stay finite: the length prior, not any residue, is what rules it out. `length_is_producible` says which case you are in, and the identity above holds only when it is `True`.
+
+## Normalized transition rows
+
+```python
+model.transition_rows(length, position, *, log=False) -> np.ndarray
+```
+
+All next-residue conditionals of the **final normalized sequence law** at a
+fixed length and zero-based position. These include backward completion and
+terminal factors; they are not the stored forward expert table.
+
+With alphabet size `R` and model order `k`, the shape is
+`(R ** min(k, position), R)`. Columns follow the model's residue alphabet.
+Context rows use the same alphabet order, oldest residue first, as a base-`R`
+index. Position zero has one empty-context row. Prefix contexts contain only
+actual preceding residues; sentinel padding stays internal.
+
+```python
+from BEAM.model.alphabets import symbols
+
+alphabet = symbols(model.alphabet)
+context = "CASS"                    # for an amino-acid order-4 model
+row = 0
+for residue in context:
+    row = row * len(alphabet) + alphabet.index(residue)
+probabilities = model.transition_rows(14, 8)[row]
+log_probabilities = model.transition_rows(14, 8, log=True)[row]
+```
+
+Here the context occupies positions 4 through 7 and the row predicts position
+8, conditional on total length 14. `log=True` preserves probabilities whose
+linear float64 values would underflow. Indices must be integers; invalid
+lengths or positions raise before allocating the result.
+
+The rows also produce consecutive block marginals with a streaming recursion:
+
+```python
+import numpy as np
+
+def block_marginals(model, length):
+    R, k = model.n_residues, model.config["order"]
+    width = min(k + 1, length)
+    mass = np.ones(1)
+    for position in range(length):
+        block = mass[:, None] * model.transition_rows(length, position)
+        if position >= width - 1:
+            yield position - width + 1, block.reshape((R,) * width)
+        mass = (block.reshape(-1) if position < k
+                else block.reshape(R, -1).sum(axis=0))
+```
+
+This integrates all supported complete strings. It has no probability bins,
+contour integration, or per-word masked-query loop. The carried context vector
+has `R**k` entries; the returned row table and each emitted block can have
+`R**(k+1)` entries. Consume blocks as they are yielded rather than retaining
+all lengths and positions.
+
+Each native call uses two rolling suffix vectors and one edge-weight layer,
+and recomputes the suffix from the sink to the requested position. Repeated
+position calls therefore repeat suffix work; they do not cache all transition
+layers. The memory budget includes native scratch and the output table, while
+the binding also checks the temporary output-copy cost. This API is the kernel
+for block-based analyses; it does not itself implement or validate a repertoire
+distance or a depth-ladder comparison.
 
 ## Per-length quantities
 

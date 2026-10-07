@@ -1033,6 +1033,53 @@ BeamError beam_model_positional_marginals(const BeamModel *m, uint32_t length,
                                           double *out, double *out_log_z);
 
 /**
+ * All normalized transition rows of the fixed-length sequence law at one
+ * zero-based position, in residue-only context order.
+ *
+ * For k = model order, h = min(k, position), and R = number of emitted
+ * residues, `out` must hold R^h * R doubles. Its row-major shape is (R^h, R):
+ *
+ *   out[row * R + x] = P(X_position = x | X_(position-h)..X_(position-1), L).
+ *
+ * `row` is the h-residue context packed in base R, oldest residue most
+ * significant, using the model alphabet's residue order. The empty context
+ * at position 0 has one row. Sentinel symbols are never output; before the
+ * context is full, the trellis's missing leading slots are padded internally
+ * with the same sentinel as a path from the root.
+ *
+ * These are conditionals of the FINAL NORMALIZED law, not either expert's
+ * stored probabilities. Each edge is multiplied by its suffix partition
+ * value, including delayed backward scores at the sink, then normalized over
+ * emitted residues. The length prior cancels. Products of these conditionals
+ * recover P(sequence | L).
+ *
+ * If `log_space` is true, output natural logarithms; otherwise output
+ * probabilities. Current positive-prior models support every exposed context.
+ * Defensively, a context with no completing path receives an all-zero row
+ * (all -INFINITY in log space), not a fabricated conditional distribution.
+ * Non-finite arithmetic other than absent-path -INFINITY is an error; output
+ * contents are unspecified on error. Probability output can underflow for
+ * sufficiently rare emissions; use log space to retain their log values.
+ *
+ * This is a finite, full-suffix dynamic program: no sampling, probability
+ * bins, truncation, or pruning. Ordinary floating-point rounding remains.
+ * It holds only two rolling backward vectors and one edge layer, descending
+ * from the sink to position + 1, rather than retaining every backward layer.
+ * With S = (R+1)^k, scratch is S*(R+2)*sizeof(double); the budget additionally
+ * charges the caller-owned R^(h+1)*sizeof(double) output. Suffix recurrence
+ * work is O((length-position-1)*S*R), plus edge/tail construction and output
+ * normalization. Repeated calls for different positions recompute suffixes.
+ *
+ * @return BEAM_ERR_NOT_BUILT before finalize; BEAM_ERR_PARAM_OUT_OF_RANGE
+ *         for an unsupported length, position >= length, non-finite weights,
+ *         or arithmetic outside the floating-point range; BEAM_ERR_BUDGET
+ *         if scratch plus output exceeds the configured operation budget.
+ */
+BeamError beam_model_transition_rows(const BeamModel *m, uint32_t length,
+                                     uint32_t position, bool log_space,
+                                     double *out);
+
+/**
  * `P(x_i = a | length, band)` for each band of a sequence's own surprisal.
  *
  * One residue distribution per position PER BAND OF PROBABILITY: what a
