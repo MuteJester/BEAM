@@ -45,3 +45,9 @@ tools/runtime_profile/runs/
 tools/runtime_profile/cache/
 tools/runtime_profile/TIMINGS.md
 tools/runtime_profile/*.log
+
+# Benchmarks design and working notes
+benchmarks/*.md
+benchmarks/runs/
+
+

@@ -1,0 +1,6 @@
+-std=c11
+-D_GNU_SOURCE
+-fopenmp
+-I.
+-I../../include
+-I../../src/native/internal

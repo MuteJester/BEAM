@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# BEAM C benchmarks: build, run, record, report. See benchmarks/DESIGN.md.
+#   ./benchmarks/run --help
+set -euo pipefail
+exec python3 "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/python/runner.py" "$@"
