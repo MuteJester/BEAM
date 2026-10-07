@@ -20,6 +20,7 @@ import math
 import numpy as np
 import pytest
 
+import BEAM
 from BEAM import BeamModel
 from BEAM.constants import BEAM_ALPHABET as AA
 
@@ -314,9 +315,20 @@ def test_asking_for_one_logo_from_several_bands_is_refused(model):
 # ═══════════════════════════════════════════════════════════════
 
 def test_the_cost_is_reported_before_the_sweep_and_scales_with_bins(model):
-    a = model.insights.cost(LENGTH, edges=[-math.inf, math.inf], bins=1024)
-    b = model.insights.cost(LENGTH, edges=[-math.inf, math.inf], bins=2048)
-    c = model.insights.cost(LENGTH, edges=[-math.inf, math.inf], bins=4096)
-    assert a["bytes"] > 0
-    assert (c["bytes"] - b["bytes"]) == pytest.approx(
-        2 * (b["bytes"] - a["bytes"]), rel=1e-9)
+    edges = [-math.inf, math.inf]
+    a = model.insights.cost(LENGTH, edges=edges, bins=1024)
+    b = model.insights.cost(LENGTH, edges=edges, bins=2048)
+    c = model.insights.cost(LENGTH, edges=edges, bins=4096)
+    assert 0 < a["bytes"] < b["bytes"] < c["bytes"]
+    # And it is the guard's own figure, not a bound on it: the backward rows
+    # are sized by the sweep's range pass, so growth alone would also pass an
+    # estimate charging every row the full grid.
+    was = BEAM.memory_budget()
+    try:
+        BEAM.set_memory_budget(b["bytes"])
+        model.insights.logos(LENGTH, edges=edges, bins=2048)
+        BEAM.set_memory_budget(b["bytes"] - 1)
+        with pytest.raises(BEAM.BudgetExceeded):
+            model.insights.logos(LENGTH, edges=edges, bins=2048)
+    finally:
+        BEAM.set_memory_budget(was)

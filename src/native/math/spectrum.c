@@ -58,13 +58,98 @@ typedef struct {
     uint32_t lo, hi;     /* the destination bins it can write, [lo, hi)      */
 } SpecEdge;
 
+/*
+ * ONE POOL OF HISTOGRAM ROWS, RECYCLED WITHIN A LAYER.
+ *
+ * The sweep used to hold two full planes, `cur` and `next`, each a row of
+ * `hist` doubles for every live slot: on the foundation at 16,384 bins that
+ * is 160,000 rows x 128 KiB, twice, and per measure. But a source row is read
+ * by exactly one group (spec_group) and cleared as soon as that group is
+ * done, so the rows the current layer has finished with can hold the next
+ * layer's targets. A group takes rows for its targets from the pool, gathers
+ * into them exactly as before, then clears its sources and gives their rows
+ * back. Where a row lives changes nothing about what is added to it, so every
+ * bin is the same sum in the same order, bit for bit.
+ *
+ * The peak is the rows alive at once: about the widest layer plus each
+ * thread's group in flight, where two planes held the widest layer twice. A
+ * layer whose groups take more rows than they free (one that grows) draws on
+ * rows its earlier groups returned, and the pool grows by a chunk only when
+ * it runs dry, so correctness never depends on that estimate.
+ *
+ * Every row in the free list is all zero: rows are cleared, over the range
+ * they occupied, before they are given back.
+ */
+#define SPEC_CHUNK_SHIFT 10u
+#define SPEC_CHUNK_ROWS  (1u << SPEC_CHUNK_SHIFT)
+
+typedef struct {
+    double   **chunk;            /* [cap_chunks] SPEC_CHUNK_ROWS rows each   */
+    uint32_t   n_chunks, cap_chunks;
+    uint32_t  *free_ids;         /* [cap_chunks * SPEC_CHUNK_ROWS] a stack   */
+    uint32_t   n_free;
+    size_t     hist;             /* doubles per row                          */
+    int        failed;           /* a chunk could not be allocated           */
+#ifdef _OPENMP
+    omp_lock_t lock;
+    int        lock_ready;
+#endif
+} SpecRows;
+
+static inline double *spec_row(const SpecRows *p, uint32_t id) {
+    return p->chunk[id >> SPEC_CHUNK_SHIFT]
+         + (size_t)(id & (SPEC_CHUNK_ROWS - 1u)) * p->hist;
+}
+
+/* Under the lock. The chunk table is sized once, up front, so threads reading
+ * `chunk[i]` for rows already handed out never see it move. */
+static bool spec_rows_grow(SpecRows *p) {
+    if (p->n_chunks == p->cap_chunks) return false;
+    double *c = (double *)calloc((size_t)SPEC_CHUNK_ROWS * p->hist, sizeof(double));
+    if (!c) return false;
+    const uint32_t base = p->n_chunks * SPEC_CHUNK_ROWS;
+    p->chunk[p->n_chunks++] = c;
+    for (uint32_t r = SPEC_CHUNK_ROWS; r-- > 0; )      /* low ids pop first */
+        p->free_ids[p->n_free++] = base + r;
+    return true;
+}
+
+/* `n` zero rows into `out`; false (and `failed` set) if memory ran out. */
+static bool spec_rows_take(SpecRows *p, uint32_t n, uint32_t *out) {
+    bool ok = true;
+#ifdef _OPENMP
+    omp_set_lock(&p->lock);
+#endif
+    while (ok && p->n_free < n) ok = spec_rows_grow(p);
+    if (ok) for (uint32_t i = 0; i < n; ++i) out[i] = p->free_ids[--p->n_free];
+    else p->failed = 1;
+#ifdef _OPENMP
+    omp_unset_lock(&p->lock);
+#endif
+    return ok;
+}
+
+/* Return rows that are already all zero. */
+static void spec_rows_give(SpecRows *p, const uint32_t *ids, uint32_t n) {
+#ifdef _OPENMP
+    omp_set_lock(&p->lock);
+#endif
+    for (uint32_t i = 0; i < n; ++i) p->free_ids[p->n_free++] = ids[i];
+#ifdef _OPENMP
+    omp_unset_lock(&p->lock);
+#endif
+}
+
 /* What one layer's groups share. */
 typedef struct {
     const uint32_t *lv_next;     /* the next layer's live states, ascending  */
     const uint64_t *mask;        /* this layer's live set                    */
-    const uint32_t *sc;          /* state -> slot in `cur`                   */
+    const uint32_t *sc;          /* state -> slot in this layer              */
     const double   *w;           /* this layer's edge weights                */
-    double         *cur, *next;
+    SpecRows       *rows;        /* where every slot's histogram lives       */
+    const uint32_t *rowc;        /* this layer's slot -> row                 */
+    uint32_t       *rown;        /* next layer's slot -> row, set per group  */
+    uint8_t        *done;        /* this layer's slot: row given back        */
     BeamBinRange   *rc, *rn;
     uint32_t A, R, SK, bins, nm;
     size_t   hist;
@@ -75,7 +160,10 @@ typedef struct {
 /* Per thread: a group's sources and its edges, target by target. */
 typedef struct {
     uint32_t *ks, *st;           /* [A] source slots and states              */
+    uint32_t *give;              /* [A] source rows to return                */
     uint32_t *first;             /* [R + 1] a target's first edge            */
+    const double **src;          /* [A] source rows                          */
+    double  **dst;               /* [R] target rows                          */
     SpecEdge *edge;              /* [A * R]                                  */
 } SpecScratch;
 
@@ -124,14 +212,24 @@ static void spec_group(const SpecLayer *ly, uint32_t g0, uint32_t g1,
                        const SpecScratch *sp) {
     const uint32_t A = ly->A, R = ly->R, bins = ly->bins, nm = ly->nm;
     const uint32_t rest = ly->lv_next[g0] / A;
-    uint32_t ns = 0;
+    uint32_t ns = 0, ngive = 0;
     for (uint32_t a = 0; a < A; ++a) {
         const uint32_t s = a * ly->SK + rest;
         if (!live_bit_get(ly->mask, s)) continue;
         const uint32_t ks = ly->sc[s];
+        /* Every live source belongs to this group alone: its row comes back
+         * to the pool when the group is done, with mass or without. */
+        ly->done[ks] = 1;
+        sp->give[ngive++] = ly->rowc[ks];
         if (ly->rc[ks].lo >= ly->rc[ks].hi) continue;      /* no mass here */
+        sp->src[ns] = spec_row(ly->rows, ly->rowc[ks]);
         sp->ks[ns] = ks; sp->st[ns] = s; ++ns;
     }
+    /* The targets' rows are taken BEFORE any source row is given back: the
+     * sources are still to be read. */
+    if (!spec_rows_take(ly->rows, g1 - g0, ly->rown + g0)) return;
+    for (uint32_t kk = g0; kk < g1; ++kk)
+        sp->dst[kk - g0] = spec_row(ly->rows, ly->rown[kk]);
     /* Each target's edges, sources ascending, and the bins they can write. */
     uint32_t ne = 0, dlo = bins, dhi = 0;
     for (uint32_t kk = g0; kk < g1; ++kk) {
@@ -168,7 +266,7 @@ static void spec_group(const SpecLayer *ly, uint32_t g0, uint32_t g1,
     for (uint32_t t0 = dlo; t0 < dhi; t0 += SPEC_TILE) {
         const uint32_t t1 = dhi - t0 > SPEC_TILE ? t0 + SPEC_TILE : dhi;
         for (uint32_t kk = g0; kk < g1; ++kk) {
-            double *dst = ly->next + (size_t)kk * ly->hist;
+            double *dst = sp->dst[kk - g0];
             for (uint32_t ei = sp->first[kk - g0]; ei < sp->first[kk - g0 + 1u]; ++ei) {
                 const SpecEdge *e = &sp->edge[ei];
                 const int64_t p0 = e->lo > t0 ? e->lo : t0;
@@ -176,22 +274,24 @@ static void spec_group(const SpecLayer *ly, uint32_t g0, uint32_t g1,
                 if (p0 >= p1) continue;
                 const uint32_t ks = sp->ks[e->src];
                 const BeamBinRange sr = ly->rc[ks];
-                const double *src = ly->cur + (size_t)ks * ly->hist;
+                const double *src = sp->src[e->src];
                 for (uint32_t mi = 0; mi < nm; ++mi)
                     spec_move(dst + (size_t)mi * bins, src + (size_t)mi * bins,
                               e->k, e->f, e->g, e->fac[mi], sr.lo, sr.hi, p0, p1);
             }
         }
     }
-    /* Each source fed this group only: clear it now, while it is in cache. */
+    /* Each source fed this group only: clear it now, while it is in cache,
+     * and hand its row to whichever group needs one next. */
     for (uint32_t j = 0; j < ns; ++j) {
         BeamBinRange *sr = &ly->rc[sp->ks[j]];
-        double *row = ly->cur + (size_t)sp->ks[j] * ly->hist;
+        double *row = (double *)sp->src[j];
         for (uint32_t mi = 0; mi < nm; ++mi)
             memset(row + (size_t)mi * bins + sr->lo, 0,
                    (size_t)(sr->hi - sr->lo) * sizeof(double));
         sr->lo = bins; sr->hi = 0;
     }
+    spec_rows_give(ly->rows, sp->give, ngive);
 }
 
 /* One slice [t0, t1) of the output bins at the sink: every final state's
@@ -199,8 +299,8 @@ static void spec_group(const SpecLayer *ly, uint32_t g0, uint32_t g1,
  * per-state form summed it, and threads own disjoint bins. */
 SPEC_CLONES
 static void spec_sink_slice(const SpecEdge *e, uint32_t ne,
-                            const BeamBinRange *rc, const double *cur,
-                            size_t hist, uint32_t bins, uint32_t nm,
+                            const BeamBinRange *rc, const SpecRows *rows,
+                            const uint32_t *rowc, uint32_t bins, uint32_t nm,
                             double *out_a, double *out_b, uint32_t t0,
                             uint32_t t1) {
     for (uint32_t i = 0; i < ne; ++i) {
@@ -208,7 +308,7 @@ static void spec_sink_slice(const SpecEdge *e, uint32_t ne,
         const int64_t p1 = e[i].hi < t1 ? e[i].hi : t1;
         if (p0 >= p1) continue;
         const BeamBinRange sr = rc[e[i].src];
-        const double *src = cur + (size_t)e[i].src * hist;
+        const double *src = spec_row(rows, rowc[e[i].src]);
         spec_move(out_a, src, e[i].k, e[i].f, e[i].g, e[i].fac[0],
                   sr.lo, sr.hi, p0, p1);
         if (nm == 2u)
@@ -222,19 +322,22 @@ static void spec_sink_slice(const SpecEdge *e, uint32_t ne,
 
 /*
  * Everything one length of the DP needs, sized for the widest layer of every
- * length a call runs, so the lengths of a pooled spectrum share it. Its two
- * histogram planes are tens of gigabytes on the foundation at 16,384 bins:
- * allocated and freed per length, their pages were zeroed by the kernel on
- * first touch and unmapped again for each of 27 lengths, a tenth of the
- * sweep. The planes are all zero between lengths -- each length clears what
- * it wrote -- so sharing them changes nothing computed, and the peak is the
- * widest length's, as before.
+ * length a call runs, so the lengths of a pooled spectrum share it. Its rows
+ * of histograms (SpecRows) are tens of gigabytes on the foundation at 16,384
+ * bins: allocated and freed per length, their pages were zeroed by the kernel
+ * on first touch and unmapped again for each of 27 lengths, a tenth of the
+ * sweep. The rows are all zero between lengths -- each length clears what it
+ * wrote and returns every row -- so sharing them changes nothing computed,
+ * and the peak is the widest length's, as before.
  */
 typedef struct {
     uint32_t maxlive, nm, bins;
     int      nth;
-    size_t   stride, per_edges;
-    double  *w, *tail, *cur, *next;
+    size_t   stride, per_edges, per_ptrs;
+    double  *w, *tail;
+    SpecRows rows;
+    uint32_t *rowc, *rown;       /* [maxlive] slot -> row, each side         */
+    uint8_t  *done;              /* [maxlive] this layer's row given back    */
     BeamBinRange *rc, *rn;
     uint32_t *sc, *sn, *gs;
     uint8_t  *av;
@@ -243,26 +346,52 @@ typedef struct {
 } SpecWork;
 
 static void spec_work_free(SpecWork *wk) {
-    free(wk->w); free(wk->tail); free(wk->cur); free(wk->next);
+    for (uint32_t c = 0; c < wk->rows.n_chunks; ++c) free(wk->rows.chunk[c]);
+    free(wk->rows.chunk); free(wk->rows.free_ids);
+#ifdef _OPENMP
+    if (wk->rows.lock_ready) omp_destroy_lock(&wk->rows.lock);
+#endif
+    free(wk->w); free(wk->tail); free(wk->rowc); free(wk->rown); free(wk->done);
     free(wk->rc); free(wk->rn); free(wk->sc); free(wk->sn); free(wk->gs);
     free(wk->av); free(wk->scr); free(wk->sink);
     memset(wk, 0, sizeof *wk);
+}
+
+/* Rows a layer can hold at once, at most: two whole layers (when a layer that
+ * grows is processed in an unlucky order) plus every thread's group in
+ * flight. The chunk table is sized for that once, so it never moves; chunks
+ * themselves are allocated only as rows are actually needed. */
+static uint64_t spec_max_rows(uint32_t maxlive, int nth, uint32_t A, uint32_t R) {
+    return 2ull * maxlive + (uint64_t)nth * (A + R) + 1u;
 }
 
 static BeamError spec_work_new(const BeamModel *m, uint32_t maxlive,
                                uint32_t nm, uint32_t bins, SpecWork *wk) {
     memset(wk, 0, sizeof *wk);
     const uint32_t A = m->n_alphabet, R = m->n_residues, S = m->n_states;
-    const size_t hist = (size_t)nm * bins;   /* doubles per live slot */
     wk->maxlive = maxlive; wk->nm = nm; wk->bins = bins;
     wk->nth = beam_threads() > 0 ? beam_threads() : 1;
-    const size_t per_thread = (2u * (size_t)A + R + 1u) * sizeof(uint32_t);
     wk->per_edges = (size_t)A * R * sizeof(SpecEdge);
-    wk->stride = (wk->per_edges + per_thread + 63u) & ~(size_t)63u;
+    wk->per_ptrs = ((size_t)A + R) * sizeof(double *);
+    const size_t per_ids = (3u * (size_t)A + R + 1u) * sizeof(uint32_t);
+    wk->stride = (wk->per_edges + wk->per_ptrs + per_ids + 63u) & ~(size_t)63u;
+
+    const uint64_t max_rows = spec_max_rows(maxlive, wk->nth, A, R);
+    wk->rows.hist = (size_t)nm * bins;
+    wk->rows.cap_chunks = (uint32_t)((max_rows + SPEC_CHUNK_ROWS - 1u) / SPEC_CHUNK_ROWS);
+    wk->rows.chunk = (double **)calloc(wk->rows.cap_chunks, sizeof(double *));
+    wk->rows.free_ids = (uint32_t *)malloc((size_t)wk->rows.cap_chunks * SPEC_CHUNK_ROWS
+                                           * sizeof(uint32_t));
+#ifdef _OPENMP
+    omp_init_lock(&wk->rows.lock);
+    wk->rows.lock_ready = 1;
+#endif
+
     wk->w    = (double *)malloc((size_t)S * R * sizeof(double));
     wk->tail = (double *)malloc((size_t)S * sizeof(double));
-    wk->cur  = (double *)calloc((size_t)maxlive * hist, sizeof(double));
-    wk->next = (double *)calloc((size_t)maxlive * hist, sizeof(double));
+    wk->rowc = (uint32_t *)malloc((size_t)maxlive * sizeof(uint32_t));
+    wk->rown = (uint32_t *)malloc((size_t)maxlive * sizeof(uint32_t));
+    wk->done = (uint8_t *)malloc((size_t)maxlive);
     wk->rc   = (BeamBinRange *)malloc((size_t)maxlive * sizeof(BeamBinRange));
     wk->rn   = (BeamBinRange *)malloc((size_t)maxlive * sizeof(BeamBinRange));
     /* state -> slot within its own layer's live list, one map per side */
@@ -272,8 +401,9 @@ static BeamError spec_work_new(const BeamModel *m, uint32_t maxlive,
     wk->av   = (uint8_t *)malloc((size_t)S);   /* byte mask for the build */
     wk->scr  = (unsigned char *)malloc((size_t)wk->nth * wk->stride);
     wk->sink = (SpecEdge *)malloc((size_t)maxlive * sizeof(SpecEdge));
-    if (!wk->w || !wk->tail || !wk->cur || !wk->next || !wk->rc || !wk->rn
-        || !wk->sc || !wk->sn || !wk->gs || !wk->av || !wk->scr || !wk->sink) {
+    if (!wk->rows.chunk || !wk->rows.free_ids || !wk->w || !wk->tail || !wk->rowc
+        || !wk->rown || !wk->done || !wk->rc || !wk->rn || !wk->sc || !wk->sn
+        || !wk->gs || !wk->av || !wk->scr || !wk->sink) {
         spec_work_free(wk);
         return BEAM_EALLOC("the per-state surprisal histograms");
     }
@@ -345,17 +475,21 @@ static BeamError spectrum_one(const BeamModel *m, bool counting,
     /* The caller's scratch when it holds this length, else this call's own. */
     SpecWork own;
     SpecWork *wk = shared;
-    if (!wk || wk->maxlive < maxlive || wk->nm != nm || wk->bins != bins) {
+    if (!wk || wk->rows.failed || wk->maxlive < maxlive || wk->nm != nm
+        || wk->bins != bins) {
         err = spec_work_new(m, maxlive, nm, bins, &own);
         if (err != BEAM_OK) { beam_live_release(&lh); return err; }
         wk = &own;
     }
-    const size_t hist = (size_t)nm * bins;    /* doubles per live slot */
+    const size_t hist = (size_t)nm * bins;    /* doubles per row */
     const int nth = wk->nth;
-    double *w = wk->w, *tail = wk->tail, *cur = wk->cur, *next = wk->next;
+    double *w = wk->w, *tail = wk->tail;
+    SpecRows *rows = &wk->rows;
     BeamBinRange *rc = wk->rc, *rn = wk->rn;
     uint32_t *sc = wk->sc, *sn = wk->sn, *gs = wk->gs;
-    uint8_t *av = wk->av;
+    uint32_t *rowc = wk->rowc, *rown = wk->rown;
+    uint8_t *av = wk->av, *done = wk->done;
+    bool ok = true;
 
     for (uint32_t k = 0; k < maxlive; ++k) { rc[k].lo = bins; rc[k].hi = 0; }
     /* Layer 0 is the root alone, so its live list has one entry and the walk
@@ -372,12 +506,16 @@ static BeamError spectrum_one(const BeamModel *m, bool counting,
             beam_live_release(&lh);
             return BEAM_OK;
         }
-        for (uint32_t mi = 0; mi < nm; ++mi)
-            cur[(size_t)rk * hist + (size_t)mi * bins + 0] = 1.0;
-        rc[rk].lo = 0; rc[rk].hi = 1;
+        /* Every slot of layer 0 has a row; the root's carries the unit mass. */
+        ok = spec_rows_take(rows, L->n_live[0], rowc);
+        if (ok) {
+            double *r0 = spec_row(rows, rowc[rk]);
+            for (uint32_t mi = 0; mi < nm; ++mi) r0[(size_t)mi * bins + 0] = 1.0;
+            rc[rk].lo = 0; rc[rk].hi = 1;
+        }
     }
 
-    for (uint32_t i = 0; i < len; ++i) {
+    for (uint32_t i = 0; ok && i < len; ++i) {
         /* Pass the mask this function already computed. The transport loop
          * below tests `av_cur[s]` / `av_next[tt]` before reading a row, so the
          * "dead rows are never read" contract holds and skipping them is
@@ -398,14 +536,17 @@ static BeamError spectrum_one(const BeamModel *m, bool counting,
          */
         const uint32_t *lv_next = L->live[i + 1];
         const uint32_t  n_next  = L->n_live[i + 1];
+        const uint32_t  n_cur   = L->n_live[i];
         for (uint32_t k = 0; k < n_next; ++k) sn[lv_next[k]] = k;
         uint32_t ng = 0;
         for (uint32_t k = 0; k < n_next; ++k)
             if (k == 0 || lv_next[k] / A != lv_next[k - 1] / A) gs[ng++] = k;
         gs[ng] = n_next;
+        memset(done, 0, n_cur);
         const SpecLayer ly = {
             .lv_next = lv_next, .mask = L->mask[i], .sc = sc, .w = w,
-            .cur = cur, .next = next, .rc = rc, .rn = rn,
+            .rows = rows, .rowc = rowc, .rown = rown, .done = done,
+            .rc = rc, .rn = rn,
             .A = A, .R = R, .SK = SK, .bins = bins, .nm = nm, .hist = hist,
             .ds = ds, .counting = counting,
         };
@@ -421,41 +562,50 @@ static BeamError spectrum_one(const BeamModel *m, bool counting,
             unsigned char *base = wk->scr + tid * wk->stride;
             SpecScratch sp;
             sp.edge  = (SpecEdge *)base;
-            sp.ks    = (uint32_t *)(base + wk->per_edges);
+            sp.src   = (const double **)(base + wk->per_edges);
+            sp.dst   = (double **)(sp.src + A);
+            sp.ks    = (uint32_t *)(base + wk->per_edges + wk->per_ptrs);
             sp.st    = sp.ks + A;
-            sp.first = sp.st + A;
+            sp.give  = sp.st + A;
+            sp.first = sp.give + A;
 #ifdef _OPENMP
             #pragma omp for schedule(dynamic, 1)
 #endif
             for (int64_t g = 0; g < (int64_t)ng; ++g)
                 spec_group(&ly, gs[g], gs[g + 1], &sp);
         }
+        if (rows->failed) { ok = false; break; }
         /* Clear what no group cleared -- a source none of whose targets
          * lives -- and only what was written, so the sweep costs occupied
-         * bins rather than the whole grid. */
+         * bins rather than the whole grid. Then its row goes back too. */
 #ifdef _OPENMP
         #pragma omp parallel for schedule(static) num_threads(nth)
 #endif
-        for (int64_t k = 0; k < (int64_t)L->n_live[i]; ++k) {
-            if (rc[k].lo >= rc[k].hi) continue;
+        for (int64_t k = 0; k < (int64_t)n_cur; ++k) {
+            if (done[k] || rc[k].lo >= rc[k].hi) continue;
+            double *row = spec_row(rows, rowc[k]);
             for (uint32_t mi = 0; mi < nm; ++mi)
-                memset(cur + (size_t)k * hist + (size_t)mi * bins + rc[k].lo, 0,
+                memset(row + (size_t)mi * bins + rc[k].lo, 0,
                        (size_t)(rc[k].hi - rc[k].lo) * sizeof(double));
         }
-        { double *t = cur; cur = next; next = t; }
+        uint32_t nleft = 0;
+        for (uint32_t k = 0; k < n_cur; ++k)
+            if (!done[k]) rowc[nleft++] = rowc[k];      /* compact in place */
+        spec_rows_give(rows, rowc, nleft);
         { BeamBinRange *t = rc; rc = rn; rn = t; }
         { uint32_t *t = sc; sc = sn; sn = t; }
+        { uint32_t *t = rowc; rowc = rown; rown = t; }
     }
 
-    /*
-     * Sink: the backward tail, plus the per-length constant that turns the
-     * accumulated weight into a surprisal. Every final state's histogram
-     * lands in the one output, so the threads split the OUTPUT bins between
-     * them (spec_sink_slice) and each walks the states in order: the same
-     * sums as the per-state form, on every thread rather than one.
-     */
-    beam_tail_weights(m, len, tail);
-    {
+    if (ok) {
+        /*
+         * Sink: the backward tail, plus the per-length constant that turns the
+         * accumulated weight into a surprisal. Every final state's histogram
+         * lands in the one output, so the threads split the OUTPUT bins
+         * between them (spec_sink_slice) and each walks the states in order:
+         * the same sums as the per-state form, on every thread rather than one.
+         */
+        beam_tail_weights(m, len, tail);
         const double off = m->log_z[len] - m->log_pi[len];
         SpecEdge *se = wk->sink;
         uint32_t ne = 0, dlo = bins, dhi = 0;
@@ -487,30 +637,38 @@ static BeamError spectrum_one(const BeamModel *m, bool counting,
         for (int64_t sl = 0; sl < nsl; ++sl) {
             const uint32_t t0 = dlo + (uint32_t)sl * SPEC_SINK_SLICE;
             const uint32_t t1 = dhi - t0 > SPEC_SINK_SLICE ? t0 + SPEC_SINK_SLICE : dhi;
-            spec_sink_slice(se, ne, rc, cur, hist, bins, nm, out_a, out_b, t0, t1);
+            spec_sink_slice(se, ne, rc, rows, rowc, bins, nm, out_a, out_b, t0, t1);
         }
-    }
-    /* Leave the planes all zero for the next length that shares them. */
+        /* Leave every row all zero and back in the pool, for the next length
+         * that shares it. */
 #ifdef _OPENMP
-    #pragma omp parallel for schedule(static) num_threads(nth)
+        #pragma omp parallel for schedule(static) num_threads(nth)
 #endif
-    for (int64_t k = 0; k < (int64_t)L->n_live[len]; ++k) {
-        if (rc[k].lo >= rc[k].hi) continue;
-        for (uint32_t mi = 0; mi < nm; ++mi)
-            memset(cur + (size_t)k * hist + (size_t)mi * bins + rc[k].lo, 0,
-                   (size_t)(rc[k].hi - rc[k].lo) * sizeof(double));
+        for (int64_t k = 0; k < (int64_t)L->n_live[len]; ++k) {
+            if (rc[k].lo >= rc[k].hi) continue;
+            double *row = spec_row(rows, rowc[k]);
+            for (uint32_t mi = 0; mi < nm; ++mi)
+                memset(row + (size_t)mi * bins + rc[k].lo, 0,
+                       (size_t)(rc[k].hi - rc[k].lo) * sizeof(double));
+        }
+        spec_rows_give(rows, rowc, L->n_live[len]);
     }
 
     if (wk == &own) spec_work_free(&own);
     beam_live_release(&lh);
+    if (!ok)
+        return BEAM_EALLOC("the per-state surprisal histograms");
     return BEAM_OK;
 }
 
-/* Every length the model generates, in ascending order, into `out_a` (and
- * `out_b`), the lengths sharing one scratch. */
-static BeamError spectrum_pooled(const BeamModel *m, bool counting,
-                                 uint32_t bins, double ds, double *out_a,
-                                 double *out_b) {
+/*
+ * Every length the model generates, in ascending order, for each measure in
+ * turn, all sharing one scratch. A measure is `counts[j]` (true: counting)
+ * accumulated into `outs[j]`.
+ */
+static BeamError spectrum_pooled(const BeamModel *m, const bool *counts,
+                                 double *const *outs, uint32_t n_measures,
+                                 uint32_t bins, double ds) {
     uint32_t maxlive = 0;
     for (uint32_t L = 1; L < m->n_len_slots; ++L) {
         if (!beam_length_live(m, L)) continue;
@@ -521,12 +679,13 @@ static BeamError spectrum_pooled(const BeamModel *m, bool counting,
     }
     if (maxlive == 0) return BEAM_OK;
     SpecWork wk;
-    BeamError e = spec_work_new(m, maxlive, out_b ? 2u : 1u, bins, &wk);
+    BeamError e = spec_work_new(m, maxlive, 1u, bins, &wk);
     if (e != BEAM_OK) return e;
-    for (uint32_t L = 1; L < m->n_len_slots && e == BEAM_OK; ++L) {
-        if (!beam_length_live(m, L)) continue;
-        e = spectrum_one(m, counting, L, bins, ds, out_a, out_b, &wk);
-    }
+    for (uint32_t j = 0; j < n_measures && e == BEAM_OK; ++j)
+        for (uint32_t L = 1; L < m->n_len_slots && e == BEAM_OK; ++L) {
+            if (!beam_length_live(m, L)) continue;
+            e = spectrum_one(m, counts[j], L, bins, ds, outs[j], NULL, &wk);
+        }
     spec_work_free(&wk);
     return e;
 }
@@ -587,7 +746,8 @@ BeamError beam_model_spectrum(const BeamModel *m, bool counting,
         if (!beam_length_live(m, length)) return BEAM_EBADLEN(m, length);
         return spectrum_one(m, counting, length, bins, ds, weights, NULL, NULL);
     }
-    return spectrum_pooled(m, counting, bins, ds, weights, NULL);
+    double *const outs[1] = {weights};
+    return spectrum_pooled(m, &counting, outs, 1u, bins, ds);
 }
 
 BeamError beam_model_spectrum_pair(const BeamModel *m, uint32_t length,
@@ -608,13 +768,25 @@ BeamError beam_model_spectrum_pair(const BeamModel *m, uint32_t length,
 
     memset(counting_weights,  0, (size_t)bins * sizeof(double));
     memset(generated_weights, 0, (size_t)bins * sizeof(double));
+    /*
+     * One measure after the other, not both through one transport. Carrying
+     * two measures per row doubled the rows' memory and saved no time -- the
+     * work is per bin per measure either way (528 s fused against 2 x 265 s on
+     * the foundation at 16,384 bins) -- so two passes over one shared scratch
+     * hold half the peak. Both passes use the grid spacing computed once above
+     * and split every edge by fractions computed from the same weight, so the
+     * two measures are split identically, bit for bit, as before.
+     */
     if (length != 0) {
         if (!beam_length_live(m, length)) return BEAM_EBADLEN(m, length);
-        return spectrum_one(m, false, length, bins, ds,
-                            counting_weights, generated_weights, NULL);
+        e = spectrum_one(m, true, length, bins, ds, counting_weights, NULL, NULL);
+        if (e == BEAM_OK)
+            e = spectrum_one(m, false, length, bins, ds, generated_weights, NULL, NULL);
+        return e;
     }
-    return spectrum_pooled(m, false, bins, ds, counting_weights,
-                           generated_weights);
+    const bool counts[2] = {true, false};
+    double *const outs[2] = {counting_weights, generated_weights};
+    return spectrum_pooled(m, counts, outs, 2u, bins, ds);
 }
 
 /**
@@ -629,7 +801,11 @@ static uint64_t spectrum_bytes(const BeamModel *m, uint32_t bins,
                                uint32_t nm, uint32_t maxlive) {
     const uint64_t S = m->n_states;
     if (maxlive == 0u || maxlive > S) maxlive = (uint32_t)S;
-    return 2ull * maxlive * nm * bins * sizeof(double)  /* cur + next   */
+    /* The row pool's worst case: a growing layer processed in an unlucky
+     * order can hold its two neighbours' rows at once. On a full frontier it
+     * holds about one layer, so this is an upper bound, kept conservative so
+     * the budget is never exceeded. */
+    return 2ull * maxlive * nm * bins * sizeof(double)  /* row pool     */
          + 2ull * maxlive * sizeof(BeamBinRange)
          + S * m->n_residues * sizeof(double)           /* edge weights */
          + S * sizeof(double)                           /* tail         */

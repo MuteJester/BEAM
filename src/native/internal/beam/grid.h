@@ -50,29 +50,44 @@ typedef struct { uint32_t lo, hi; } BeamBinRange;
  *
  * `sr` bounds the source's occupied bins; `dr` is widened to cover whatever
  * this call writes.
+ *
+ * `_at` takes rows stored from a bin other than 0: `src[0]` holds grid bin
+ * `src_off` and `dst[0]` grid bin `dst_off`, so a row can be kept at the
+ * width it occupies. Bins, ranges and the shift are all in GRID coordinates
+ * exactly as before -- the offsets only move where a value is stored -- so the
+ * split, and every sum it feeds, is the same to the bit. The caller
+ * guarantees every bin written lies at or above `dst_off` and within the
+ * row's storage.
  */
-static inline void beam_grid_transport(const double *src, double *dst,
-                                       uint32_t bins, double u, double factor,
-                                       BeamBinRange sr, BeamBinRange *dr) {
+static inline void beam_grid_transport_at(const double *src, uint32_t src_off,
+                                          double *dst, uint32_t dst_off,
+                                          uint32_t bins, double u, double factor,
+                                          BeamBinRange sr, BeamBinRange *dr) {
     const int64_t k = (int64_t)floor(u);
     const double  f = u - (double)k;
     const double  g = 1.0 - f;
     for (uint32_t b = sr.lo; b < sr.hi; ++b) {
-        const double v = src[b];
+        const double v = src[b - src_off];
         if (v == 0.0) continue;
         const int64_t lo = (int64_t)b + k;
         if (lo >= 0 && lo < (int64_t)bins) {
-            dst[lo] += v * g * factor;
+            dst[lo - dst_off] += v * g * factor;
             if ((uint32_t)lo < dr->lo) dr->lo = (uint32_t)lo;
             if ((uint32_t)lo + 1u > dr->hi) dr->hi = (uint32_t)lo + 1u;
         }
         const int64_t hi = lo + 1;
         if (hi >= 0 && hi < (int64_t)bins) {
-            dst[hi] += v * f * factor;
+            dst[hi - dst_off] += v * f * factor;
             if ((uint32_t)hi < dr->lo) dr->lo = (uint32_t)hi;
             if ((uint32_t)hi + 1u > dr->hi) dr->hi = (uint32_t)hi + 1u;
         }
     }
+}
+
+static inline void beam_grid_transport(const double *src, double *dst,
+                                       uint32_t bins, double u, double factor,
+                                       BeamBinRange sr, BeamBinRange *dr) {
+    beam_grid_transport_at(src, 0u, dst, 0u, bins, u, factor, sr, dr);
 }
 
 /**

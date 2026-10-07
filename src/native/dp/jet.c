@@ -937,6 +937,76 @@ static inline void line_edge_body(double mag, double dLr, double dLi,
     }
 }
 
+/* line_edge_body eight lanes at a time, as two four-lane chains, for CPUs
+ * with sixteen 256-bit registers. There, each eight-lane chain above is two
+ * registers, and the two chains with their rotation, sources and accumulators
+ * want about twice the sixteen that exist: the compiler keeps them on the
+ * stack and reloads them every step -- on an AVX2 desktop 57% of the edge
+ * loop's samples were those spills, against 23% on arithmetic. Half the
+ * lanes at a time fits; one four-lane chain alone would, but then the core
+ * waits on its multiply-subtract recurrence, and two hide each other's
+ * latency (on the foundation, 384 orders: 64 s as above, 49 s with one
+ * chain, 43 s with two).
+ *
+ * Every lane performs the same operations in the same order as there --
+ * the same products, the same differences and sums, the accumulator added
+ * in the same edge order -- only which lanes are in flight together
+ * differs, so the values are the same to the bit. */
+__attribute__((always_inline))
+static inline void line_edge_body4(double mag, double dLr, double dLi,
+                                   const double *restrict pr,
+                                   const double *restrict pi,
+                                   const double *restrict ac,
+                                   const double *restrict as, uint64_t g0,
+                                   uint32_t T, const double *restrict cre,
+                                   const double *restrict cim,
+                                   double *restrict are, double *restrict aim,
+                                   int first) {
+    const uint64_t end = g0 + T;
+    for (uint32_t l = 0; l < BEAM_LINE_LANES; l += 2u * BEAM_LINE_VEC) {
+        beam_v4d par, pai, pbr, pbi;
+        V4_LOAD(par, pr + l); V4_LOAD(pai, pi + l);
+        V4_LOAD(pbr, pr + l + BEAM_LINE_VEC); V4_LOAD(pbi, pi + l + BEAM_LINE_VEC);
+        uint32_t b = 0;
+        for (uint64_t a = g0 - g0 % BEAM_LINE_BLOCK; a < end; a += BEAM_LINE_BLOCK, ++b) {
+            const double Ar = mag * ac[b], Ai = mag * as[b];
+            /* Two four-lane chains, held by name: two recurrences in flight
+             * hide each other's latency, and still fit the registers. */
+            beam_v4d ra = par * Ar - pai * Ai, ia = par * Ai + pai * Ar;
+            beam_v4d rb = pbr * Ar - pbi * Ai, ib = pbr * Ai + pbi * Ar;
+            uint64_t g = a;
+            const uint64_t stop = a + BEAM_LINE_BLOCK < end ? a + BEAM_LINE_BLOCK : end;
+            for (; g < g0; g += BEAM_LINE_LANES) {        /* a tile mid-block */
+                const beam_v4d ta = ra * dLr - ia * dLi, tb = rb * dLr - ib * dLi;
+                ia = ra * dLi + ia * dLr;
+                ib = rb * dLi + ib * dLr;
+                ra = ta; rb = tb;
+            }
+            for (; g < stop; g += BEAM_LINE_LANES) {
+                const size_t o = (size_t)(g - g0) + l, ob = o + BEAM_LINE_VEC;
+                beam_v4d car, cai, cbr, cbi, xar, xai, xbr, xbi;
+                V4_LOAD(car, cre + o); V4_LOAD(cai, cim + o);
+                V4_LOAD(cbr, cre + ob); V4_LOAD(cbi, cim + ob);
+                const beam_v4d uar = ra * car - ia * cai, uai = ra * cai + ia * car;
+                const beam_v4d ubr = rb * cbr - ib * cbi, ubi = rb * cbi + ib * cbr;
+                if (first) {
+                    xar = uar; xai = uai; xbr = ubr; xbi = ubi;
+                } else {
+                    V4_LOAD(xar, are + o); V4_LOAD(xai, aim + o);
+                    V4_LOAD(xbr, are + ob); V4_LOAD(xbi, aim + ob);
+                    xar += uar; xai += uai; xbr += ubr; xbi += ubi;
+                }
+                V4_STORE(are + o, xar); V4_STORE(aim + o, xai);
+                V4_STORE(are + ob, xbr); V4_STORE(aim + ob, xbi);
+                const beam_v4d ta = ra * dLr - ia * dLi, tb = rb * dLr - ib * dLi;
+                ia = ra * dLi + ia * dLr;
+                ib = rb * dLi + ib * dLr;
+                ra = ta; rb = tb;
+            }
+        }
+    }
+}
+
 /* nx = acc * s, and nmax = max(nmax, |re|, |im|), over T orders. */
 __attribute__((always_inline))
 static inline void line_store_body(uint32_t T, const double *restrict are,
@@ -965,7 +1035,9 @@ static inline void line_store_body(uint32_t T, const double *restrict are,
 /* The CPU picks, at load time, a copy compiled for AVX-512, for AVX2 or for
  * the baseline. All perform the same operations per order in the same order
  * with no fused multiply-add -- contraction is off under -std=c11 -- so they
- * agree to the bit. */
+ * agree to the bit. On AVX2 without AVX-512 the tile runs line_edge_body4,
+ * the same arithmetic per lane with fewer lanes in flight
+ * (`line_narrow_pick`). */
 #if defined(__x86_64__) && defined(__ELF__) && defined(__GNUC__)
 #define BEAM_EDGE_CLONES __attribute__((target_clones("avx512f", "avx2", "default")))
 #else
@@ -985,6 +1057,7 @@ typedef struct {
     const double   *pr, *pi;  /* [16 E] patterns                        */
     const double   *ac, *as;  /* [nb E] anchors                         */
     uint32_t        nb;
+    int             narrow;   /* line_edge_body4 rather than line_edge_body */
 } LineTile;
 
 /* Writing a target's tile into the next layer's plane. The row is not read
@@ -1040,9 +1113,18 @@ static LineStoreFn line_store_pick(void) {
     if (__builtin_cpu_supports("avx2")) return line_store_nt256;
     return line_store_plain;
 }
+
+/* line_edge_body4 where the registers are 256 bits and sixteen of them:
+ * AVX2 without AVX-512. Elsewhere the eight-lane chains fit, or this has not
+ * been measured, and they stay. */
+static int line_narrow_pick(void) {
+    __builtin_cpu_init();
+    return __builtin_cpu_supports("avx2") && !__builtin_cpu_supports("avx512f");
+}
 #define LINE_FENCE() _mm_sfence()
 #else
 static LineStoreFn line_store_pick(void) { return line_store_plain; }
+static int line_narrow_pick(void) { return 0; }
 #define LINE_FENCE() ((void)0)
 #endif
 
@@ -1060,13 +1142,22 @@ static void line_tile(const LineTile *lt, uint64_t g0, uint32_t ts, uint32_t T,
         const uint32_t q0 = lt->first[k], q1 = lt->first[k + 1u];
         for (uint32_t q = q0; q < q1; ++q) {
             const double *c = cur + (size_t)lt->src[q] * RS;
-            line_edge_body(lt->mag[q], lt->fc[LINE_ROT_FIXED * q + 2u],
-                           lt->fs[LINE_ROT_FIXED * q + 2u],
-                           lt->pr + (size_t)BEAM_LINE_LANES * q,
-                           lt->pi + (size_t)BEAM_LINE_LANES * q,
-                           lt->ac + (size_t)q * lt->nb, lt->as + (size_t)q * lt->nb,
-                           g0, T, c + ts, c + IM + ts, acc, acc + BEAM_LINE_TILE,
-                           q == q0);
+            if (lt->narrow)
+                line_edge_body4(lt->mag[q], lt->fc[LINE_ROT_FIXED * q + 2u],
+                                lt->fs[LINE_ROT_FIXED * q + 2u],
+                                lt->pr + (size_t)BEAM_LINE_LANES * q,
+                                lt->pi + (size_t)BEAM_LINE_LANES * q,
+                                lt->ac + (size_t)q * lt->nb, lt->as + (size_t)q * lt->nb,
+                                g0, T, c + ts, c + IM + ts, acc, acc + BEAM_LINE_TILE,
+                                q == q0);
+            else
+                line_edge_body(lt->mag[q], lt->fc[LINE_ROT_FIXED * q + 2u],
+                               lt->fs[LINE_ROT_FIXED * q + 2u],
+                               lt->pr + (size_t)BEAM_LINE_LANES * q,
+                               lt->pi + (size_t)BEAM_LINE_LANES * q,
+                               lt->ac + (size_t)q * lt->nb, lt->as + (size_t)q * lt->nb,
+                               g0, T, c + ts, c + IM + ts, acc, acc + BEAM_LINE_TILE,
+                               q == q0);
         }
         if (q0 == q1) memset(acc, 0, 2u * BEAM_LINE_TILE * sizeof(double));
         double *nx = next + (size_t)lt->tgt[k] * RS;
@@ -1083,13 +1174,22 @@ static void line_sink_tile(const LineTile *lt, uint64_t g0, uint32_t ts,
     const uint32_t q1 = lt->first[1];
     for (uint32_t q = 0; q < q1; ++q) {
         const double *c = cur + (size_t)lt->src[q] * RS;
-        line_edge_body(lt->mag[q], lt->fc[LINE_ROT_FIXED * q + 2u],
-                       lt->fs[LINE_ROT_FIXED * q + 2u],
-                       lt->pr + (size_t)BEAM_LINE_LANES * q,
-                       lt->pi + (size_t)BEAM_LINE_LANES * q,
-                       lt->ac + (size_t)q * lt->nb, lt->as + (size_t)q * lt->nb,
-                       g0, T, c + ts, c + IM + ts, part + ts, part + IM + ts,
-                       q == 0);
+        if (lt->narrow)
+            line_edge_body4(lt->mag[q], lt->fc[LINE_ROT_FIXED * q + 2u],
+                            lt->fs[LINE_ROT_FIXED * q + 2u],
+                            lt->pr + (size_t)BEAM_LINE_LANES * q,
+                            lt->pi + (size_t)BEAM_LINE_LANES * q,
+                            lt->ac + (size_t)q * lt->nb, lt->as + (size_t)q * lt->nb,
+                            g0, T, c + ts, c + IM + ts, part + ts, part + IM + ts,
+                            q == 0);
+        else
+            line_edge_body(lt->mag[q], lt->fc[LINE_ROT_FIXED * q + 2u],
+                           lt->fs[LINE_ROT_FIXED * q + 2u],
+                           lt->pr + (size_t)BEAM_LINE_LANES * q,
+                           lt->pi + (size_t)BEAM_LINE_LANES * q,
+                           lt->ac + (size_t)q * lt->nb, lt->as + (size_t)q * lt->nb,
+                           g0, T, c + ts, c + IM + ts, part + ts, part + IM + ts,
+                           q == 0);
     }
 }
 
@@ -1145,7 +1245,7 @@ static void line_group(const BeamModel *m, const uint32_t *tgt, uint32_t b,
                        double re, double qmax, double im0, double dim,
                        uint64_t k0, uint32_t Wp, const double *sv,
                        const double *cur, double *next, LineScratch *sc,
-                       LineStoreFn store) {
+                       LineStoreFn store, int narrow) {
     const uint32_t A = m->n_alphabet, R = m->n_residues, SK = m->state_shift;
     const uint32_t rest = tgt[b] / A;
     uint32_t ne = 0;
@@ -1169,7 +1269,7 @@ static void line_group(const BeamModel *m, const uint32_t *tgt, uint32_t b,
         line_patterns(ne, sc->fcs, sc->fsn, sc->pr, sc->pi);
     }
     LineTile lt = {tgt + b, sc->first, e - b, sc->mag, sc->src, sc->fcs, sc->fsn,
-                   sc->pr, sc->pi, sc->acs, sc->asn, 0u};
+                   sc->pr, sc->pi, sc->acs, sc->asn, 0u, narrow};
     for (uint32_t ts = 0; ts < Wp; ts += BEAM_LINE_TILE) {
         const uint32_t T = Wp - ts < BEAM_LINE_TILE ? Wp - ts : BEAM_LINE_TILE;
         const uint64_t g0 = k0 + ts;
@@ -1187,7 +1287,8 @@ static void line_group(const BeamModel *m, const uint32_t *tgt, uint32_t b,
 static int line_sink_chunk(const uint32_t *ends, uint32_t b, uint32_t e,
                            const double *tail, double re, double tmax,
                            double im0, double dim, uint64_t k0, uint32_t Wp,
-                           const double *cur, double *part, LineScratch *sc) {
+                           const double *cur, double *part, LineScratch *sc,
+                           int narrow) {
     uint32_t ne = 0;
     for (uint32_t k = b; k < e; ++k) {
         const double tv = tail[ends[k]];
@@ -1201,7 +1302,7 @@ static int line_sink_chunk(const uint32_t *ends, uint32_t b, uint32_t e,
     line_patterns(ne, sc->fcs, sc->fsn, sc->pr, sc->pi);
     const uint32_t one[2] = {0u, ne};
     LineTile lt = {NULL, one, 1u, sc->mag, sc->src, sc->fcs, sc->fsn,
-                   sc->pr, sc->pi, sc->acs, sc->asn, 0u};
+                   sc->pr, sc->pi, sc->acs, sc->asn, 0u, narrow};
     for (uint32_t ts = 0; ts < Wp; ts += BEAM_LINE_TILE) {
         const uint32_t T = Wp - ts < BEAM_LINE_TILE ? Wp - ts : BEAM_LINE_TILE;
         const uint64_t g0 = k0 + ts;
@@ -1287,6 +1388,7 @@ BeamError jet_sweep_line(const BeamModel *m, BeamLineWork *wk, uint32_t len,
     const size_t RS = beam_line_row(Wp), IM = beam_line_im(Wp);
     const uint64_t per_thread = wk->per_thread;
     const LineStoreFn store = line_store_pick();
+    const int narrow = line_narrow_pick();
     double   *w     = wk->w;
     double   *tail  = wk->tail;
     double   *cur   = wk->cur;
@@ -1371,7 +1473,7 @@ BeamError jet_sweep_line(const BeamModel *m, BeamLineWork *wk, uint32_t len,
 #endif
             for (int64_t g = 0; g < (int64_t)ng; ++g)
                 line_group(m, tgt, gs[g], gs[g + 1], alive, w, re, qmax, im0,
-                           dim, k0, Wp, sv, cur, next, &sc, store);
+                           dim, k0, Wp, sv, cur, next, &sc, store, narrow);
             LINE_FENCE();          /* this thread's streamed rows, before the barrier */
 #ifdef _OPENMP
             #pragma omp critical(beam_line_nmax)
@@ -1424,7 +1526,8 @@ BeamError jet_sweep_line(const BeamModel *m, BeamLineWork *wk, uint32_t len,
                 const uint32_t e = b + BEAM_LINE_SINK_CHUNK < ns ? b + BEAM_LINE_SINK_CHUNK : ns;
                 used[c] = (uint8_t)line_sink_chunk(ends, b, e, tail, re, tmax, im0,
                                                    dim, k0, Wp, cur,
-                                                   part + (size_t)c * RS, &sc);
+                                                   part + (size_t)c * RS, &sc,
+                                                   narrow);
             }
         }
         int any = 0;

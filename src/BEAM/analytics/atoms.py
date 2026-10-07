@@ -21,13 +21,13 @@ class Atoms:
     sharing prediction needs — is a sum over these pairs.
 
     **The probability is ``generated / counting``, not ``exp(-surprisal)``.**
-    Both spectra come out of ONE transport
-    (:meth:`BeamModel.spectrum_pair`), so they are the same weights carrying
-    different mass and their ratio is the mass-weighted mean probability of
-    the sequences in the bin. That the two share splitting fractions is what
-    makes the ratio meaningful, and taking them from one sweep makes it
-    structural rather than a coincidence of two calls doing the same
-    arithmetic. Reading ``exp(-surprisal)`` off the bin's left edge instead biases
+    Both spectra come out of ONE call (:meth:`BeamModel.spectrum_pair`),
+    which puts them on one grid and splits every edge of both by the same
+    fractions, so they are the same weights carrying different mass and their
+    ratio is the mass-weighted mean probability of the sequences in the bin.
+    That the two share splitting fractions is what makes the ratio meaningful,
+    and taking them from one call makes it structural rather than a
+    coincidence of two calls doing the same arithmetic. Reading ``exp(-surprisal)`` off the bin's left edge instead biases
     every atom by up to ``exp(spacing)`` and shows up immediately as a total
     mass that is not 1. With this definition
     ``sum(multiplicities * probabilities)`` is the generated mass exactly,

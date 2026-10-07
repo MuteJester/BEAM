@@ -120,10 +120,11 @@ class PseqAnalysis:
         return {"counting": self._hist[key_c], "generated": self._hist[key_g]}
 
     def histogram_pair(self, bins: int = 2048) -> dict[str, Histogram]:
-        """Both global spectra from ONE transport, on one grid.
+        """Both global spectra on one grid, split by the same fractions.
 
-        About 1.5x faster than the two single-measure calls, and bit-identical
-        to them. The shared grid is the load-bearing part: see
+        Bit-identical to the two single-measure calls and about as long; it
+        holds half their combined peak memory at once. The shared grid is the
+        load-bearing part: see
         :meth:`BeamModel.spectrum_pair` and :meth:`atoms` for why the two measures
         have to be split by the same fractions and not merely by the same
         arithmetic.

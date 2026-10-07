@@ -270,7 +270,9 @@ BeamError beam_insights_logos(const BeamModel *m, const BeamLogoRequest *req,
  * multi-gigabyte grid, and the caller cannot see that from the question.
  * `bytes` is the figure that will be checked against the memory budget, from
  * the same expression, so a caller can compare before asking instead of
- * catching a refusal after.
+ * catching a refusal after. For a banded sweep it is exact -- a budget of
+ * `bytes` runs it and one byte less refuses it -- because the estimate runs
+ * the sweep's own integer pass that sizes each backward row.
  */
 BeamError beam_insights_logo_cost(const BeamModel *m,
                                   const BeamLogoRequest *req,

@@ -60,22 +60,22 @@ BeamError beam_surprisal_range_at(const BeamModel *m, uint32_t len,
                                   double *out_min, double *out_max);
 
 /**
- * Scratch a banded positional sweep holds at once, in bytes.
+ * The figure `beam_model_positional_banded` refuses on, for the same length,
+ * grid and number of edges, exposed so that `beam_insights_logo_cost`
+ * reports that number rather than a second derivation of it. `budget.h`
+ * requires a guard and its allocation to come from one expression; an
+ * estimator that disagrees with the guard is the same defect wearing a
+ * different hat.
  *
- * The figure `beam_model_positional_banded` refuses on, exposed so that
- * `beam_insights_logo_cost` reports the same number rather than a second
- * derivation of it. `budget.h` requires a guard and its allocation to come
- * from one expression; an estimator that disagrees with the guard is the same
- * defect wearing a different hat.
- *
- * `bbins` is the padded grid width. A caller estimating before the sweep does
- * not know the padding -- it comes from the sink weights -- and should pass
- * `bins`, which makes the answer a slight underestimate.
+ * It builds the sweep's own plan to get it -- the sink weights, the backward
+ * origin and an integer pass over the edges that sizes every backward row --
+ * because the rows are stored at their own widths and those are not known
+ * until then. That is one layer-weight evaluation and one pass of integer
+ * work per layer, against a sweep that moves every occupied bin twice.
  */
-uint64_t beam_positional_banded_bytes(const BeamModel *m, uint32_t bins,
-                                      uint32_t bbins, uint64_t slots,
-                                      uint32_t maxlive, uint32_t len,
-                                      uint32_t n_thr);
+BeamError beam_positional_banded_cost(const BeamModel *m, uint32_t length,
+                                      uint32_t bins, double spacing,
+                                      uint32_t n_edges, uint64_t *out_bytes);
 
 /* ── Log-space accumulation ──────────────────────────────────── */
 

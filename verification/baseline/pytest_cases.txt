@@ -32,6 +32,8 @@ tests/python/analytics/test_exact_occupancy.py::test_a_fresh_batch_below_its_rou
 tests/python/analytics/test_exact_occupancy.py::test_a_fresh_batch_below_its_rounding_floor_builds_at_most_two_lines[nt]
 tests/python/analytics/test_exact_occupancy.py::test_a_line_carries_its_own_real_power_sum[aa]
 tests/python/analytics/test_exact_occupancy.py::test_a_line_carries_its_own_real_power_sum[nt]
+tests/python/analytics/test_exact_occupancy.py::test_a_lines_file_without_power_sums_still_loads[aa]
+tests/python/analytics/test_exact_occupancy.py::test_a_lines_file_without_power_sums_still_loads[nt]
 tests/python/analytics/test_exact_occupancy.py::test_a_value_below_its_rounding_floor_builds_at_most_one_new_line[aa]
 tests/python/analytics/test_exact_occupancy.py::test_a_value_below_its_rounding_floor_builds_at_most_one_new_line[nt]
 tests/python/analytics/test_exact_occupancy.py::test_a_value_no_allowed_q_can_resolve_builds_no_line[aa]
@@ -65,6 +67,8 @@ tests/python/analytics/test_exact_occupancy.py::test_novelty_short_of_its_tolera
 tests/python/analytics/test_exact_occupancy.py::test_novelty_short_of_its_tolerance_still_tells_the_truth[nt]
 tests/python/analytics/test_exact_occupancy.py::test_poisson_richness[aa]
 tests/python/analytics/test_exact_occupancy.py::test_poisson_richness[nt]
+tests/python/analytics/test_exact_occupancy.py::test_power_sums_saved_with_the_lines_are_not_swept_again[aa]
+tests/python/analytics/test_exact_occupancy.py::test_power_sums_saved_with_the_lines_are_not_swept_again[nt]
 tests/python/analytics/test_exact_occupancy.py::test_private_at_depth[aa]
 tests/python/analytics/test_exact_occupancy.py::test_private_at_depth[nt]
 tests/python/analytics/test_exact_occupancy.py::test_private_in_a_cohort[aa]
@@ -109,6 +113,8 @@ tests/python/analytics/test_exact_occupancy.py::test_the_fingerprint_is_taken_on
 tests/python/analytics/test_exact_occupancy.py::test_the_fingerprint_is_taken_once[nt]
 tests/python/analytics/test_exact_occupancy.py::test_the_fused_contour_sums_agree_with_the_matrix_form[aa]
 tests/python/analytics/test_exact_occupancy.py::test_the_fused_contour_sums_agree_with_the_matrix_form[nt]
+tests/python/analytics/test_exact_occupancy.py::test_the_power_sums_every_use_needs_are_one_sweep[aa]
+tests/python/analytics/test_exact_occupancy.py::test_the_power_sums_every_use_needs_are_one_sweep[nt]
 tests/python/analytics/test_expected_counts_memory.py::test_a_budget_below_the_working_set_refuses_rather_than_allocating
 tests/python/analytics/test_expected_counts_memory.py::test_the_refusal_is_a_memory_error
 tests/python/analytics/test_expected_counts_memory.py::test_the_working_set_covers_the_answer_it_returned

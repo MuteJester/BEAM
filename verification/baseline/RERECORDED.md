@@ -2480,3 +2480,27 @@ bytes, thread independence and 411 independent enumeration checks passed
 before reconciling the inventories; the surface checks then passed separately.
 The fingerprint pilot's validation logs and exact additions are recorded under
 `.private/likelihood_studies/56_gapped_fingerprint/`.
+
+# Why the pytest inventory moved for the swept power sums
+
+Re-recorded 2026-10-07, tag `presweptsums`. ExactOccupancy now sweeps the
+real power sums it always needs -- D0, the fingerprint and the planning grid --
+in one batch at construction, routes every later real order through the same
+batcher, and saves what it swept in the lines file so a later process sweeps
+none of it again. Every value is unchanged to the bit: an order's power sum
+depends on the model and q alone.
+
+    pytest_cases.txt   6 added (3 tests x aa/nt in test_exact_occupancy.py):
+                       the first power sums are one sweep, sums saved with
+                       the lines are not swept again and give the same bits,
+                       and a lines file without them still loads. Two tests
+                       that counted sweeps by their size (one of 90, one of
+                       4) now count each order once, since the batches are
+                       no longer those sizes; names unchanged.
+    python_api.txt     unchanged (re-written by the recorder, byte-identical)
+    c_cases.txt        unchanged (likewise)
+    numeric.json       unchanged (likewise)
+    threads.json       unchanged (likewise)
+
+The gate passed on everything else before recording. The full suite: 1009
+passed, 2 skipped.
