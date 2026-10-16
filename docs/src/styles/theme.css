@@ -18,3 +18,53 @@
 	display: block;
 	overflow-x: auto;
 }
+
+/* Figures: show the variant matching the theme; print the light one. */
+:root[data-theme='light'] .beam-dark,
+:root:not([data-theme='light']) .beam-light {
+	display: none;
+}
+@media print {
+	.beam-dark { display: none !important; }
+	.beam-light { display: block !important; }
+	.beam-interactive-body { display: none; }
+}
+.beam-print-only { display: none; }
+@media print {
+	.beam-print-only { display: block; }
+}
+.beam-figure {
+	margin: 1.5rem 0;
+}
+.beam-figure img {
+	width: 100%;
+	height: auto;
+}
+.beam-figure figcaption {
+	font-size: var(--sl-text-sm);
+	color: var(--sl-color-gray-2);
+	margin-top: 0.5rem;
+}
+
+/* Example: code and output read as one unit. */
+.beam-example > :not(:first-child) {
+	margin-top: 0.5rem;
+}
+
+/* Interactive figures: a framed panel with its description under it. */
+.beam-interactive {
+	margin: 1.75rem 0;
+	padding: 1rem 1.25rem;
+	border: 1px solid var(--sl-color-gray-5);
+	border-radius: 0.5rem;
+	background: var(--sl-color-gray-7, var(--sl-color-black));
+}
+.beam-interactive-title {
+	font-weight: 600;
+	margin: 0 0 0.75rem;
+}
+.beam-interactive-description {
+	font-size: var(--sl-text-sm);
+	color: var(--sl-color-gray-2);
+	margin: 0.75rem 0 0;
+}

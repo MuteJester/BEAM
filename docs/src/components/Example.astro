@@ -1,0 +1,38 @@
+---
+/**
+ * An example program and what it printed, exactly as recorded by
+ * docs/tools/run_examples.py: <Example src="quickstart/score" />.
+ * A page cannot show code that did not run: an unrecorded example fails the build.
+ */
+import { Code } from '@astrojs/starlight/components';
+
+interface Props {
+	src: string;
+	title?: string;
+	output?: boolean;
+}
+const { src, title, output = true } = Astro.props;
+
+const codes = import.meta.glob<string>('../generated/**/code.py', {
+	query: '?raw',
+	import: 'default',
+	eager: true,
+});
+const outputs = import.meta.glob<string>('../generated/**/output.txt', {
+	query: '?raw',
+	import: 'default',
+	eager: true,
+});
+const code = codes[`../generated/${src}/code.py`];
+const printed = outputs[`../generated/${src}/output.txt`];
+if (code === undefined) {
+	throw new Error(
+		`Example "${src}" has no recording. Run: python docs/tools/run_examples.py --only '${src}'`,
+	);
+}
+---
+
+<div class="beam-example">
+	<Code code={code.trimEnd()} lang="python" title={title ?? `${src.split('/').pop()}.py`} />
+	{output && printed?.trim() && <Code code={printed.trimEnd()} lang="text" title="Output" />}
+</div>

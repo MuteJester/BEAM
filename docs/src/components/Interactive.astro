@@ -1,0 +1,37 @@
+---
+/**
+ * Frame for an interactive figure (a Svelte island passed as the slot).
+ * The description is always visible text; the fallback figure stands in
+ * without JavaScript and on paper.
+ */
+import Figure from './Figure.astro';
+
+interface Props {
+	title: string;
+	description: string;
+	/** "section/name/figure" of a recorded static figure */
+	fallback?: string;
+	fallbackAlt?: string;
+}
+const { title, description, fallback, fallbackAlt = description } = Astro.props;
+const parts = fallback?.split('/');
+const fig = parts && { src: parts.slice(0, -1).join('/'), name: parts.at(-1)!, alt: fallbackAlt };
+---
+
+<section class="beam-interactive not-content" aria-label={title}>
+	<p class="beam-interactive-title">{title}</p>
+	<div class="beam-interactive-body"><slot /></div>
+	<p class="beam-interactive-description">{description}</p>
+	{
+		fig && (
+			<>
+				<noscript>
+					<Figure {...fig} />
+				</noscript>
+				<div class="beam-print-only">
+					<Figure {...fig} />
+				</div>
+			</>
+		)
+	}
+</section>

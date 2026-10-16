@@ -1,0 +1,29 @@
+---
+/**
+ * A figure recorded by an example, in the variant matching the site theme:
+ * <Figure src="depth/saturation" name="curve" alt="..." caption="..." />.
+ */
+import fs from 'node:fs';
+import path from 'node:path';
+
+interface Props {
+	src: string;
+	name: string;
+	alt: string;
+	caption?: string;
+}
+const { src, name, alt, caption } = Astro.props;
+
+const recorded = path.join(process.cwd(), 'public', 'figures', src, `${name}-light.svg`);
+if (!fs.existsSync(recorded)) {
+	throw new Error(`Figure "${src}/${name}" was not recorded by its example (${recorded}).`);
+}
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+const url = (theme: string) => `${base}/figures/${src}/${name}-${theme}.svg`;
+---
+
+<figure class="beam-figure">
+	<img class="beam-light" src={url('light')} alt={alt} loading="lazy" />
+	<img class="beam-dark" src={url('dark')} alt={alt} loading="lazy" />
+	{caption && <figcaption>{caption}</figcaption>}
+</figure>
