@@ -27,17 +27,19 @@
 
 	let data = $state<Data | null>(null);
 	let selected = $state<number | null>(null);
+	let failed = $state(false);
 	let themeTick = $state(0);
 	let chart: HTMLDivElement | undefined = $state();
 
 	$effect(() => {
 		fetch(dataUrl('viz/distance_breakdown/distance_breakdown.json'))
-			.then((r) => r.json())
+			.then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
 			.then((d: Data) => {
 				data = d;
 				const top = [...d.lengths].sort((a, b) => b.pattern_term - a.pattern_term)[0];
 				selected = top?.length ?? null;
-			});
+			})
+			.catch(() => (failed = true));
 		return onThemeChange(() => themeTick++);
 	});
 
@@ -94,11 +96,11 @@
 			<span><span class="swatch patterns"></span>local patterns: {pct(data.pattern_squared / data.squared_distance)}</span>
 			<span class="muted">distance {Math.sqrt(data.squared_distance).toFixed(4)}</span>
 		</div>
-		<div bind:this={chart} class="chart"></div>
+		<div bind:this={chart} class="chart" role="img" aria-label="Contribution of each CDR3 length to the distance, split into length and pattern terms"></div>
 		<div class="row" role="group" aria-label="Length">
 			<span class="muted">Patterns at length</span>
 			{#each shown as r}
-				<button class:active={selected === r.length} onclick={() => (selected = r.length)}>{r.length}</button>
+				<button class:active={selected === r.length} aria-pressed={selected === r.length} onclick={() => (selected = r.length)}>{r.length}</button>
 			{/each}
 		</div>
 		{#if patterns.length}
@@ -121,6 +123,8 @@
 		{:else}
 			<p class="muted">No pattern among the strongest at this length.</p>
 		{/if}
+	{:else if failed}
+		<p class="muted">The data for this figure could not be loaded.</p>
 	{:else}
 		<p class="muted">Loading…</p>
 	{/if}

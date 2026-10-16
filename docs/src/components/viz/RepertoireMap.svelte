@@ -112,7 +112,7 @@
 			<div bind:this={heat} class="panel" role="img" aria-label="Distance between every pair of repertoires"></div>
 			<div bind:this={scatter} class="panel" role="img" aria-label="The repertoires laid out so that distances are preserved as well as possible"></div>
 		</div>
-		<p class="readout">
+		<p class="readout" aria-live="polite">
 			<strong>{data.names[selected]}</strong> (group {data.labels[selected]}): nearest repertoire
 			<strong>{data.names[nearest]}</strong> (group {data.labels[nearest]}), at distance
 			{data.distance[selected][nearest].toFixed(4)}.

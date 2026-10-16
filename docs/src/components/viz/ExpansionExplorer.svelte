@@ -58,7 +58,7 @@
 			<span>Clonal expansion: <strong>{row.strength === 0 ? 'none' : `strength ${row.strength}`}</strong></span>
 			<input type="range" min="0" max={rows.length - 1} step="1" bind:value={index} aria-label="Strength of clonal expansion" />
 		</label>
-		<div class="readout">
+		<div class="readout" aria-live="polite">
 			<div>Largest clone: <strong>{pct(row.top_share)}</strong> of the cells; ten largest: {pct(row.top10_share)}.</div>
 			<div>
 				Its probability: <strong>{sci(row.p_top_weighted)}</strong> weighted by cells, <strong>{sci(row.p_top_unique)}</strong>
@@ -66,7 +66,7 @@
 			</div>
 			<div>Distance between the two models: <strong>{row.distance.toFixed(4)}</strong>.</div>
 		</div>
-		<div bind:this={chart}></div>
+		<div bind:this={chart} role="img" aria-label="CDR3 length distribution of the repertoire weighted by cells and with each sequence counted once"></div>
 	{:else if failed}
 		<p class="muted">The data for this figure could not be loaded.</p>
 	{:else}

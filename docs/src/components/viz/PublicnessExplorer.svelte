@@ -24,6 +24,7 @@
 
 	let data = $state<Data | null>(null);
 	let size = $state(100);
+	let failed = $state(false);
 	let depth = $state(100_000);
 	let sequence = $state<string | null>('CASSLGQGAYNEQFF');
 	let gridIndex = $state(50);
@@ -32,8 +33,9 @@
 
 	$effect(() => {
 		fetch(dataUrl('viz/publicness_grid/publicness_grid.json'))
-			.then((r) => r.json())
-			.then((d: Data) => (data = d));
+			.then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
+			.then((d: Data) => (data = d))
+			.catch(() => (failed = true));
 		return onThemeChange(() => themeTick++);
 	});
 
@@ -79,19 +81,19 @@
 		<div class="row" role="group" aria-label="Cohort size">
 			<span class="label">Cohort</span>
 			{#each sizes as s}
-				<button class:active={size === s} onclick={() => (size = s)}>{s} people</button>
+				<button class:active={size === s} aria-pressed={size === s} onclick={() => (size = s)}>{s} people</button>
 			{/each}
 		</div>
 		<div class="row" role="group" aria-label="Cells sampled per person">
 			<span class="label">Depth</span>
 			{#each depths as d}
-				<button class:active={depth === d} onclick={() => (depth = d)}>{fmt(d)} cells each</button>
+				<button class:active={depth === d} aria-pressed={depth === d} onclick={() => (depth = d)}>{fmt(d)} cells each</button>
 			{/each}
 		</div>
 		<div class="row" role="group" aria-label="Sequence">
 			<span class="label">Sequence</span>
 			{#each exampleNames as s}
-				<button class="mono" class:active={sequence === s} onclick={() => (sequence = s)}>{s}</button>
+				<button class="mono" class:active={sequence === s} aria-pressed={sequence === s} onclick={() => (sequence = s)}>{s}</button>
 			{/each}
 		</div>
 		<label class="control">
@@ -109,13 +111,15 @@
 				aria-label="Sequence probability"
 			/>
 		</label>
-		<div class="readout">
+		<div class="readout" aria-live="polite">
 			<div><strong>{fmt(mean, 1)}</strong> people expected to carry it</div>
 			<div class="muted">
 				Nobody: {pct(pNobody)} · most likely: {mode} {mode === 1 ? 'person' : 'people'}
 			</div>
 		</div>
-		<div bind:this={chart} class="chart"></div>
+		<div bind:this={chart} class="chart" role="img" aria-label="Probability of each number of carriers in the cohort"></div>
+	{:else if failed}
+		<p class="muted">The data for this figure could not be loaded.</p>
 	{:else}
 		<p class="muted">Loading the exact distributions…</p>
 	{/if}

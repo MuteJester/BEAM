@@ -89,7 +89,7 @@
 				<text x={i * 30 + 20} y={H + 18} font-size="10" text-anchor="middle" fill="currentColor">{i + 1}</text>
 			{/each}
 		</svg>
-		<p class="readout">
+		<p class="readout" aria-live="polite">
 			Consensus <span class="mono">{logo.consensus}</span>; information {logo.information.toFixed(1)} bits{shown !== 'all'
 				? `; these sequences carry ${pct(logo.fraction)} of the probability at length ${length}`
 				: ''}.

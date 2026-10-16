@@ -16,13 +16,15 @@
 
 	let data = $state<Data | null>(null);
 	let chosen = $state(0);
+	let failed = $state(false);
 	let step = $state(0); // residues revealed so far
 	let playing = $state(false);
 
 	$effect(() => {
 		fetch(dataUrl('viz/two_anchors/two_anchors.json'))
-			.then((r) => r.json())
-			.then((d: Data) => (data = d));
+			.then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
+			.then((d: Data) => (data = d))
+			.catch(() => (failed = true));
 	});
 
 	const seq = $derived(data?.sequences[chosen]);
@@ -62,7 +64,7 @@
 	{#if data && seq}
 		<div class="row" role="group" aria-label="Sequence">
 			{#each data.sequences as s, i}
-				<button class="mono" class:active={chosen === i} onclick={() => choose(i)}>{s.sequence}</button>
+				<button class="mono" class:active={chosen === i} aria-pressed={chosen === i} onclick={() => choose(i)}>{s.sequence}</button>
 			{/each}
 		</div>
 		<div class="controls">
@@ -126,6 +128,8 @@
 				Press Play to read the sequence one residue at a time.
 			{/if}
 		</div>
+	{:else if failed}
+		<p class="muted">The data for this figure could not be loaded.</p>
 	{:else}
 		<p class="muted">Loading…</p>
 	{/if}

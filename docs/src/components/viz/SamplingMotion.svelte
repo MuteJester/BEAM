@@ -13,12 +13,14 @@
 	let playing = $state(false);
 	let speed = $state(20); // draws per tick
 	let themeTick = $state(0);
+	let failed = $state(false);
 	let chart: HTMLDivElement | undefined = $state();
 
 	$effect(() => {
 		fetch(dataUrl('viz/sampling/sampling.json'))
-			.then((r) => r.json())
-			.then((d: Data) => (data = d));
+			.then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
+			.then((d: Data) => (data = d))
+			.catch(() => (failed = true));
 		return onThemeChange(() => themeTick++);
 	});
 
@@ -31,6 +33,12 @@
 		}, 120);
 		return () => clearInterval(timer);
 	});
+
+	const finished = $derived(data !== null && drawn >= data.sequences.length);
+	function toggle() {
+		if (finished) drawn = 0; // a finished draw starts again
+		playing = finished || !playing;
+	}
 
 	const recent = $derived(data ? data.sequences.slice(Math.max(0, drawn - 8), drawn).reverse() : []);
 	const recentLogP = $derived(data ? data.log_p.slice(Math.max(0, drawn - 8), drawn).reverse() : []);
@@ -69,8 +77,8 @@
 <div class="sampling">
 	{#if data}
 		<div class="controls">
-			<button onclick={() => (playing = !playing)}>
-				{playing ? 'Pause' : drawn >= data.sequences.length ? 'Done' : drawn ? 'Resume' : 'Draw'}
+			<button onclick={toggle}>
+				{playing ? 'Pause' : finished ? 'Draw again' : drawn ? 'Resume' : 'Draw'}
 			</button>
 			<button
 				onclick={() => {
@@ -82,18 +90,20 @@
 				Speed
 				<input type="range" min="1" max="100" bind:value={speed} aria-label="Draws per step" />
 			</label>
-			<span class="count"><strong>{fmt(drawn)}</strong> of {fmt(data.sequences.length)} drawn</span>
+			<span class="count" aria-live="polite"><strong>{fmt(drawn)}</strong> of {fmt(data.sequences.length)} drawn</span>
 		</div>
 		<ol class="ticker" aria-live="off">
 			{#each recent as s, i (drawn - i)}
 				<li><span class="mono">{s}</span><span class="logp">ln P = {recentLogP[i].toFixed(1)}</span></li>
 			{/each}
 		</ol>
-		<div bind:this={chart} class="chart"></div>
+		<div bind:this={chart} class="chart" role="img" aria-label="Length distribution of the draws so far against the model's exact length distribution"></div>
 		<div class="legend">
 			<span><span class="swatch a"></span>share of the draws so far</span>
 			<span><span class="swatch b"></span>the model's exact length distribution</span>
 		</div>
+	{:else if failed}
+		<p class="muted">The data for this figure could not be loaded.</p>
 	{:else}
 		<p class="muted">Loading…</p>
 	{/if}

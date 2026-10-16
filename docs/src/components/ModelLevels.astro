@@ -83,11 +83,20 @@
 	.a {
 		color: var(--sl-color-accent);
 	}
+	/* text colours with at least 4.5:1 contrast on each theme's background */
+	.levels {
+		--ml-b: #ef785f;
+		--ml-c: #9aa4ea;
+	}
+	:global(:root[data-theme='light']) .levels {
+		--ml-b: #b5472f;
+		--ml-c: #4b5cc4;
+	}
 	.b {
-		color: #ef785f;
+		color: var(--ml-b);
 	}
 	.c {
-		color: #6c7bd9;
+		color: var(--ml-c);
 	}
 	.model.a {
 		background: var(--sl-color-accent);

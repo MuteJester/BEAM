@@ -74,8 +74,8 @@
 				{/each}
 			</div>
 		{/each}
-		<div bind:this={chart}></div>
-		<p class="readout">
+		<div bind:this={chart} role="img" aria-label="Log probability of the chosen sequence under each group's model"></div>
+		<p class="readout" aria-live="polite">
 			<span class="mono">{row.sequence}</span> ({row.length} residues{row.motif ? `, carries ${data.motif}` : ''}):
 			most probable under group <strong>{best}</strong>; it was drawn from group {row.drawn_from}. If the three group
 			models were exact and the groups equally likely beforehand, the chance it came from A, B or C would be

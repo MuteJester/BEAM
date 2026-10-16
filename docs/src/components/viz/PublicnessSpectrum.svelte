@@ -57,11 +57,11 @@
 				<button class:active={depth === d} aria-pressed={depth === d} onclick={() => (depth = d)}>{fmt(d)} cells each</button>
 			{/each}
 		</div>
-		<div class="readout">
+		<div class="readout" aria-live="polite">
 			<div><strong>{fmt(seen)}</strong> distinct sequences expected across the cohort.</div>
 			<div><strong>{pct(counts[0] / seen)}</strong> of them private (in one person); {everyone >= 0.1 ? fmt(everyone, 1) : sci(everyone)} expected in all {fmt(size)}.</div>
 		</div>
-		<div bind:this={chart}></div>
+		<div bind:this={chart} role="img" aria-label="Expected number of sequences carried by each number of people in the cohort"></div>
 	{:else if failed}
 		<p class="muted">The data for this figure could not be loaded.</p>
 	{:else}

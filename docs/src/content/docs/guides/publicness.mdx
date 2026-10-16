@@ -47,8 +47,6 @@ the sequence.
 <Interactive
 	title="Explore publicness"
 	description="Choose a cohort size, a sampling depth and a sequence, or set any sequence probability with the slider. The bars show the probability that each number of people carries the sequence, computed from the reference model."
-	fallback="publicness/distribution/carriers"
-	fallbackAlt="Probability of each number of carriers out of 100 people for three sequences."
 >
 	<PublicnessExplorer client:visible />
 </Interactive>
@@ -103,8 +101,6 @@ everyone carries them pile up at "carried by all 100", where about 39 are expect
 <Interactive
 	title="The publicness spectrum"
 	description="Choose a cohort size and a sampling depth. Each dot is the expected number of sequences carried by exactly that many people (counts below 0.01 are not shown). Larger cohorts extend the spectrum to higher publicness; deeper sampling raises it at every level."
-	fallback="publicness/spectrum/spectrum"
-	fallbackAlt="Expected publicness spectrum of 100 people sampled to 100,000 cells each."
 >
 	<PublicnessSpectrum client:visible />
 </Interactive>

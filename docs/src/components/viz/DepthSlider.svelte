@@ -90,7 +90,7 @@
 				aria-label="Number of cells sampled"
 			/>
 		</label>
-		<div class="readout">
+		<div class="readout" aria-live="polite">
 			<div>
 				<span class="swatch accent"></span>
 				<strong>{fmt(distinct)}</strong> distinct sequences expected
@@ -108,7 +108,7 @@
 			</div>
 			<div class="muted">Every value here is exact to a relative error of at most {boundUp(bound)}.</div>
 		</div>
-		<div bind:this={chart} class="chart"></div>
+		<div bind:this={chart} class="chart" role="img" aria-label="Expected distinct sequences, and those also expected in a second sample, against the number of cells sampled, with the chosen depth marked"></div>
 	{:else if failed}
 		<p class="muted">The data for this figure could not be loaded.</p>
 	{:else}
