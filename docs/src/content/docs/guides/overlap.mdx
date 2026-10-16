@@ -1,0 +1,55 @@
+---
+title: How many sequences will two samples share?
+description: The expected overlap between two independent samples of a population, and how many sequences are private to one sample of a cohort.
+sidebar:
+  order: 5
+---
+
+import { Aside } from '@astrojs/starlight/components';
+import Example from '../../../components/Example.astro';
+import Figure from '../../../components/Figure.astro';
+
+**The question:** if two samples are drawn from the same population, how many sequences will
+they have in common by chance alone?
+
+Overlap between repertoires is often read as evidence of a shared response. Before reading it
+that way, it helps to know how much overlap independent samples of one population produce on
+their own. BEAM computes that exactly.
+
+## Two samples
+
+`sharing(d1, d2)` is the expected number of sequences found in both of two independent samples of
+depths `d1` and `d2`.
+
+<Example src="overlap/sharing" />
+
+<Figure
+	src="overlap/sharing"
+	name="overlap"
+	alt="Share of one sample's sequences also found in a second sample of equal depth, rising with depth."
+	caption="Expected overlap between two independent samples of equal depth from the reference population."
+/>
+
+Two samples of 100,000 cells share about 3,700 sequences by chance, 3.8% of either sample's
+distinct sequences. The overlap grows with depth: at ten million cells each, 15% of one sample's
+sequences are expected in the other. A deeper second sample also raises the overlap: 100,000
+cells against a million share 15% of the smaller sample's sequences.
+
+## Private sequences in a cohort
+
+`private(depths)` is the expected number of sequences found in exactly one sample of a cohort.
+
+<Example src="overlap/private" />
+
+Across ten people sampled to 100,000 cells each, 94% of all distinct sequences are expected to
+be private to one person. Shared sequences are the exception, even by chance.
+
+<Aside type="caution" title="Pitfalls">
+- **This is the chance baseline.** It assumes both samples are independent draws from one
+  population. Real overlaps above it point to something shared: an HLA type, an exposure, or the
+  same person sampled twice. Overlaps below it are possible too, when two populations differ.
+- **Depths are numbers of cells**, not numbers of distinct sequences.
+- **Use the population the samples come from.** The reference model describes a broad human
+  aggregate. For overlaps within a specific group, such as one tissue or one disease cohort, a
+  model of that group gives the relevant baseline.
+</Aside>

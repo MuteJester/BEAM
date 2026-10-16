@@ -1,0 +1,84 @@
+---
+title: How deeply should I sequence?
+description: The expected number of distinct sequences at any sequencing depth, what doubling the depth buys, and how many sequences are seen once, twice or more.
+sidebar:
+  order: 4
+---
+
+import { Aside } from '@astrojs/starlight/components';
+import Example from '../../../components/Example.astro';
+import Figure from '../../../components/Figure.astro';
+import Interactive from '../../../components/Interactive.astro';
+import DepthSlider from '../../../components/viz/DepthSlider.svelte';
+
+**The question:** if I sample *n* T cells, how many different CDR3 sequences should I expect to
+see, and how much would sequencing deeper add?
+
+Because common sequences are drawn again and again, a sample of *n* cells contains fewer than
+*n* distinct sequences, and each additional cell is less likely to bring something new. BEAM
+computes the expected number of distinct sequences exactly, for any depth, from the model of the
+population.
+
+<Interactive
+	title="Explore sequencing depth"
+	description="Drag the slider to change the number of cells sampled. Teal: expected distinct sequences in the sample. Orange: how many of them a second, independent sample of the same depth would also contain. The dashed line is the ceiling where every cell carries a new sequence. All values are exact, computed from the reference model."
+	fallback="depth/richness/saturation"
+	fallbackAlt="Expected distinct sequences against sampling depth, on log scales, bending below the line where every cell is a new sequence."
+>
+	<DepthSlider client:visible />
+</Interactive>
+
+## Distinct sequences at a given depth
+
+`ExactOccupancy` holds a model and answers sampling questions about it. `richness(n)` is the
+expected number of distinct sequences among `n` cells.
+
+<Example src="depth/richness" />
+
+<Figure
+	src="depth/richness"
+	name="saturation"
+	alt="Expected distinct sequences against sampling depth on log scales, bending below the line where every cell is a new sequence."
+	caption="Expected distinct sequences against depth for the reference population. The gap to the dashed line is the cells that repeat a sequence already in the sample."
+/>
+
+At 100,000 cells, almost every cell (97%) still brings a new sequence. At ten million, more than
+a quarter of the cells repeat a sequence already drawn, and at a billion almost two thirds do.
+The curve never flattens completely: the population has far more sequences than any sample can
+hold.
+
+Each answer carries its **bound**, a guaranteed limit on the relative error (here below
+$10^{-12}$). The first `richness` call on a large model takes a minute or two while the
+integrals it needs are prepared; after that every depth is answered almost instantly.
+
+## What would sequencing deeper add?
+
+`richness_difference(n2, n1)` gives the new distinct sequences gained going from `n1` to `n2`
+cells, computed directly rather than as the difference of two large numbers.
+
+<Example src="depth/doubling" />
+
+Doubling 100,000 cells to 200,000 still adds 93,093 new sequences: 93% of the extra cells bring
+something new. Doubling 100 million cells adds new sequences with only 44% of the extra
+cells. This is the diminishing return to plan a sequencing budget with.
+
+## Seen once, twice or more
+
+`frequency(n, j)` is the expected number of sequences seen exactly `j` times in `n` cells.
+
+<Example src="depth/frequency" />
+
+At a million cells, most distinct sequences are seen exactly once, and only a few hundred ten
+times. In a real repertoire, sequences seen many times are mostly expanded clones; this
+calculation is what the population alone would produce, so it is the baseline to compare clone
+sizes against.
+
+<Aside type="caution" title="Pitfalls">
+- **This is sampling from a population, not from one person.** The reference model describes
+  sequences across many people, and the calculation treats cells as independent draws. A real
+  person's repertoire has expanded clones, which make repeats more common than this baseline.
+  To plan the depth for one person's sample, build a model from that person (or a similar
+  sample) and ask it the same question.
+- **Depth counts cells, not distinct sequences.** Use the number of cells (templates, UMIs)
+  sampled, not the number of distinct sequences you observed.
+</Aside>
