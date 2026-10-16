@@ -30,10 +30,11 @@ CDR3s are present, regardless of how much each was expanded.
 
 <Example src="abundance/weighted_vs_unique" />
 
-The largest clone holds 3.3% of this repertoire's cells, and the weighted model gives it a
-probability of 4.5%: of the order of its share of the cells. To the unique model it is one
-sequence among 43,379, and its probability, about $5 \times 10^{-11}$, reflects only its
-sequence.
+The largest clone holds 2.9% of this stand-in repertoire's cells (stand-in population A, with
+clonal expansion added), and the weighted model gives it a probability of 3.4%, close to that
+share: the model does not store frequencies, it builds probabilities from overlapping stretches
+of sequence, so the two need not agree exactly. To the unique model it is one sequence among
+48,964, and its probability, about $7 \times 10^{-12}$, reflects only its sequence.
 
 ## Clonal expansion
 
@@ -54,16 +55,18 @@ different weighted by cells and similar counted by unique sequences:
 
 <Example src="abundance/expansion_distance" />
 
-Weighted by cells, the expanded clones make the two repertoires almost four times as distant as
-when each distinct sequence counts once. If the question is whether two people's repertoires
+Weighted by cells, the expanded clones make the two stand-in repertoires almost four times as
+distant as when each distinct sequence counts once. The size of the effect depends on how
+strongly the clones are expanded; the explorer above shows the whole range. If the question is whether two people's repertoires
 differ in composition, the weighted distance is mostly measuring expansion.
 
 ## Benefits and drawbacks
 
 | | Weighted by abundance | Unique sequences |
 |---|---|---|
-| **Describes** | the cells | the sequence composition |
-| **Clonal expansion** | dominates the model | removed |
+| **Describes** | what the abundances count: cells (templates, UMIs) or reads | the sequence composition |
+| **Clonal expansion** | dominates the model | no longer weighted, though it still takes up depth and decides which sequences were seen |
+| **Depends on depth** | little: more cells sharpen the same distribution | strongly: deeper samples add rare, often longer, sequences, so compare at an equal number of distinct sequences |
 | **Differences in abundance units** (templates, UMIs, reads) between platforms | carried into the model | removed |
 | **Sampling questions** (depth, overlap, publicness) | in cells, as sequenced | in distinct sequences, not cells |
 | **Frequencies of individual sequences** | kept | lost |
@@ -75,7 +78,8 @@ how an expanded response changes a repertoire. The reference model is weighted b
 where the platform reported them, and counts each distinct sequence once per repertoire
 otherwise.
 
-**Use unique sequences** when the question is about which sequences a repertoire contains:
+**Use unique sequences** when the question is about which sequences a repertoire contains, and
+compare repertoires at the same number of distinct sequences, as the paper did:
 comparing cell types, conditions or studies, especially across platforms whose abundance units
 differ, or when a few expanded clones would otherwise decide the comparison. The paper's
 comparison of CD4 and CD8 repertoires across two independent studies counted each distinct

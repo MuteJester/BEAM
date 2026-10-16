@@ -62,8 +62,12 @@ export function boundUp(x: number): string {
 /** A probability as "3.3 × 10⁻⁵". */
 export function sci(x: number, digits = 2): string {
 	if (x === 0) return '0';
-	const exp = Math.floor(Math.log10(x));
-	const mant = x / 10 ** exp;
+	let exp = Math.floor(Math.log10(x));
+	let mant = Number((x / 10 ** exp).toFixed(digits - 1));
+	if (mant >= 10) {
+		mant /= 10;
+		exp += 1;
+	}
 	const sup = String(exp)
 		.split('')
 		.map((c) => '⁻⁰¹²³⁴⁵⁶⁷⁸⁹'['-0123456789'.indexOf(c)])

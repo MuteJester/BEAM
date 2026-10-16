@@ -1,6 +1,6 @@
 <script lang="ts">
 	import * as Plot from '@observablehq/plot';
-	import { dataUrl, fmt, onThemeChange, pct, themeColors } from './theme';
+	import { dataUrl, fmt, onThemeChange, pct, sci, themeColors } from './theme';
 
 	type Spectra = Record<string, { n: number; depth: number; counts: number[] }>;
 
@@ -29,7 +29,7 @@
 		themeTick;
 		if (!counts.length || !chart) return;
 		const c = themeColors();
-		const pts = counts.map((v, i) => ({ k: i + 1, v })).filter((d) => d.v > 1e-3);
+		const pts = counts.map((v, i) => ({ k: i + 1, v })).filter((d) => d.v >= 0.01);
 		const plot = Plot.plot({
 			width: chart.clientWidth,
 			height: 280,
@@ -59,7 +59,7 @@
 		</div>
 		<div class="readout">
 			<div><strong>{fmt(seen)}</strong> distinct sequences expected across the cohort.</div>
-			<div><strong>{pct(counts[0] / seen)}</strong> of them private (in one person); {fmt(everyone, 1)} expected in all {fmt(size)}.</div>
+			<div><strong>{pct(counts[0] / seen)}</strong> of them private (in one person); {everyone >= 0.1 ? fmt(everyone, 1) : sci(everyone)} expected in all {fmt(size)}.</div>
 		</div>
 		<div bind:this={chart}></div>
 	{:else if failed}

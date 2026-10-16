@@ -67,25 +67,35 @@ one chain or one sequencing platform.
 
 When you evaluate a cohort against a reference that **contains** it, the cohort's own sequences
 look more probable than they would to an independent reference. `without` removes a cohort's
-counts from a model; the result is exactly the model built without the cohort:
+counts from a model; the result is the model built without the cohort. The example uses a
+stand-in corpus of 13 repertoires, three of which form the cohort; how much the cohort's
+sequences gain depends on how large a share of the corpus the cohort is, and is far smaller in
+a reference of 38,538 repertoires:
 
 <Example src="models/leave_out" />
 
-With the reference model this is `BEAM.load_pretrained("foundation").without(cohort_model)`, when
-your cohort is one of the studies it was built from. The paper evaluated its predictions for the
-Emerson cohort this way.
+With the reference model this is `BEAM.load_pretrained("foundation").without(cohort)`, when your
+cohort is one of the studies it was built from; the paper evaluated its predictions for the
+Emerson cohort this way. The subtraction is only right if the cohort's counts are exactly the
+counts the reference holds for it: the same filtered sequences (3 to 27 standard amino acids)
+and the same weights (template counts where the platform reported them, otherwise one per
+distinct sequence per repertoire). BEAM cannot check this, so build the cohort's counts with the
+corpus's rules, or pass them directly with `without(sequences, abundances=...)`.
 
 ## Pooling counts or mixing models
 
 Pooling cells builds one model of the combined repertoire. A **mixture** keeps the members
 separate: pick a member at random, then a sequence from that member. Mixtures are what diversity
 *between* members is defined on. Beta diversity counts how many effectively distinct members a
-group has:
+group has. The example uses stand-in groups; at Hill order 2, beta diversity is driven by the
+most common sequences:
 
 <Example src="models/mixture" />
 
-Two groups drawn from one population count as one; three different populations count as
-clearly more than one.
+Two groups drawn from one population count as one (1.04). Three different populations count as
+about one and a half: at order 2 the measure is driven by the most common sequences, and the three
+stand-in populations share most of theirs. Differences in rarer sequences need lower orders or
+the distance.
 
 <Aside type="tip" title="Rule of thumb">
 Compare **samples** with per-repertoire models, **groups** with group models (or with the

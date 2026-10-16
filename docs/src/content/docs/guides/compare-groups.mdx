@@ -39,8 +39,10 @@ can then score any sequence.
 
 Score a sequence under each group's model: the group under which it is most probable is the one
 it resembles most, and the difference in log probability says by how much. To assign a whole
-**repertoire**, build its model and find the group model nearest to it by distance, as the paper
-matched CD4 and CD8 repertoires across studies.
+**repertoire**, build its model and find the group model nearest to it by distance. (The paper
+matched CD4 and CD8 repertoires across two studies by the closely related nearest-neighbour rule:
+each repertoire was assigned the cell type of its nearest repertoire, by distance, among the
+other study's repertoires.)
 
 <Example src="groups/which_group" />
 
@@ -50,10 +52,12 @@ often wrong. **A whole repertoire carries much more**: the distance from a new d
 each group's model places it with its own group.
 
 <Aside type="note" title="Why distance rather than summed log probability?">
-Summing a repertoire's log probabilities under each group model can mislead: a model built from
-a more diverse group spreads its probability more thinly, which lowers every score under it
-whatever the repertoire. The distance compares the distributions themselves, length by length
-and pattern by pattern.
+Summing a repertoire's log probabilities under each group model can mislead, because the group
+models are estimates. With the same number of cells, a model of a more diverse group has seen a
+smaller part of its population, so it gives too little probability to sequences it has not
+seen, including new sequences from its own group, and the sum then favours a less diverse
+group. The distance compares the distributions themselves, length by length and pattern by
+pattern. It has its own noise floor, which is why group models of similar size are compared.
 </Aside>
 
 <Interactive
@@ -71,13 +75,10 @@ Build one model per **repertoire**, compute the distance between every pair, and
 
 <Example src="groups/cluster" />
 
-Every repertoire's nearest neighbour comes from its own group, and distances between groups
-(0.34 on average) are well above distances within them (0.19). Cut into three clusters, though,
-groups A and C join, and one repertoire of group B splits off. That is not a failure of the
-distance: A and C differ only in one motif, and that difference is smaller than the variation
-among B's repertoires, whose longer and more diverse CDR3s make samples of the same size
-noisier. Some group differences are smaller than the differences between samples; deeper
-samples, or more of them, separate them.
+The three clusters are exactly the three groups, every repertoire's nearest neighbour comes from
+its own group, and distances between groups (0.32 on average) are more than twice those within
+them (0.14). Groups A and C, which differ only in how often one motif occurs, are closer to each
+other than either is to B.
 
 <Figure
 	src="groups/cluster"
@@ -105,12 +106,48 @@ example above prints. Two useful baselines:
 - **disjoint samples of one repertoire**: split a repertoire's cells in two and compare the halves.
 
 To compare a property such as "the naive–memory distance is larger in CD8 than in CD4", compute
-the distance for each donor and compare the two sets of per-donor distances, as the paper did.
+both distances within each donor and compare them donor by donor, as the paper did (with a
+sign-flip test over twin families).
+
+## Disjoint halves and unequal depths
+
+The distance between two models is never zero, even for two samples of one repertoire: each
+model sees a finite sample. Two baselines make a distance interpretable, and unequal depths
+must be removed before comparing:
+
+<Example src="groups/noise_floor" />
+
+Two halves of one repertoire and two repertoires of one population are equally far apart: that
+is the noise floor at this depth, and a different population is more than twice as far. The floor
+depends on depth, and the **smaller** sample sets it: comparing 30,000 cells with 3,000 gives
+about the distance between two samples of 3,000, well above the floor at 30,000. So a distance
+involving a small sample cannot be compared with distances between large ones; compare
+repertoires at matched depths, each against the floor at that depth.
 
 ## Which patterns make the groups differ?
 
 Compare two group models with `compare` to see whether lengths or local patterns drive the
 difference, and which patterns: see [How different are two repertoires?](/BEAM/guides/compare-repertoires/).
+
+## What the paper showed with real repertoires
+
+The stand-ins above show the methods. The paper applied them to real data:
+
+- **Clustering by cell population.** 67 of 69 mouse repertoires clustered with their sorted CD4,
+  CD8 or double-negative population, as with TCRdist with optimal transport.
+- **Comparing groups within donors.** In all 10 donors from five twin families, naive and memory
+  repertoires were further apart in CD8 than in CD4 T cells, and at 250 clone records per sample
+  these distances exceeded those between disjoint samples of the same repertoire. Separation also
+  held at unequal depths (Supplementary Fig. S8).
+- **Matching cell types across studies.** With references taken entirely from the other study,
+  the nearest repertoire had the same cell type (CD4 or CD8) for 98.9% and 99.2% of queries from
+  two independent studies (30 and 22 people, 1,000 sequences per repertoire).
+- **The same person over time.** In a longitudinal study of two donors, every one of 72
+  repertoires had its nearest neighbour in the same donor (Supplementary Fig. S10).
+- **Sensitivity to controlled changes.** In simulated repertoires, the distance responded to
+  changed junctional insertions, D-gene trimming and implanted motifs (Supplementary Fig. S9).
+- **Discovering patterns.** Five overlapping length-15 windows, chosen from 12 mice, were enriched
+  in double-negative T cells in all 11 mice held back for validation.
 
 <Aside type="caution" title="Pitfalls">
 - **Match the depth.** Smaller repertoires give noisier models and larger distances. Compare

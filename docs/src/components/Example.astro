@@ -49,4 +49,16 @@ if (createHash('sha256').update(source).digest('hex') !== meta.source_sha256) {
 <div class="beam-example">
 	<Code code={code.trimEnd()} lang="python" title={title ?? `${src.split('/').pop()}.py`} />
 	{output && printed?.trim() && <Code code={printed.trimEnd()} lang="text" title="Output" />}
+	<a class="beam-example-source" href={`https://github.com/MuteJester/BEAM/blob/main/docs/examples/${src}.py`}>
+		Full program, including the set-up hidden here
+	</a>
 </div>
+
+<style>
+	.beam-example-source {
+		display: block;
+		font-size: var(--sl-text-xs);
+		margin-top: 0.35rem;
+		text-align: right;
+	}
+</style>

@@ -80,25 +80,29 @@ sequences at the top are the ones a cohort study would see again and again.
 
 Instead of one sequence at a time, ask about **every** sequence at once: how many sequences are
 expected to be carried by exactly 1, 2, …, all of the people in a cohort. This is the cohort's
-**publicness spectrum**. BEAM computes it over every sequence the model can produce, grouped by
-probability (`pseq_analysis().atoms`).
+**publicness spectrum**. BEAM computes it over every sequence the model can produce, grouped onto
+a fine grid of probabilities (`pseq_analysis().atoms`). The grid is an approximation, so the
+example checks it against the exact, grid-free counts of distinct and private sequences; a
+coarser grid of 4,096 values needs about a third of the memory and moves the spectrum by about
+1.5%.
 
 <Example src="publicness/spectrum" />
 
-Of the 7.5 million distinct sequences expected across 100 people, 90% are private to one person,
-and about 24 are expected in all 100. Between these extremes the counts fall steadily: the
-spectrum declines roughly as a power law, as the paper's predicted spectra do.
+Of the 7.2 million distinct sequences expected across 100 people, 89% are private to one person.
+The counts then fall over most of the range, as in the paper's predicted spectra, which declined
+approximately as power laws. At the very end they rise again: sequences common enough that almost
+everyone carries them pile up at "carried by all 100", where about 39 are expected.
 
 <Figure
 	src="publicness/spectrum"
 	name="spectrum"
-	alt="Expected number of sequences against the number of people carrying them, on log scales: a steady decline from private sequences to the few found in everyone."
+	alt="Expected number of sequences against the number of people carrying them, on log scales: a decline from private sequences over most of the range, with a small rise at the far end, where sequences found in everyone accumulate."
 	caption="The expected publicness spectrum of 100 people sampled to 100,000 cells each, under the reference model."
 />
 
 <Interactive
 	title="The publicness spectrum"
-	description="Choose a cohort size and a sampling depth. Each dot is the expected number of sequences carried by exactly that many people. Larger cohorts extend the spectrum to higher publicness; deeper sampling raises it everywhere."
+	description="Choose a cohort size and a sampling depth. Each dot is the expected number of sequences carried by exactly that many people (counts below 0.01 are not shown). Larger cohorts extend the spectrum to higher publicness; deeper sampling raises it at every level."
 	fallback="publicness/spectrum/spectrum"
 	fallbackAlt="Expected publicness spectrum of 100 people sampled to 100,000 cells each."
 >
@@ -116,15 +120,16 @@ donor's expected distinct and private counts:
 The shallowest donors are expected to have about 76% private sequences and the deepest about
 88%: deeper samples reach further into the rare sequences that nobody else carries.
 
-This is the baseline the paper compared real donors with: when observed private fractions vary
-between donors more than this, something beyond sampling, such as genetics or exposure, differs
-between them.
+This is the baseline the paper compared real donors with: observed private fractions varied
+between donors more than sampling from one shared distribution produces, so something beyond
+sampling, biological or technical, differs between them.
 
 ## What public sequences look like
 
-Sequence logos of the common and the rare sequences of one length show what makes a sequence
-public. Common sequences are more constrained, first at the start and then through the
-junction.
+Sequence logos of the common and the rare sequences of one length show what probable, and
+therefore public, sequences look like: common sequences are more constrained. (The paper's
+logos, split by expected publicness rather than probability, show the constraint arising first
+at the start of the CDR3 and then through the junction.)
 
 <Example src="publicness/logos" />
 

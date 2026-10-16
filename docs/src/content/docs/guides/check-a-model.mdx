@@ -12,11 +12,19 @@ import Figure from '../../../components/Figure.astro';
 **The question:** I built a model from a repertoire. Does it describe that repertoire well, and
 does it say anything useful about sequences it has not seen?
 
-Check a model the way any model is checked: on data it was not built from. Keep part of the cells
-aside, build the model on the rest, and compare. This mirrors the paper's checks: a model built
-without the Emerson cohort matched the cohort's length and residue composition, and models built
-without a pair of twins predicted the twins' unseen sequences better than a model of independent
-positions.
+Check a model the way any model is checked: on data it was not built from. Build it without
+part of the data, then compare its predictions with what was left out.
+
+**What the paper found on real data.** A model built without the 768 Emerson donors matched
+their length and residue composition. Models of naive and memory CD4 and CD8 T cells, each
+built without one twin family at a time, gave the held-out family's unseen sequences a higher
+probability than a model of independent positions in all 40 donor–population comparisons, by
+3.66 nats per sequence on average.
+
+**The example below shows how to run the same checks on your data.** It uses a stand-in
+repertoire (stand-in population B: CDR3s tilted towards longer lengths). Stand-ins are drawn
+from a BEAM model, so BEAM is bound to describe them well: the numbers show the procedure, not
+evidence about real repertoires.
 
 <Example src="fit/held_out" />
 
@@ -38,10 +46,14 @@ positions.
 3. **Unseen sequences.** The real test of a sequence model is what it says about sequences it
    never saw. A model of independent positions, built from the same length and positional
    composition, is the natural baseline: it knows which residues are common where, but not which
-   residues go together. BEAM gives the held-out sequences a higher probability than that
-   baseline, because it has learned which neighbouring residues occur together.
+   residues go together. A model that captures which neighbouring residues occur together should
+   give the held-out sequences a higher probability than that baseline, as BEAM did on the
+   paper's real data.
 
 <Aside type="caution" title="Pitfalls">
+- **Hold out whole repertoires where you can.** Holding out a donor, or a whole family as the
+  paper did, tests how a model generalises to new people. Holding out part of one repertoire's
+  cells is weaker: the two parts share clones.
 - **Hold out cells, not distinct sequences.** Holding out a share of the distinct sequences
   over-represents rare sequences, which are longer on average, and the comparison then mixes
   two different populations.

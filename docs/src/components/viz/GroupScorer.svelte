@@ -10,7 +10,7 @@
 		log_p: Record<string, number>;
 	}
 
-	let data = $state<{ motif: string; rows: Row[] } | null>(null);
+	let data = $state<{ motif: string; rows: Row[]; accuracy: Record<string, number> } | null>(null);
 	let chosen = $state(0);
 	let themeTick = $state(0);
 	let failed = $state(false);
@@ -46,15 +46,16 @@
 			height: 170,
 			marginLeft: 70,
 			style: { color: c.text, background: 'transparent', fontSize: '12px' },
-			x: { label: 'log probability under the group model (natural log) →', grid: true },
+			x: { label: '← log probability relative to the most probable group (nats)', grid: true },
 			y: { domain: groups, label: null, tickFormat: (g) => `group ${g}` },
 			marks: [
 				Plot.barX(groups, {
 					y: (g) => g,
-					x1: (g) => Math.min(...groups.map((h) => row.log_p[h])) - 2,
-					x2: (g) => row.log_p[g],
+					x1: 0,
+					x2: (g) => row.log_p[g] - Math.max(...groups.map((h) => row.log_p[h])),
 					fill: (g) => colour[g],
 				}),
+				Plot.ruleX([0], { stroke: c.muted }),
 			],
 		});
 		chart.replaceChildren(plot);
@@ -76,9 +77,14 @@
 		<div bind:this={chart}></div>
 		<p class="readout">
 			<span class="mono">{row.sequence}</span> ({row.length} residues{row.motif ? `, carries ${data.motif}` : ''}):
-			most likely under group <strong>{best}</strong>. With the three groups equally likely beforehand, the chance it came
-			from A, B or C is {pct(posterior.A)}, {pct(posterior.B)} and {pct(posterior.C)}. It was drawn from group
-			{row.drawn_from}.
+			most probable under group <strong>{best}</strong>; it was drawn from group {row.drawn_from}. If the three group
+			models were exact and the groups equally likely beforehand, the chance it came from A, B or C would be
+			{pct(posterior.A)}, {pct(posterior.B)} and {pct(posterior.C)}.
+		</p>
+		<p class="readout muted">
+			Over all unseen sequences of a new donor, the group under which a sequence is most probable is its own group for
+			{pct(data.accuracy.A)} of A's, {pct(data.accuracy.B)} of B's and {pct(data.accuracy.C)} of C's sequences: one sequence
+			says little about its group.
 		</p>
 	{:else if failed}
 		<p class="muted">The data for this figure could not be loaded.</p>

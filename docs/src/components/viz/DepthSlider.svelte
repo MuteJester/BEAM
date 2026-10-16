@@ -11,6 +11,8 @@
 		novelty: number[];
 		entropy: number;
 		sample_entropy: number[];
+		novelty_bound: number[];
+		sample_entropy_bound: number[];
 	}
 
 	let data = $state<Grid | null>(null);
@@ -30,7 +32,17 @@
 	const depth = $derived(data ? data.depths[index] : 0);
 	const distinct = $derived(data ? data.richness[index] : 0);
 	const shared = $derived(data ? data.sharing[index] : 0);
-	const bound = $derived(data ? Math.max(data.richness_bound[index], data.sharing_bound[index]) : 0);
+	// The largest guaranteed relative error among all the values shown.
+	const bound = $derived(
+		data
+			? Math.max(
+					data.richness_bound[index],
+					data.sharing_bound[index],
+					data.novelty_bound[index],
+					data.sample_entropy_bound[index],
+				)
+			: 0,
+	);
 
 	$effect(() => {
 		themeTick;
@@ -94,7 +106,7 @@
 				sample; the sample's Shannon entropy is expected to reach <strong>{pct(data.sample_entropy[index] / data.entropy)}</strong>
 				of the population's.
 			</div>
-			<div class="muted">Exact to a relative error of at most {boundUp(bound)}.</div>
+			<div class="muted">Every value here is exact to a relative error of at most {boundUp(bound)}.</div>
 		</div>
 		<div bind:this={chart} class="chart"></div>
 	{:else if failed}

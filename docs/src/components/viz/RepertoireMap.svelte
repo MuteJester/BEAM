@@ -53,7 +53,7 @@
 			style: { color: c.text, background: 'transparent', fontSize: '11px' },
 			x: { domain: data.names, label: null, tickRotate: -90 },
 			y: { domain: data.names, label: null },
-			color: { scheme: 'viridis', legend: false },
+			color: { scheme: 'viridis', legend: true, label: 'distance' },
 			marks: [
 				Plot.cell(cells, { x: 'j', y: 'i', fill: 'd', inset: 0.5 }),
 				Plot.cell(
@@ -109,8 +109,8 @@
 			{/each}
 		</div>
 		<div class="panels">
-			<div bind:this={heat} class="panel" aria-label="Distance between every pair of repertoires"></div>
-			<div bind:this={scatter} class="panel" aria-label="The repertoires laid out so that distances are preserved as well as possible"></div>
+			<div bind:this={heat} class="panel" role="img" aria-label="Distance between every pair of repertoires"></div>
+			<div bind:this={scatter} class="panel" role="img" aria-label="The repertoires laid out so that distances are preserved as well as possible"></div>
 		</div>
 		<p class="readout">
 			<strong>{data.names[selected]}</strong> (group {data.labels[selected]}): nearest repertoire
