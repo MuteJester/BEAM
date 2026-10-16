@@ -27,5 +27,9 @@
   "private": true,
   "engines": {
     "node": ">=24"
+  },
+  "overrides": {
+    "katex": "$katex",
+    "postcss-selector-parser": "^7.1.6"
   }
 }
