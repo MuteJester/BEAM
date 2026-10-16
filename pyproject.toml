@@ -56,7 +56,7 @@ Citation = "https://github.com/MuteJester/BEAM/blob/main/CITATION.cff"
 # only loses the saving.
 [project.optional-dependencies]
 parquet = ["pyarrow>=4.0"]
-dev = ["pyarrow>=4.0", "pytest>=7", "mpmath"]
+dev = ["pyarrow>=4.0", "pytest>=7", "mpmath", "pandas"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

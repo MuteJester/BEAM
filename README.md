@@ -1,164 +1,207 @@
 # BEAM
 
-**B**idirectional **E**xpert-**A**nchored **M**odel: a probability model over
-CDR3 sequences in which every residue is scored twice.
+[![PyPI](https://img.shields.io/pypi/v/beam-model.svg)](https://pypi.org/project/beam-model/)
+[![Python](https://img.shields.io/pypi/pyversions/beam-model.svg)](https://pypi.org/project/beam-model/)
+[![Tests](https://github.com/MuteJester/BEAM/actions/workflows/tests.yml/badge.svg)](https://github.com/MuteJester/BEAM/actions/workflows/tests.yml)
+[![License: GPL v3](https://img.shields.io/badge/license-GPL--3.0-blue.svg)](LICENSE)
 
-One expert is **N-anchored**, indexing a residue by its distance from the front
-of the sequence. The other is **C-anchored**, indexing it by its distance from
-the back. The two readings are combined log-linearly and normalised per length
-by an exact forward dynamic program over a layered DAG. Nothing is sampled and
-nothing is pruned: every probability the model reports is exact given its
-tables.
+**Exact probabilities for T cell receptor repertoires.**
+
+BEAM is a probability model of T cell receptor (TCRβ) CDR3 sequences. Give it a
+sequence and it tells you how likely that sequence is; give it a sequencing
+depth and it tells you how many distinct sequences you should expect to see,
+how many two samples will share, and how many people in a cohort will carry a
+given sequence. Every one of these numbers is **computed exactly**, without
+simulation, so the answers are reproducible to the last digit.
+
+BEAM comes with a ready-made reference model built from **38,538 human
+repertoires**, and you can build models from your own data in one line.
+
+> **Paper:** T. Konstantinovsky and G. Yaari. *A computable probability
+> landscape for T cell receptor repertoire sampling and comparison.* (Submitted.)
+
+## What can I do with it?
+
+| Question | What BEAM gives you |
+|---|---|
+| How likely is this TCR? | The exact probability of any CDR3 sequence |
+| What do typical TCRs look like? | Realistic sequences drawn from the model |
+| How deeply should I sequence? | The expected number of distinct sequences at any depth, and how many two samples share |
+| How many people will share this TCR? | The expected number of repertoires in a cohort that contain it |
+| How different are two repertoires, and why? | A distance that separates differences in sequence length from differences in local sequence patterns |
 
 ## Install
 
 ```bash
-pip install -e .
+pip install beam-model
 ```
 
-Requires a C compiler with OpenMP and NumPy. No other runtime dependencies.
+Ready-to-use packages exist for **Linux** (x86-64 and ARM) and **macOS** (Apple
+Silicon), for Python 3.11 to 3.15. On Windows, install it inside
+[WSL](https://learn.microsoft.com/windows/wsl/install).
 
-## Use
+## Quick start
+
+```python
+import BEAM
+
+model = BEAM.load_pretrained("foundation")    # downloads once (~90 MB), then cached
+
+model.pseq("CASSLGQGYEQYF")                    # probability of one sequence
+# 3.3e-05
+```
+
+The reference model uses about 1 GB of memory once loaded.
+
+## Examples
+
+### How likely is a TCR?
+
+`pseq` returns the probability of a sequence under the model: the chance that
+one TCR drawn at random has exactly this CDR3. It takes one sequence or a list.
+
+```python
+model.pseq(["CASSLGQGYEQYF", "CASSPGTGELFF", "CWWWWWWWWF"])
+# array([3.3e-05, 2.9e-05, 6.9e-23])
+```
+
+Sequences the model has never seen still get a sensible probability: a
+plausible new CDR3 gets a moderate one, an implausible one (like the last) a
+vanishingly small one. Use `log_pseq_batch` for millions of sequences at once.
+
+### What do typical TCRs look like?
+
+```python
+model.sample(5, seed=1)
+# ['CASSPGTSSDTYEQYF', 'CASSLGTYSYNEQFF', 'CASRPGNSPLHF', ...]
+```
+
+Sequences are drawn exactly in proportion to their probability.
+
+### How deeply should I sequence?
+
+If you sample *n* TCRs from a population, how many **different** sequences
+will you see? And if two labs each sample *n*, how many sequences will they
+have in common? Both have exact answers.
+
+```python
+from BEAM.analytics.exact_occupancy import ExactOccupancy
+
+occupancy = ExactOccupancy(model)
+
+occupancy.richness(100_000).value               # distinct sequences in 100,000 TCRs
+# 96771.4...
+occupancy.richness(1_000_000).value             # ... and in a million
+# 879776.1...
+occupancy.sharing(100_000, 100_000).value       # shared by two samples of 100,000
+# 3678.4...
+```
+
+Each result also reports a guaranteed bound on its error (`.bound`, here below
+one part in a trillion). The first query takes a minute or two while BEAM
+computes the integrals it needs; every later query, at any depth, is instant.
+
+### How many people will share a TCR?
+
+A sequence is *public* when many people carry it. Describe a cohort by how
+deeply each person's repertoire was sampled, and BEAM tells you how many of
+them are expected to contain a sequence.
+
+```python
+from BEAM import PublicnessModel
+
+cohort = PublicnessModel([50_000] * 100)        # 100 people, 50,000 sequences each
+
+mean, variance = cohort.moments(model.pseq("CASSLGQGYEQYF"))
+mean                                            # expected number of people
+# 80.8
+```
+
+`cohort.pmf(p)` gives the full distribution: the probability that exactly 0,
+1, 2, ... people share the sequence.
+
+### How different are two repertoires, and why?
+
+Build a model from each person's repertoire and compare them. The distance
+splits exactly into a part due to **different sequence lengths** and a part
+due to **different local sequence patterns**, and it names the patterns that
+differ most.
+
+```python
+import pandas as pd
+from BEAM import BeamModel
+from BEAM.analytics.distance import compare
+
+def repertoire_model(path):
+    table = pd.read_csv(path, sep="\t")             # an AIRR-format table
+    return BeamModel.from_dataframe(table, sequence_column="junction_aa",
+                                    abundance_column="duplicate_count")
+
+a = repertoire_model("donor_A.tsv")
+b = repertoire_model("donor_B.tsv")
+
+result = compare(a, b)
+result.distance                                     # 0 = identical
+result.length_squared_distance / result.squared_distance   # share due to lengths
+result.patterns[:5]                                 # the patterns that differ most
+```
+
+Comparing two repertoires takes about a minute.
+
+## Using your own data
+
+The reference model was built from CDR3 amino-acid sequences that **include**
+the conserved cysteine at the start and the phenylalanine or tryptophan at the
+end, for example `CASSLGQGYEQYF`; use the same convention when you score
+sequences against it or build models to compare with it. In AIRR-format files
+this is the `junction_aa` column (AIRR's `cdr3_aa` column leaves those two
+residues out).
 
 ```python
 from BEAM import BeamModel
 
-model = BeamModel(sequences, abundances=abundances, order=4, max_length=27)
-model.log_pseq("CASSLGYEQYF")        # exact log probability
-model.save("foundation")             # -> foundation.beam
+model = BeamModel(sequences, abundances=counts)     # from Python lists
+model = BeamModel.from_sequence_file("cdr3.tsv")    # one "SEQUENCE<TAB>COUNT" per line
+model.save("my_repertoire")                         # -> my_repertoire.beam
+model = BeamModel.from_file("my_repertoire.beam")
 ```
 
-### Amino acids or nucleotides
+Abundances are optional; without them every sequence counts once. Nucleotide
+sequences work too, with `alphabet="nt"`.
 
-The same model either way — two anchored experts, one table each, exact
-dynamic programs. Only the symbols change, and with them the size of every
-table.
+## Why exact?
 
-```python
-BeamModel(seqs)                        # amino acids: ACDEFGHIKLMNPQRSTVWY
-BeamModel(seqs, alphabet="nt")         # nucleotides: ACGTN
-```
+Most questions about a repertoire are sums over every possible sequence, and
+there are far too many sequences to list. The usual workaround is simulation:
+draw many sequences and count. BEAM is built so that these sums can be
+computed directly. Its probabilities add up to exactly one over all sequences,
+and quantities such as expected richness, overlap and publicness are evaluated
+exactly with stated error bounds. The same input always gives the same answer,
+and small differences between groups are not lost in simulation noise.
 
-`order` and `max_length` default to what the alphabet needs:
-order 4 over 27 residues, or order 6 over 81 bases, three bases to the
-residue. An amino acid is a compressed codon, so matching the amino-acid
-model's context *span* would need order 12 and is not buildable; order 6 is
-two codons and is cheaper than the amino-acid model already is.
+## Documentation
 
-Nucleotide input is case-folded, so `acgt` and `ACGT` are one sequence. `N`
-is a residue rather than a wildcard — a read carrying one is data the model
-can represent — while the other IUPAC ambiguity codes are refused, since `R`
-means "A or G" and the model has nothing to say about that. Amino-acid input
-is not folded: case carries no meaning for a base, but folding residues would
-silently widen what is accepted.
+The API reference is in [`docs/api/python/`](docs/api/python/):
+[the model](docs/api/python/model.md),
+[scoring and analytics](docs/api/python/analytics.md),
+[publicness](docs/api/python/publicness.md),
+[the probability of a whole repertoire](docs/api/python/likelihood.md),
+[mixtures of repertoires](docs/api/python/mixture.md),
+[diversity](docs/api/python/diversity.md) and
+[exact queries](docs/api/python/query.md).
 
-There is no auto-detection. `ACGT` is a perfectly good peptide, so a
-heuristic would quietly build the wrong model from short or low-complexity
-input; the alphabet is always named.
+Questions and ideas are welcome in
+[Discussions](https://github.com/MuteJester/BEAM/discussions); bugs in
+[Issues](https://github.com/MuteJester/BEAM/issues).
 
-### Combining models: counts or probabilities
+## Citing BEAM
 
-Two different things, and choosing the wrong one is the most consequential
-mistake this library makes easy.
+If BEAM is useful in your work, please cite the paper above. GitHub's **"Cite
+this repository"** button (from [`CITATION.cff`](CITATION.cff)) gives the
+reference in BibTeX and APA.
 
-```python
-a.merged(b)              # ADD THE COUNTS: the model you would get by
-                         # training on the pooled corpus
-Mixture([a, b])          # MIX THE PROBABILITIES: pick a donor, then a
-                         # sequence from that donor
-```
+## License
 
-The pooled model has a strictly larger support, because a pooled path may
-splice an edge learned from one donor onto an edge learned from another and
-spell a sequence no single donor spells. Pooling 64 donors at a fixed
-30,000-sequence budget raises `D0` by 24.3% while the number of transitions
-rises 0.57%.
-
-`Mixture` is the object beta diversity between individuals is defined on, and
-`D0(union) <= D0(merged)` always. See [`docs/api/python/mixture.md`](docs/api/python/mixture.md),
-which also says which Hill orders are exact (`q = 0` and integer `q >= 2`),
-which are bounded (`q = 1`, refused rather than estimated), and what one inner
-product costs.
-
-### Diversity at a common sequencing depth
-
-```python
-from BEAM import depth_matched_hill_profiles
-
-r = depth_matched_hill_profiles([seqs_a, seqs_b], [templates_a, templates_b],
-                                seed=1)
-r.profiles                     # (2 repertoires, 20 resamples, 31 orders)
-r.resampling_band(5, 95)       # a resampling band, not a confidence interval
-```
-
-Each repertoire is resampled to the smallest template total in the call, and
-every resample is a freshly fitted model. The depth belongs to the call, so
-profiles are comparable only within one. See
-[`docs/api/python/diversity.md`](docs/api/python/diversity.md).
-
-### A hierarchical Bayesian prior
-
-Every sequence up to `max_length` is possible, and the repertoire decides where
-the mass goes. Each table row is a Dirichlet posterior centred on its parent,
-the same position with one residue less of context, down to the position alone
-and then the uniform `1/R`:
-
-```
-P_k(x) = (n_k(x) + alpha[k] * P_{k-1}(x)) / (n_k + alpha[k])
-```
-
-So a context the corpus never saw predicts what its shorter context predicts:
-new CDR3-like sequences get graded probabilities, and junk stays improbable.
-
-```python
-model = BeamModel(seqs, abundances=ab)          # strengths estimated from the counts
-model.config["alpha"]                           # what the evidence chose
-model.log_pseq("CWWWWWWWF")                     # finite, and very low
-fit = BEAM.fit_alpha(seqs, ab)                  # or: fit them to held-out reads
-```
-
-Unless you name them, the strengths are the ones that maximise the evidence of
-the model's own counts (the Dirichlet-multinomial marginal likelihood), level
-by level, under a weak hyperprior centred on 10 for the corpora the counts say
-nothing about.
-
-Storage stays sparse: only observed rows are kept, and an unobserved row is
-resolved through its parent. See
-[`docs/api/python/model.md`](docs/api/python/model.md#the-hierarchical-prior).
-
-## Testing
-
-```bash
-make test                 # C unit tests
-python -m pytest tests    # Python suite
-```
-
-## Layout
-
-| Path | Contents |
-|---|---|
-| `include/beam/` | Public C headers |
-| `src/native/model/` | Model state: config, lifecycle, training, smoothing, finalize |
-| `src/native/dp/` | The dynamic programs over the trellis |
-| `src/native/math/` | Named probability operations: Mellin, moments, spectrum, diversity |
-| `src/native/mixture/` | Probability mixtures of several models: inner products, support unions |
-| `src/native/algorithms/` | Sampling and exact top-k |
-| `src/native/occupancy/` | Poisson-binomial sharing model (`PublicnessModel`) |
-| `src/native/storage/` | Sparse row storage |
-| `src/native/io/` | Model persistence |
-| `src/native/core/` | Errors, logging, alphabet, runtime, RNG, CRC32C |
-| `src/native/bindings/python/` | The `_cbeam` extension, split by domain |
-| `src/BEAM/` | Python package: `model/`, `analytics/`, `math/`, `io/`, `publicness/`, `query/`, `mixture/`, `insights/`, `diversity/` |
-| `build_support/` | Explicit source manifests read by both `Makefile` and `setup.py` |
-| `tests/python/` | Python suite, grouped as `model/`, `math/`, `analytics/`, `publicness/`, `query/`, `mixture/`, `insights/`, `diversity/` |
-| `tests/native/` | C unit tests |
-| `tests/reference/` | An independent reimplementation, used to check the model against |
-| `docs/` | `architecture/`, `api/python/` |
-
-## A note on the file format
-
-Saved models carry the magic `0x4245414D` (`"BEAM"`) and store counts plus the
-configuration, the prior's strengths included, so a loaded model can still be
-observed into and re-finalized. Only the current format is read: BEAM has not
-been released, so a file from an earlier development build is refused with a
-message naming its format, and the remedy is to rebuild it from its sequences.
+BEAM is free software under the [GNU General Public License v3.0 or
+later](LICENSE). Contributions are welcome: see
+[`CONTRIBUTING.md`](CONTRIBUTING.md).

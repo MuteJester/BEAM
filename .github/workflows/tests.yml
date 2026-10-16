@@ -1,0 +1,80 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  # The release workflow runs this same suite on the tagged commit.
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  python:
+    name: Python ${{ matrix.python }} / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    # Bounds a hang; without it a stuck job holds a runner for six hours.
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        # The oldest and the newest supported Python on both platforms.
+        os: [ubuntu-latest, macos-latest]
+        python: ["3.11", "3.15"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python }}
+          allow-prereleases: true
+      - name: OpenMP runtime (macOS)
+        if: runner.os == 'macOS'
+        run: brew install libomp
+      - name: Install BEAM with test dependencies
+        run: python -m pip install ".[dev]"
+      - name: Python test suite
+        # Runs against the INSTALLED package, from outside the source tree,
+        # so a file missing from the distribution fails here, not for users.
+        run: |
+          cp -r tests "$RUNNER_TEMP/tests"
+          cd "$RUNNER_TEMP"
+          python -m pytest tests -q -o faulthandler_timeout=300
+      - name: README examples
+        run: python tools/release/check_readme.py README.md
+
+  native:
+    name: C unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: make -j"$(nproc)" test
+
+  packaging:
+    name: Build and check distributions
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.15"
+          allow-prereleases: true
+      - run: python -m pip install build twine cffconvert
+      - name: Build sdist and wheel
+        run: python -m build
+      - name: Metadata renders on PyPI
+        run: twine check --strict dist/*
+      - name: CITATION.cff is valid
+        run: cffconvert --validate
+      - name: The sdist installs and works in a clean environment
+        run: |
+          python -m venv "$RUNNER_TEMP/sdist"
+          "$RUNNER_TEMP/sdist/bin/pip" install dist/*.tar.gz
+          cd "$RUNNER_TEMP" && "$RUNNER_TEMP/sdist/bin/python" "$GITHUB_WORKSPACE/tools/release/smoke_test.py"
