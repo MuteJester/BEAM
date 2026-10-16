@@ -1,0 +1,17 @@
+name: Feature request
+description: Something BEAM should be able to do.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: need
+    attributes:
+      label: What you want to compute
+      description: The question you are trying to answer, and why the current API does not cover it.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What it could look like
+      description: Optional. A sketch of the call you would like to make.
+      render: python

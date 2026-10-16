@@ -1,0 +1,33 @@
+name: Bug report
+description: BEAM crashed, gave a wrong result, or would not install.
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: example
+    attributes:
+      label: Minimal example
+      description: The shortest code that shows the problem, with its full output or traceback.
+      render: python
+    validations:
+      required: true
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: Output of `python -c "import BEAM, sys, numpy; print(BEAM.__version__, sys.version, numpy.__version__)"`
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Operating system and how BEAM was installed
+      placeholder: e.g. Ubuntu 24.04, pip install beam-model
+    validations:
+      required: true
