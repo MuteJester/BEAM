@@ -1045,6 +1045,16 @@ tests/python/model/test_weight_buffers.py::test_other_dtypes_still_build_the_sam
 tests/python/model/test_weight_buffers.py::test_other_dtypes_still_build_the_same_model[int32]
 tests/python/model/test_weight_buffers.py::test_other_dtypes_still_build_the_same_model[int64]
 tests/python/model/test_weight_buffers.py::test_the_buffer_path_is_actually_taken
+tests/python/pretrained/test_pretrained.py::test_damaged_cache_is_fetched_again
+tests/python/pretrained/test_pretrained.py::test_falls_back_to_the_next_mirror
+tests/python/pretrained/test_pretrained.py::test_listed
+tests/python/pretrained/test_pretrained.py::test_loads_exactly_the_published_model
+tests/python/pretrained/test_pretrained.py::test_model_format_matches_what_save_writes
+tests/python/pretrained/test_pretrained.py::test_newer_format_asks_for_an_upgrade
+tests/python/pretrained/test_pretrained.py::test_second_load_needs_no_network
+tests/python/pretrained/test_pretrained.py::test_shipped_registry_is_readable
+tests/python/pretrained/test_pretrained.py::test_unknown_name_lists_what_exists
+tests/python/pretrained/test_pretrained.py::test_wrong_bytes_are_refused_and_not_kept
 tests/python/publicness/test_publicness.py::test_aggregate_is_the_multiplicity_weighted_sum_of_atoms
 tests/python/publicness/test_publicness.py::test_closed_form_moments_match_the_pmf
 tests/python/publicness/test_publicness.py::test_depth_binning_is_exact_below_the_bin_count

@@ -2528,3 +2528,21 @@ Only these five inventories were updated. Numerical references, thread
 references and saved-model byte references were not rewritten. The optional
 `verification/distance_manuscript.py` script checks locally available frozen
 Figure 5 models and attribution tables without changing manuscript assets.
+
+# Additions for published models and the package version
+
+Recorded 2026-10-16, tag `prepretrained`, with `check.py --record`; the
+previous `python_api.txt` and `pytest_cases.txt` are kept under that tag. Every
+other check passed before recording, `exact` included, and the three other
+files the recorder writes (`c_cases.txt`, `numeric.json`, `threads.json`) came
+out byte-identical, so no copies of them were kept.
+
+- The Python API gains `load_pretrained`, `pretrained_models`,
+  `pretrained_path` and `PretrainedModel` (`BEAM.pretrained`), and
+  `__version__` moves from `0.1.0` to `1.0.0.dev0`, now the single source of
+  the package version.
+- The Python test inventory gains the ten cases in
+  `tests/python/pretrained/test_pretrained.py`.
+
+No C symbol, C test, numerical reference, thread reference or saved-model byte
+reference changed.

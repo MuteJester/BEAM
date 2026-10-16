@@ -1,5 +1,5 @@
-__all__: ['AbundanceSpectrum', 'AlphaFit', 'Atoms', 'Attribution', 'BeamError', 'BeamModel', 'BeamQuery', 'BeamTypeError', 'BeamValueError', 'BetaDiversity', 'BudgetExceeded', 'Builder', 'Calibration', 'Condition', 'DepthMatchedProfiles', 'EntropyBounds', 'EntropyEstimate', 'Histogram', 'ImpossibleCondition', 'IncompatibleMembers', 'InternalError', 'InvalidSequence', 'Mixture', 'MixtureError', 'MixtureTooLarge', 'ModelFileError', 'ModelMismatch', 'NoLivePaths', 'NotFinalized', 'OutOfMemory', 'PairLikelihood', 'Piece', 'PseqAnalysis', 'PublicnessModel', 'QueryError', 'QueryTooLarge', 'RepertoireLikelihood', 'ResamplingBand', 'ScaleIndex', 'SupportSize', 'UnsupportedOrder', 'UnsupportedQuery', 'abundance_spectrum', 'attribute', 'auto_profile_edges', 'depth_matched_hill_profiles', 'effective_threads', 'file_provenance_span', 'fit_alpha', 'memory_budget', 'pair_likelihood', 'repertoire_likelihood', 'set_memory_budget', 'set_threads', 'threads']
-__version__: 0.1.0
+__all__: ['AbundanceSpectrum', 'AlphaFit', 'Atoms', 'Attribution', 'BeamError', 'BeamModel', 'BeamQuery', 'BeamTypeError', 'BeamValueError', 'BetaDiversity', 'BudgetExceeded', 'Builder', 'Calibration', 'Condition', 'DepthMatchedProfiles', 'EntropyBounds', 'EntropyEstimate', 'Histogram', 'ImpossibleCondition', 'IncompatibleMembers', 'InternalError', 'InvalidSequence', 'Mixture', 'MixtureError', 'MixtureTooLarge', 'ModelFileError', 'ModelMismatch', 'NoLivePaths', 'NotFinalized', 'OutOfMemory', 'PairLikelihood', 'Piece', 'PretrainedModel', 'PseqAnalysis', 'PublicnessModel', 'QueryError', 'QueryTooLarge', 'RepertoireLikelihood', 'ResamplingBand', 'ScaleIndex', 'SupportSize', 'UnsupportedOrder', 'UnsupportedQuery', 'abundance_spectrum', 'attribute', 'auto_profile_edges', 'depth_matched_hill_profiles', 'effective_threads', 'file_provenance_span', 'fit_alpha', 'load_pretrained', 'memory_budget', 'pair_likelihood', 'pretrained_models', 'pretrained_path', 'repertoire_likelihood', 'set_memory_budget', 'set_threads', 'threads']
+__version__: 1.0.0.dev0
 class AbundanceSpectrum:
   def __delattr__(self, name, /)
   def __dir__(self, /)
@@ -982,6 +982,29 @@ class Piece:
   def __sizeof__(self, /)
   def __str__(self, /)
   def __subclasshook__(?)
+class PretrainedModel:
+  def __delattr__(self, name)
+  def __dir__(self, /)
+  def __eq__(self, other)
+  def __format__(self, format_spec, /)
+  def __ge__(self, value, /)
+  def __getattribute__(self, name, /)
+  def __getstate__(self, /)
+  def __gt__(self, value, /)
+  def __hash__(self)
+  def __init__(self, name: 'str', release: 'str', file: 'str', bytes: 'int', sha256: 'str', format: 'int', description: 'str', urls: 'tuple', doi: 'str | None' = None, citation: 'str | None' = None, license: 'str | None' = None, built_with: 'str | None' = None) -> None
+  def __init_subclass__(?)
+  def __le__(self, value, /)
+  def __lt__(self, value, /)
+  def __ne__(self, value, /)
+  def __new__(*args, **kwargs)
+  def __reduce__(self, /)
+  def __reduce_ex__(self, protocol, /)
+  def __repr__(self)
+  def __setattr__(self, name, value)
+  def __sizeof__(self, /)
+  def __str__(self)
+  def __subclasshook__(?)
 class PseqAnalysis:
   def __delattr__(self, name, /)
   def __dir__(self, /)
@@ -1264,8 +1287,11 @@ def depth_matched_hill_profiles(repertoires: 'Sequence[Sequence[str]]', abundanc
 def effective_threads() -> 'int'
 def file_provenance_span() -> 'tuple[int, int]'
 def fit_alpha(sequences: 'Iterable[str]', abundances: 'Iterable[float] | None' = None, *, held_out: 'tuple | None' = None, fraction: 'float' = 0.5, seed: 'int' = 0, bounds: 'tuple[float, float]' = (0.001, 1000000000000.0), sweeps: 'int' = 2, tol: 'float' = 0.05, **config) -> 'AlphaFit'
+def load_pretrained(name: 'str', *, progress: 'bool' = True)
 def memory_budget() -> 'int'
 def pair_likelihood(model, sequences_1: 'Sequence[str]', counts_1: 'Iterable', sequences_2: 'Sequence[str]', counts_2: 'Iterable', *, bins: 'int' = 2048, profile_edges: 'Sequence[int]' = (1, 2, 3, 4, 5, 6, 11, 101), atoms=None) -> 'PairLikelihood'
+def pretrained_models() -> 'list[PretrainedModel]'
+def pretrained_path(name: 'str', *, progress: 'bool' = True) -> 'Path'
 def repertoire_likelihood(model, sequences: 'Sequence[str]', counts: 'Iterable', *, bins: 'int' = 8192, profile_edges='auto', atoms=None, atoms_coarse=None) -> 'RepertoireLikelihood'
 def set_memory_budget(nbytes: 'int') -> 'None'
 def set_threads(n: 'int') -> 'None'
