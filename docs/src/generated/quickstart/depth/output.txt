@@ -1,0 +1,2 @@
+distinct sequences in 100,000 TCRs: 96,771
+guaranteed relative error below:    5e-13

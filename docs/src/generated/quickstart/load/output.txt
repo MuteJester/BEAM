@@ -1,0 +1,1 @@
+BeamModel(order=4, sequences=926,909,993, states=194,481, memory=994MB)

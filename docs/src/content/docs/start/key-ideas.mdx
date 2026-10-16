@@ -1,0 +1,70 @@
+---
+title: Key ideas
+description: What a BEAM model is, what "exact" means, and what sequencing depth and publicness mean here, in plain words.
+sidebar:
+  order: 3
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Five ideas are enough to read every page of these docs.
+
+## A probability for every CDR3
+
+A BEAM model is a probability distribution over CDR3β amino-acid sequences. It gives every
+sequence a probability: the chance that one T cell drawn at random from the population has
+exactly that CDR3. Summed over all possible sequences, these probabilities add up to exactly one.
+
+A model is **built** from a repertoire, or from many, by counting short stretches of
+sequence. It reads every residue twice: once by its position counted from the start of the
+sequence, and once counted from the end. The two readings are combined, which captures the
+conserved start (CASS…) and end (…YEQYF) of a CDR3 as well as what lies between.
+
+A model also gives a sensible probability to sequences it has never seen. A plausible new CDR3
+gets a moderate probability; a string that looks nothing like a CDR3 gets a vanishingly small
+one.
+
+## Exact, not simulated
+
+Many questions about a repertoire are sums over every possible sequence: how many distinct
+sequences will 100,000 cells contain? There are far too many sequences to list, so the usual
+answer is simulation: draw many samples and count, and accept some random error.
+
+BEAM is built so that these sums can be computed directly. The answers it gives carry a
+**guaranteed bound** on their error, typically below one part in a trillion, and the same
+question always gets the same answer. Differences between groups are therefore not hidden by
+simulation noise.
+
+## Depth: how many TCRs you sample
+
+The **depth** of a sample is the number of T cells (or receptor molecules) drawn from the
+population. Because common sequences are drawn many times, a sample of depth 100,000 contains
+fewer than 100,000 *distinct* sequences.
+
+BEAM's sampling calculations treat a sample as independent draws from the model's
+distribution. That is the right baseline for "what would I expect by chance", but it does not
+model clonal expansion within one person. Keep that in mind when comparing predictions with a
+real repertoire.
+
+## Publicness
+
+A sequence is **public** when many people carry it. Given a cohort, described by how deeply each
+person's repertoire was sampled, BEAM gives the expected number of people whose sample contains a
+sequence, and the full distribution of that number.
+
+## The reference model and your own models
+
+The **reference model** (`BEAM.load_pretrained("foundation")`) was built from 38,538 published
+human TCRβ repertoires. It describes this broad, aggregated population, which makes it the
+natural reference for "how likely is this sequence in people in general".
+
+You can also build a model from a **single repertoire**. It then describes that person or
+sample, and two such models can be compared with each other.
+
+<Aside type="caution" title="Writing CDR3 sequences">
+BEAM's reference model was built from CDR3 sequences written **with** the conserved cysteine at
+the start and the phenylalanine or tryptophan at the end, for example `CASSLGQGYEQYF`. This is
+the `junction_aa` column of AIRR-format files. Its `cdr3_aa` column leaves those two residues
+out, so use `junction_aa`. Sequences are made of the 20 standard amino acids, up to 27
+residues long.
+</Aside>

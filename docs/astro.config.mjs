@@ -6,6 +6,17 @@ import starlightLinksValidator from 'starlight-links-validator';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import { unified } from '@astrojs/markdown-remark';
+import fs from 'node:fs';
+
+/** Whether a docs section has a page that is not hidden from the sidebar. */
+function hasPages(dir) {
+	const path = new URL(`./src/content/docs/${dir}/`, import.meta.url);
+	if (!fs.existsSync(path)) return false;
+	return fs
+		.readdirSync(path)
+		.filter((f) => /\.mdx?$/.test(f))
+		.some((f) => !/^\s*hidden:\s*true/m.test(fs.readFileSync(new URL(f, path), 'utf8')));
+}
 
 // Served from GitHub Pages at https://mutejester.github.io/BEAM/, so every
 // internal URL carries the /BEAM base; components build asset and data URLs
@@ -32,13 +43,21 @@ export default defineConfig({
 			customCss: ['katex/dist/katex.min.css', './src/styles/theme.css'],
 			lastUpdated: true,
 			plugins: [starlightLinksValidator()],
+			// A section appears once it has a visible page, so the sidebar never
+			// shows an empty heading while the site grows.
 			sidebar: [
-				{ label: 'Get started', items: [{ autogenerate: { directory: 'start' } }] },
-				{ label: 'Guides', items: [{ autogenerate: { directory: 'guides' } }] },
-				{ label: 'Explanations', items: [{ autogenerate: { directory: 'explanations' } }] },
-				{ label: 'Reference', collapsed: true, items: [{ autogenerate: { directory: 'reference' } }] },
-				{ label: 'Resources', collapsed: true, items: [{ autogenerate: { directory: 'resources' } }] },
-			],
+				['Get started', 'start'],
+				['Guides', 'guides'],
+				['Explanations', 'explanations'],
+				['Reference', 'reference'],
+				['Resources', 'resources'],
+			]
+				.filter(([, dir]) => hasPages(dir))
+				.map(([label, dir]) => ({
+					label,
+					collapsed: dir === 'reference' || dir === 'resources',
+					items: [{ autogenerate: { directory: dir } }],
+				})),
 		}),
 		svelte(),
 	],

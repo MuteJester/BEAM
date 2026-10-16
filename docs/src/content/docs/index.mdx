@@ -1,7 +1,50 @@
 ---
 title: BEAM
-description: Exact probabilities for T cell receptor repertoires.
+description: Exact probabilities for T cell receptor repertoires. Score sequences, plan sequencing depth, predict publicness and compare repertoires, with exact answers instead of simulation.
 template: splash
 hero:
-  tagline: Exact probabilities for T cell receptor repertoires.
+  tagline: Exact probabilities for T cell receptor repertoires. Ask how likely a CDR3 is, how deeply to sequence, how many people share a sequence, or how two repertoires differ, and get an exact answer instead of a simulation.
+  actions:
+    - text: Get started
+      link: /BEAM/start/quickstart/
+      icon: right-arrow
+    - text: View on GitHub
+      link: https://github.com/MuteJester/BEAM
+      icon: external
+      variant: minimal
 ---
+
+import { Card, CardGrid, Code } from '@astrojs/starlight/components';
+
+## What BEAM answers
+
+<CardGrid>
+	<Card title="How likely is this TCR?" icon="magnifier">
+		The exact probability of any CDR3β sequence, including ones never seen before, and
+		which residues make it likely or unlikely.
+	</Card>
+	<Card title="How deeply should I sequence?" icon="setting">
+		How many distinct sequences to expect at a given depth, and how many two samples will
+		have in common.
+	</Card>
+	<Card title="How many people share this TCR?" icon="open-book">
+		The expected number of repertoires in a cohort that contain a sequence, and the full
+		distribution around it.
+	</Card>
+	<Card title="How different are two repertoires?" icon="random">
+		A distance between repertoires that separates differences in sequence length from
+		differences in local sequence patterns, and names the patterns.
+	</Card>
+</CardGrid>
+
+## Install
+
+<Code code="pip install beam-model" lang="bash" />
+
+BEAM runs on Linux and macOS with Python 3.11 to 3.15. It comes with a reference model built
+from 38,538 human repertoires, ready to load in one line.
+
+## Cite
+
+T. Konstantinovsky and G. Yaari. *A computable probability landscape for T cell receptor
+repertoire sampling and comparison.* (Submitted.)
