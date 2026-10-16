@@ -144,15 +144,19 @@ CONTRACT = [
     ("load a non-model file",
      lambda m, s, t: _c.load(_damaged(s, t, "magic.beam", 0, b"ZZZZ")),
      OSError, "not a BEAM model file", False),
-    ("save to a full device",
-     lambda m, s, t: _c.save(m._g, "/dev/full"),
-     OSError, "incomplete", False),
+    pytest.param(
+        "save to a full device",
+        lambda m, s, t: _c.save(m._g, "/dev/full"),
+        OSError, "incomplete", False,
+        marks=pytest.mark.skipif(not os.path.exists("/dev/full"),
+                                 reason="needs /dev/full (Linux)"),
+        id="save to a full device"),
 ]
 
 
 @pytest.mark.parametrize(
     "label,call,cls,fragment,needs_starving",
-    CONTRACT, ids=[c[0] for c in CONTRACT])
+    CONTRACT, ids=[c[0] if isinstance(c, tuple) else c.id for c in CONTRACT])
 def test_the_observed_exception_class_is_unchanged(
         model, saved, tmp_path, label, call, cls, fragment, needs_starving):
     """Pin (entry point -> class), the thing a restructure can silently move.

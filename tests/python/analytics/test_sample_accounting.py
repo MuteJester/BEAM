@@ -105,6 +105,8 @@ def _charged(maxlen: int, n: int) -> int:
         BEAM.set_memory_budget(was)
 
 
+@pytest.mark.skipif(not sys.platform.startswith("linux"),
+                    reason="reads resident memory from /proc/self/statm (Linux)")
 @pytest.mark.parametrize("maxlen,slen", [(14, 10), (27, 20)])
 def test_the_charge_covers_the_true_peak(maxlen, slen):
     n = 2_000_000

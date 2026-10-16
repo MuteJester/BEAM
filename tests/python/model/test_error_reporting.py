@@ -55,6 +55,8 @@ def restore_budget():
 
 # ── save ───────────────────────────────────────────────────────────────────
 
+@pytest.mark.skipif(not os.path.exists("/dev/full"),
+                    reason="needs /dev/full (Linux), which opens but cannot be written")
 def test_a_write_failure_does_not_report_an_earlier_unrelated_error(model):
     """The message must describe THIS failure.
 
@@ -93,13 +95,16 @@ def test_load_distinguishes_its_failures(saved, tmp_path):
 
     bad = str(tmp_path / "bad.beam")
     shutil.copy(saved, bad)
+
+    text_file = tmp_path / "hostname"       # an ordinary text file
+    text_file.write_text("example-host\n")
     with open(bad, "r+b") as fh:            # corrupt the payload, not the header
         fh.seek(os.path.getsize(bad) - 40)
         fh.write(b"\xff" * 8)
 
     cases = {
         "/nonexistent/dir/x.beam": "cannot open",
-        "/etc/hostname":           "not a BEAM model file",
+        str(text_file):            "not a BEAM model file",
         trunc:                     "ends before",
         bad:                       "checksum",
     }

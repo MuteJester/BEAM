@@ -108,7 +108,11 @@ def libomp_prefix():
 
 def platform_flags():
     """Compile and link flags for this platform: (compile, link)."""
-    compile_args = ["-O2", "-std=c11"]
+    # -ffp-contract=off: the C core relies on no fused multiply-add, so that
+    # its SIMD and scalar copies, and mirrored computations, agree to the bit.
+    # GCC already behaves so under -std=c11; Clang (Apple's compiler) contracts
+    # by default and must be told.
+    compile_args = ["-O2", "-std=c11", "-ffp-contract=off"]
     link_args = []
     if sys.platform.startswith("linux"):
         compile_args.append("-fopenmp")
