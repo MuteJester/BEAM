@@ -21,7 +21,7 @@ for i, j in itertools.combinations(range(n), 2):
     D[i, j] = D[j, i] = compare(models[i], models[j]).distance
 
 clusters = fcluster(linkage(squareform(D), "average"), 3, "maxclust")
-print("clusters:", " ".join(f"{g}{c}" for g, c in zip(labels, clusters)))
+print("cluster of each repertoire:", "  ".join(f"{g}{k % 4 + 1}:{c}" for k, (g, c) in enumerate(zip(labels, clusters))))
 
 nearest = [labels[int(np.argsort(D[i])[1])] for i in range(n)]
 print(f"nearest neighbour from the same group: {np.mean([a == b for a, b in zip(labels, nearest)]):.0%}")

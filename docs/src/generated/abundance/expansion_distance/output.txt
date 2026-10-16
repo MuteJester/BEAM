@@ -1,2 +1,2 @@
-distance, weighted by cells:          0.5942
-distance, each distinct sequence once: 0.1617
+distance, weighted by cells:          0.5821
+distance, each distinct sequence once: 0.1564

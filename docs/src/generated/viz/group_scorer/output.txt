@@ -1,1 +1,1 @@
-15 sequences
+15 sequences; per-sequence accuracy A: 53%, B: 55%, C: 45%

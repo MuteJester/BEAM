@@ -1,0 +1,6 @@
+two halves of one repertoire:     0.1570
+two repertoires, one population:  0.1575
+two repertoires, two populations: 0.3701
+unequal depth (30,000 vs 3,000 cells), one population: 0.2582
+both subsampled to 3,000 cells, one population:         0.2564
+both subsampled to 3,000 cells, two populations:        0.4309

@@ -19,14 +19,18 @@ AA = "ACDEFGHIKLMNPQRSTVWY"
 
 
 class FakeReference:
-    """Anything with `sample(n, seed=)` will do: random CDR3-like strings."""
+    """Anything with `sample(n, length=, seed=)` and `length_distribution`
+    will do: random CDR3-like strings, uniform over lengths 14 to 22, long
+    enough that independent draws practically never repeat."""
 
-    def sample(self, n, seed=None):
+    length_distribution = {L: 1 / 9 for L in range(14, 23)}
+
+    def sample(self, n, length=None, seed=None):
         rng = np.random.default_rng(seed)
         out = []
         for _ in range(n):
-            length = int(rng.integers(10, 19))
-            middle = "".join(rng.choice(list(AA), size=length - 7))
+            L = length if length is not None else int(rng.integers(14, 23))
+            middle = "".join(rng.choice(list(AA), size=L - 7))
             out.append("CASS" + middle + "QYF")
         return out
 
@@ -83,3 +87,20 @@ def test_donors_of_one_group_differ_but_share_the_population(ref):
     d2 = st.population(ref, "B", 3000, seed=11)
     assert d1 != d2
     assert abs(np.mean([len(s) for s in d1]) - np.mean([len(s) for s in d2])) < 0.3
+
+
+@pytest.mark.parametrize("kind", ["A", "B", "C"])
+def test_a_population_adds_no_repeats_of_its_own(ref, kind):
+    """A stand-in must repeat sequences only as often as sampling the
+    reference does. The fake reference practically never repeats, so neither
+    may this."""
+    cells = st.population(ref, kind, 4000, seed=6)
+    assert len(set(cells)) == len(cells)
+
+
+def test_population_b_is_the_reference_tilted_by_length(ref):
+    cells = st.population(ref, "B", 20000, seed=7)
+    share = {L: np.mean([len(s) == L for s in cells]) for L in range(14, 23)}
+    w = {L: 1.6 ** (L - 14) for L in range(14, 23)}
+    expected = {L: w[L] / sum(w.values()) for L in w}
+    assert max(abs(share[L] - expected[L]) for L in w) < 0.01

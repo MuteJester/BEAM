@@ -1,6 +1,7 @@
 import numpy as np
 import BEAM
 
+BEAM.set_memory_budget(32 << 30)          # the fine probability grid below needs about 20 GB
 model = BEAM.load_pretrained("foundation")
 
 # 1. By length: the model's probability against the share of all possible strings
@@ -11,8 +12,9 @@ for L in range(10, 21, 2):
     print(f"{L:6}   {model.length_distribution.get(L, 0):11.3g}   {strings[L] / total:25.2e}")
 print(f"{27:6}   {model.length_distribution.get(27, 0):11.3g}   {strings[27] / total:25.2e}")
 
-# 2. By probability: how much of the probability sits on how few sequences
-p, w = model.pseq_analysis().atoms(512).as_arrays()
+# 2. By probability: how much of the probability sits on how few sequences,
+#    with every sequence grouped onto a fine grid of probabilities
+p, w = model.pseq_analysis().atoms(16384).as_arrays()
 order = np.argsort(p)[::-1]
 mass = np.cumsum(p[order] * w[order])
 support = np.cumsum(w[order]) / w.sum()

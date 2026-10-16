@@ -23,6 +23,9 @@ save_data("depth_grid", {
     "novelty": [u.value for u in novelty],
     "entropy": H,
     "sample_entropy": [H - x.value for x in deficit],
+    # relative bounds: novelty directly; the sample entropy H - S from S's bound
+    "novelty_bound": [u.bound for u in novelty],
+    "sample_entropy_bound": [x.bound * x.value / (H - x.value) for x in deficit],
 })
 print(f"{len(depths)} depths; worst relative bound "
       f"{max(max(r.bound for r in richness), max(s.bound for s in sharing)):.0e}")

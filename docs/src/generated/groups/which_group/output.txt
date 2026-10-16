@@ -1,8 +1,8 @@
 one sequence at a time  (share of a new donor's sequences most probable under each group)
-  donor from A:  A: 50%  B: 26%  C: 24%
-  donor from B:  A: 38%  B: 41%  C: 21%
-  donor from C:  A: 39%  B: 22%  C: 39%
+  donor from A:  A: 54%  B: 26%  C: 20%
+  donor from B:  A: 32%  B: 53%  C: 15%
+  donor from C:  A: 34%  B: 20%  C: 46%
 whole repertoire  (distance from the donor's model to each group's model)
-  donor from A:  A: 0.1653  B: 0.3823  C: 0.2400   nearest: A
-  donor from B:  A: 0.3909  B: 0.2603  C: 0.3943   nearest: B
-  donor from C:  A: 0.2450  B: 0.3899  C: 0.1823   nearest: C
+  donor from A:  A: 0.1470  B: 0.3689  C: 0.2229   nearest: A
+  donor from B:  A: 0.3644  B: 0.1546  C: 0.3643   nearest: B
+  donor from C:  A: 0.2237  B: 0.3683  C: 0.1479   nearest: C

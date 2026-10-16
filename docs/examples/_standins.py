@@ -2,17 +2,17 @@
 
 Real labelled repertoires (cell types, conditions, cohorts) cannot be shipped
 with the documentation, so the group examples use stand-ins whose differences
-are built in and known. Each population is drawn from a reference model and
-then reweighted:
+are built in and known. Each population is a reference model's distribution, changed in one stated
+way, and sampled exactly:
 
     "A"  the reference population itself;
-    "B"  tilted towards longer CDR3s (each extra residue x1.6 as likely);
-    "C"  enriched for the junction motif "PG" (x8 as likely when present).
+    "B"  tilted towards longer CDR3s: each extra residue x1.6 as likely;
+    "C"  enriched for the junction motif "PG": x8 as likely when present.
 
 A stand-in donor is `population(reference, kind, cells, seed)`: that many
-cells of one population, drawn with replacement, so common sequences repeat
-as they do in a real sample. `expand` then gives clones heavy-tailed sizes, as
-clonal expansion does.
+independent cells of one population. Sequences repeat only as often as
+independent draws from the population repeat them. `expand` then gives clones
+heavy-tailed sizes, as clonal expansion does.
 """
 from __future__ import annotations
 
@@ -31,23 +31,37 @@ def has_motif(sequence: str) -> bool:
     return MOTIF in sequence[3:-3]
 
 
-def _weights(pool: list[str], kind: str) -> np.ndarray:
-    if kind == "A":
-        return np.ones(len(pool))
-    if kind == "B":
-        return np.exp(LENGTH_TILT * (np.array([len(s) for s in pool]) - 14))
-    if kind == "C":
-        return np.where([has_motif(s) for s in pool], MOTIF_BOOST, 1.0)
-    raise ValueError(f"unknown stand-in population {kind!r}; use one of {KINDS}")
+def population(reference, kind: str, cells: int, seed: int) -> list[str]:
+    """`cells` independent cells of stand-in population `kind`, from `reference`.
 
-
-def population(reference, kind: str, cells: int, seed: int, *, pool_factor: int = 4) -> list[str]:
-    """`cells` cells of stand-in population `kind`, drawn from `reference`."""
-    pool = list(reference.sample(pool_factor * cells, seed=seed))
-    w = _weights(pool, kind)
+    Exact for each kind, with no resampling: B draws each cell's length from the
+    tilted length distribution and then a sequence of that length; C draws
+    motif carriers and other sequences in the enriched proportion.
+    """
     rng = np.random.default_rng(seed)
-    idx = rng.choice(len(pool), size=cells, replace=True, p=w / w.sum())
-    return [pool[i] for i in idx]
+    if kind == "A":
+        return list(reference.sample(cells, seed=seed))
+    if kind == "B":
+        dist = reference.length_distribution
+        lengths = sorted(dist)
+        w = np.array([dist[L] * np.exp(LENGTH_TILT * (L - 14)) for L in lengths])
+        counts = rng.multinomial(cells, w / w.sum())
+        out = []
+        for L, n in zip(lengths, counts):
+            if n:
+                out += list(reference.sample(int(n), length=L, seed=seed * 1000 + L))
+        return [out[i] for i in rng.permutation(len(out))]
+    if kind == "C":
+        draws = list(reference.sample(8 * cells, seed=seed))
+        carriers = [s for s in draws if has_motif(s)]
+        others = [s for s in draws if not has_motif(s)]
+        b = len(carriers) / len(draws)
+        n_carriers = int(rng.binomial(cells, MOTIF_BOOST * b / (MOTIF_BOOST * b + 1 - b)))
+        if n_carriers > len(carriers):
+            raise RuntimeError("too few motif carriers drawn; increase the draw")
+        out = carriers[:n_carriers] + others[:cells - n_carriers]
+        return [out[i] for i in rng.permutation(len(out))]
+    raise ValueError(f"unknown stand-in population {kind!r}; use one of {KINDS}")
 
 
 def expand(cells: list[str], *, seed: int, strength: float) -> tuple[list[str], list[int]]:

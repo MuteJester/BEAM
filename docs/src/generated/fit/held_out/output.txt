@@ -1,3 +1,3 @@
-length distribution, total variation:   0.008
-positional composition (length 15), mean total variation: 0.039
-10,072 unseen held-out sequences: BEAM scores them 4.90 nats higher on average (90% of them)
+length distribution, total variation:   0.012
+positional composition (length 15), mean total variation: 0.052
+15,800 unseen held-out sequences: BEAM scores them 5.93 nats higher on average (96% of them)

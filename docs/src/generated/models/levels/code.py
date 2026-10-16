@@ -15,4 +15,4 @@ def long_share(model):
 
 for name, model in [("donor 1", per_repertoire[0]), ("donor 2", per_repertoire[1]),
                     ("donor 3", per_repertoire[2]), ("group", group), ("reference", reference)]:
-    print(f"{name:10} P(length >= 17) = {long_share(model):.3f}   sequences seen: {model.n_observed:>11,}")
+    print(f"{name:10} P(length >= 17) = {long_share(model):.3f}   cells counted: {model.total_weight:>15,.0f}")

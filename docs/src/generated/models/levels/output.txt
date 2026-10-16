@@ -1,5 +1,5 @@
-donor 1    P(length >= 17) = 0.426   sequences seen:      30,000
-donor 2    P(length >= 17) = 0.423   sequences seen:      30,000
-donor 3    P(length >= 17) = 0.434   sequences seen:      30,000
-group      P(length >= 17) = 0.428   sequences seen:      90,000
-reference  P(length >= 17) = 0.115   sequences seen: 926,909,993
+donor 1    P(length >= 17) = 0.430   cells counted:          30,000
+donor 2    P(length >= 17) = 0.426   cells counted:          30,000
+donor 3    P(length >= 17) = 0.426   cells counted:          30,000
+group      P(length >= 17) = 0.427   cells counted:          90,000
+reference  P(length >= 17) = 0.115   cells counted:   5,629,439,400

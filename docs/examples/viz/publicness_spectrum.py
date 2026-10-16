@@ -4,8 +4,9 @@ import BEAM
 from BEAM import PublicnessModel
 from _docs import save_data
 
+BEAM.set_memory_budget(32 << 30)
 model = BEAM.load_pretrained("foundation")
-p, w = model.pseq_analysis().atoms(512).as_arrays()
+p, w = model.pseq_analysis().atoms(16384).as_arrays()   # fine grid: see publicness/spectrum
 out = {}
 for n in (10, 100, 1000):
     for depth in (10_000, 100_000, 1_000_000):

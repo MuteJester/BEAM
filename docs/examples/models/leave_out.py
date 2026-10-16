@@ -16,7 +16,7 @@ held_out = reference.without(cohort)              # the reference with the cohor
 rebuilt = BeamModel(corpus_cells)                 # the same thing, built from scratch
 
 cohort_seqs = sorted(set(cohort_cells))
-print("same as rebuilding without the cohort:",
-      np.allclose(held_out.log_pseq_batch(cohort_seqs), rebuilt.log_pseq_batch(cohort_seqs)))
+difference = np.abs(held_out.log_pseq_batch(cohort_seqs) - rebuilt.log_pseq_batch(cohort_seqs)).max()
+print(f"largest difference from rebuilding without the cohort: {difference:.1e}")
 gain = np.mean(reference.log_pseq_batch(cohort_seqs) - held_out.log_pseq_batch(cohort_seqs))
 print(f"mean log P of the cohort's sequences is {gain:.2f} nats higher when the cohort is included")
