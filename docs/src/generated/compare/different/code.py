@@ -17,3 +17,4 @@ print("\noverlapping patterns grouped:")
 for g in result.group_overlaps().groups[:4]:
     print(f"  length {g.length}, positions {g.start}-{g.end - 1}: {g.consensus}  "
           f"(more common in donor {'A' if g.direction == 'p' else 'B'})")
+

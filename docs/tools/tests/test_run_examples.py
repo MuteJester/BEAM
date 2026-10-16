@@ -186,3 +186,61 @@ def test_examples_can_import_the_package_source(site, tmp_path):
     example("intro/imp", "import toypkg\nprint(toypkg.VALUE)\n")
     run()
     assert (root / "src" / "generated" / "intro" / "imp" / "output.txt").read_text() == "42\n"
+
+
+# ── Found in review: what --check must not miss ──────────────────────────
+
+def test_check_sees_a_change_in_a_tiny_probability(site):
+    root, example, run = site
+    value = root / "examples" / "num" / "value.txt"
+    value.parent.mkdir(parents=True)
+    value.write_text("6.9e-23")
+    example("num/tiny", "from pathlib import Path\n"
+                        "print(Path(__file__).with_name('value.txt').read_text())\n")
+    run()
+    value.write_text("3.1e-20")
+    assert [m.key for m in run(check=True).mismatched] == ["num/tiny"]
+
+
+def test_check_compares_interactive_data(site):
+    root, example, run = site
+    value = root / "examples" / "viz" / "value.txt"
+    value.parent.mkdir(parents=True)
+    value.write_text("0.5")
+    example("viz/grid", "from pathlib import Path\nfrom _docs import save_data\n"
+                        "v = float(Path(__file__).with_name('value.txt').read_text())\n"
+                        "save_data('grid', {'y': [v, 2 * v]})\nprint('saved')\n")
+    run()
+    value.write_text("0.6")                     # same printed output, different data
+    mismatched = run(check=True).mismatched
+    assert [m.key for m in mismatched] == ["viz/grid"]
+    assert "grid.json" in mismatched[0].detail
+
+
+def test_check_compares_the_data_a_figure_plots(site):
+    root, example, run = site
+    value = root / "examples" / "plots" / "value.txt"
+    value.parent.mkdir(parents=True)
+    value.write_text("4")
+    example("plots/curve", "from pathlib import Path\nfrom _docs import figure\n"
+                           "v = float(Path(__file__).with_name('value.txt').read_text())\n"
+                           "with figure('curve') as (fig, ax):\n"
+                           "    ax.plot([1, 2, 3], [1, v, 9])\n"
+                           "    ax.bar([1, 2], [v, 1])\n")
+    assert not run().failed
+    value.write_text("5")
+    mismatched = run(check=True).mismatched
+    assert [m.key for m in mismatched] == ["plots/curve"]
+    assert "curve" in mismatched[0].detail
+
+
+def test_figures_are_byte_identical_across_runs(site):
+    root, example, run = site
+    example("plots/curve", "from _docs import figure\n"
+                           "with figure('curve') as (fig, ax):\n"
+                           "    ax.plot([1, 2, 3], [1, 4, 9])\n")
+    run()
+    svg = root / "public" / "figures" / "plots" / "curve" / "curve-light.svg"
+    first = svg.read_bytes()
+    run(force=True)
+    assert svg.read_bytes() == first

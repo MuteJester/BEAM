@@ -6,4 +6,4 @@ occupancy = ExactOccupancy(model)
 
 distinct = occupancy.richness(100_000)
 print(f"distinct sequences in 100,000 TCRs: {distinct.value:,.0f}")
-print(f"guaranteed relative error below:    {distinct.bound:.0e}")
+print(f"guaranteed relative error bound:   {distinct.bound:.2g}")

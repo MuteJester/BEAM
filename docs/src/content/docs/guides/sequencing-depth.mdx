@@ -42,13 +42,14 @@ expected number of distinct sequences among `n` cells.
 	caption="Expected distinct sequences against depth for the reference population. The gap to the dashed line is the cells that repeat a sequence already in the sample."
 />
 
-At 100,000 cells, almost every cell (97%) still brings a new sequence. At ten million, more than
-a quarter of the cells repeat a sequence already drawn, and at a billion almost two thirds do.
+In a sample of 100,000 cells, 96.8% of the cells carry a sequence not seen earlier in the
+sample. At ten million, more than a quarter of the cells repeat a sequence already drawn, and at
+a billion almost two thirds do.
 The curve never flattens completely: the population has far more sequences than any sample can
 hold.
 
-Each answer carries its **bound**, a guaranteed limit on the relative error (here below
-$10^{-12}$). The first `richness` call on a large model takes a minute or two while the
+Each answer carries its **bound**, a guaranteed limit on the relative error (here around
+$10^{-13}$). The first `richness` call on a large model takes a minute or two while the
 integrals it needs are prepared; after that every depth is answered almost instantly.
 
 ## What would sequencing deeper add?

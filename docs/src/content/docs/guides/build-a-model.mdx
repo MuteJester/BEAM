@@ -80,8 +80,9 @@ model = BeamModel(nucleotide_cdr3s, alphabet="nt")   # A, C, G, T and N
 ```
 
 <Aside type="caution" title="Pitfalls">
-- **Choose the column deliberately.** To compare with the reference model, use full junctions
-  (`junction_aa`), which include the conserved C and F/W.
+- **Choose the column deliberately.** Without `sequence_column`, `from_dataframe` and
+  `from_parquet` read `cdr3_aa`, which in AIRR tables leaves out the conserved C and F/W. To
+  compare with the reference model, pass `sequence_column="junction_aa"`.
 - **Abundance units differ between platforms.** Templates, UMIs and reads are not the same
   thing. Within one study use one unit; across studies keep in mind that counts are not directly
   comparable.

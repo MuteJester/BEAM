@@ -47,6 +47,18 @@ export function pct(x: number, digits = 1): string {
 	return `${(100 * x).toFixed(digits)}%`;
 }
 
+/** A positive bound rounded UP to one significant digit, e.g. 1.06e-9 -> "2e-9". */
+export function boundUp(x: number): string {
+	if (!(x > 0)) return '0';
+	let exp = Math.floor(Math.log10(x));
+	let mant = Math.ceil(x / 10 ** exp - 1e-12);
+	if (mant === 10) {
+		mant = 1;
+		exp += 1;
+	}
+	return `${mant}e${exp}`;
+}
+
 /** A probability as "3.3 × 10⁻⁵". */
 export function sci(x: number, digits = 2): string {
 	if (x === 0) return '0';

@@ -22,9 +22,9 @@ All members must share alphabet, order and maximum length.
 | Method | Returns | Exactness |
 |---|---|---|
 | `hill_number(q)` | Effective number of sequences of the mixture at order `q`. | Exact for `q = 0` and integer `q ≥ 2`; `q = 1` is refused (`UnsupportedOrder`). |
-| `beta_diversity(q).beta` | How many effectively distinct members the group has, between 1 and the number of members. | Exact at the same orders. |
+| `beta_diversity(q).beta` | How many effectively distinct members the group has, between 1 and the number of members. | Exact at the same orders. At `q = 1` it returns `beta = None` with exact lower and upper limits instead. |
 | `entropy_bounds()` | Exact lower and upper bounds on the Shannon entropy ($q = 1$). | Exact bounds. |
 | `entropy_estimate(n, seed=)` | A sampled estimate of the Shannon entropy, with its standard error. | Labelled as sampled. |
 | `support_size()` | Number of distinct sequences any member can produce. | Exact. |
 
-Why $q = 1$ is refused: see [What "exact" means](/BEAM/explanations/what-exact-means/#refused).
+Why $q = 1$ is treated differently: see [What "exact" means](/BEAM/explanations/what-exact-means/#refused).

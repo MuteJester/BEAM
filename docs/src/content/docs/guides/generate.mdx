@@ -17,8 +17,11 @@ use as a background or a null set?
 ## Drawing sequences
 
 `sample` draws sequences **exactly in proportion to their probability**: a sequence twice as
-probable is drawn twice as often. Give `length` to draw only sequences of that length, and
-`seed` to make the draw reproducible.
+probable is drawn twice as often. Give `length` to draw only sequences of that length.
+
+`seed` chooses the draw: the same seed always gives the same sequences, and **leaving it out
+uses seed 0**, so two calls without a seed return the same draws. Pass different seeds for
+independent draws, for example two null sets.
 
 <Example src="generate/sample" />
 
@@ -58,8 +61,8 @@ it has never seen. Most of what it draws has the conserved start and end, but no
 
 <Example src="generate/canonical" />
 
-That is a little below the corpus the reference model was built from, in which 99.6% of
-sequences start with C and 98.6% end with F or W. The model reserves some probability for
+That is a little below the corpus the reference model was built from, in which, according to
+the paper's Methods, 99.6% of sequences start with C and 98.6% end with F or W. The model reserves some probability for
 sequences it never observed, and some of that goes to non-canonical ones. Filter the draws if
 your use needs canonical CDR3s only.
 

@@ -23,8 +23,8 @@ A model is downloaded once and kept in a cache directory. Its SHA-256 checksum i
 before it is first loaded and on every later load; a damaged file is downloaded again, and a
 file that does not match is never loaded. Once cached, loading needs no network.
 
-The cache is `$BEAM_CACHE_DIR` if set, otherwise `~/.cache/beam-model` on Linux and
-`~/Library/Caches/beam-model` on macOS.
+The cache is `$BEAM_CACHE_DIR` if set, otherwise `$XDG_CACHE_HOME/beam-model` if that is set,
+otherwise `~/.cache/beam-model` on Linux and `~/Library/Caches/beam-model` on macOS.
 
 ## Where the models come from
 

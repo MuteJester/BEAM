@@ -22,6 +22,7 @@ const fig = parts && { src: parts.slice(0, -1).join('/'), name: parts.at(-1)!, a
 	<p class="beam-interactive-title">{title}</p>
 	<div class="beam-interactive-body"><slot /></div>
 	<p class="beam-interactive-description">{description}</p>
+	<noscript><style is:inline>{'.beam-interactive-body { display: none; }'}</style></noscript>
 	{
 		fig && (
 			<>

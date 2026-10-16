@@ -20,8 +20,10 @@ run but are left out of the displayed code.
 
 An example is run again only when its source, the helpers or the models it
 can load (the registry in $BEAM_PRETRAINED_REGISTRY) changed: some examples
-take minutes. `--check` re-runs everything and compares with the recorded
-output, numbers to a relative 1e-9, everything else exactly.
+take minutes. `--check` re-runs everything and compares with what was recorded: the
+printed output, the interactive data, and the data each figure plots
+(recorded beside it as <name>.data.json), numbers to a relative 1e-9 and
+everything else exactly.
 """
 from __future__ import annotations
 
@@ -41,7 +43,9 @@ from pathlib import Path
 
 DOCS = Path(__file__).resolve().parents[1]
 REL_TOL = 1e-9
-ABS_TOL = 1e-12
+# No absolute tolerance: BEAM's outputs are mostly tiny probabilities and
+# error bounds, and an absolute floor would let any of them change unnoticed.
+ABS_TOL = 0.0
 NUMBER = re.compile(r"[-+]?(?:\d+\.\d*|\.\d+|\d+)(?:[eE][-+]?\d+)?")
 
 
@@ -118,6 +122,48 @@ def numbers_agree(expected: str, got: str) -> str | None:
     return None
 
 
+def _values_agree(a, b, where: str = "") -> str | None:
+    """None if two JSON values agree (numbers to REL_TOL), else where they differ."""
+    if isinstance(a, bool) or isinstance(b, bool) or not (
+            isinstance(a, (int, float)) and isinstance(b, (int, float))):
+        if type(a) is not type(b):
+            return f"{where or 'value'}: {type(a).__name__} recorded, {type(b).__name__} now"
+    if isinstance(a, dict):
+        if set(a) != set(b):
+            return f"{where or 'object'}: keys differ"
+        for k in a:
+            d = _values_agree(a[k], b[k], f"{where}.{k}" if where else str(k))
+            if d:
+                return d
+        return None
+    if isinstance(a, list):
+        if len(a) != len(b):
+            return f"{where or 'list'}: {len(a)} items recorded, {len(b)} now"
+        for i, (x, y) in enumerate(zip(a, b)):
+            d = _values_agree(x, y, f"{where}[{i}]")
+            if d:
+                return d
+        return None
+    if isinstance(a, (int, float)) and not isinstance(a, bool):
+        if not math.isclose(a, b, rel_tol=REL_TOL, abs_tol=ABS_TOL):
+            return f"{where}: recorded {a!r}, now {b!r}"
+        return None
+    return None if a == b else f"{where}: recorded {a!r}, now {b!r}"
+
+
+def json_files_agree(recorded: Path, now: Path) -> str | None:
+    """Compare every .json file of two directories; None if all agree."""
+    names = {p.name for p in recorded.glob("*.json")} | {p.name for p in now.glob("*.json")}
+    for name in sorted(names):
+        r, n = recorded / name, now / name
+        if not r.exists() or not n.exists():
+            return f"{name}: {'not recorded' if not r.exists() else 'no longer written'}"
+        d = _values_agree(json.loads(r.read_text()), json.loads(n.read_text()))
+        if d:
+            return f"{name}: {d}"
+    return None
+
+
 def _execute(path: Path, root: Path, src: Path, figures: Path, data: Path):
     env = dict(os.environ)
     env["PYTHONPATH"] = os.pathsep.join(
@@ -150,7 +196,12 @@ def run_all(root: Path, src: Path, *, only: str | None = None, force: bool = Fal
 
         if check:
             with tempfile.TemporaryDirectory() as scratch:
-                proc = _execute(path, root, src, Path(scratch) / "f", Path(scratch) / "d")
+                fig_now, data_now = Path(scratch) / "f", Path(scratch) / "d"
+                proc = _execute(path, root, src, fig_now, data_now)
+                files_diff = (
+                    json_files_agree(root / "public" / "figures" / key, fig_now)
+                    or json_files_agree(root / "public" / "data" / key, data_now)
+                ) if proc.returncode == 0 else None
         else:
             proc = _execute(path, root, src, root / "public" / "figures" / key,
                             root / "public" / "data" / key)
@@ -164,7 +215,7 @@ def run_all(root: Path, src: Path, *, only: str | None = None, force: bool = Fal
             if not recorded.exists():
                 summary.mismatched.append(Problem(key, "no recorded output"))
                 continue
-            diff = numbers_agree(recorded.read_text(), proc.stdout)
+            diff = numbers_agree(recorded.read_text(), proc.stdout) or files_diff
             if diff:
                 summary.mismatched.append(Problem(key, diff))
             else:

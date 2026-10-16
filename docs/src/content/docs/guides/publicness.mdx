@@ -16,7 +16,8 @@ sampled repertoire?
 
 A sequence is **public** when it appears in many people. How many depends on two things: how
 common the sequence is in the population, which is its probability under the model, and how
-deeply each person was sampled. `PublicnessModel` combines them exactly.
+deeply each person was sampled. `PublicnessModel` combines them: the mean and variance exactly,
+and the full distribution by an accurate numerical inversion.
 
 ## Expected carriers
 
@@ -44,7 +45,7 @@ the sequence.
 
 <Interactive
 	title="Explore publicness"
-	description="Choose a cohort size, a sampling depth and a sequence, or set any sequence probability with the slider. The bars show the exact probability that each number of people carries the sequence."
+	description="Choose a cohort size, a sampling depth and a sequence, or set any sequence probability with the slider. The bars show the probability that each number of people carries the sequence, computed from the reference model."
 	fallback="publicness/distribution/carriers"
 	fallbackAlt="Probability of each number of carriers out of 100 people for three sequences."
 >
@@ -56,6 +57,12 @@ the sequence.
 Real cohorts mix shallow and deep samples. Give each person's depth:
 
 <Example src="publicness/unequal" />
+
+To stay fast, people of similar depth are grouped into at most 64 groups, each represented by
+one depth. With 64 or fewer distinct depths, as here, nothing is grouped. With more, the result
+is a close approximation; `cohort.depth_spread` gives the widest ratio of depths within a group
+(1.0 means no grouping), and `PublicnessModel(depths, depth_bins=len(set(depths)))` avoids
+grouping altogether.
 
 ## The most public sequences of a repertoire
 

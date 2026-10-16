@@ -5,6 +5,9 @@
  * A page cannot show code that did not run: an unrecorded example fails the build.
  */
 import { Code } from '@astrojs/starlight/components';
+import { createHash } from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 
 interface Props {
 	src: string;
@@ -28,6 +31,17 @@ const printed = outputs[`../generated/${src}/output.txt`];
 if (code === undefined) {
 	throw new Error(
 		`Example "${src}" has no recording. Run: python docs/tools/run_examples.py --only '${src}'`,
+	);
+}
+// A recording of an older version of the program is as wrong as none: the
+// page would show code and output the current program does not produce.
+const source = fs.readFileSync(path.join(process.cwd(), 'examples', `${src}.py`));
+const meta = JSON.parse(
+	fs.readFileSync(path.join(process.cwd(), 'src', 'generated', src, 'meta.json'), 'utf8'),
+);
+if (createHash('sha256').update(source).digest('hex') !== meta.source_sha256) {
+	throw new Error(
+		`Example "${src}" changed since it was recorded. Run: python docs/tools/run_examples.py --only '${src}'`,
 	);
 }
 ---

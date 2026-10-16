@@ -34,10 +34,10 @@ brought within the requested tolerance is returned with the bound it has, never 
 
 ## Refused
 
-Some quantities have no exact form under the model. BEAM refuses them rather than returning
-an approximation that would be easy to mistake for an exact number, and offers what *can* be
-said exactly instead. For example, the diversity of a group of repertoires is exact at Hill
-order 2 but has no exact form at order 1 (Shannon diversity). There, BEAM gives exact lower and
+Some quantities BEAM has no exact method for. It refuses them rather than returning an
+approximation that would be easy to mistake for an exact number, and offers what *can* be said
+exactly instead. For example, the diversity of a group of repertoires is exact at Hill order 2,
+but BEAM has no exact method at order 1 (Shannon diversity). There, it gives exact lower and
 upper bounds:
 
 <Example src="exactness/refused" />

@@ -36,8 +36,9 @@ about 1 GB. Large computations check their needs against a budget first; see
 
 ## Are the results reproducible?
 
-Yes. Exact quantities do not depend on random numbers or on the number of threads, and sampling
-with the same `seed` gives the same sequences.
+Yes. Exact quantities do not depend on random numbers or on the number of threads, bounded
+values agree within their stated bounds, and sampling with the same `seed` gives the same
+sequences (without a `seed`, sampling uses seed 0).
 
 ## Is BEAM a model of V(D)J recombination?
 

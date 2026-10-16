@@ -35,11 +35,16 @@ BeamModel(sequences, *, abundances=None, alphabet="aa", order=None,
 
 | Method | Reads |
 |---|---|
-| `BeamModel.from_dataframe(data, sequence_column=, abundance_column=, **config)` | A pandas DataFrame, an Arrow table or a dict of lists. |
+| `BeamModel.from_dataframe(data, sequence_column=None, abundance_column=None, **config)` | A pandas DataFrame, an Arrow table or a dict of lists. |
 | `BeamModel.from_sequence_file(path, sep="\t", sequence_column=0, abundance_column=1, has_header=False, **config)` | A delimited text file, without loading it into memory. |
-| `BeamModel.from_parquet(path, sequence_column=, abundance_column=, **config)` | A parquet file, one batch at a time (needs `pyarrow`). |
+| `BeamModel.from_parquet(path, sequence_column=None, abundance_column=None, **config)` | A parquet file, one batch at a time (needs `pyarrow`). |
 | `BeamModel.builder(**config)` | A `Builder` that accumulates counts batch by batch, for corpora of any size. |
 | `BeamModel.from_file(path)` | A model saved with `save`. |
+
+`from_dataframe` and `from_parquet` read the column **`cdr3_aa`** when no `sequence_column` is
+given (`cdr3` for nucleotides), and count every row once when no `abundance_column` is given. To
+compare with the reference model, name `junction_aa` explicitly: AIRR's `cdr3_aa` leaves out the
+conserved start and end residues.
 
 ## Scoring
 
@@ -57,7 +62,7 @@ BeamModel(sequences, *, abundances=None, alphabet="aa", order=None,
 
 | Method | Returns |
 |---|---|
-| `sample(n, length=None, seed=None)` | `n` sequences drawn exactly in proportion to their probability. |
+| `sample(n, length=None, seed=None)` | `n` sequences drawn exactly in proportion to their probability. Without a `seed` the draw uses seed 0, so repeated calls return the same sequences; pass different seeds for independent draws. |
 | `simulate(n, length=None, seed=None)` | The same draws with their log probabilities (`.sequences`, `.log_probs`). |
 | `top_k_sequences(k=20, length=None)` | The `k` most probable sequences with their log probabilities. |
 | `tempered(t)` | A new model with $P_t(s) \propto P(s)^t$: sharper for $t > 1$, flatter for $t < 1$. |
@@ -79,9 +84,9 @@ All exact, computed over every sequence the model can produce.
 |---|---|
 | `entropy(base=e)` | Shannon entropy of the sequence distribution. |
 | `hill_number(q)`, `hill_numbers(orders)`, `diversity_profile()` | Effective numbers of sequences (Hill numbers). |
-| `path_count(length=None)` | Number of distinct sequences the model can produce. |
+| `path_count(length=None)` | Number of distinct sequences the model can produce. Because every sequence up to the maximum length has some probability, this is the size of the whole sequence space (for example $20^L$ at length $L$), not a measure of the repertoire. |
 | `positional_marginals(length)` | $P(x_i = a \mid L)$ for every position and residue: the basis of a sequence logo. |
-| `surprisal_stats()` | Mean, variance, skewness and kurtosis of $-\ln P$. |
+| `surprisal_stats()` | Mean, variance, standard deviation, skewness and excess kurtosis of $-\ln P$. |
 
 ## Combining and updating
 
@@ -99,8 +104,8 @@ To mix *probabilities* rather than pool counts, use [`Mixture`](/BEAM/reference/
 
 | Member | Meaning |
 |---|---|
-| `save(path)` | Writes counts and configuration to `path.beam`. |
-| `compact()` | Drops the raw counts to save memory; the model can still score and sample, but no longer be combined. |
+| `save(path)` | Writes counts and configuration; `.beam` is added when the path has no suffix. |
+| `compact()` | Drops the raw counts to save memory. The model still scores, samples and computes, but can no longer be saved, copied, combined or given new prior strengths. |
 | `memory_bytes` | Approximate memory of the model's tables. |
 | `config` | The configuration it was built with, including the prior strengths chosen. |
 | `n_observed`, `n_skipped` | Sequence records accepted and rejected while building. |

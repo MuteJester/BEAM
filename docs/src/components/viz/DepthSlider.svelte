@@ -1,6 +1,6 @@
 <script lang="ts">
 	import * as Plot from '@observablehq/plot';
-	import { dataUrl, fmt, onThemeChange, pct, themeColors } from './theme';
+	import { boundUp, dataUrl, fmt, onThemeChange, pct, themeColors } from './theme';
 
 	interface Grid {
 		depths: number[];
@@ -84,7 +84,7 @@
 				<strong>{fmt(shared)}</strong> of them also expected in a second sample of the same depth
 				<span class="muted">({pct(shared / distinct)})</span>
 			</div>
-			<div class="muted">Exact to a relative error below {bound.toExponential(0)}.</div>
+			<div class="muted">Exact to a relative error of at most {boundUp(bound)}.</div>
 		</div>
 		<div bind:this={chart} class="chart"></div>
 	{:else}

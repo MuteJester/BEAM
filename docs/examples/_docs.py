@@ -19,6 +19,7 @@ from pathlib import Path
 import matplotlib
 
 matplotlib.use("Agg")
+import matplotlib.patches  # noqa: E402
 import matplotlib.pyplot as plt  # noqa: E402
 
 # One palette for both themes: mid-tone colours that read on white and on
@@ -54,18 +55,38 @@ def _style(fig, theme: str) -> None:
         text.set_color(ink)
 
 
+def _plotted(fig) -> list:
+    """The numbers a figure shows: every line's points and every bar."""
+    axes = []
+    for ax in fig.axes:
+        lines = [line.get_xydata().tolist() for line in ax.get_lines()]
+        bars = [[float(v) for v in (p.get_x(), p.get_width(), p.get_y(), p.get_height())]
+                for p in ax.patches if isinstance(p, matplotlib.patches.Rectangle)]
+        axes.append({"lines": lines, "bars": bars})
+    return axes
+
+
 @contextlib.contextmanager
 def figure(name: str, *, size=(6.4, 3.8), ncols: int = 1):
-    """A matplotlib figure saved as `<name>-light.svg` and `<name>-dark.svg`."""
+    """A matplotlib figure saved as `<name>-light.svg` and `<name>-dark.svg`.
+
+    The numbers it plots are saved beside it as `<name>.data.json`, so the
+    runner's --check can tell when a figure's content changed. The SVGs carry
+    no date and fixed element ids, so an unchanged figure is byte-identical.
+    """
     with plt.rc_context({"axes.prop_cycle": matplotlib.cycler(color=PALETTE),
                          "font.size": 10, "svg.fonttype": "none",
+                         "svg.hashsalt": "beam-docs",
                          "axes.spines.top": False, "axes.spines.right": False}):
         fig, ax = plt.subplots(1, ncols, figsize=size, layout="constrained")
         yield fig, ax
         out = _out("DOCS_FIGURES")
+        (out / f"{name}.data.json").write_text(
+            json.dumps(_plotted(fig), separators=(",", ":")))
         for theme in ("light", "dark"):
             _style(fig, theme)
-            fig.savefig(out / f"{name}-{theme}.svg", transparent=True)
+            fig.savefig(out / f"{name}-{theme}.svg", transparent=True,
+                        metadata={"Date": None})
         plt.close(fig)
 
 

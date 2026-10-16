@@ -16,13 +16,14 @@ A depth is a number of independent draws (cells) from the model; it need not be 
 See [How deeply should I sequence?](/BEAM/guides/sequencing-depth/) and
 [How many sequences will two samples share?](/BEAM/guides/overlap/).
 
-The first query takes a minute or two on a large model while the integrals it needs are
-prepared; they are kept, so later queries at any depth are fast. `rel_tol` is the relative
+Creating it runs one sweep of the model, and the first query takes a minute or two on a large
+model while the integrals it needs are prepared; they are kept, so later queries at any depth
+are fast. `rel_tol` is the relative
 error each value is planned to.
 
 ## Methods
 
-Every method returns a `BoundedValue` (or a list of them).
+Every method returns a `BoundedValue`, a list of them, or (for the cohort summaries) a dict of them.
 
 | Method | Expected number of… |
 |---|---|

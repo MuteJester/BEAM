@@ -31,8 +31,8 @@ sequences will 100,000 cells contain? There are far too many sequences to list, 
 answer is simulation: draw many samples and count, and accept some random error.
 
 BEAM is built so that these sums can be computed directly. The answers it gives carry a
-**guaranteed bound** on their error, typically below one part in a trillion, and the same
-question always gets the same answer. Differences between groups are therefore not hidden by
+**guaranteed bound** on their error, typically below one part in a trillion, so asking the same
+question again gives the same answer within that bound, with no random noise. Differences between groups are therefore not hidden by
 simulation noise.
 
 ## Depth: how many TCRs you sample

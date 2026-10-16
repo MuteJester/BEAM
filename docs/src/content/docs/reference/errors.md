@@ -5,8 +5,12 @@ sidebar:
   order: 20
 ---
 
-Every exception BEAM raises on purpose derives from `BEAM.BeamError` **and** from the built-in
-exception it replaces, so `except ValueError` and `except BEAM.BeamError` both work.
+Errors from BEAM's computational core are raised as subclasses of `BEAM.BeamError` **and** of
+the built-in exception they correspond to, so `except ValueError` and `except BEAM.BeamError`
+both catch them. Argument checks made in Python before reaching the core, such as
+`model.explain()` on a sequence it cannot score or `float()` of a bounded value, raise the
+plain built-in (`ValueError`, `TypeError`, `RuntimeError`). **Catching the built-in always
+works**; catch the `BEAM` classes when you want to tell refusals apart.
 
 ```python
 import BEAM
@@ -23,7 +27,7 @@ except BEAM.BudgetExceeded as err:     # one specific refusal
 | `BeamValueError` | An argument BEAM cannot use. | `ValueError` |
 | `InvalidSequence` | A sequence BEAM cannot read: bad characters, empty, too long. | `ValueError` |
 | `BeamTypeError` | An argument of the wrong type. | `TypeError` |
-| `NotFinalized` | The model cannot be used this way, for example after `compact()`. | `RuntimeError` |
+| `NotFinalized` | The model cannot be used this way, for example `save()` after `compact()`. | `RuntimeError` |
 | `NoLivePaths` | Nothing satisfies the condition asked for, so the conditional does not exist. | `RuntimeError` |
 | `ModelMismatch` | Two models cannot be combined: different alphabets, orders or shapes. | `RuntimeError` |
 | `BudgetExceeded` | Refused because it would exceed the memory budget you set. | `MemoryError` |

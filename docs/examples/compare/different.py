@@ -1,6 +1,7 @@
 import BEAM
 from BEAM import BeamModel
 from BEAM.analytics.distance import compare
+from _docs import figure  # hide
 
 # --- hide
 reference = BEAM.load_pretrained("foundation")
@@ -25,3 +26,15 @@ print("\noverlapping patterns grouped:")
 for g in result.group_overlaps().groups[:4]:
     print(f"  length {g.length}, positions {g.start}-{g.end - 1}: {g.consensus}  "
           f"(more common in donor {'A' if g.direction == 'p' else 'B'})")
+
+# --- hide
+rows = [x for x in result.lengths if x.contribution + x.pattern_contribution > 1e-3 * result.squared_distance]
+with figure("split", size=(6.4, 3.2)) as (fig, ax):
+    Ls = [x.length for x in rows]
+    ax.bar(Ls, [x.contribution for x in rows], color="#e07a3f", label="length")
+    ax.bar(Ls, [x.pattern_contribution for x in rows], bottom=[x.contribution for x in rows],
+           label="local patterns")
+    ax.set_xlabel("CDR3 length (residues)")
+    ax.set_ylabel("contribution to the\nsquared distance")
+    ax.legend(frameon=False)
+# --- show

@@ -21,5 +21,7 @@ sequence of that length, so no small-sample correction applies. Information is m
 against a uniform background.
 
 `pseq_above` and `pseq_below` restrict a logo to sequences above or below a probability; the two
-fractions add up to one. `surprisal_above` / `surprisal_below` do the same in nats.
+`fraction`s, each a share of the probability mass at that length, add up to one. These
+conditional logos are computed on a fine grid of probabilities, and `resolution_error` reports
+the effect of the grid on them. `surprisal_above` / `surprisal_below` do the same in nats.
 `model.insights.logos(...)` returns several logos at once.
