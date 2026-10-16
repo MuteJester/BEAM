@@ -1,0 +1,4 @@
+P(nobody carries it)     0.000
+P(1 to 5 people)         0.000
+P(more than 5 people)    1.000
+most likely: 27 people

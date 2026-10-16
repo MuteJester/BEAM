@@ -1,0 +1,17 @@
+distance: 0.4523
+from lengths: 67.8%   from local patterns: 32.2%
+
+local patterns that differ most (probability given the length):
+length  position  pattern   donor A   donor B
+    14         9  NEQFF       0.0795    0.6922
+    13         8  NEQFF       0.0646    0.6244
+    14         8  YNEQF       0.0398    0.3687
+    13         7  YNEQF       0.0275    0.3061
+    12         7  NEQFF       0.0533    0.4976
+    14         9  TEAFF       0.0954    0.0018
+
+overlapping patterns grouped:
+  length 14, positions 5-13: GSSYNEQFF  (more common in donor B)
+  length 13, positions 5-12: SSYNEQFF  (more common in donor B)
+  length 12, positions 4-11: SSYNEQFF  (more common in donor B)
+  length 14, positions 7-13: GNTEAFF  (more common in donor A)

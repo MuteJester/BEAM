@@ -8,6 +8,8 @@ sidebar:
 import { Aside } from '@astrojs/starlight/components';
 import Example from '../../../components/Example.astro';
 import Figure from '../../../components/Figure.astro';
+import Interactive from '../../../components/Interactive.astro';
+import SamplingMotion from '../../../components/viz/SamplingMotion.svelte';
 
 **The question:** what do sequences from this population look like, and can I get new ones to
 use as a background or a null set?
@@ -39,6 +41,15 @@ Draw many sequences and their lengths follow the model's length distribution, as
 	alt="Bar chart of the length distribution of 50,000 sampled CDR3s with the model's length probabilities overlaid as points; they match closely."
 	caption="Lengths of 50,000 sequences drawn from the reference model, against its exact length distribution."
 />
+
+<Interactive
+	title="Sampling in motion"
+	description="Press Draw to watch sequences being drawn from the reference model, newest first, with their log probabilities. The bars show the share of each length among the draws so far; the dots are the model's exact length distribution, which the bars approach as draws accumulate."
+	fallback="generate/lengths/lengths"
+	fallbackAlt="Length distribution of 50,000 sampled CDR3s against the model's length probabilities."
+>
+	<SamplingMotion client:visible />
+</Interactive>
 
 ## Not every draw is a textbook CDR3
 

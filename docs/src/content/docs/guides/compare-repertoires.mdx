@@ -1,0 +1,66 @@
+---
+title: How different are two repertoires, and why?
+description: An exact distance between two repertoires' models, split into differences in sequence length and in local sequence patterns, with the patterns that differ most.
+sidebar:
+  order: 7
+---
+
+import { Aside } from '@astrojs/starlight/components';
+import Example from '../../../components/Example.astro';
+import Interactive from '../../../components/Interactive.astro';
+import DistanceBreakdown from '../../../components/viz/DistanceBreakdown.svelte';
+
+**The question:** how different are these two repertoires, and in what way?
+
+Build a model from each repertoire and compare the models. `compare` gives an exact distance
+between them, and splits it into parts that say *where* the difference lies:
+
+- a part due to **different length distributions**, for example one repertoire having longer
+  CDR3s;
+- a part due to **different local patterns**: short stretches of sequence that are more common
+  at a given length and position in one repertoire than in the other.
+
+The parts add up exactly to the (squared) distance, so the split is an accounting, not an
+approximation.
+
+The examples on this page use stand-in repertoires drawn from the reference model, so that the
+answer is known: two samples of the same population, and one sample from a population shifted
+towards longer CDR3s and the `…NEQFF` ending.
+
+## A baseline: two samples of one population
+
+Two repertoires of finite size never have identical models, even from the same population. The
+distance between two such samples is the noise floor against which a real difference stands out.
+
+<Example src="compare/same_population" />
+
+## Two different populations
+
+<Example src="compare/different" />
+
+The distance is much larger than the noise floor, and the split says why: a large share comes
+from the different length distributions, and the strongest local patterns point at the
+sequence ends that were made more common.
+
+<Interactive
+	title="Where the difference lies"
+	description="The bar at the top splits the squared distance into its length part (orange) and its local-pattern part (teal). The chart shows both parts at each CDR3 length. Choose a length to list its local patterns that differ most, with their probability in each repertoire."
+>
+	<DistanceBreakdown client:visible />
+</Interactive>
+
+## Reading the patterns
+
+Each pattern is a short stretch of sequence at a given length and position, with its probability
+in each repertoire **given the length**. Conditioning on length keeps the two parts separate: a
+pattern term measures a difference in sequence content, not a consequence of different lengths.
+`group_overlaps()` joins overlapping patterns into longer motifs, which are easier to read.
+
+<Aside type="caution" title="Pitfalls">
+- **Compare against a baseline.** A distance means little on its own; compare it with the
+  distance between samples of similar size from one population, or between replicates.
+- **Repertoire size matters.** Models of small repertoires are noisier, so their distances are
+  larger. Compare repertoires of similar sizes, or subsample to a common size.
+- **Same settings.** Both models must have the same alphabet and order.
+- **Comparing takes about a minute** for models of the default order.
+</Aside>

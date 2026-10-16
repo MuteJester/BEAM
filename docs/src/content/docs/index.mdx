@@ -14,27 +14,31 @@ hero:
       variant: minimal
 ---
 
-import { Card, CardGrid, Code } from '@astrojs/starlight/components';
+import { CardGrid, Code, LinkCard } from '@astrojs/starlight/components';
 
 ## What BEAM answers
 
 <CardGrid>
-	<Card title="How likely is this TCR?" icon="magnifier">
-		The exact probability of any CDR3β sequence, including ones never seen before, and
-		which residues make it likely or unlikely.
-	</Card>
-	<Card title="How deeply should I sequence?" icon="setting">
-		How many distinct sequences to expect at a given depth, and how many two samples will
-		have in common.
-	</Card>
-	<Card title="How many people share this TCR?" icon="open-book">
-		The expected number of repertoires in a cohort that contain a sequence, and the full
-		distribution around it.
-	</Card>
-	<Card title="How different are two repertoires?" icon="random">
-		A distance between repertoires that separates differences in sequence length from
-		differences in local sequence patterns, and names the patterns.
-	</Card>
+	<LinkCard
+		title="How likely is this TCR?"
+		description="The exact probability of any CDR3β sequence, including ones never seen before, and which residues make it likely or unlikely."
+		href="/BEAM/guides/score/"
+	/>
+	<LinkCard
+		title="How deeply should I sequence?"
+		description="How many distinct sequences to expect at a given depth, and how many two samples will have in common."
+		href="/BEAM/guides/sequencing-depth/"
+	/>
+	<LinkCard
+		title="How many people share this TCR?"
+		description="The expected number of repertoires in a cohort that contain a sequence, and the full distribution around it."
+		href="/BEAM/guides/publicness/"
+	/>
+	<LinkCard
+		title="How different are two repertoires?"
+		description="A distance that separates differences in sequence length from differences in local sequence patterns, and names the patterns."
+		href="/BEAM/guides/compare-repertoires/"
+	/>
 </CardGrid>
 
 ## Install

@@ -1,0 +1,7 @@
+most public sequences of this sample (expected carriers out of 100):
+  CASSPQRNTEAFF      100.0
+  CASSQSPGGTQYF      100.0
+  CASSQSPGGIQYF      100.0
+  CASSALLGSASTQYF    100.0
+  CASSLVPEAYNEQFF    100.0
+expected in fewer than one person: 71% of its sequences

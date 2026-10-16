@@ -1,0 +1,81 @@
+---
+title: How public is a sequence?
+description: The expected number of people in a cohort who carry a sequence, the full distribution around it, and the most public sequences of a repertoire.
+sidebar:
+  order: 6
+---
+
+import { Aside } from '@astrojs/starlight/components';
+import Example from '../../../components/Example.astro';
+import Figure from '../../../components/Figure.astro';
+import Interactive from '../../../components/Interactive.astro';
+import PublicnessExplorer from '../../../components/viz/PublicnessExplorer.svelte';
+
+**The question:** in a cohort of people, how many would I expect to carry this sequence in their
+sampled repertoire?
+
+A sequence is **public** when it appears in many people. How many depends on two things: how
+common the sequence is in the population, which is its probability under the model, and how
+deeply each person was sampled. `PublicnessModel` combines them exactly.
+
+## Expected carriers
+
+Describe the cohort by the depth of each person's sample, then ask about a sequence's
+probability.
+
+<Example src="publicness/one_sequence" />
+
+`moments` returns the mean and variance of the number of carriers. The most common of the three
+sequences is expected in about 81 of the 100 people; the rarest in almost nobody.
+
+## The whole distribution
+
+The mean is not the whole story: `pmf` gives the probability that exactly 0, 1, 2, … people carry
+the sequence.
+
+<Example src="publicness/distribution" />
+
+<Figure
+	src="publicness/distribution"
+	name="carriers"
+	alt="Probability of each number of carriers out of 100 people, for three sequences of different probability; the distributions sit at different places."
+	caption="How many of 100 people, each sampled to 50,000 cells, carry three sequences of different probability."
+/>
+
+<Interactive
+	title="Explore publicness"
+	description="Choose a cohort size, a sampling depth and a sequence, or set any sequence probability with the slider. The bars show the exact probability that each number of people carries the sequence."
+	fallback="publicness/distribution/carriers"
+	fallbackAlt="Probability of each number of carriers out of 100 people for three sequences."
+>
+	<PublicnessExplorer client:visible />
+</Interactive>
+
+## Cohorts sampled to different depths
+
+Real cohorts mix shallow and deep samples. Give each person's depth:
+
+<Example src="publicness/unequal" />
+
+## The most public sequences of a repertoire
+
+`moments` takes many probabilities at once, so a whole repertoire can be ranked by how public
+its sequences are expected to be:
+
+<Example src="publicness/rank" />
+
+At this depth the most common sequences are expected in all 100 people, while 71% of this
+sample's sequences are expected in fewer than one person: most of any repertoire is private. The
+sequences at the top are the ones a cohort study would see again and again.
+
+<Aside type="caution" title="Pitfalls">
+- **This is the expectation from probability alone.** Sharing in real cohorts also comes from
+  shared HLA types and shared exposures, such as a common virus. A sequence carried by many more
+  people than expected is exactly what such an effect looks like, which is what makes the
+  expectation useful.
+- **Depth is the number of cells sampled per person**, not the number of distinct sequences
+  observed.
+- **The population matters.** Under the reference model, probabilities describe a broad
+  aggregate of published repertoires. A cohort that differs from it (another species, another
+  chain, a sorted subset) needs a model of its own population.
+</Aside>

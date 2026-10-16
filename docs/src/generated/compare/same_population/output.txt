@@ -1,0 +1,2 @@
+distance: 0.1699
+from lengths: 0.5%   from local patterns: 99.5%
