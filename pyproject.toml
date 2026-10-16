@@ -1,14 +1,51 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "beam-model"
-version = "0.1.0"
-description = "BEAM: Bidirectional Expert-Anchored Model over CDR3 sequences"
+dynamic = ["version"]
+description = "Exact probability models of T cell receptor CDR3 repertoires: sequence probabilities, sampling depth, publicness and repertoire comparison"
 readme = "README.md"
-requires-python = ">=3.9"
-dependencies = ["numpy>=1.21"]
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE"]
+authors = [
+    { name = "Thomas Konstantinovsky", email = "thomaskon90@gmail.com" },
+    { name = "Gur Yaari" },
+]
+maintainers = [
+    { name = "Thomas Konstantinovsky", email = "thomaskon90@gmail.com" },
+]
+requires-python = ">=3.11"
+dependencies = ["numpy>=1.23.2", "scipy>=1.10"]
+keywords = [
+    "TCR", "T cell receptor", "CDR3", "immune repertoire", "AIRR-seq",
+    "immunology", "bioinformatics", "probabilistic model", "publicness",
+    "repertoire comparison",
+]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "Topic :: Scientific/Engineering :: Medical Science Apps.",
+    "Programming Language :: C",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3.15",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+]
+
+[project.urls]
+Homepage = "https://github.com/MuteJester/BEAM"
+Source = "https://github.com/MuteJester/BEAM"
+Issues = "https://github.com/MuteJester/BEAM/issues"
+Changelog = "https://github.com/MuteJester/BEAM/blob/main/CHANGELOG.md"
+Citation = "https://github.com/MuteJester/BEAM/blob/main/CITATION.cff"
 
 # Reading parquet is optional -- `from_sequence_file` and `from_dataframe`
 # need none of this. It is declared because it was NOT, and so nothing
@@ -19,10 +56,41 @@ dependencies = ["numpy>=1.21"]
 # only loses the saving.
 [project.optional-dependencies]
 parquet = ["pyarrow>=4.0"]
-dev = ["pyarrow>=4.0", "pytest>=7"]
+dev = ["pyarrow>=4.0", "pytest>=7", "mpmath"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
+# Only the Python package. Without this, src/native/ is found as a namespace
+# package and the C sources are installed as a top-level `native` package.
+include = ["BEAM", "BEAM.*"]
+
+[tool.setuptools.dynamic]
+# One source of truth: BEAM.__version__, read statically at build time. The
+# release workflow refuses a tag that does not equal it.
+version = { attr = "BEAM.__version__" }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+# Wheels are built by cibuildwheel in CI (.github/workflows/release.yml), and
+# each one is installed and run through tools/release/smoke_test.py, which
+# checks exact normalisation, sampling and a save/load round trip, before
+# anything is published.
+[tool.cibuildwheel]
+build = ["cp311-*", "cp312-*", "cp313-*", "cp314-*", "cp315-*"]
+# musl (Alpine) has no ifunc, which the AVX2/AVX-512 kernel selection uses.
+skip = ["*-musllinux_*"]
+test-sources = ["tools/release/smoke_test.py"]
+test-command = "python tools/release/smoke_test.py"
+
+[tool.cibuildwheel.linux]
+archs = ["x86_64", "aarch64"]
+manylinux-x86_64-image = "manylinux_2_28"
+manylinux-aarch64-image = "manylinux_2_28"
+
+[tool.cibuildwheel.macos]
+archs = ["arm64"]
+# Apple clang ships no OpenMP runtime; Homebrew's libomp is bundled into the
+# wheel by delocate. Its bottles target the runner's macOS, so the wheels do too.
+before-all = "brew install libomp"
+environment = { BEAM_LIBOMP_PREFIX = "/opt/homebrew/opt/libomp", MACOSX_DEPLOYMENT_TARGET = "14.0" }

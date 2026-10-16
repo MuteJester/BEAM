@@ -25,6 +25,9 @@ moved before trusting the verdict. A full forced rebuild takes about seven
 seconds; a verdict computed against a stale binary is worth less than nothing,
 because it is believed.
 """
+import os
+import platform
+import sys
 from pathlib import Path
 
 from setuptools import Extension, setup
@@ -75,14 +78,69 @@ def headers():
     return out
 
 
+def target_is_x86():
+    """Whether the extension is being compiled FOR x86.
+
+    `-mpopcnt` exists only there. On macOS the target can differ from the
+    machine doing the build (cibuildwheel sets ARCHFLAGS to choose it), so
+    ARCHFLAGS wins when it names an architecture.
+    """
+    archflags = os.environ.get("ARCHFLAGS", "")
+    if "-arch" in archflags:
+        return "x86_64" in archflags
+    return platform.machine().lower() in ("x86_64", "amd64", "i386", "i686")
+
+
+def libomp_prefix():
+    """A libomp installation for Apple clang, or None.
+
+    Apple's compiler accepts OpenMP pragmas only through `-Xpreprocessor
+    -fopenmp` and ships no runtime, so the headers and library must come from
+    elsewhere: BEAM_LIBOMP_PREFIX if set, else Homebrew's usual locations.
+    """
+    candidates = [os.environ.get("BEAM_LIBOMP_PREFIX"),
+                  "/opt/homebrew/opt/libomp", "/usr/local/opt/libomp"]
+    for prefix in filter(None, candidates):
+        if (Path(prefix) / "include" / "omp.h").is_file():
+            return prefix
+    return None
+
+
+def platform_flags():
+    """Compile and link flags for this platform: (compile, link)."""
+    compile_args = ["-O2", "-std=c11"]
+    link_args = []
+    if sys.platform.startswith("linux"):
+        compile_args.append("-fopenmp")
+        link_args.append("-fopenmp")
+    elif sys.platform == "darwin":
+        prefix = libomp_prefix()
+        if prefix:
+            compile_args += ["-Xpreprocessor", "-fopenmp", f"-I{prefix}/include"]
+            link_args += [f"-L{prefix}/lib", "-lomp"]
+        else:
+            # Every OpenMP use in the C core sits behind `#ifdef _OPENMP`, so
+            # this builds a correct, single-threaded extension.
+            print("BEAM: libomp not found (brew install libomp); "
+                  "building without multithreading", file=sys.stderr)
+    else:
+        sys.exit("BEAM builds on Linux and macOS. On Windows, install it "
+                 "inside WSL: https://learn.microsoft.com/windows/wsl/install")
+    if target_is_x86():
+        compile_args.append("-mpopcnt")
+    return compile_args, link_args
+
+
+COMPILE_ARGS, LINK_ARGS = platform_flags()
+
 setup(
     ext_modules=[Extension(
         "BEAM._cbeam",
         sources=manifest("python_binding_sources.txt") + manifest("native_sources.txt"),
         depends=headers(),
         include_dirs=["include", "src/native/internal"],
-        extra_compile_args=["-O2", "-std=c11", "-fopenmp", "-mpopcnt"],
-        extra_link_args=["-fopenmp"],
+        extra_compile_args=COMPILE_ARGS,
+        extra_link_args=LINK_ARGS,
         libraries=["m"],
     )],
 )
