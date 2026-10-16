@@ -74,6 +74,13 @@ installs them only when asked for explicitly.
 - **After PyPI accepted the upload:** that version is final. Fix forward with
   a patch release.
 
+Published releases are **immutable** (a repository setting): once a release
+is public, its files cannot be replaced or deleted and its tag cannot be
+moved or removed. A draft can still be changed or deleted, which is why the
+workflow builds a draft first and publishes it last. The same holds for
+model releases, so a published model file is permanent: a corrected model
+is a new `models-vN`, never a replaced file.
+
 ## Releasing models
 
 Models are built where the data lives, then published with
@@ -104,3 +111,7 @@ file and describes how it was built.
 - GitHub: the `pypi` environment, limited to `v*` tags, with a required
   reviewer.
 - Zenodo: the GitHub integration switched on for `MuteJester/BEAM`.
+- GitHub: immutable releases on; a "Protect main" ruleset that blocks
+  force-pushes to and deletion of `main` (ordinary pushes are unaffected);
+  private vulnerability reporting, secret scanning with push protection, and
+  Dependabot security alerts on.
