@@ -51,3 +51,8 @@ benchmarks/*.md
 benchmarks/runs/
 
 
+
+# Documentation site (Astro): dependencies and build output
+docs/node_modules/
+docs/dist/
+docs/.astro/
