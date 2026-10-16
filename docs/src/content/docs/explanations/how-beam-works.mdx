@@ -1,0 +1,107 @@
+---
+title: How BEAM works
+description: Two readings of every residue, an exact normaliser, and a prior for the unseen, explained with the reference model.
+sidebar:
+  order: 1
+---
+
+import { Aside } from '@astrojs/starlight/components';
+import Example from '../../../components/Example.astro';
+import Interactive from '../../../components/Interactive.astro';
+import TwoAnchors from '../../../components/viz/TwoAnchors.svelte';
+
+BEAM stands for **B**idirectional **E**xpert-**A**nchored **M**odel. This page explains the three
+ideas behind it. None of them is needed to use BEAM, but they explain why its answers can be
+exact.
+
+## Every residue is read twice
+
+A CDR3 is assembled from gene segments. Its start is encoded by the V gene and its end by the J
+gene; the middle is the junction, where nucleotides are added and removed at random. So the
+start of a CDR3 is best described by counting positions **from the front**, and the end by
+counting **from the back**: the residue three from the end of a CDR3 is constrained by the J
+gene, whatever the CDR3's length.
+
+BEAM has two components, called experts, one for each direction:
+
+- the **start-anchored** expert scores residue $i$ given its position from the front and the
+  few residues before it;
+- the **end-anchored** expert scores the same residue given its position from the back and the
+  few residues after it.
+
+Each residue gets both scores, and they are combined. The result knows the conserved start
+*and* the conserved end, without being told which V or J genes exist. Change only the last
+residue of a typical CDR3 from F to W, an ending that is rare in TCRβ CDR3s, and the
+end-anchored expert objects strongly:
+
+<Example src="how-it-works/terminal_residue" />
+
+<Interactive
+	title="Reading a CDR3 from both ends"
+	description="Each residue of the chosen sequence is scored by both experts. Bars show surprisal in bits: how unexpected the residue was to the expert reading from the start (teal) and to the one reading from the end (orange). The numbers under each residue are its position from the start and from the end. At the end, the scores are assembled into the sequence's exact probability."
+	fallback="score/explain/explain"
+	fallbackAlt="Bar chart of surprisal per residue of CASSLGQGYEQYF for the two experts."
+>
+	<TwoAnchors client:visible />
+</Interactive>
+
+The pattern repeats across sequences: the start-anchored expert is confident over the opening
+`CASS`, the end-anchored expert over the closing J motif, and both are uncertain in the middle.
+
+## Assembling a probability
+
+For a sequence $s$ of length $L$, the log probability is
+
+$$
+\ln P(s) \;=\; \ln \pi(L) \;+\; \sum_{i=0}^{L-1} \Big( w_N \ln \phi_N(s_i) + w_C \ln \phi_C(s_i) \Big) \;-\; \ln Z(L)
+$$
+
+- $\pi(L)$ is the probability of the length;
+- $\phi_N$ and $\phi_C$ are the two experts' scores for residue $i$, weighted by $w_N$ and $w_C$
+  (one half each by default);
+- $Z(L)$ is the **normaliser**: the same weighted product summed over *every* sequence of length
+  $L$, so that the probabilities of all length-$L$ sequences add up to exactly one.
+
+Every term is available, and they add up to the model's own score:
+
+<Example src="how-it-works/assemble" />
+
+## Why the normaliser can be exact
+
+There are $20^L$ sequences of length $L$, more than $10^{16}$ for a typical CDR3 of 13 residues.
+Summing over them one by one is impossible. BEAM never does: each expert looks only a few
+residues back or ahead, so the scores of all sequences of one length can be arranged as paths
+through a **layered graph**, one layer per position. Summing over every path is then a single
+sweep through the layers, an exact *dynamic program*.
+
+The same idea gives every other exact quantity on this site: expected numbers of distinct
+sequences, overlaps, publicness and distances are all sums over every sequence, computed by
+sweeps through the graph instead of by listing or sampling sequences.
+
+On a model small enough to list every sequence, the total probability can be checked directly:
+
+<Example src="how-it-works/normalised" />
+
+## Sequences the model has never seen
+
+A repertoire contains a vanishing fraction of all possible CDR3s, so a model must say something
+sensible about sequences it never saw. BEAM uses a **hierarchical prior**: when a context of the
+last $k$ residues was seen rarely or never, its prediction leans on the prediction of the
+shorter context of $k-1$ residues, and so on down to the position alone:
+
+$$
+P_k(x) \;=\; \frac{n_k(x) + \alpha_k\, P_{k-1}(x)}{n_k + \alpha_k}
+$$
+
+where $n_k(x)$ counts how often residue $x$ followed the context, $n_k$ is the total count of
+the context, and $\alpha_k$ sets how strongly the shorter context is trusted. BEAM chooses the
+strengths $\alpha_k$ from the data themselves, by maximising the evidence of the counts.
+
+The result: a plausible new CDR3 gets a moderate probability, a junk string gets a vanishingly
+small one, and every sequence up to the maximum length is possible.
+
+<Aside type="note" title="What a model stores">
+A model stores **counts**, not probabilities. That is why two models can be pooled
+(`merged`), and why a saved model reloads to exactly the same probabilities. Only the contexts
+that were observed are stored.
+</Aside>
