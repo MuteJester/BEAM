@@ -1,0 +1,88 @@
+---
+title: Abundance or unique sequences?
+description: Whether to weight a BEAM model by cell or template abundance or count each distinct CDR3 once — what each describes, how clonal expansion affects them, and the benefits and drawbacks of each.
+sidebar:
+  order: 3
+---
+
+import { Aside } from '@astrojs/starlight/components';
+import Example from '../../../components/Example.astro';
+import Interactive from '../../../components/Interactive.astro';
+import ExpansionExplorer from '../../../components/viz/ExpansionExplorer.svelte';
+
+A repertoire is a list of distinct CDR3 sequences, each carried by some number of cells
+(templates, UMIs, reads). When you build a model you choose how much each sequence counts, and
+that choice **defines what the model describes**.
+
+```python
+BeamModel(sequences, abundances=counts)   # weighted: each CELL counts
+BeamModel(sequences)                      # unique: each distinct SEQUENCE counts once
+```
+
+## What each describes
+
+**Weighted by abundance**, the model describes the **cells**: its probability for a sequence is
+the chance that a cell drawn at random carries it. Expanded clones count as many times as they
+have cells.
+
+**Unique sequences**, the model describes the **sequence composition** of the repertoire: which
+CDR3s are present, regardless of how much each was expanded.
+
+<Example src="abundance/weighted_vs_unique" />
+
+The largest clone holds 3.3% of this repertoire's cells, and the weighted model gives it a
+probability of 4.5%: of the order of its share of the cells. To the unique model it is one
+sequence among 43,379, and its probability, about $5 \times 10^{-11}$, reflects only its
+sequence.
+
+## Clonal expansion
+
+Clonal expansion is a response to antigen: a few T cells divide and fill a large part of the
+repertoire. Whether it should influence the model depends on the question.
+
+<Interactive
+	title="Clonal expansion and the two kinds of model"
+	description="Drag the slider to make the clones of one stand-in repertoire more expanded. The numbers show how much of the repertoire the largest clones take, the largest clone's probability under each model, and the distance between the weighted and the unique model. The chart shows each model's length distribution: the weighted model follows the expanded clones, the unique model does not move."
+	fallback="abundance/weighted_vs_unique/lengths"
+	fallbackAlt="Length distributions of the weighted and unique models of an expanded stand-in repertoire."
+>
+	<ExpansionExplorer client:visible />
+</Interactive>
+
+Two repertoires of the **same** population, one with expanded clones and one without, look very
+different weighted by cells and similar counted by unique sequences:
+
+<Example src="abundance/expansion_distance" />
+
+Weighted by cells, the expanded clones make the two repertoires almost four times as distant as
+when each distinct sequence counts once. If the question is whether two people's repertoires
+differ in composition, the weighted distance is mostly measuring expansion.
+
+## Benefits and drawbacks
+
+| | Weighted by abundance | Unique sequences |
+|---|---|---|
+| **Describes** | the cells | the sequence composition |
+| **Clonal expansion** | dominates the model | removed |
+| **Differences in abundance units** (templates, UMIs, reads) between platforms | carried into the model | removed |
+| **Sampling questions** (depth, overlap, publicness) | in cells, as sequenced | in distinct sequences, not cells |
+| **Frequencies of individual sequences** | kept | lost |
+| **Best for** | how a sample of cells will look; expanded responses; the population as sampled | comparing repertoires' composition across samples, studies and platforms |
+
+**Use abundance weighting** when the question is about cells: how many distinct sequences a
+sample of cells will contain, how many people will carry a sequence at a given sequencing depth,
+how an expanded response changes a repertoire. The reference model is weighted by template counts
+where the platform reported them, and counts each distinct sequence once per repertoire
+otherwise.
+
+**Use unique sequences** when the question is about which sequences a repertoire contains:
+comparing cell types, conditions or studies, especially across platforms whose abundance units
+differ, or when a few expanded clones would otherwise decide the comparison. The paper's
+comparison of CD4 and CD8 repertoires across two independent studies counted each distinct
+sequence once for this reason.
+
+<Aside type="caution" title="Depth changes meaning">
+With unique sequences, a model's "draws" are distinct sequences, not cells. Sampling
+calculations such as [expected distinct sequences at a depth](/BEAM/guides/sequencing-depth/)
+then answer questions about distinct sequences, and their depths must be counted the same way.
+</Aside>

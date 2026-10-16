@@ -2,7 +2,7 @@
 title: Changelog
 description: What changed in each BEAM release.
 sidebar:
-  order: 3
+  order: 4
 ---
 
 Every release is listed, with what was added, changed and fixed, in the

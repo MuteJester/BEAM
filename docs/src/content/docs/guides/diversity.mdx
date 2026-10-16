@@ -1,0 +1,81 @@
+---
+title: How diverse is my sample, really?
+description: The Shannon entropy and Hill diversity of a TCR repertoire, how much of it a sample of a given depth shows, the sampling bias of plug-in diversity estimates, and the chance that the next cell sequenced is new.
+sidebar:
+  order: 6
+---
+
+import { Aside } from '@astrojs/starlight/components';
+import Example from '../../../components/Example.astro';
+import Figure from '../../../components/Figure.astro';
+
+**The question:** I measured the diversity of my sample. How much of the population's diversity
+does that number reflect, and have I sequenced enough?
+
+Diversity indices computed from a sample, such as Shannon entropy, are biased: a finite sample
+misses the rare sequences, so it looks less diverse than the population it came from. BEAM
+computes the population's diversity exactly from its model, and how much of it a sample of a
+given depth is expected to show.
+
+## The diversity of the population
+
+`entropy` is the Shannon entropy of the model's sequence distribution, computed over every
+sequence. Its exponential, $D_1$, is the **effective number of sequences**: the number of equally
+common sequences that would be as diverse. `hill_number(2.0)` is the inverse Simpson index,
+$D_2$, which weighs common sequences more.
+
+<Example src="diversity/model_diversity" />
+
+The population behind the reference model is as diverse as about 270 million equally common
+sequences by Shannon entropy, and about 630 thousand by the inverse Simpson index: a large part
+of every sample is made of comparatively few common sequences.
+
+## How much diversity a sample shows
+
+`sampling_deficit_many(depths)` gives the entropy a sample of each depth is expected to **lose**
+to finite sampling. The sample's expected Shannon entropy is the population's minus that
+deficit. `novelty_many(depths)` gives the chance that the next cell sequenced carries a sequence
+not yet in the sample.
+
+<Example src="diversity/sample_bias" />
+
+<Figure
+	src="diversity/sample_bias"
+	name="bias"
+	alt="Two curves against the number of cells sampled on a log axis: the share of the population's entropy a sample shows rises slowly towards one, and the chance the next cell is new falls slowly."
+	caption="As a sample of the reference population grows, its Shannon entropy approaches the population's (teal) and new sequences become rarer (coral)."
+/>
+
+A sample of 100,000 cells shows only 59% of the population's Shannon entropy; even ten billion
+cells show 95%. The chance that the next cell is new falls slowly as well: after a million cells,
+82.5% of new cells still carry a sequence not yet seen. The rare sequences, each individually
+improbable, make up the missing part.
+
+Use this to:
+
+- **correct a measured diversity** for depth: the expected sample entropy at your depth is the
+  baseline to compare a measured entropy against;
+- **compare samples of different depths** fairly: compare each with its own expected value;
+- **decide whether to sequence more**: the chance of a new sequence says how much more sequencing
+  would still reveal.
+
+The [depth slider](/BEAM/guides/sequencing-depth/) shows both quantities at any depth up to
+$10^{11}$ cells.
+
+## Comparing diversity between repertoires
+
+To compare the diversity of repertoires sequenced to different depths, bring them to a common
+depth first. `depth_matched_hill_profiles` resamples each repertoire to the smallest depth in the
+set, builds a model from each resample and returns its Hill numbers; see
+[Diversity at equal depth](/BEAM/reference/diversity/).
+
+<Aside type="caution" title="Pitfalls">
+- **A sample here is independent draws from the population.** The deficit is computed for a
+  Poisson sample of the given depth from the model. Clonal expansion makes a real sample less
+  diverse than this.
+- **Use your population's model.** The numbers above describe the reference population. For a
+  particular tissue or cell type, build a model of that group and ask it.
+- **Entropy depends on the weighting.** A model weighted by abundance includes clonal expansion
+  in its diversity; a model of unique sequences does not. See
+  [Abundance or unique sequences?](/BEAM/explanations/abundance/)
+</Aside>

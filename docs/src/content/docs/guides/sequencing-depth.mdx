@@ -2,7 +2,7 @@
 title: How deeply should I sequence?
 description: The expected number of distinct sequences at any sequencing depth, what doubling the depth buys, and how many sequences are seen once, twice or more.
 sidebar:
-  order: 4
+  order: 5
 ---
 
 import { Aside } from '@astrojs/starlight/components';
@@ -73,6 +73,9 @@ At a million cells, most distinct sequences are seen exactly once, and only a fe
 times. In a real repertoire, sequences seen many times are mostly expanded clones; this
 calculation is what the population alone would produce, so it is the baseline to compare clone
 sizes against.
+
+For how much of the population's **diversity** a sample of a given depth shows, and the chance
+that the next cell sequenced is new, see [How diverse is my sample?](/BEAM/guides/diversity/).
 
 <Aside type="caution" title="Pitfalls">
 - **This is sampling from a population, not from one person.** The reference model describes

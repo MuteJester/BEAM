@@ -7,9 +7,12 @@ from _docs import save_data
 model = BEAM.load_pretrained("foundation")
 occupancy = ExactOccupancy(model)
 
-depths = np.logspace(3, 10, 141)            # 20 points per decade
+depths = np.logspace(3, 11, 161)            # 20 points per decade, up to 1e11
 richness = [occupancy.richness(d) for d in depths]
 sharing = [occupancy.sharing(d, d) for d in depths]
+novelty = occupancy.novelty_many(depths)
+deficit = occupancy.sampling_deficit_many(depths)
+H = model.entropy()
 
 save_data("depth_grid", {
     "depths": depths,
@@ -17,6 +20,9 @@ save_data("depth_grid", {
     "richness_bound": [r.bound for r in richness],
     "sharing": [s.value for s in sharing],
     "sharing_bound": [s.bound for s in sharing],
+    "novelty": [u.value for u in novelty],
+    "entropy": H,
+    "sample_entropy": [H - x.value for x in deficit],
 })
 print(f"{len(depths)} depths; worst relative bound "
       f"{max(max(r.bound for r in richness), max(s.bound for s in sharing)):.0e}")

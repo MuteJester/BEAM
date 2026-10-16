@@ -200,7 +200,7 @@
 	}
 	.bar.end,
 	.swatch.end {
-		background: #e07a3f;
+		background: #ef785f;
 	}
 	.res {
 		font-size: var(--sl-text-base);

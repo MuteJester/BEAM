@@ -1,0 +1,110 @@
+---
+/** A diagram of the three levels a BEAM model can describe. Static: no data. */
+---
+
+<figure class="levels not-content" aria-label="Three levels of BEAM model: one per repertoire, one per group, and a reference over all groups">
+	<div class="level">
+		<div class="title">One repertoire</div>
+		<div class="reps">
+			<span class="rep a">R1</span>
+		</div>
+		<div class="arrow">↓ build</div>
+		<div class="model a">model of R1</div>
+		<p>Describes one sample or one person. Compare samples, follow a person over time, plan the depth for this sample.</p>
+	</div>
+	<div class="level">
+		<div class="title">One group</div>
+		<div class="reps">
+			<span class="rep b">R1</span><span class="rep b">R2</span><span class="rep b">R3</span>
+		</div>
+		<div class="arrow">↓ pool the cells, then build</div>
+		<div class="model b">model of the group</div>
+		<p>
+			Describes a cell type, a condition or a cohort. Compare groups, ask which group a sequence resembles,
+			predict sharing within the group.
+		</p>
+	</div>
+	<div class="level">
+		<div class="title">Everything: a reference</div>
+		<div class="reps">
+			<span class="rep a">…</span><span class="rep b">…</span><span class="rep c">…</span><span class="rep a">…</span>
+		</div>
+		<div class="arrow">↓ pool all, then build</div>
+		<div class="model c">reference model</div>
+		<p>
+			Generalises over all the data given, like the foundation model built from 38,538 repertoires. The baseline
+			for "how likely in people in general".
+		</p>
+	</div>
+</figure>
+
+<style>
+	.levels {
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+		gap: 1rem;
+		margin: 1.5rem 0;
+	}
+	.level {
+		border: 1px solid var(--sl-color-gray-5);
+		border-radius: 0.5rem;
+		padding: 0.9rem;
+		display: grid;
+		gap: 0.5rem;
+		align-content: start;
+		text-align: center;
+	}
+	.title {
+		font-weight: 600;
+	}
+	.reps {
+		display: flex;
+		justify-content: center;
+		gap: 0.3rem;
+		flex-wrap: wrap;
+	}
+	.rep {
+		font-size: var(--sl-text-xs);
+		padding: 0.15rem 0.45rem;
+		border-radius: 0.3rem;
+		border: 1px solid currentColor;
+	}
+	.arrow {
+		font-size: var(--sl-text-xs);
+		color: var(--sl-color-gray-3);
+	}
+	.model {
+		font-weight: 600;
+		font-size: var(--sl-text-sm);
+		padding: 0.35rem;
+		border-radius: 0.35rem;
+		color: var(--sl-color-black);
+	}
+	.a {
+		color: var(--sl-color-accent);
+	}
+	.b {
+		color: #ef785f;
+	}
+	.c {
+		color: #6c7bd9;
+	}
+	.model.a {
+		background: var(--sl-color-accent);
+		color: var(--sl-color-black);
+	}
+	.model.b {
+		background: #ef785f;
+		color: #fff;
+	}
+	.model.c {
+		background: #6c7bd9;
+		color: #fff;
+	}
+	.level p {
+		font-size: var(--sl-text-sm);
+		color: var(--sl-color-gray-2);
+		margin: 0;
+		text-align: left;
+	}
+</style>

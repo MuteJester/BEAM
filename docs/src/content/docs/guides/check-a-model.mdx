@@ -1,0 +1,52 @@
+---
+title: Does my model describe my data?
+description: Check a BEAM model against held-out data — length distribution, positional amino-acid composition, and how well it predicts sequences it never saw compared with a model of independent positions.
+sidebar:
+  order: 4
+---
+
+import { Aside } from '@astrojs/starlight/components';
+import Example from '../../../components/Example.astro';
+import Figure from '../../../components/Figure.astro';
+
+**The question:** I built a model from a repertoire. Does it describe that repertoire well, and
+does it say anything useful about sequences it has not seen?
+
+Check a model the way any model is checked: on data it was not built from. Keep part of the cells
+aside, build the model on the rest, and compare. This mirrors the paper's checks: a model built
+without the Emerson cohort matched the cohort's length and residue composition, and models built
+without a pair of twins predicted the twins' unseen sequences better than a model of independent
+positions.
+
+<Example src="fit/held_out" />
+
+<Figure
+	src="fit/held_out"
+	name="positions"
+	alt="Total variation between the model's and the held-out cells' residue composition at each position of length-15 CDR3s; low everywhere."
+	caption="At each position of length-15 CDR3s, the difference between the model's residue composition and the held-out cells'."
+/>
+
+## Reading the three checks
+
+1. **Lengths.** The total variation between the model's length distribution and the held-out
+   cells' is the share of probability that would have to move to make them equal. Values near 0
+   mean the model has the repertoire's lengths right.
+2. **Composition at each position.** The same measure for the residues at each position of one
+   length. Part of what remains is sampling noise in the held-out cells themselves: a few thousand
+   sequences of one length do not estimate twenty residue frequencies per position exactly.
+3. **Unseen sequences.** The real test of a sequence model is what it says about sequences it
+   never saw. A model of independent positions, built from the same length and positional
+   composition, is the natural baseline: it knows which residues are common where, but not which
+   residues go together. BEAM gives the held-out sequences a higher probability than that
+   baseline, because it has learned which neighbouring residues occur together.
+
+<Aside type="caution" title="Pitfalls">
+- **Hold out cells, not distinct sequences.** Holding out a share of the distinct sequences
+  over-represents rare sequences, which are longer on average, and the comparison then mixes
+  two different populations.
+- **Compare like with like.** A model weighted by abundance describes cells, so compare it with
+  held-out cells. A model of unique sequences describes the distinct sequences.
+- **A check is only as precise as the held-out data.** Small held-out sets give noisy
+  comparisons; compare the differences with those between two halves of the held-out data.
+</Aside>

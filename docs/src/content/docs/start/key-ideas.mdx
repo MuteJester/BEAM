@@ -58,8 +58,10 @@ The **reference model** (`BEAM.load_pretrained("foundation")`) was built from 38
 human TCRβ repertoires. It describes this broad, aggregated population, which makes it the
 natural reference for "how likely is this sequence in people in general".
 
-You can also build a model from a **single repertoire**. It then describes that person or
-sample, and two such models can be compared with each other.
+You can also build a model from a **single repertoire**, which then describes that person or
+sample, or from a **group** of repertoires, such as one cell type or one patient cohort. See
+[Which model do I need?](/BEAM/explanations/which-model/), and for whether to weight by
+abundance, [Abundance or unique sequences?](/BEAM/explanations/abundance/)
 
 <Aside type="caution" title="Writing CDR3 sequences">
 BEAM's reference model was built from CDR3 sequences written **with** the conserved cysteine at
@@ -74,4 +76,5 @@ residues long.
 - [How likely is a sequence?](/BEAM/guides/score/): scoring, and what makes a score high or low.
 - [Building a model from your data](/BEAM/guides/build-a-model/): models of your own repertoires.
 - [How deeply should I sequence?](/BEAM/guides/sequencing-depth/): exact sampling calculations.
+- [What can I do with BEAM?](/BEAM/start/use-cases/): every question, with where it is answered.
 - [How BEAM works](/BEAM/explanations/how-beam-works/): the model behind the numbers.

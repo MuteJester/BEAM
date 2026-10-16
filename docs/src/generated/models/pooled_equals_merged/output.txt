@@ -1,0 +1,1 @@
+largest difference in log probability over 1,000 sequences: 0.0e+00

@@ -139,7 +139,7 @@
 	}
 	.part.length,
 	.swatch.length {
-		background: #e07a3f;
+		background: #ef785f;
 	}
 	.part.patterns,
 	.swatch.patterns {

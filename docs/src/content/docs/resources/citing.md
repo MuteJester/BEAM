@@ -2,7 +2,7 @@
 title: Citing BEAM
 description: How to cite BEAM in your work.
 sidebar:
-  order: 2
+  order: 3
 ---
 
 If BEAM is useful in your work, please cite:

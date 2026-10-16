@@ -8,17 +8,22 @@
 		richness_bound: number[];
 		sharing: number[];
 		sharing_bound: number[];
+		novelty: number[];
+		entropy: number;
+		sample_entropy: number[];
 	}
 
 	let data = $state<Grid | null>(null);
 	let index = $state(40); // 10^(3 + 40/20) = 100,000 cells
+	let failed = $state(false);
 	let themeTick = $state(0);
 	let chart: HTMLDivElement | undefined = $state();
 
 	$effect(() => {
 		fetch(dataUrl('viz/depth_grid/depth_grid.json'))
-			.then((r) => r.json())
-			.then((d: Grid) => (data = d));
+			.then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
+			.then((d: Grid) => (data = d))
+			.catch(() => (failed = true));
 		return onThemeChange(() => themeTick++);
 	});
 
@@ -84,9 +89,16 @@
 				<strong>{fmt(shared)}</strong> of them also expected in a second sample of the same depth
 				<span class="muted">({pct(shared / distinct)})</span>
 			</div>
+			<div>
+				The next cell has a <strong>{pct(data.novelty[index])}</strong> chance of carrying a sequence not yet in the
+				sample; the sample's Shannon entropy is expected to reach <strong>{pct(data.sample_entropy[index] / data.entropy)}</strong>
+				of the population's.
+			</div>
 			<div class="muted">Exact to a relative error of at most {boundUp(bound)}.</div>
 		</div>
 		<div bind:this={chart} class="chart"></div>
+	{:else if failed}
+		<p class="muted">The data for this figure could not be loaded.</p>
 	{:else}
 		<p class="muted">Loading the exact values…</p>
 	{/if}
@@ -125,7 +137,7 @@
 		background: var(--sl-color-accent);
 	}
 	.swatch.second {
-		background: #e07a3f;
+		background: #ef785f;
 	}
 	.chart {
 		min-height: 300px;

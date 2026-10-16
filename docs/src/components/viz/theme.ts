@@ -23,7 +23,7 @@ export function themeColors(): ThemeColors {
 		text: v('--sl-color-white'),
 		muted: v('--sl-color-gray-3'),
 		grid: v('--sl-color-gray-5'),
-		second: '#e07a3f',
+		second: '#ef785f',
 	};
 }
 

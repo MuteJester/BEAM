@@ -9,6 +9,8 @@ import { Aside } from '@astrojs/starlight/components';
 import Example from '../../../components/Example.astro';
 import Interactive from '../../../components/Interactive.astro';
 import TwoAnchors from '../../../components/viz/TwoAnchors.svelte';
+import LogoExplorer from '../../../components/viz/LogoExplorer.svelte';
+import Figure from '../../../components/Figure.astro';
 
 BEAM stands for **B**idirectional **E**xpert-**A**nchored **M**odel. This page explains the three
 ideas behind it. None of them is needed to use BEAM, but they explain why its answers can be
@@ -81,6 +83,42 @@ sweeps through the graph instead of by listing or sampling sequences.
 On a model small enough to list every sequence, the total probability can be checked directly:
 
 <Example src="how-it-works/normalised" />
+
+## Where the probability lives
+
+Every string of up to 27 amino acids has some probability, but almost all of the probability
+sits on a tiny fraction of them. By length, most possible strings are long, while most CDR3s are
+13 to 16 residues; and within each length, a small share of the strings carries most of the
+probability.
+
+<Example src="how-it-works/where_probability_lives" />
+
+Strings of 27 residues are 95% of all possible strings, yet the model almost never produces them.
+And the sequences with probability above $10^{-8}$ carry half of all the probability while making
+up about $10^{-28}$ of the possible strings: a vanishingly small, highly structured corner of
+sequence space.
+
+<Figure
+	src="how-it-works/where_probability_lives"
+	name="lengths"
+	alt="On a log scale, the probability of each CDR3 length, peaking around 14 to 15, against the share of possible strings, which grows twentyfold with every residue."
+	caption="The probability of each length under the reference model against the share of all possible strings of that length."
+/>
+
+## What the model has learned about each position
+
+At a given length, the probability of each residue at each position is exact
+(`positional_marginals`), and drawn as a sequence logo it shows the conserved start, the
+conserved end and the variable junction between them.
+
+<Interactive
+	title="Sequence logos of the reference model"
+	description="Choose a CDR3 length to see the probability of each residue at each position, drawn as a sequence logo: letter height is the residue's share of the information at that position. For lengths 13 to 16, switch between the common sequences (probability above 10⁻⁷) and the rare ones."
+	fallback="publicness/logos/logos"
+	fallbackAlt="Sequence logos of common and rare length-15 CDR3s."
+>
+	<LogoExplorer client:visible />
+</Interactive>
 
 ## Sequences the model has never seen
 

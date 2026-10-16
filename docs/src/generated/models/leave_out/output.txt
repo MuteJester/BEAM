@@ -1,0 +1,2 @@
+same as rebuilding without the cohort: True
+mean log P of the cohort's sequences is 1.28 nats higher when the cohort is included

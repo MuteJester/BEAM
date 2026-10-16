@@ -1,0 +1,2 @@
+two groups, one population:      beta = 1.055
+three groups, three populations: beta = 2.595

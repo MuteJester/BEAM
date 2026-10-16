@@ -20,11 +20,15 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.patches  # noqa: E402
+import matplotlib.transforms  # noqa: E402
+import numpy as np  # noqa: E402
+from matplotlib.font_manager import FontProperties  # noqa: E402
+from matplotlib.textpath import TextPath  # noqa: E402
 import matplotlib.pyplot as plt  # noqa: E402
 
 # One palette for both themes: mid-tone colours that read on white and on
-# the site's dark background. The first is the site's teal accent.
-PALETTE = ["#14a394", "#e07a3f", "#6c7bd9", "#c4568a", "#8a9a2b", "#7d7d7d"]
+# the site's dark background: BEAM's teal and coral first.
+PALETTE = ["#438f91", "#ef785f", "#6c7bd9", "#c4568a", "#8a9a2b", "#7d7d7d"]
 INK = {"light": "#1f2328", "dark": "#e6edf3"}
 GRID = {"light": "#d0d7de", "dark": "#3d444d"}
 
@@ -62,12 +66,15 @@ def _plotted(fig) -> list:
         lines = [line.get_xydata().tolist() for line in ax.get_lines()]
         bars = [[float(v) for v in (p.get_x(), p.get_width(), p.get_y(), p.get_height())]
                 for p in ax.patches if isinstance(p, matplotlib.patches.Rectangle)]
-        axes.append({"lines": lines, "bars": bars})
+        shapes = [[float(v) for v in p.get_path().get_extents().bounds]
+                  for p in ax.patches if isinstance(p, matplotlib.patches.PathPatch)]
+        images = [np.asarray(im.get_array(), dtype=float).ravel().tolist() for im in ax.images]
+        axes.append({"lines": lines, "bars": bars, "shapes": shapes, "images": images})
     return axes
 
 
 @contextlib.contextmanager
-def figure(name: str, *, size=(6.4, 3.8), ncols: int = 1):
+def figure(name: str, *, size=(6.4, 3.8), ncols: int = 1, nrows: int = 1):
     """A matplotlib figure saved as `<name>-light.svg` and `<name>-dark.svg`.
 
     The numbers it plots are saved beside it as `<name>.data.json`, so the
@@ -78,7 +85,7 @@ def figure(name: str, *, size=(6.4, 3.8), ncols: int = 1):
                          "font.size": 10, "svg.fonttype": "none",
                          "svg.hashsalt": "beam-docs",
                          "axes.spines.top": False, "axes.spines.right": False}):
-        fig, ax = plt.subplots(1, ncols, figsize=size, layout="constrained")
+        fig, ax = plt.subplots(nrows, ncols, figsize=size, layout="constrained")
         yield fig, ax
         out = _out("DOCS_FIGURES")
         (out / f"{name}.data.json").write_text(
@@ -105,3 +112,38 @@ def save_data(name: str, obj) -> None:
     """Write data for an interactive figure as `<name>.json`."""
     (_out("DOCS_DATA") / f"{name}.json").write_text(
         json.dumps(_plain(obj), separators=(",", ":")))
+
+
+# Residue colours for logos, by chemistry: hydrophobic, aromatic, polar,
+# positive, negative, and the special cases G and P.
+RESIDUE_COLOURS = {
+    **dict.fromkeys("AVLIM", "#8a9a2b"), **dict.fromkeys("FWY", "#6c7bd9"),
+    **dict.fromkeys("STNQC", "#14a394"), **dict.fromkeys("KRH", "#c4568a"),
+    **dict.fromkeys("DE", "#ef785f"), "G": "#7d7d7d", "P": "#b08a2e",
+}
+
+
+def draw_logo(ax, heights, residues: str) -> None:
+    """A sequence logo: at each position, letters stacked to their heights (bits)."""
+    font = FontProperties(family="DejaVu Sans", weight="bold")
+    heights = np.asarray(heights, dtype=float)
+    for i, column in enumerate(heights):
+        y = 0.0
+        for a in np.argsort(column):
+            h = column[a]
+            if h < 0.02:
+                continue
+            path = TextPath((0, 0), residues[a], size=1, prop=font)
+            box = path.get_extents()
+            place = (matplotlib.transforms.Affine2D()
+                     .translate(-box.x0, -box.y0)
+                     .scale(0.86 / box.width, h / box.height)
+                     .translate(i - 0.43, y))
+            ax.add_patch(matplotlib.patches.PathPatch(
+                place.transform_path(path), color=RESIDUE_COLOURS.get(residues[a], "#7d7d7d"), lw=0))
+            y += h
+    ax.set_xlim(-0.6, len(heights) - 0.4)
+    ax.set_ylim(0, max(1.0, float(heights.sum(axis=1).max()) * 1.05))
+    ax.set_xticks(range(len(heights)), [str(i + 1) for i in range(len(heights))])
+    ax.set_ylabel("bits")
+

@@ -53,14 +53,15 @@ def population(reference, kind: str, cells: int, seed: int, *, pool_factor: int 
 def expand(cells: list[str], *, seed: int, strength: float) -> tuple[list[str], list[int]]:
     """Distinct sequences of `cells` and their clone sizes after expansion.
 
-    Each clone's sampled count is multiplied by ceil(exp(strength * E)), E an
-    exponential variate: strength 0 leaves the counts as sampled; larger
-    strengths make a few clones very large, as expansion does.
+    Each clone's sampled count is multiplied by ceil(exp(strength * |Z|)), Z a
+    standard normal variate: strength 0 leaves the counts as sampled; at
+    strength 2.5 the largest clone holds a few percent of the cells and the ten
+    largest about a seventh, as in an expanded repertoire.
     """
     counts = Counter(cells)
     seqs = sorted(counts)
     if strength == 0:
         return seqs, [counts[s] for s in seqs]
     rng = np.random.default_rng(seed)
-    factor = np.ceil(np.exp(strength * rng.exponential(1.0, size=len(seqs)))).astype(int)
+    factor = np.ceil(np.exp(strength * np.abs(rng.standard_normal(len(seqs))))).astype(int)
     return seqs, [int(counts[s] * f) for s, f in zip(seqs, factor)]

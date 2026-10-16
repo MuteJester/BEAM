@@ -178,7 +178,7 @@
 		background: var(--sl-color-accent);
 	}
 	.swatch.b {
-		background: #e07a3f;
+		background: #ef785f;
 		border-radius: 50%;
 	}
 	.muted {

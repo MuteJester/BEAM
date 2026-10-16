@@ -1,0 +1,94 @@
+---
+title: Which model do I need?
+description: One BEAM model per repertoire, one per group (cell type, condition, cohort), or one reference over all your data — what each describes, how to build it, and which questions it answers.
+sidebar:
+  order: 2
+---
+
+import { Aside } from '@astrojs/starlight/components';
+import Example from '../../../components/Example.astro';
+import ModelLevels from '../../../components/ModelLevels.astro';
+
+A BEAM model describes **whatever set of cells it is built from**. Choosing that set is the first
+decision of any analysis, and it decides which questions the model can answer.
+
+<ModelLevels />
+
+## One model per repertoire
+
+Built from one sample, a model describes that sample: one person, one tissue, one time point.
+This is the model to use when the unit of comparison is the sample:
+
+- comparing two samples, or many ([distances and clustering](/BEAM/guides/compare-groups/#clustering-repertoires));
+- following one person over time, or matching samples of the same person;
+- planning the depth for this kind of sample.
+
+A model of one sample is only as detailed as the sample: a few thousand cells describe the
+common sequences well and the rare ones through the prior.
+
+## One model per group
+
+A **group** is any set of repertoires that belong together: a cell type (CD4, CD8, naive,
+memory), a tissue, a condition, a patient cohort. Pool the cells of all its repertoires and build
+one model. It describes the group as a whole, averaged over its members, and it is more detailed
+than any one member's model because it has seen more cells.
+
+<Example src="models/levels" />
+
+The stand-in group here has longer CDR3s than the population (stand-in population B). Each donor's
+model shows it, the pooled group model shows it with more data behind it, and the reference model,
+built from everyone, does not.
+
+Use a group model to:
+
+- **compare groups** directly, for example CD8 against CD4 ([Comparing groups](/BEAM/guides/compare-groups/));
+- **ask which group a sequence or repertoire resembles**, by scoring it under each group's model;
+- **predict sharing within the group**, with the group model as the population.
+
+Pooling the cells and building, or building per repertoire and adding the models up, give the
+same model:
+
+<Example src="models/pooled_equals_merged" />
+
+So group models can be assembled from per-repertoire models later, without going back to the
+raw data.
+
+## One reference over everything
+
+Pool every repertoire you have, of every group, and the model generalises over all of them. The
+reference model shipped with BEAM is this level for human TCRβ: 38,538 repertoires from 447
+studies. It is the baseline for "how likely is this sequence in people in general", and the
+population for sampling and publicness calculations when nothing more specific is known.
+
+You can build your own reference the same way, for example over all repertoires of one species,
+one chain or one sequencing platform.
+
+## Leaving a cohort out
+
+When you evaluate a cohort against a reference that **contains** it, the cohort's own sequences
+look more probable than they would to an independent reference. `without` removes a cohort's
+counts from a model; the result is exactly the model built without the cohort:
+
+<Example src="models/leave_out" />
+
+With the reference model this is `BEAM.load_pretrained("foundation").without(cohort_model)`, when
+your cohort is one of the studies it was built from. The paper evaluated its predictions for the
+Emerson cohort this way.
+
+## Pooling counts or mixing models
+
+Pooling cells builds one model of the combined repertoire. A **mixture** keeps the members
+separate: pick a member at random, then a sequence from that member. Mixtures are what diversity
+*between* members is defined on. Beta diversity counts how many effectively distinct members a
+group has:
+
+<Example src="models/mixture" />
+
+Two groups drawn from one population count as one; three different populations count as
+clearly more than one.
+
+<Aside type="tip" title="Rule of thumb">
+Compare **samples** with per-repertoire models, **groups** with group models (or with the
+distances between their members' models), and use a **reference** for questions about the
+population as a whole.
+</Aside>

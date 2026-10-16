@@ -3,11 +3,20 @@ title: BEAM
 description: Exact probabilities for T cell receptor repertoires. Score sequences, plan sequencing depth, predict publicness and compare repertoires, with exact answers instead of simulation.
 template: splash
 hero:
-  tagline: Exact probabilities for T cell receptor repertoires. Ask how likely a CDR3 is, how deeply to sequence, how many people share a sequence, or how two repertoires differ, and get an exact answer instead of a simulation.
+  title: Exact probabilities for T cell receptor repertoires
+  tagline: Ask how likely a CDR3 is, how deeply to sequence, how many people share a sequence, or how two repertoires, cell types or conditions differ, and get an exact answer instead of a simulation.
+  image:
+    light: ../../assets/beam-logo-light.svg
+    dark: ../../assets/beam-logo-dark.svg
+    alt: BEAM
   actions:
-    - text: Get started
-      link: /BEAM/start/quickstart/
+    - text: What can I do with BEAM?
+      link: /BEAM/start/use-cases/
       icon: right-arrow
+    - text: Quick start
+      link: /BEAM/start/quickstart/
+      icon: rocket
+      variant: secondary
     - text: View on GitHub
       link: https://github.com/MuteJester/BEAM
       icon: external
@@ -39,7 +48,19 @@ import { CardGrid, Code, LinkCard } from '@astrojs/starlight/components';
 		description="A distance that separates differences in sequence length from differences in local sequence patterns, and names the patterns."
 		href="/BEAM/guides/compare-repertoires/"
 	/>
+	<LinkCard
+		title="How do cell types or conditions differ?"
+		description="Group models for CD4 and CD8, naive and memory, tissues or cohorts: compare groups, cluster repertoires, and see which group a sample resembles."
+		href="/BEAM/guides/compare-groups/"
+	/>
+	<LinkCard
+		title="How diverse is my sample, really?"
+		description="The population's diversity, how much of it a sample of your depth shows, and the chance that the next cell is new."
+		href="/BEAM/guides/diversity/"
+	/>
 </CardGrid>
+
+[See every question BEAM answers →](/BEAM/start/use-cases/)
 
 ## Install
 

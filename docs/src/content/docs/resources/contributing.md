@@ -2,7 +2,7 @@
 title: Contributing
 description: How to report a problem, ask a question or contribute to BEAM.
 sidebar:
-  order: 4
+  order: 5
 ---
 
 - **Questions and ideas:** [GitHub Discussions](https://github.com/MuteJester/BEAM/discussions).

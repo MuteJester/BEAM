@@ -2,7 +2,7 @@
 title: How public is a sequence?
 description: The expected number of people in a cohort who carry a sequence, the full distribution around it, and the most public sequences of a repertoire.
 sidebar:
-  order: 6
+  order: 8
 ---
 
 import { Aside } from '@astrojs/starlight/components';
@@ -10,6 +10,7 @@ import Example from '../../../components/Example.astro';
 import Figure from '../../../components/Figure.astro';
 import Interactive from '../../../components/Interactive.astro';
 import PublicnessExplorer from '../../../components/viz/PublicnessExplorer.svelte';
+import PublicnessSpectrum from '../../../components/viz/PublicnessSpectrum.svelte';
 
 **The question:** in a cohort of people, how many would I expect to carry this sequence in their
 sampled repertoire?
@@ -74,6 +75,69 @@ its sequences are expected to be:
 At this depth the most common sequences are expected in all 100 people, while 71% of this
 sample's sequences are expected in fewer than one person: most of any repertoire is private. The
 sequences at the top are the ones a cohort study would see again and again.
+
+## The publicness of a whole cohort
+
+Instead of one sequence at a time, ask about **every** sequence at once: how many sequences are
+expected to be carried by exactly 1, 2, …, all of the people in a cohort. This is the cohort's
+**publicness spectrum**. BEAM computes it over every sequence the model can produce, grouped by
+probability (`pseq_analysis().atoms`).
+
+<Example src="publicness/spectrum" />
+
+Of the 7.5 million distinct sequences expected across 100 people, 90% are private to one person,
+and about 24 are expected in all 100. Between these extremes the counts fall steadily: the
+spectrum declines roughly as a power law, as the paper's predicted spectra do.
+
+<Figure
+	src="publicness/spectrum"
+	name="spectrum"
+	alt="Expected number of sequences against the number of people carrying them, on log scales: a steady decline from private sequences to the few found in everyone."
+	caption="The expected publicness spectrum of 100 people sampled to 100,000 cells each, under the reference model."
+/>
+
+<Interactive
+	title="The publicness spectrum"
+	description="Choose a cohort size and a sampling depth. Each dot is the expected number of sequences carried by exactly that many people. Larger cohorts extend the spectrum to higher publicness; deeper sampling raises it everywhere."
+	fallback="publicness/spectrum/spectrum"
+	fallbackAlt="Expected publicness spectrum of 100 people sampled to 100,000 cells each."
+>
+	<PublicnessSpectrum client:visible />
+</Interactive>
+
+## How private is each donor?
+
+In a cohort of unequal depths, each person's expected share of private sequences differs: a
+deeply sampled donor has more rare sequences that nobody else has. `private_at_depth` gives each
+donor's expected distinct and private counts:
+
+<Example src="publicness/per_donor" />
+
+The shallowest donors are expected to have about 76% private sequences and the deepest about
+88%: deeper samples reach further into the rare sequences that nobody else carries.
+
+This is the baseline the paper compared real donors with: when observed private fractions vary
+between donors more than this, something beyond sampling, such as genetics or exposure, differs
+between them.
+
+## What public sequences look like
+
+Sequence logos of the common and the rare sequences of one length show what makes a sequence
+public. Common sequences are more constrained, first at the start and then through the
+junction.
+
+<Example src="publicness/logos" />
+
+At length 15, the common sequences carry a quarter of the probability and 37 bits of
+information, against 29 bits for the rare ones: common sequences are more predictable at almost
+every position.
+
+<Figure
+	src="publicness/logos"
+	name="logos"
+	alt="Two sequence logos for length-15 CDR3s: common sequences above, with taller, more conserved stacks, and rare sequences below."
+	caption="Sequence logos of length-15 CDR3s under the reference model: sequences with probability above 10⁻⁷ (top) and the rest (bottom)."
+/>
 
 <Aside type="caution" title="Pitfalls">
 - **This is the expectation from probability alone.** Sharing in real cohorts also comes from

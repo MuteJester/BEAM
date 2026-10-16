@@ -31,7 +31,7 @@ for g in result.group_overlaps().groups[:4]:
 rows = [x for x in result.lengths if x.contribution + x.pattern_contribution > 1e-3 * result.squared_distance]
 with figure("split", size=(6.4, 3.2)) as (fig, ax):
     Ls = [x.length for x in rows]
-    ax.bar(Ls, [x.contribution for x in rows], color="#e07a3f", label="length")
+    ax.bar(Ls, [x.contribution for x in rows], color="#ef785f", label="length")
     ax.bar(Ls, [x.pattern_contribution for x in rows], bottom=[x.contribution for x in rows],
            label="local patterns")
     ax.set_xlabel("CDR3 length (residues)")

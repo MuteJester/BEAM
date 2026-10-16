@@ -1,0 +1,3 @@
+entropy H:                       19.426 nats
+effective number of sequences:   D1 = exp(H) = 2.733e+08
+inverse Simpson (Hill order 2):  D2 = 6.291e+05

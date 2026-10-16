@@ -1,0 +1,124 @@
+---
+title: Comparing groups — cell types, conditions, cohorts
+description: Compare TCR repertoires between groups such as CD4 and CD8, naive and memory, tissues or patient cohorts — group models, which group a sequence or repertoire resembles, clustering many repertoires and finding nearest neighbours.
+sidebar:
+  order: 10
+---
+
+import { Aside } from '@astrojs/starlight/components';
+import Example from '../../../components/Example.astro';
+import Figure from '../../../components/Figure.astro';
+import Interactive from '../../../components/Interactive.astro';
+import GroupScorer from '../../../components/viz/GroupScorer.svelte';
+import RepertoireMap from '../../../components/viz/RepertoireMap.svelte';
+
+**The question:** my repertoires fall into groups (cell types, tissues, conditions, patient
+cohorts). How do the groups differ, which group does a new sequence or sample resemble, and do
+the samples cluster by group?
+
+The paper asked exactly these questions of real data: clustering mouse repertoires by sorted
+cell population (CD4, CD8, double negative), comparing naive and memory repertoires within CD4
+and CD8, and matching CD4 and CD8 repertoires across two independent studies. The examples here
+use **stand-in groups** with known, built-in differences, so that you can see what each method
+recovers:
+
+- **group A**: sequences as in the reference population;
+- **group B**: CDR3s tilted towards longer lengths;
+- **group C**: CDR3s enriched for the junction motif `PG`.
+
+Each stand-in repertoire is a sample of cells from its group's population. Replace them with
+your own repertoires and labels.
+
+## Group models
+
+Build one model per group from all of its repertoires' cells pooled together (see
+[Which model do I need?](/BEAM/explanations/which-model/#one-model-per-group)). Each group model
+can then score any sequence.
+
+## Which group does a sequence look like?
+
+Score a sequence under each group's model: the group under which it is most probable is the one
+it resembles most, and the difference in log probability says by how much. To assign a whole
+**repertoire**, build its model and find the group model nearest to it by distance, as the paper
+matched CD4 and CD8 repertoires across studies.
+
+<Example src="groups/which_group" />
+
+**One sequence carries little information.** A long CDR3 points to group B and a `PG` motif to
+group C, but most sequences could come from any group, so sequence-by-sequence assignments are
+often wrong. **A whole repertoire carries much more**: the distance from a new donor's model to
+each group's model places it with its own group.
+
+<Aside type="note" title="Why distance rather than summed log probability?">
+Summing a repertoire's log probabilities under each group model can mislead: a model built from
+a more diverse group spreads its probability more thinly, which lowers every score under it
+whatever the repertoire. The distance compares the distributions themselves, length by length
+and pattern by pattern.
+</Aside>
+
+<Interactive
+	title="Which group does this sequence look like?"
+	description="Choose a sequence drawn from one of the three stand-in groups. The bars show its log probability under each group's model; the text gives the resulting chance that it came from each group, with the three groups equally likely beforehand."
+>
+	<GroupScorer client:visible />
+</Interactive>
+
+## Clustering repertoires
+
+Build one model per **repertoire**, compute the distance between every pair, and cluster. Order
+3 makes each comparison take seconds, which matters when there are many pairs; the default order
+4 is more detailed.
+
+<Example src="groups/cluster" />
+
+Every repertoire's nearest neighbour comes from its own group, and distances between groups
+(0.34 on average) are well above distances within them (0.19). Cut into three clusters, though,
+groups A and C join, and one repertoire of group B splits off. That is not a failure of the
+distance: A and C differ only in one motif, and that difference is smaller than the variation
+among B's repertoires, whose longer and more diverse CDR3s make samples of the same size
+noisier. Some group differences are smaller than the differences between samples; deeper
+samples, or more of them, separate them.
+
+<Figure
+	src="groups/cluster"
+	name="matrix"
+	alt="A 12 by 12 heatmap of distances between stand-in repertoires, with three dark blocks along the diagonal for the three groups."
+	caption="Distances between twelve stand-in repertoires, four from each group. Repertoires of the same group are closer to each other (darker blocks)."
+/>
+
+<Interactive
+	title="A map of repertoires"
+	description="Left: the distance between every pair of the twelve stand-in repertoires. Right: the repertoires laid out in two dimensions so that distances are preserved as well as possible, coloured by group; repertoires of one group nearly overlap, because the differences between them are spread over many dimensions that two cannot show. Choose a repertoire to see its nearest neighbour."
+	fallback="groups/cluster/matrix"
+	fallbackAlt="Heatmap of distances between twelve stand-in repertoires."
+>
+	<RepertoireMap client:visible />
+</Interactive>
+
+## Is a difference real?
+
+Repertoires of one group are never identical: each is a finite sample. A difference between
+groups means something only when it is larger than the differences **within** groups, which the
+example above prints. Two useful baselines:
+
+- **within-group distances**, between repertoires of the same group;
+- **disjoint samples of one repertoire**: split a repertoire's cells in two and compare the halves.
+
+To compare a property such as "the naive–memory distance is larger in CD8 than in CD4", compute
+the distance for each donor and compare the two sets of per-donor distances, as the paper did.
+
+## Which patterns make the groups differ?
+
+Compare two group models with `compare` to see whether lengths or local patterns drive the
+difference, and which patterns: see [How different are two repertoires?](/BEAM/guides/compare-repertoires/).
+
+<Aside type="caution" title="Pitfalls">
+- **Match the depth.** Smaller repertoires give noisier models and larger distances. Compare
+  repertoires of similar size, or subsample to a common number of cells first.
+- **Choose the weighting deliberately.** Weighting by abundance lets a few expanded clones
+  dominate a repertoire's model; counting each distinct sequence once compares sequence
+  composition. See [Abundance or unique sequences?](/BEAM/explanations/abundance/)
+- **Same settings for every model.** Distances need the same alphabet and order for all models.
+- **A group model hides variation within the group.** Use per-repertoire models when the spread
+  between members matters.
+</Aside>

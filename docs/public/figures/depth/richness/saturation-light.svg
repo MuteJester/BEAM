@@ -1366,7 +1366,7 @@ L 406.965952 42.082101
 L 417.667806 37.644911 
 L 428.36966 33.228387 
 L 439.071515 28.831479 
-" clip-path="url(#p61a6ef31e0)" style="fill: none; stroke: #14a394; stroke-width: 2; stroke-linecap: square"/>
+" clip-path="url(#p61a6ef31e0)" style="fill: none; stroke: #438f91; stroke-width: 2; stroke-linecap: square"/>
    </g>
    <g id="patch_3">
     <path d="M 45.778365 211.44351 
@@ -1392,7 +1392,7 @@ L 74.778365 16.098677
      <path d="M 54.778365 30.776802 
 L 64.778365 30.776802 
 L 74.778365 30.776802 
-" style="fill: none; stroke: #14a394; stroke-width: 2; stroke-linecap: square"/>
+" style="fill: none; stroke: #438f91; stroke-width: 2; stroke-linecap: square"/>
     </g>
     <g id="text_20">
      <text style="font-size: 10px; font-family: 'DejaVu Sans', 'Bitstream Vera Sans', 'Computer Modern Sans Serif', 'Lucida Grande', 'Verdana', 'Geneva', 'Lucid', 'Arial', 'Helvetica', 'Avant Garde', sans-serif; text-anchor: start; fill: #1f2328" x="82.778365" y="34.276802" transform="rotate(-0 82.778365 34.276802)">expected distinct sequences</text>
