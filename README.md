@@ -1,4 +1,9 @@
-# BEAM
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/MuteJester/BEAM/main/docs/public/brand/beam-logo-dark.svg">
+    <img alt="BEAM" src="https://raw.githubusercontent.com/MuteJester/BEAM/main/docs/public/brand/beam-logo-light.svg" width="360">
+  </picture>
+</p>
 
 [![PyPI](https://img.shields.io/pypi/v/beam-model.svg)](https://pypi.org/project/beam-model/)
 [![Python](https://img.shields.io/pypi/pyversions/beam-model.svg)](https://pypi.org/project/beam-model/)

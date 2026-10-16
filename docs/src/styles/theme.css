@@ -1,16 +1,19 @@
-/* BEAM accent: a deep teal. Starlight's dark theme is the :root default and
+/* BEAM brand: navy #16314B, teal #438F91, coral #EF785F (light); on dark,
+   #EDF3F7 and teal #73B9BA. Starlight's dark theme is the :root default and
    the light theme overrides it; -low is the background tint, -high the
-   strongest text use. */
+   strongest text use. In light mode the accent is a deeper shade of the brand
+   teal so that links keep a 4.5:1 contrast on white. */
 :root {
-	--sl-color-accent-low: #0b3532;
-	--sl-color-accent: #14a394;
-	--sl-color-accent-high: #b4efe6;
+	--sl-color-accent-low: #12333a;
+	--sl-color-accent: #73b9ba;
+	--sl-color-accent-high: #d4eded;
+	--beam-coral: #ef785f;
 }
 
 :root[data-theme='light'] {
-	--sl-color-accent-low: #cff3ed;
-	--sl-color-accent: #0a7469;
-	--sl-color-accent-high: #053b35;
+	--sl-color-accent-low: #d9eeee;
+	--sl-color-accent: #2f7274;
+	--sl-color-accent-high: #16314b;
 }
 
 /* Wide tables and plots scroll inside their box rather than the page. */

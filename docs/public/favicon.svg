@@ -1,13 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40" fill="none">
-  <g fill="#14a394">
-    <rect x="3" y="24" width="5" height="9" rx="1.2"/>
-    <rect x="10" y="24" width="5" height="9" rx="1.2"/>
-    <rect x="17.5" y="24" width="5" height="9" rx="1.2"/>
-    <rect x="25" y="24" width="5" height="9" rx="1.2"/>
-    <rect x="32" y="24" width="5" height="9" rx="1.2"/>
-  </g>
-  <g stroke="#0a7469" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M4 12 H17"/><path d="M13 8 L17.5 12 L13 16"/>
-    <path d="M36 12 H23"/><path d="M27 8 L22.5 12 L27 16"/>
-  </g>
-</svg>
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" role="img" aria-label="BEAM"><title>BEAM</title><style>.ink{fill:#16314B}.ink-line{stroke:#16314B;fill:none}.teal{fill:#438F91}.teal-line{stroke:#438F91;fill:none}@media (prefers-color-scheme: dark){.ink{fill:#EDF3F7}.ink-line{stroke:#EDF3F7}.teal{fill:#73B9BA}.teal-line{stroke:#73B9BA}}</style><rect x="6" y="27" width="8" height="9" rx="1" class="ink"/><rect x="17" y="27" width="8" height="9" rx="1" class="ink"/><rect x="28" y="27" width="8" height="9" rx="1" fill="#EF785F"/><rect x="39" y="27" width="8" height="9" rx="1" class="teal"/><rect x="50" y="27" width="8" height="9" rx="1" class="teal"/><path d="M5 25 V20 H31" class="ink-line" stroke-width="3" stroke-linejoin="round"/>
+    <path d="M30 16 L35 20 L30 24Z" class="ink"/>
+    <path d="M59 38 V43 H33" class="teal-line" stroke-width="3" stroke-linejoin="round"/>
+    <path d="M34 39 L29 43 L34 47Z" class="teal"/></svg>

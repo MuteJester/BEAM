@@ -1,0 +1,4 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" role="img" aria-label="BEAM"><title>BEAM</title><rect x="6" y="27" width="8" height="9" rx="1" fill="#16314B"/><rect x="17" y="27" width="8" height="9" rx="1" fill="#16314B"/><rect x="28" y="27" width="8" height="9" rx="1" fill="#EF785F"/><rect x="39" y="27" width="8" height="9" rx="1" fill="#438F91"/><rect x="50" y="27" width="8" height="9" rx="1" fill="#438F91"/><path d="M5 25 V20 H31" fill="none" stroke="#16314B" stroke-width="3" stroke-linejoin="round"/>
+    <path d="M30 16 L35 20 L30 24Z" fill="#16314B"/>
+    <path d="M59 38 V43 H33" fill="none" stroke="#438F91" stroke-width="3" stroke-linejoin="round"/>
+    <path d="M34 39 L29 43 L34 47Z" fill="#438F91"/></svg>

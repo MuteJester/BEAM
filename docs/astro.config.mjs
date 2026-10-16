@@ -38,6 +38,7 @@ export default defineConfig({
 				dark: './src/assets/logo-dark.svg',
 			},
 			favicon: '/favicon.svg',
+			head: [{ tag: 'link', attrs: { rel: 'icon', href: '/BEAM/favicon.ico', sizes: '32x32' } }],
 			social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/MuteJester/BEAM' }],
 			editLink: { baseUrl: 'https://github.com/MuteJester/BEAM/edit/main/docs/' },
 			customCss: ['katex/dist/katex.min.css', './src/styles/theme.css'],
