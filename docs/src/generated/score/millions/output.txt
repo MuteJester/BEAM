@@ -1,0 +1,3 @@
+scored 200,000 sequences
+median probability:     9.85e-09
+5% are rarer than:      1.05e-13

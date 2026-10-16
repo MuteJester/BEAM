@@ -1,0 +1,90 @@
+---
+title: Building a model from your data
+description: Build a BEAM model from your own repertoire, from Python lists or an AIRR table, save it, and combine models.
+sidebar:
+  order: 3
+---
+
+import { Aside } from '@astrojs/starlight/components';
+import Example from '../../../components/Example.astro';
+
+**The question:** how do I get a model of *my* repertoire, so I can score, sample and compare
+it?
+
+A model is built by counting short stretches of sequence across a repertoire, weighted by how
+many cells carry each sequence. Building takes seconds to tens of seconds for a typical
+repertoire.
+
+The examples on this page use a stand-in repertoire: 50,000 cells drawn from the reference model.
+Replace it with your own sequences.
+
+## From Python lists
+
+Give the CDR3 sequences and, optionally, how many cells (or templates, or reads) carry each.
+Without abundances every sequence counts once.
+
+<Example src="own-model/from_lists" />
+
+The model of this repertoire gives `CASSLGQGYEQYF` a probability of 1.9 × 10⁻⁵, against 3.3 × 10⁻⁵
+under the reference model: 50,000 cells carry less information than 38,538 repertoires, and the
+model reflects what this sample contains.
+
+## From an AIRR table
+
+AIRR-format rearrangement tables (`.tsv`) can be read with pandas and passed directly. Name the
+columns that hold the sequence and the count.
+
+<Example src="own-model/from_airr" />
+
+`n_skipped` counts the rows that were left out: an empty sequence, one longer than the maximum
+length, or one with a character outside the alphabet. Checking it catches a wrong column
+straight away.
+
+Two other readers avoid holding the table in memory:
+
+```python
+model = BeamModel.from_sequence_file("cdr3.tsv")   # one "SEQUENCE<TAB>COUNT" per line
+model = BeamModel.from_parquet("repertoire.parquet",
+                               sequence_column="junction_aa",
+                               abundance_column="duplicate_count")   # needs pyarrow
+```
+
+## Saving and loading
+
+A saved model keeps its counts and settings, so it reloads to exactly the same probabilities.
+
+<Example src="own-model/save_load" />
+
+## Combining models
+
+There are two different ways to combine repertoires, and they answer different questions.
+
+<Example src="own-model/combine" />
+
+- **Pooling the counts** (`a.merged(b)`) gives the model of one combined repertoire, as if all
+  the cells had been sequenced together.
+- **Mixing the probabilities** (here written out as the average) describes picking a donor at
+  random and then a cell from that donor. It is the right object for questions about a group of
+  people.
+
+The two differ because pooling counts can combine stretches of sequence seen in different
+donors into sequences no single donor had. For many donors, `BEAM.Mixture` works with
+probability mixtures of models directly.
+
+## Nucleotide sequences
+
+The same model works on nucleotide CDR3s: name the alphabet when building.
+
+```python
+model = BeamModel(nucleotide_cdr3s, alphabet="nt")   # A, C, G, T and N
+```
+
+<Aside type="caution" title="Pitfalls">
+- **Choose the column deliberately.** To compare with the reference model, use full junctions
+  (`junction_aa`), which include the conserved C and F/W.
+- **Abundance units differ between platforms.** Templates, UMIs and reads are not the same
+  thing. Within one study use one unit; across studies keep in mind that counts are not directly
+  comparable.
+- **Long sequences are dropped, not truncated.** The default maximum is 27 amino acids. Check
+  `n_skipped` after building.
+</Aside>

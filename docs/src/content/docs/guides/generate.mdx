@@ -1,0 +1,61 @@
+---
+title: Generating sequences
+description: Draw realistic CDR3 sequences from a model, of any length or a fixed one, with their probabilities.
+sidebar:
+  order: 2
+---
+
+import { Aside } from '@astrojs/starlight/components';
+import Example from '../../../components/Example.astro';
+import Figure from '../../../components/Figure.astro';
+
+**The question:** what do sequences from this population look like, and can I get new ones to
+use as a background or a null set?
+
+## Drawing sequences
+
+`sample` draws sequences **exactly in proportion to their probability**: a sequence twice as
+probable is drawn twice as often. Give `length` to draw only sequences of that length, and
+`seed` to make the draw reproducible.
+
+<Example src="generate/sample" />
+
+## Sequences with their probabilities
+
+`simulate` draws the same way and also returns each sequence's log probability, which saves
+scoring them afterwards.
+
+<Example src="generate/simulate" />
+
+## The draws follow the model
+
+Draw many sequences and their lengths follow the model's length distribution, as they should:
+
+<Example src="generate/lengths" />
+
+<Figure
+	src="generate/lengths"
+	name="lengths"
+	alt="Bar chart of the length distribution of 50,000 sampled CDR3s with the model's length probabilities overlaid as points; they match closely."
+	caption="Lengths of 50,000 sequences drawn from the reference model, against its exact length distribution."
+/>
+
+## Not every draw is a textbook CDR3
+
+The model gives some probability to every sequence of up to 27 residues, including sequences
+it has never seen. Most of what it draws has the conserved start and end, but not all:
+
+<Example src="generate/canonical" />
+
+That is a little below the corpus the reference model was built from, in which 99.6% of
+sequences start with C and 98.6% end with F or W. The model reserves some probability for
+sequences it never observed, and some of that goes to non-canonical ones. Filter the draws if
+your use needs canonical CDR3s only.
+
+<Aside type="caution" title="Pitfalls">
+- **Draws are independent.** Sampling 50,000 sequences is drawing 50,000 cells from the
+  population, with repeats. It does not reproduce the clonal structure of one person's
+  repertoire.
+- **A fixed `length` changes the question.** `sample(n, length=12)` draws from the sequences of
+  length 12 only. Use it when length is controlled by design, not to imitate a repertoire.
+</Aside>

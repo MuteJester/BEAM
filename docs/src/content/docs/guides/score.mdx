@@ -1,0 +1,93 @@
+---
+title: How likely is a sequence?
+description: Score one CDR3 or millions, compare sequences of different lengths, and see which residues make a sequence likely or unlikely.
+sidebar:
+  order: 1
+---
+
+import { Aside } from '@astrojs/starlight/components';
+import Example from '../../../components/Example.astro';
+import Figure from '../../../components/Figure.astro';
+
+**The question:** how probable is this CDR3β sequence in a population, and why?
+
+A BEAM model gives every sequence a probability: the chance that one T cell drawn at random has
+exactly that CDR3. With the reference model, that population is the 38,538 human repertoires it
+was built from.
+
+## One sequence, or a few
+
+`pseq` returns the probability; `pseq(..., log=True)` and `log_pseq_batch` return its natural
+logarithm, which is easier to compare because CDR3 probabilities are tiny.
+
+<Example src="score/one_and_many" />
+
+A log probability of −10.3 is a probability of about 3 × 10⁻⁵: roughly 3 cells in every 100,000
+carry this sequence.
+
+## Millions of sequences
+
+`log_pseq_batch` scores a whole list in one call and is the way to score a
+repertoire.
+
+<Example src="score/millions" />
+
+Half of the sequences have a probability below about 10⁻⁸. That is the typical scale: most CDR3s
+are individually rare, and only a small set of sequences reach 10⁻⁵ or above.
+
+## Comparing sequences of different lengths
+
+A longer CDR3 is usually less probable, partly because it is longer and partly because long
+CDR3s are rarer to begin with. The two parts separate exactly:
+
+$$
+P(s) = P(L)\,P(s \mid L)
+$$
+
+where $P(L)$ is the probability of the length and $P(s \mid L)$ the probability of the sequence
+among all sequences of that length. `length_distribution` gives $P(L)$.
+
+<Example src="score/lengths" />
+
+The 19-residue sequence is about 20,000 times less probable than the 13-residue one. Only
+about 14 times of that comes from its length; the rest is the sequence itself. Comparing
+$P(s \mid L)$ asks "how typical is this sequence for its length".
+
+## Which residues drive a score
+
+`explain` splits a score into one term per residue, from each of the model's two readings: one
+counting positions from the start of the sequence, one counting from the end. A term is shown
+as **surprisal** in bits: 0 means the residue was entirely expected, and each extra bit means
+half as likely.
+
+<Example src="score/explain" />
+
+<Figure
+	src="score/explain"
+	name="explain"
+	alt="Bar chart of surprisal per residue of CASSLGQGYEQYF, for the reading from the start and the reading from the end."
+	caption="Surprisal of each residue of CASSLGQGYEQYF under the two readings of the reference model."
+/>
+
+The reading from the start is sure of the opening `CASS`, the reading from the end is sure of
+the closing `QYF`, and both are uncertain in the middle (`LGQGY`), where the junction between
+the gene segments makes CDR3s diverse. The terms reconstruct the score exactly, so this is an
+explanation of the probability, not an illustration of it.
+
+## What the model cannot score
+
+A sequence longer than the model's maximum length (27 residues for the reference model), or
+containing a character outside the 20 standard amino acids, has probability 0. `explain` raises
+an error that says why.
+
+<Example src="score/invalid" />
+
+<Aside type="caution" title="Pitfalls">
+- **Use `junction_aa`, not `cdr3_aa`.** The reference model's sequences include the conserved
+  start (C) and end (F or W). Leaving them out scores a different string.
+- **Probabilities describe the population the model was built from.** Under the reference
+  model, "likely" means common across many published human repertoires, not likely in any one
+  person.
+- **Compare like with like.** Rank sequences of one length by $P(s)$, or compare across
+  lengths with $P(s \mid L)$, depending on whether length should count.
+</Aside>

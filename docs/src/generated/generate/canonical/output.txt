@@ -1,0 +1,2 @@
+start with C:      98.0%
+end with F or W:   96.9%

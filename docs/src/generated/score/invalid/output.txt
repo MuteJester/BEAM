@@ -1,0 +1,2 @@
+0.0 0.0
+explain: sequence contains ['X'], which the 'aa' alphabet does not accept; its residues are 'ACDEFGHIKLMNPQRSTVWY'

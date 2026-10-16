@@ -1,0 +1,2 @@
+donor A 2.079e-05   donor B 1.907e-05
+pooled  2.026e-05   mixed   1.993e-05

@@ -1,0 +1,2 @@
+BeamModel(order=4, sequences=49,063, states=194,481, memory=53MB)
+sequences skipped: 0
