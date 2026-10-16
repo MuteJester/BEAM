@@ -7,6 +7,7 @@ nothing here touches the real site or needs BEAM.
 from __future__ import annotations
 
 import json
+import time
 import sys
 from pathlib import Path
 
@@ -244,3 +245,28 @@ def test_figures_are_byte_identical_across_runs(site):
     first = svg.read_bytes()
     run(force=True)
     assert svg.read_bytes() == first
+
+
+def test_an_example_that_runs_too_long_is_stopped_and_reported(site):
+    root, example, run = site
+    example("slow/sleep", "import time\ntime.sleep(60)\n")
+    start = time.monotonic()
+    summary = run(timeout=1)
+    assert time.monotonic() - start < 30
+    assert [f.key for f in summary.failed] == ["slow/sleep"]
+    assert "timed out after 1 s" in summary.failed[0].detail
+
+
+def test_the_theme_draws_no_grid_over_images(tmp_path, monkeypatch):
+    """A heatmap's cells must not be crossed by grid lines; a line plot keeps its grid."""
+    monkeypatch.syspath_prepend(str(HELPERS.parent))
+    monkeypatch.setenv("DOCS_FIGURES", str(tmp_path))
+    import numpy as np
+    import _docs
+    with _docs.figure("heat") as (fig, ax):
+        ax.imshow(np.eye(3))
+    with _docs.figure("line") as (fig, ax):
+        ax.plot([0, 1], [0, 1])
+    heat, line = (tmp_path / "heat-light.svg").read_text(), (tmp_path / "line-light.svg").read_text()
+    # matplotlib writes each grid line as a path inside a "grid" clip of the tick group
+    assert heat.count('id="line2d_') < line.count('id="line2d_')

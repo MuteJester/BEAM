@@ -46,6 +46,8 @@ REL_TOL = 1e-9
 # No absolute tolerance: BEAM's outputs are mostly tiny probabilities and
 # error bounds, and an absolute floor would let any of them change unnoticed.
 ABS_TOL = 0.0
+# an example running longer than this has hung (the slowest takes about 10 minutes)
+DEFAULT_TIMEOUT = 3600.0
 NUMBER = re.compile(r"[-+]?(?:\d+\.\d*|\.\d+|\d+)(?:[eE][-+]?\d+)?")
 
 
@@ -164,19 +166,22 @@ def json_files_agree(recorded: Path, now: Path) -> str | None:
     return None
 
 
-def _execute(path: Path, root: Path, src: Path, figures: Path, data: Path):
+def _execute(path: Path, root: Path, src: Path, figures: Path, data: Path, timeout: float):
     env = dict(os.environ)
     env["PYTHONPATH"] = os.pathsep.join(
         [str(src), str(root / "examples")] + [p for p in [env.get("PYTHONPATH")] if p])
     env["DOCS_FIGURES"], env["DOCS_DATA"] = str(figures), str(data)
     env["MPLBACKEND"] = "Agg"
     with tempfile.TemporaryDirectory() as cwd:
-        return subprocess.run([sys.executable, str(path)], cwd=cwd, env=env,
-                              capture_output=True, text=True)
+        try:
+            return subprocess.run([sys.executable, str(path)], cwd=cwd, env=env,
+                                  capture_output=True, text=True, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            return subprocess.CompletedProcess(path, 1, "", f"timed out after {timeout:g} s")
 
 
 def run_all(root: Path, src: Path, *, only: str | None = None, force: bool = False,
-            check: bool = False) -> Summary:
+            check: bool = False, timeout: float = DEFAULT_TIMEOUT) -> Summary:
     root, src = Path(root), Path(src)
     summary = Summary()
     model, helpers = model_fingerprint(), helpers_fingerprint(root)
@@ -197,14 +202,14 @@ def run_all(root: Path, src: Path, *, only: str | None = None, force: bool = Fal
         if check:
             with tempfile.TemporaryDirectory() as scratch:
                 fig_now, data_now = Path(scratch) / "f", Path(scratch) / "d"
-                proc = _execute(path, root, src, fig_now, data_now)
+                proc = _execute(path, root, src, fig_now, data_now, timeout)
                 files_diff = (
                     json_files_agree(root / "public" / "figures" / key, fig_now)
                     or json_files_agree(root / "public" / "data" / key, data_now)
                 ) if proc.returncode == 0 else None
         else:
             proc = _execute(path, root, src, root / "public" / "figures" / key,
-                            root / "public" / "data" / key)
+                            root / "public" / "data" / key, timeout)
         if proc.returncode != 0:
             summary.failed.append(Problem(key, proc.stderr.strip() or
                                           f"exited with status {proc.returncode}"))
@@ -240,10 +245,12 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--only", help="glob over example keys, e.g. 'depth/*'")
     ap.add_argument("--force", action="store_true")
     ap.add_argument("--check", action="store_true")
+    ap.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT,
+                    help="seconds before an example is stopped and reported as failed")
     a = ap.parse_args(argv)
 
     started = time.perf_counter()
-    s = run_all(a.root, a.src, only=a.only, force=a.force, check=a.check)
+    s = run_all(a.root, a.src, only=a.only, force=a.force, check=a.check, timeout=a.timeout)
     for key in s.ran:
         print(f"{'checked' if a.check else 'ran':8} {key}")
     for key in s.skipped:
