@@ -2,9 +2,8 @@
 the C against.
 
 This is deliberately written straight from the specification in
-`include/beam/model.h` and
-`docs/superpowers/specs/2026-09-21-single-expert-model-design.md`, in the most
-obvious way, with no shared code with `src/native/`. It is slow and that is
+`include/beam/model.h`, in the most obvious way, with no shared code with
+`src/native/`. It is slow and that is
 fine: it exists so that a test failure means the two disagree, rather than
 meaning the C disagrees with itself.
 
