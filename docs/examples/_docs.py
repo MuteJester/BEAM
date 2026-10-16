@@ -49,7 +49,11 @@ def _style(fig, theme: str) -> None:
         ax.tick_params(colors=ink, which="both")
         for text in (ax.title, ax.xaxis.label, ax.yaxis.label):
             text.set_color(ink)
-        ax.grid(True, color=grid, linewidth=0.6, alpha=0.8)
+        # no grid over images (heatmaps) or colour bars: it would cross their cells
+        if ax.images or getattr(ax, "_colorbar", None) is not None:
+            ax.grid(False)
+        else:
+            ax.grid(True, color=grid, linewidth=0.6, alpha=0.8)
         legend = ax.get_legend()
         if legend:
             legend.get_frame().set_alpha(0.0)

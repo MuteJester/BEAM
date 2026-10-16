@@ -63,6 +63,8 @@ pattern. It has its own noise floor, which is why group models of similar size a
 <Interactive
 	title="Which group does this sequence look like?"
 	description="Choose a sequence drawn from one of the three stand-in groups. The bars show its log probability under each group's model; the text gives the resulting chance that it came from each group, with the three groups equally likely beforehand."
+	fallback="viz/group_scorer/posterior"
+	fallbackAlt="For fifteen sequences, five drawn from each stand-in group, the chance that each came from group A, B or C, with the groups equally likely beforehand."
 >
 	<GroupScorer client:visible />
 </Interactive>
@@ -83,15 +85,13 @@ other than either is to B.
 <Figure
 	src="groups/cluster"
 	name="matrix"
-	alt="A 12 by 12 heatmap of distances between stand-in repertoires, with three dark blocks along the diagonal for the three groups."
+	alt="A 12 by 12 heatmap of distances between stand-in repertoires, with three dark blocks along the diagonal for the three groups; the blocks between groups A and C are lighter, and those involving group B lightest."
 	caption="Distances between twelve stand-in repertoires, four from each group. Repertoires of the same group are closer to each other (darker blocks)."
 />
 
 <Interactive
 	title="A map of repertoires"
 	description="Left: the distance between every pair of the twelve stand-in repertoires. Right: the repertoires laid out in two dimensions so that distances are preserved as well as possible, coloured by group; repertoires of one group nearly overlap, because the differences between them are spread over many dimensions that two cannot show. Choose a repertoire to see its nearest neighbour."
-	fallback="groups/cluster/matrix"
-	fallbackAlt="Heatmap of distances between twelve stand-in repertoires."
 >
 	<RepertoireMap client:visible />
 </Interactive>

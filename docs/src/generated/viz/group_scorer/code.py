@@ -2,7 +2,7 @@
 import numpy as np
 import BEAM
 from BEAM import BeamModel
-from _docs import save_data
+from _docs import figure, save_data
 from _standins import population, has_motif
 
 ref = BEAM.load_pretrained("foundation")
@@ -26,4 +26,15 @@ for g, seed in zip("ABC", (81, 82, 83)):
         rows.append({"sequence": s, "drawn_from": g, "length": len(s), "motif": has_motif(s),
                      "log_p": {k: float(models[k].pseq(s, log=True)) for k in "ABC"}})
 save_data("group_scorer", {"motif": "PG", "rows": rows, "accuracy": accuracy})
+# the static stand-in for the interactive: each sequence's chance of each group
+post = np.array([[r["log_p"][k] for k in "ABC"] for r in rows])
+post = np.exp(post - post.max(axis=1, keepdims=True))
+post /= post.sum(axis=1, keepdims=True)
+with figure("posterior", size=(5.6, 5.4)) as (fig, ax):
+    im = ax.imshow(post, cmap="viridis", vmin=0, vmax=1, aspect="auto")
+    ax.set_xticks(range(3), [f"group {k}" for k in "ABC"])
+    ax.set_yticks(range(len(rows)), [f"{r['sequence']} ({r['drawn_from']})" for r in rows],
+                  fontfamily="monospace", fontsize=8)
+    ax.grid(False)
+    fig.colorbar(im, ax=ax, label="chance it came from the group")
 print(f"{len(rows)} sequences; per-sequence accuracy " + ", ".join(f"{g}: {a:.0%}" for g, a in accuracy.items()))
