@@ -13,6 +13,9 @@ name: Release
 #   pypi    Trusted Publishing (no stored token), from the protected `pypi`
 #           environment; the one irreversible step, so it runs last
 #   publish the draft becomes the public release, which Zenodo archives
+#   verify  installs the published version from PyPI on clean Linux (x86_64,
+#           ARM) and macOS machines and runs the smoke test and the README
+#           examples: what users get, not what was built
 #
 # Re-running a failed workflow is safe: the draft step refreshes a draft and
 # refuses to touch a release that is already public.
@@ -173,3 +176,38 @@ jobs:
           LATEST="--latest"
           [ "$PRERELEASE" = "true" ] && LATEST="--latest=false"
           gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false $LATEST
+
+  verify:
+    needs: [guard, publish]
+    name: Install from PyPI (${{ matrix.os }}, Python ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
+        python: ["3.11", "3.15"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python }}
+          allow-prereleases: true
+      - name: Install beam-model ${{ needs.guard.outputs.version }} from PyPI
+        env:
+          VERSION: ${{ needs.guard.outputs.version }}
+        run: |
+          python -m venv "$RUNNER_TEMP/venv"
+          # A new version can take a few minutes to reach every PyPI mirror.
+          # --only-binary: a user's install must get a wheel, not compile.
+          for i in 1 2 3 4 5 6 7 8 9 10; do
+            "$RUNNER_TEMP/venv/bin/pip" install --no-cache-dir --only-binary beam-model \
+              "beam-model==$VERSION" pandas && break
+            echo "not available yet, retrying in 30 s"; sleep 30
+          done
+          "$RUNNER_TEMP/venv/bin/python" -c "import BEAM; assert BEAM.__version__ == '$VERSION', BEAM.__version__"
+      - name: Smoke test and README examples
+        run: |
+          cd "$RUNNER_TEMP"
+          "$RUNNER_TEMP/venv/bin/python" "$GITHUB_WORKSPACE/tools/release/smoke_test.py"
+          "$RUNNER_TEMP/venv/bin/python" "$GITHUB_WORKSPACE/tools/release/check_readme.py" "$GITHUB_WORKSPACE/README.md"

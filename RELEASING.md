@@ -51,6 +51,10 @@ models must be re-issued as a new `models-vN` in the new format.
    Open the run in the Actions tab and approve. A PyPI version can never be
    uploaded twice, so this is the point of no return.
 4. The release becomes public, and Zenodo archives it and mints its DOI.
+   A last job then installs the published version from PyPI on clean Linux
+   and macOS machines and runs the smoke test and the README examples. If
+   it fails, the release that users get is broken: fix forward with a
+   patch release.
 5. **Open the next cycle on `main`:** `__version__ = "X.Y+1.0.dev0"` and a
    new `## [Unreleased]` section in `CHANGELOG.md`.
 
