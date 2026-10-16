@@ -64,6 +64,9 @@ where = ["src"]
 # package and the C sources are installed as a top-level `native` package.
 include = ["BEAM", "BEAM.*"]
 
+[tool.setuptools.package-data]
+BEAM = ["pretrained/registry.json"]
+
 [tool.setuptools.dynamic]
 # One source of truth: BEAM.__version__, read statically at build time. The
 # release workflow refuses a tag that does not equal it.

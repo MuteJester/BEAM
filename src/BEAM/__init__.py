@@ -46,6 +46,8 @@ from .likelihood import (AbundanceSpectrum, PairLikelihood, Piece,
                          repertoire_likelihood)
 from .model.fit import AlphaFit, fit_alpha
 from .query import BeamQuery, Condition
+from .pretrained import (PretrainedModel, load_pretrained, pretrained_models,
+                         pretrained_path)
 from .query.errors import (ImpossibleCondition, QueryError, QueryTooLarge,
                            UnsupportedQuery)
 
@@ -73,5 +75,7 @@ __all__ = [
     "abundance_spectrum", "auto_profile_edges", "AbundanceSpectrum",
     "PairLikelihood", "Piece",
     "fit_alpha", "AlphaFit",
+    "load_pretrained", "pretrained_models", "pretrained_path",
+    "PretrainedModel",
 ]
 __version__ = "1.0.0.dev0"
