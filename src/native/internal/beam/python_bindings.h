@@ -144,5 +144,6 @@ PyObject *py_query_probability(PyObject *self, PyObject *args);
 void release_f64_buffers(Py_buffer *views, int n);
 PyObject *set_beam_error(BeamError err);
 PyObject *py_fingerprint_search(PyObject *self, PyObject *args);
+PyObject *py_local_distance(PyObject *self, PyObject *args);
 
 #endif /* BEAM_INTERNAL_PYTHON_BINDINGS_H */

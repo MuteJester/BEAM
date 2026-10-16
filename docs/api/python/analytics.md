@@ -1,5 +1,172 @@
 # Scoring detail, per-length quantities, spectra, distributions, calibration
 
+## Local repertoire distance and overlapping-pattern groups
+
+```python
+from BEAM import BeamModel
+from BEAM.analytics.distance import compare, group_overlaps
+
+sequences = ["ACGT", "ACGA", "TCGT", "TTGA"]
+a = BeamModel(sequences, abundances=[40, 20, 10, 5],
+              alphabet="nt", order=2, max_length=4)
+b = BeamModel(sequences, abundances=[5, 10, 20, 40],
+              alphabet="nt", order=2, max_length=4)
+
+result = compare(a, b, top_k=50)
+print(result.distance, result.length_squared_distance,
+      result.pattern_squared_distance, result.remainder)
+for term in result.patterns[:5]:
+    print(term.length, term.start, term.word, term.direction,
+          term.conditional_p, term.conditional_q, term.contribution)
+
+grouped = group_overlaps(result)
+for group in grouped.groups[:5]:
+    probabilities = group.probabilities(a, b)
+    print(group.length, group.start, group.consensus, group.contribution,
+          probabilities.conditional_p, probabilities.conditional_q)
+```
+
+`compare(a, b, *, width=None, top_k=100)` calculates the exact local-window
+distance and its additive explanation in C. Both models must be finalized and
+have the same alphabet and order; their maximum lengths may differ. It uses
+**every length supported by either model**. Positions are zero-based; an end
+coordinate is exclusive. `width=None` means `order + 1`, giving five-residue
+windows for an order-4 model. At shorter lengths, one window spans the whole
+sequence. An explicit width must be between 1 and `order + 1`.
+
+Let `pi_P(L)` and `pi_Q(L)` be the length probabilities, and `p_Li(u)` and
+`q_Li(u)` the probabilities of word `u` at window start `i`, conditional on
+length `L`. With `w_L = min(width, L)` and `n_L = L - w_L + 1`, the returned
+squared distance is
+
+```text
+D² = sum_L 0.5 * (sqrt(pi_P(L)) - sqrt(pi_Q(L)))²
+   + sum_L sum_i sum_u sqrt(pi_P(L)*pi_Q(L)) / (2*n_L)
+                       * (sqrt(p_Li(u)) - sqrt(q_Li(u)))².
+```
+
+This is the squared Hellinger distance between the representations indexed by
+length, a uniformly chosen window at that length, and its word. The default
+width corresponds to the manuscript's local-pattern distance. Changing width
+changes the quantity; in particular, smaller windows can miss dependencies
+between positions, so zero local distance need not imply identical complete
+sequence laws. This calculation differs from the complete-sequence Hellinger
+distance available through [`Mixture.hellinger_distance`](mixture.md), and from the adaptive
+gapped categories in [`analytics.fingerprint.compare`](#gapped-repertoire-fingerprints).
+
+The immutable `DistanceComparison` has these components:
+
+| Attribute | Meaning |
+| --- | --- |
+| `distance`, `squared_distance` | `D` and `D²` |
+| `length_squared_distance` | Sum of the length terms |
+| `pattern_squared_distance` | Sum of all within-length window/word terms |
+| `lengths` | Every supported length, its `p` and `q`, length `contribution`, and `pattern_contribution` |
+| `windows` | Every window's `length`, `start`, `width` and total `contribution` |
+| `patterns` | The strongest strictly positive individual word contributions |
+| `reported_pattern_squared_distance` | Sum of the returned word contributions |
+| `remainder` | Within-length contribution omitted from `patterns` |
+| `coverage` | Reported word contribution divided by total pattern contribution |
+| `total_coverage` | Length plus reported word contribution divided by `D²` |
+| `scratch_bytes` | Conservative peak allocation estimate for this operation, including native outputs and Python result construction; excludes existing models and is not process RSS |
+
+Each `PatternContribution` contains `length`, `start`, `word`,
+`conditional_p`, `conditional_q`, and `contribution`; `width`, `end`, `delta`
+and `direction` are derived properties. `direction` is `"p"` or `"q"` according
+to the higher **length-conditioned** probability, not the length-weighted
+sequence frequency. Lengths absent from either model have zero pattern
+contribution; their separation is fully assigned to length.
+
+`top_k` limits only the returned explanation, never the distance calculation.
+Patterns are ranked globally by decreasing contribution, with ties resolved
+by length, start, then word in the model's alphabet order. `top_k=0` returns
+no words but still calculates every length and window. The accounting is
+
+```python
+result.squared_distance == (
+    result.length_squared_distance
+    + result.reported_pattern_squared_distance
+    + result.remainder
+)  # up to floating-point rounding
+```
+
+Coverage is `None` when its denominator is zero. These coverage measures
+describe the local distance representation, not explained biology or the
+fraction of complete-sequence separation captured. Calculation releases the
+GIL, respects BEAM's thread settings, and checks the native working memory
+against [`set_memory_budget`](runtime.md#memory-budget) before allocation.
+The dynamic program streams lengths and windows; it does not sample sequences
+or retain every word from every window.
+
+### Grouping related windows
+
+`group_overlaps(result, *, min_overlap=None)`, also available as
+`result.group_overlaps(...)`, groups the returned patterns in Python without
+changing the distance. The default requires at least `max(1, width - 1)`
+shared positions. Members must have the same length and enrichment direction,
+agree at every shared position, and overlap an existing member sufficiently.
+The complete accumulated consensus is checked, so a bridging window cannot
+join contradictory words. Processing starts with the largest contributions;
+a bridging word can merge previously separate groups if their combined
+consensus is consistent. If eligible groups conflict, the group with the
+largest current contribution takes priority, with coordinate-based
+tie-breaking. This is a
+deterministic grouping heuristic, not an optimal clustering procedure.
+
+Each `PatternGroup` reports `length`, `start`, `end`, `consensus`, `direction`,
+its original `members`, and their summed `contribution`. Every returned word
+belongs to exactly one group, including singletons. The grouped result retains
+the same distance, coverage and remainder. Grouping sees only the returned
+`top_k` words, so increasing `top_k` can change the groups while preserving the
+distance. Group labels indicate compatible overlapping patterns; they do not
+establish a clonotype family, an antigen association, or independent biological
+discoveries.
+
+`group.direction` summarizes the member windows. It does not guarantee the
+same direction for the complete consensus event: one model can assign higher
+probability to each of two overlapping windows but lower probability to their
+intersection. Use the separately calculated complete-event probabilities to
+interpret enrichment of the longer motif.
+
+**A group's contribution is the sum of its window terms, not the contribution
+of receptors carrying its complete consensus.** Such receptors satisfy all
+of its word constraints; other receptors can satisfy only some. Word
+probabilities and observed hit counts therefore cannot be added. To measure
+the complete consensus event, call `group.probabilities(a, b)`. This evaluates
+the consensus directly with the query engine and returns both conditional
+(`conditional_p`, `conditional_q`) and length-weighted (`p`, `q`)
+probabilities, together with `length_p` and `length_q`. A conditional
+probability is `None` if that model does not support the length. These event
+probabilities are reported separately and do not replace the group's additive
+contribution. The supplied models must match the group's alphabet and order;
+the query evaluates their current parameters. The comparison's `model_p` and
+`model_q` snapshots record configuration and count summaries, not content
+hashes, so they do not verify that the supplied models are unchanged since
+comparison.
+
+### C interface
+
+The numerical API is declared in `include/beam/distance.h`:
+
+```c
+#include "beam/distance.h"
+
+BeamLocalDistanceConfig config = {.width = 0, .top_k = 100};
+BeamLocalDistanceResult *result = NULL;
+BeamError error = beam_local_distance(model_p, model_q, &config, &result);
+if (error == BEAM_OK) {
+    /* Read result->squared_distance, lengths, windows and patterns. */
+    beam_local_distance_free(result);
+}
+```
+
+C uses `width=0` for the order-dependent default. Pattern probabilities `p`
+and `q` are conditional on length. `word_index` encodes the word in base
+alphabet-size, oldest residue first. `lengths`, `windows` and `patterns` are
+owned by the result; release them together with `beam_local_distance_free`.
+On failure, the output pointer remains `NULL`. Overlap grouping is provided
+by the Python API.
+
 ## Gapped repertoire fingerprints
 
 ```python

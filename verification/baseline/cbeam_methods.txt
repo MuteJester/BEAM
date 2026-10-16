@@ -25,6 +25,7 @@ length_derivatives
 length_marginals
 live_cache_bytes
 load
+local_distance
 log_gamma_ratio
 log_gamma_ratio_shift
 log_length_prior

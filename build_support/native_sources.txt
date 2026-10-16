@@ -13,6 +13,7 @@
 src/native/algorithms/sampling.c
 src/native/algorithms/top_k.c
 src/native/algorithms/fingerprint.c
+src/native/algorithms/distance.c
 
 src/native/core/alphabet.c
 src/native/core/alphabet_aa.c

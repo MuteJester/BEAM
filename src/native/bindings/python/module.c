@@ -24,6 +24,7 @@ const char *BEAM_CAPSULE_NAME = "BeamModel";
 
 static PyMethodDef module_methods[] = {
     {"fingerprint_search", py_fingerprint_search, METH_VARARGS, NULL},
+    {"local_distance", py_local_distance, METH_VARARGS, NULL},
     {"publicness_moments",      py_publicness_moments,                 METH_VARARGS, NULL},
     {"publicness_pgf",          py_publicness_pgf,                     METH_VARARGS, NULL},
     {"publicness_accumulate",   py_publicness_accumulate,              METH_VARARGS, NULL},

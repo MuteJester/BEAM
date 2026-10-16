@@ -2504,3 +2504,27 @@ depends on the model and q alone.
 
 The gate passed on everything else before recording. The full suite: 1009
 passed, 2 skipped.
+
+# Additions for the local-window distance API
+
+Recorded 2026-10-13, tag `prelocaldistance`. Previous inventories are retained
+under that tag. This is an additive API change; no existing entry point or
+test was removed or renamed.
+
+- `_cbeam` gains `local_distance`.
+- The C symbol inventories gain `beam_local_distance` and
+  `beam_local_distance_free`, declared in `include/beam/distance.h`.
+- The Python test inventory gains 37 cases in `test_distance.py`.
+- The C test inventory gains six cases in `test_distance.c`.
+
+The public Python API is `BEAM.analytics.distance`, following the existing
+analytics submodule convention; the top-level `BEAM` API is unchanged. The
+new tests compare every local marginal and contribution with independently
+enumerated small sequence laws, check bounded ranking and exact remainder
+accounting, and test overlap grouping and separate consensus probabilities.
+The six native cases also pass with undefined-behavior instrumentation.
+
+Only these five inventories were updated. Numerical references, thread
+references and saved-model byte references were not rewritten. The optional
+`verification/distance_manuscript.py` script checks locally available frozen
+Figure 5 models and attribution tables without changing manuscript assets.

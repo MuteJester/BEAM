@@ -10,6 +10,8 @@ beam_insights_logo_cost
 beam_insights_logo_set_free
 beam_insights_logos
 beam_last_error
+beam_local_distance
+beam_local_distance_free
 beam_logo_request_default
 beam_mixture_check_shape
 beam_mixture_gram

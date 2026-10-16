@@ -52,6 +52,8 @@ beam_live_free
 beam_live_lengths_desc
 beam_live_release
 beam_live_selfcheck
+beam_local_distance
+beam_local_distance_free
 beam_logo_request_default
 beam_mellin_terms
 beam_memory_init
