@@ -100,7 +100,10 @@ def prepare(spec: dict, sources: dict[str, Path], dist: Path) -> None:
             "built_with": m["built_with"],
             "built_at": meta.get("created"),
             "config": {k: cfg[k] for k in ("alphabet", "order", "max_length")},
-            "n_sequences": int(model.n_sequences),
+            # n_observed counts the sequence records observed (distinct
+            # sequences when the corpus was merged first, as the foundation
+            # was); n_sequences is the abundance-weighted total.
+            "n_observed": int(model.n_observed),
             "total_weight": float(model.total_weight),
             "license": spec["license"], "citation": spec["citation"],
         }
@@ -132,8 +135,8 @@ def model_card(spec: dict, entries: dict) -> str:
                 f"- **Limitations:** {m['limitations']}",
                 f"- **Model:** alphabet `{c['alphabet']}`, order {c['order']}, "
                 f"maximum length {c['max_length']}; "
-                f"{e['n_sequences']:,} training sequences, total "
-                f"weight {e['total_weight']:,.0f}",
+                f"{e['n_observed']:,} sequence records observed, total "
+                f"abundance weight {e['total_weight']:,.0f}",
                 f"- **File:** `{e['file']}`, {e['bytes']:,} bytes, format "
                 f"{e['format']}, built {e['built_at']} with {e['built_with']}",
                 f"- **SHA-256:** `{e['sha256']}`\n"]
