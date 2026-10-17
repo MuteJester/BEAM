@@ -104,7 +104,8 @@ archs = ["AMD64"]
 archs = ["arm64"]
 # Apple clang ships no OpenMP runtime; Homebrew's libomp is bundled into the
 # wheel by delocate. Its bottles target the runner's macOS, so the wheels do
-# too: the minimum is read from the runner, which the workflows pin to the
-# oldest Apple-silicon image (macos-14), so the wheels install on macOS 14+.
+# too: the workflows pin the oldest Apple-silicon image, macos-14, so the
+# wheels install on macOS 14 and newer. On a newer runner delocate refuses
+# the wheel rather than ship a libomp that needs a newer macOS than declared.
 before-all = "brew install libomp"
-environment = { BEAM_LIBOMP_PREFIX = "/opt/homebrew/opt/libomp", MACOSX_DEPLOYMENT_TARGET = "$(sw_vers -productVersion | cut -d. -f1).0" }
+environment = { BEAM_LIBOMP_PREFIX = "/opt/homebrew/opt/libomp", MACOSX_DEPLOYMENT_TARGET = "14.0" }
