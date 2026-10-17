@@ -88,7 +88,9 @@ test-sources = ["tools/release/smoke_test.py"]
 test-command = "python tools/release/smoke_test.py"
 
 [tool.cibuildwheel.linux]
-archs = ["x86_64", "aarch64"]
+# Each runner builds its own architecture: the x86-64 runner x86_64, the ARM
+# runner aarch64. Listing both would ask each to emulate the other.
+archs = ["native"]
 manylinux-x86_64-image = "manylinux_2_28"
 manylinux-aarch64-image = "manylinux_2_28"
 
@@ -101,6 +103,8 @@ archs = ["AMD64"]
 [tool.cibuildwheel.macos]
 archs = ["arm64"]
 # Apple clang ships no OpenMP runtime; Homebrew's libomp is bundled into the
-# wheel by delocate. Its bottles target the runner's macOS, so the wheels do too.
+# wheel by delocate. Its bottles target the runner's macOS, so the wheels do
+# too: the minimum is read from the runner, which the workflows pin to the
+# oldest Apple-silicon image (macos-14), so the wheels install on macOS 14+.
 before-all = "brew install libomp"
-environment = { BEAM_LIBOMP_PREFIX = "/opt/homebrew/opt/libomp", MACOSX_DEPLOYMENT_TARGET = "14.0" }
+environment = { BEAM_LIBOMP_PREFIX = "/opt/homebrew/opt/libomp", MACOSX_DEPLOYMENT_TARGET = "$(sw_vers -productVersion | cut -d. -f1).0" }
