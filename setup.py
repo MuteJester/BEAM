@@ -138,7 +138,7 @@ def windows_flags():
     link_args, library_dirs, dll = [], [], None
     lib, bin_ = prefix / "lib", prefix / "bin"
     if (lib / "libomp.lib").is_file() and (bin_ / "libomp.dll").is_file():
-        compile_args.append("-fopenmp")
+        compile_args.append("/openmp")      # clang-cl's spelling; -fopenmp is ignored
         library_dirs.append(str(lib))
         link_args.append("libomp.lib")
         dll = bin_ / "libomp.dll"

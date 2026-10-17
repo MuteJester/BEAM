@@ -42,6 +42,7 @@ jobs:
           "$BEAM_LLVM_PREFIX/bin/clang-cl.exe" --version
           ls "$BEAM_LLVM_PREFIX/lib" | grep -i omp || echo "no libomp.lib"
           ls "$BEAM_LLVM_PREFIX/bin" | grep -i omp || echo "no libomp.dll"
+          find "$BEAM_LLVM_PREFIX" -maxdepth 3 -iname '*licen*' | head -20
       - name: Install BEAM with test dependencies
         run: python -m pip install -v ".[dev]"
       - name: Python test suite

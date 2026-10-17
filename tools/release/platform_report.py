@@ -72,7 +72,7 @@ def report(path):
     threads = BEAM.effective_threads()
     print(f"BEAM {BEAM.__version__}, {sys.platform}, {cores} cores, "
           f"{threads} OpenMP threads")
-    if cores > 1 and threads < 2:
+    if cores > 1 and threads < 2 and "OMP_NUM_THREADS" not in os.environ:
         sys.exit("OpenMP is not active: one thread on a machine with several cores")
 
     BEAM.set_threads(1)

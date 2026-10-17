@@ -31,6 +31,13 @@ def main():
     print(f"BEAM {BEAM.__version__} on Python {sys.version.split()[0]}, "
           f"NumPy {np.__version__}, {sys.platform}")
 
+    # A wheel built without OpenMP still gives the right answers, slowly; only
+    # this catches it. OMP_NUM_THREADS, when set, is a deliberate limit.
+    cores, threads = os.cpu_count() or 1, BEAM.effective_threads()
+    print(f"{threads} OpenMP threads on {cores} cores")
+    if "OMP_NUM_THREADS" not in os.environ:
+        assert cores == 1 or threads > 1, "built without OpenMP: one thread on several cores"
+
     model = BeamModel(TRAINING, order=2, max_length=MAX_LENGTH)
 
     every = ["".join(t) for n in range(1, MAX_LENGTH + 1)
