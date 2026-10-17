@@ -10,14 +10,16 @@
 [![Tests](https://github.com/MuteJester/BEAM/actions/workflows/tests.yml/badge.svg)](https://github.com/MuteJester/BEAM/actions/workflows/tests.yml)
 [![License: GPL v3](https://img.shields.io/badge/license-GPL--3.0-blue.svg)](LICENSE)
 
-**Exact probabilities for T cell receptor repertoires.**
+**Every possible sequence, accounted for.**
 
-BEAM is a probability model of T cell receptor (TCRβ) CDR3 sequences. Give it a
-sequence and it tells you how likely that sequence is; give it a sequencing
-depth and it tells you how many distinct sequences you should expect to see,
-how many two samples will share, and how many people in a cohort will carry a
-given sequence. Every one of these numbers is **computed exactly**, without
-simulation, so the answers are reproducible to the last digit.
+BEAM is a probability model of biological sequences, built for T cell receptor
+(TCRβ) CDR3s. It learns from the sequences alone, with their abundances if you
+have them. Give it a sequence and it tells you how likely that sequence is; give
+it a sequencing depth and it tells you how many distinct sequences you should
+expect to see, how many two samples will share, and how many people in a cohort
+will carry a given sequence. Each of these numbers is **summed over every
+combinatorially possible sequence**, without listing or simulating them, so the
+same input always gives the same answer.
 
 BEAM comes with a ready-made reference model built from **38,538 human
 repertoires**, and you can build models from your own data in one line.
@@ -29,7 +31,7 @@ repertoires**, and you can build models from your own data in one line.
 
 | Question | What BEAM gives you |
 |---|---|
-| How likely is this TCR? | The exact probability of any CDR3 sequence |
+| How likely is this TCR? | The probability of any CDR3 sequence, normalised over all possible sequences |
 | What do typical TCRs look like? | Realistic sequences drawn from the model |
 | How deeply should I sequence? | The expected number of distinct sequences at any depth, and how many two samples share |
 | How many people will share this TCR? | The expected number of repertoires in a cohort that contain it |
@@ -81,13 +83,13 @@ model.sample(5, seed=1)
 # ['CASSPGTSSDTYEQYF', 'CASSLGTYSYNEQFF', 'CASRPGNSPLHF', ...]
 ```
 
-Sequences are drawn exactly in proportion to their probability.
+Sequences are drawn in proportion to their probability.
 
 ### How deeply should I sequence?
 
 If you sample *n* TCRs from a population, how many **different** sequences
 will you see? And if two labs each sample *n*, how many sequences will they
-have in common? Both have exact answers.
+have in common? BEAM computes both directly, without simulation.
 
 ```python
 from BEAM.analytics.exact_occupancy import ExactOccupancy
@@ -174,15 +176,17 @@ model = BeamModel.from_file("my_repertoire.beam")
 Abundances are optional; without them every sequence counts once. Nucleotide
 sequences work too, with `alphabet="nt"`.
 
-## Why exact?
+## Why no simulation?
 
 Most questions about a repertoire are sums over every possible sequence, and
 there are far too many sequences to list. The usual workaround is simulation:
 draw many sequences and count. BEAM is built so that these sums can be
-computed directly. Its probabilities add up to exactly one over all sequences,
-and quantities such as expected richness, overlap and publicness are evaluated
-exactly with stated error bounds. The same input always gives the same answer,
-and small differences between groups are not lost in simulation noise.
+computed directly, by dynamic programming over the whole sequence space. Its
+probabilities are normalised over all sequences, and quantities such as
+expected richness, overlap and publicness are evaluated numerically, with
+stated error bounds where a sum is approximated. The same input always gives
+the same answer, and small differences between groups are not lost in
+simulation noise.
 
 ## Documentation
 
@@ -193,7 +197,7 @@ The API reference is in [`docs/api/python/`](docs/api/python/):
 [the probability of a whole repertoire](docs/api/python/likelihood.md),
 [mixtures of repertoires](docs/api/python/mixture.md),
 [diversity](docs/api/python/diversity.md) and
-[exact queries](docs/api/python/query.md).
+[queries](docs/api/python/query.md).
 
 Questions and ideas are welcome in
 [Discussions](https://github.com/MuteJester/BEAM/discussions); bugs in

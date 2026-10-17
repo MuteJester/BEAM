@@ -1,10 +1,10 @@
 ---
-title: BEAM
-description: Exact probabilities for T cell receptor repertoires. Score sequences, plan sequencing depth, predict publicness and compare repertoires, with exact answers instead of simulation.
+title: Every possible sequence, accounted for
+description: A probability model learned from sequences alone, with optional abundances. Score T cell receptor CDR3s and other biological sequences, plan sequencing depth, predict publicness and compare repertoires, with every answer summed over all possible sequences instead of estimated by simulation.
 template: splash
 hero:
-  title: Exact probabilities for T cell receptor repertoires
-  tagline: Ask how likely a CDR3 is, how deeply to sequence, how many people share a sequence, or how two repertoires, cell types or conditions differ, and get an exact answer instead of a simulation.
+  title: Every possible sequence, accounted for
+  tagline: Ask how likely a biological sequence is, how deeply to sequence, how many people share a sequence, or how two repertoires, cell types or conditions differ. BEAM learns from your sequences alone, with their abundances if you have them, and answers by summing over every combinatorially possible sequence, without listing or sampling a single one.
   image:
     light: ../../assets/beam-logo-light.svg
     dark: ../../assets/beam-logo-dark.svg
@@ -30,7 +30,7 @@ import { CardGrid, Code, LinkCard } from '@astrojs/starlight/components';
 <CardGrid>
 	<LinkCard
 		title="How likely is this TCR?"
-		description="The exact probability of any CDR3β sequence, including ones never seen before, and which residues make it likely or unlikely."
+		description="The probability of any CDR3β sequence, including ones never seen before, normalised over all possible sequences, and which residues make it likely or unlikely."
 		href="/BEAM/guides/score/"
 	/>
 	<LinkCard

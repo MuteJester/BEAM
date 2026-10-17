@@ -10,10 +10,11 @@ url: "https://github.com/MuteJester/BEAM"
 abstract: >-
   BEAM is a probability model for T cell receptor beta CDR3 amino-acid
   sequences that combines local sequence dependence with exact normalisation.
-  Because its probabilities are exact, it computes sequence probabilities,
-  the expected recovery, recurrence, overlap and publicness of sequences at a
-  given sampling depth, and interpretable distances between repertoires,
-  without enumerating or Monte Carlo sampling the space of sequences.
+  Its tractable local structure permits deterministic evaluation of sequence
+  probabilities, the expected recovery, recurrence, overlap and publicness of
+  sequences at a given sampling depth, and interpretable distances between
+  repertoires, without enumerating or Monte Carlo sampling the space of
+  sequences.
 keywords:
   - T cell receptor
   - TCR repertoire

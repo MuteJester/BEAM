@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "beam-model"
 dynamic = ["version"]
-description = "Exact probability models of T cell receptor CDR3 repertoires: sequence probabilities, sampling depth, publicness and repertoire comparison"
+description = "Probability models of biological sequences such as T cell receptor CDR3s: sequence probabilities, sampling depth, publicness and repertoire comparison, summed over every possible sequence without simulation"
 readme = "README.md"
 license = "GPL-3.0-or-later"
 license-files = ["LICENSE"]
