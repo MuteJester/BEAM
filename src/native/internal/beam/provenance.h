@@ -31,6 +31,12 @@ static inline int64_t beam_now_nanos(void) {
     struct timespec ts;
     if (clock_gettime(CLOCK_MONOTONIC, &ts) == 0)
         return (int64_t)ts.tv_sec * 1000000000 + (int64_t)ts.tv_nsec;
+#elif defined(TIME_UTC)
+    /* No clock_gettime (the Windows C runtime): C11's wall clock. Not
+     * monotonic, but fine for timing a build. */
+    struct timespec ts;
+    if (timespec_get(&ts, TIME_UTC) == TIME_UTC)
+        return (int64_t)ts.tv_sec * 1000000000 + (int64_t)ts.tv_nsec;
 #endif
     return 0;
 }

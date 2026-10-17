@@ -73,8 +73,10 @@ int get_u32_buffer(PyObject *obj, Py_buffer *view, const char *what) {
                      "%s must be a C-contiguous uint32 array", what);
         return 0;
     }
-    if (view->itemsize != (Py_ssize_t)sizeof(uint32_t) ||
-        !view->format || strcmp(view->format, "I") != 0) {
+    /* A 4-byte unsigned integer is "I" (unsigned int) everywhere, and may be
+     * reported as "L" where unsigned long is also 4 bytes, as on Windows. */
+    if (view->itemsize != (Py_ssize_t)sizeof(uint32_t) || !view->format ||
+        (strcmp(view->format, "I") != 0 && strcmp(view->format, "L") != 0)) {
         PyBuffer_Release(view);
         PyErr_Format(PyExc_TypeError, "%s must have dtype uint32", what);
         return 0;

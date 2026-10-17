@@ -48,7 +48,7 @@ jobs:
         run: |
           cp -r tests "$RUNNER_TEMP/tests"
           cd "$RUNNER_TEMP"
-          python -m pytest tests -q -o faulthandler_timeout=300
+          python -m pytest tests -q -rs -o faulthandler_timeout=300
       - name: README examples
         run: python tools/release/check_readme.py README.md
 
