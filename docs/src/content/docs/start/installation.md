@@ -17,7 +17,7 @@ for:
 | Platform | Architectures | Python |
 |---|---|---|
 | Linux | x86-64, ARM (aarch64) | 3.11 to 3.15 |
-| macOS | Apple Silicon (arm64) | 3.11 to 3.15 |
+| macOS 14 or newer | Apple Silicon (arm64) | 3.11 to 3.15 |
 | Windows | x86-64 | 3.11 to 3.15 |
 
 NumPy and SciPy are installed with it. Nothing else is needed.

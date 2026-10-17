@@ -207,7 +207,10 @@ class BuildExt(build_ext):
             self.compiler.cc = str(llvm_prefix() / "bin" / "clang-cl.exe")
         super().build_extensions()
         dest = Path(self.get_ext_fullpath("BEAM._cbeam")).parent
-        if OMP_DLL is not None:
+        # A source install needs the DLL beside the module. Wheels set
+        # BEAM_COPY_LIBOMP=0: delvewheel vendors it under a unique name, which
+        # cannot collide with another package's libomp.dll in the process.
+        if OMP_DLL is not None and os.environ.get("BEAM_COPY_LIBOMP", "1") != "0":
             shutil.copy2(OMP_DLL, dest / OMP_DLL.name)
         if BUNDLES_LIBOMP:
             shutil.copy2(OMP_LICENSE, dest / "libomp-LICENSE.txt")

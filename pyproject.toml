@@ -95,10 +95,12 @@ manylinux-x86_64-image = "manylinux_2_28"
 manylinux-aarch64-image = "manylinux_2_28"
 
 [tool.cibuildwheel.windows]
-# 64-bit Intel/AMD only. clang-cl compiles (setup.py), and libomp.dll is copied
-# beside the extension, so the wheel needs no repair step.
+# 64-bit Intel/AMD only. clang-cl compiles (setup.py); LLVM is found through
+# BEAM_LLVM_PREFIX (set by the workflows) or PATH. delvewheel vendors
+# libomp.dll into the wheel under a unique name, so setup.py's own copy, for
+# source installs, is switched off.
 archs = ["AMD64"]
-# LLVM is found through BEAM_LLVM_PREFIX (set by the workflow) or PATH.
+environment = { BEAM_COPY_LIBOMP = "0" }
 
 [tool.cibuildwheel.macos]
 archs = ["arm64"]
