@@ -1,0 +1,62 @@
+---
+/**
+ * The header's right-hand links: one per docs section, then Starlight's own
+ * social icons. Replaces Starlight's SocialIcons slot, which the header hides
+ * on narrow screens, where the menu button opens the full sidebar instead.
+ */
+import Default from '@astrojs/starlight/components/SocialIcons.astro';
+
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+const sections = [
+	{ label: 'Get started', dir: 'start', first: 'use-cases' },
+	{ label: 'Guides', dir: 'guides', first: 'score' },
+	{ label: 'Explanations', dir: 'explanations', first: 'how-beam-works' },
+	{ label: 'Reference', dir: 'reference', first: 'beammodel' },
+];
+const here = Astro.url.pathname;
+---
+
+<nav class="sections" aria-label="Sections">
+	{
+		sections.map(({ label, dir, first }) => {
+			const current = here.startsWith(`${base}/${dir}/`);
+			return (
+				<a href={`${base}/${dir}/${first}/`} aria-current={current ? 'true' : undefined}>
+					{label}
+				</a>
+			);
+		})
+	}
+</nav>
+<Default />
+
+<style>
+	.sections {
+		display: flex;
+		gap: 1.25rem;
+		align-items: center;
+		margin-inline-end: 0.5rem;
+	}
+	.sections a {
+		color: var(--sl-color-gray-2);
+		text-decoration: none;
+		font-size: var(--sl-text-sm);
+		font-weight: 500;
+		white-space: nowrap;
+		padding-block: 0.25rem;
+		border-bottom: 2px solid transparent;
+	}
+	.sections a:hover {
+		color: var(--sl-color-white);
+	}
+	.sections a[aria-current] {
+		color: var(--sl-color-text-accent);
+		border-bottom-color: var(--sl-color-text-accent);
+	}
+	/* Between the sidebar breakpoint and a wide screen the search box needs the room. */
+	@media (max-width: 64rem) {
+		.sections {
+			display: none;
+		}
+	}
+</style>

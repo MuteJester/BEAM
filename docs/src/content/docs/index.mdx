@@ -29,18 +29,18 @@ import { CardGrid, Code, LinkCard } from '@astrojs/starlight/components';
 
 <CardGrid>
 	<LinkCard
-		title="How likely is this TCR?"
-		description="The probability of any CDR3β sequence, including ones never seen before, normalised over all possible sequences, and which residues make it likely or unlikely."
+		title="How likely is this sequence?"
+		description="The probability of any sequence, normalised over all possible sequences, including ones never seen before: for example, of a CDR3β under a reference model of human repertoires, and which residues make it likely or unlikely."
 		href="/BEAM/guides/score/"
 	/>
 	<LinkCard
 		title="How deeply should I sequence?"
-		description="How many distinct sequences to expect at a given depth, and how many two samples will have in common."
+		description="How many distinct sequences to expect at a given depth, how often sequences repeat, and how many two samples will have in common."
 		href="/BEAM/guides/sequencing-depth/"
 	/>
 	<LinkCard
-		title="How many people share this TCR?"
-		description="The expected number of repertoires in a cohort that contain a sequence, and the full distribution around it."
+		title="How many people share this sequence?"
+		description="The expected number of repertoires in a cohort that contain a sequence, the full distribution around it, and how many of a cohort's sequences are private."
 		href="/BEAM/guides/publicness/"
 	/>
 	<LinkCard
@@ -66,7 +66,8 @@ import { CardGrid, Code, LinkCard } from '@astrojs/starlight/components';
 
 <Code code="pip install beam-model" lang="bash" />
 
-BEAM runs on Linux and macOS with Python 3.11 to 3.15. It comes with a reference model built
+BEAM runs on Linux and macOS with Python 3.11 to 3.15, and on Windows inside
+[WSL](/BEAM/start/installation/#on-windows). It comes with a reference model built
 from 38,538 human repertoires, ready to load in one line.
 
 ## Cite

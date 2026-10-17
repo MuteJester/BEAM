@@ -32,13 +32,15 @@ export default defineConfig({
 		starlight({
 			title: 'BEAM',
 			description:
-				'Exact probabilities for T cell receptor repertoires: sequence probabilities, sequencing depth, publicness and repertoire comparison.',
+				'A probability model for biological sequences such as T cell receptor CDR3s: sequence probabilities, sequencing depth, publicness and repertoire comparison, summed over every possible sequence without simulation.',
 			logo: {
 				light: './src/assets/logo-light.svg',
 				dark: './src/assets/logo-dark.svg',
 			},
 			favicon: '/favicon.svg',
 			head: [{ tag: 'link', attrs: { rel: 'icon', href: '/BEAM/favicon.ico', sizes: '32x32' } }],
+			// Section links beside the search box, before the GitHub icon.
+			components: { SocialIcons: './src/components/HeaderLinks.astro' },
 			social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/MuteJester/BEAM' }],
 			editLink: { baseUrl: 'https://github.com/MuteJester/BEAM/edit/main/docs/' },
 			customCss: ['katex/dist/katex.min.css', './src/styles/theme.css'],
