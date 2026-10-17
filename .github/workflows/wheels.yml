@@ -1,0 +1,56 @@
+name: Wheels
+
+# Builds every wheel the release builds, with the same steps, whenever the
+# packaging changes, so a broken platform shows up before a release does.
+# Nothing is published.
+on:
+  push:
+    paths:
+      - setup.py
+      - pyproject.toml
+      - MANIFEST.in
+      - build_support/**
+      - licenses/**
+      - tools/release/smoke_test.py
+      - .github/workflows/wheels.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: wheels-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Windows compiles with clang-cl and LLVM's libomp, from the runner's LLVM.
+  BEAM_LLVM_PREFIX: C:\Program Files\LLVM
+
+jobs:
+  wheels:
+    name: Wheels (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pypa/cibuildwheel@b3395e271a35f73dad77f21802abe9b986dfe299 # v4.3.1
+        with:
+          output-dir: wheelhouse
+      - name: Wheels that bundle libomp carry its licence
+        shell: bash
+        run: |
+          python - <<'PY'
+          import glob, zipfile
+          wheels = sorted(glob.glob("wheelhouse/*.whl"))
+          assert len(wheels) == 5, f"expected 5 wheels, found {len(wheels)}"
+          for w in wheels:
+              names = zipfile.ZipFile(w).namelist()
+              bundled = [n for n in names if "libomp" in n and "LICENSE" not in n]
+              if bundled:
+                  assert "BEAM/libomp-LICENSE.txt" in names, f"{w}: libomp without its licence"
+              print("ok", w, bundled)
+          PY

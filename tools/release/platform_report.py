@@ -7,22 +7,18 @@ at full precision, to a JSON file: run on two platforms, the two files show
 how far their answers differ.
 
     python tools/release/platform_report.py report.json
-    python tools/release/platform_report.py --compare linux.json windows.json
+    python tools/release/platform_report.py --compare linux.json windows.json macos.json
+
+With --max-rel, comparing fails when any value of a later report differs from
+the first by more than that relative amount.
 
 Uses only BEAM and NumPy, and a model built from a fixed synthetic corpus.
+Comparing needs neither: only the standard library.
 """
 import argparse
 import json
-import math
 import os
 import sys
-
-import numpy as np
-
-import BEAM
-from BEAM import BeamModel
-from BEAM.analytics.distance import compare
-from BEAM.analytics.exact_occupancy import ExactOccupancy
 
 ALPHABET = "ACDEFGHIKLMNPQRSTVWY"
 DEPTHS = [1e3, 1e5, 1e7, 1e9]
@@ -30,6 +26,7 @@ DEPTHS = [1e3, 1e5, 1e7, 1e9]
 
 def corpus(seed, n):
     """CDR3-like strings: CAS... plus a random middle, F at the end."""
+    import numpy as np
     rng = np.random.default_rng(seed)
     out = []
     for _ in range(n):
@@ -39,6 +36,9 @@ def corpus(seed, n):
 
 
 def quantities():
+    from BEAM import BeamModel
+    from BEAM.analytics.distance import compare
+    from BEAM.analytics.exact_occupancy import ExactOccupancy
     a = BeamModel(corpus(1, 3000), order=3)
     b = BeamModel(corpus(2, 3000), order=3)
     probes = corpus(3, 40)
@@ -68,6 +68,7 @@ def flatten(d, prefix=""):
 
 
 def report(path):
+    import BEAM
     cores = os.cpu_count() or 1
     threads = BEAM.effective_threads()
     print(f"BEAM {BEAM.__version__}, {sys.platform}, {cores} cores, "
@@ -90,6 +91,7 @@ def report(path):
 
 
 def compare_reports(first, second):
+    """The largest relative difference between two reports' values."""
     a, b = (json.load(open(p)) for p in (first, second))
     fa, fb = flatten(a["values"]), flatten(b["values"])
     print(f"{a['platform']} against {b['platform']}: {len(fa)} values")
@@ -111,12 +113,16 @@ def main():
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("paths", nargs="+")
     ap.add_argument("--compare", action="store_true",
-                    help="compare two reports instead of writing one")
+                    help="compare reports with the first instead of writing one")
+    ap.add_argument("--max-rel", type=float,
+                    help="with --compare, fail above this relative difference")
     args = ap.parse_args()
     if args.compare:
-        if len(args.paths) != 2:
-            sys.exit("--compare takes two reports")
-        compare_reports(*args.paths)
+        if len(args.paths) < 2:
+            sys.exit("--compare takes at least two reports")
+        worst = max(compare_reports(args.paths[0], p) for p in args.paths[1:])
+        if args.max_rel is not None and worst > args.max_rel:
+            sys.exit(f"largest relative difference {worst:.1e} exceeds {args.max_rel:.1e}")
     else:
         report(args.paths[0])
 

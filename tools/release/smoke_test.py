@@ -37,6 +37,10 @@ def main():
     print(f"{threads} OpenMP threads on {cores} cores")
     if "OMP_NUM_THREADS" not in os.environ:
         assert cores == 1 or threads > 1, "built without OpenMP: one thread on several cores"
+    # Windows and macOS wheels bundle LLVM's libomp, whose licence goes with it.
+    if sys.platform in ("win32", "darwin") and threads > 1:
+        licence = os.path.join(os.path.dirname(BEAM.__file__), "libomp-LICENSE.txt")
+        assert os.path.isfile(licence), "libomp is bundled without its licence"
 
     model = BeamModel(TRAINING, order=2, max_length=MAX_LENGTH)
 

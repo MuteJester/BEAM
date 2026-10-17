@@ -11,6 +11,10 @@ on:
 permissions:
   contents: read
 
+env:
+  # Windows compiles with clang-cl and LLVM's libomp, from the runner's LLVM.
+  BEAM_LLVM_PREFIX: C:\Program Files\LLVM
+
 concurrency:
   group: tests-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -24,9 +28,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # The oldest and the newest supported Python on both platforms.
-        os: [ubuntu-latest, macos-latest]
+        # The oldest and the newest supported Python on every platform.
+        os: [ubuntu-latest, macos-latest, windows-latest]
         python: ["3.11", "3.15"]
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -47,6 +54,55 @@ jobs:
           python -m pytest tests -q -o faulthandler_timeout=300
       - name: README examples
         run: python tools/release/check_readme.py README.md
+
+  platforms:
+    # OpenMP is live, one thread and all threads agree bit for bit, and a
+    # fixed set of values for the agreement check below.
+    name: Platform report / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: OpenMP runtime (macOS)
+        if: runner.os == 'macOS'
+        run: brew install libomp
+      - run: python -m pip install .
+      - name: Report
+        run: |
+          cd "$RUNNER_TEMP"
+          python "$GITHUB_WORKSPACE/tools/release/platform_report.py" "report-${{ runner.os }}.json"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: platform-report-${{ runner.os }}
+          path: ${{ runner.temp }}/report-${{ runner.os }}.json
+          if-no-files-found: error
+
+  agreement:
+    # Linux, macOS and Windows give the same answers, to well within the
+    # 1e-10 relative accuracy the occupancy sums are planned to.
+    name: Platforms agree
+    needs: platforms
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: platform-report-*
+          merge-multiple: true
+      - run: >-
+          python tools/release/platform_report.py --compare --max-rel 1e-9
+          report-Linux.json report-macOS.json report-Windows.json
 
   native:
     name: C unit tests

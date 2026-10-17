@@ -12,7 +12,8 @@ Bug reports, questions and pull requests are welcome.
 ## Development setup
 
 You need a C compiler with OpenMP (GCC or Clang; on macOS,
-`brew install libomp`) and Python 3.11 or newer.
+`brew install libomp`; on Windows, LLVM's clang-cl with the Microsoft C++
+Build Tools) and Python 3.11 or newer.
 
 ```bash
 git clone https://github.com/MuteJester/BEAM.git

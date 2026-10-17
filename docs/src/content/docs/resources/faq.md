@@ -7,10 +7,10 @@ sidebar:
 
 ## `pip install beam-model` tries to compile and fails
 
-Ready-built packages exist for Linux (x86-64, ARM) and macOS (Apple Silicon) with Python 3.11
-to 3.15. On another platform or Python version pip falls back to building from source, which
-needs a C compiler with OpenMP; see [Installation](/BEAM/start/installation/#from-source). On
-Windows, use WSL.
+Ready-built packages exist for Linux (x86-64, ARM), macOS (Apple Silicon) and Windows (x86-64)
+with Python 3.11 to 3.15. On another platform or Python version pip falls back to building from
+source, which needs a C compiler with OpenMP; see
+[Installation](/BEAM/start/installation/#from-source).
 
 ## Should I use `junction_aa` or `cdr3_aa`?
 

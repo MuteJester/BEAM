@@ -29,5 +29,5 @@ probability landscape for T cell receptor repertoire sampling and comparison*.
   profiles, repertoire likelihoods, sequence logos and an exact query engine.
 - `BEAM.load_pretrained`: published models, downloaded once and verified by
   SHA-256.
-- Wheels for Linux (x86-64, ARM) and macOS (Apple Silicon), Python 3.11 to
-  3.15.
+- Wheels for Linux (x86-64, ARM), macOS (Apple Silicon) and Windows
+  (x86-64), Python 3.11 to 3.15.

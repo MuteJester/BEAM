@@ -43,9 +43,8 @@ repertoires**, and you can build models from your own data in one line.
 pip install beam-model
 ```
 
-Ready-to-use packages exist for **Linux** (x86-64 and ARM) and **macOS** (Apple
-Silicon), for Python 3.11 to 3.15. On Windows, install it inside
-[WSL](https://learn.microsoft.com/windows/wsl/install).
+Ready-to-use packages exist for **Linux** (x86-64 and ARM), **macOS** (Apple
+Silicon) and **Windows** (x86-64), for Python 3.11 to 3.15.
 
 ## Quick start
 

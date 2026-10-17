@@ -6,16 +6,16 @@ name: Release
 #   guard   the tag matches BEAM.__version__, CITATION.cff and a CHANGELOG
 #           section; nothing else starts until it passes
 #   tests   the full CI suite on the tagged commit
-#   wheels  Linux x86_64 and aarch64, macOS arm64, Python 3.11-3.15, each
-#           installed and run through tools/release/smoke_test.py
+#   wheels  Linux x86_64 and aarch64, macOS arm64, Windows x86_64, Python
+#           3.11-3.15, each installed and run through tools/release/smoke_test.py
 #   sdist   built, installed into a clean environment and smoke-tested
 #   draft   a draft GitHub Release with every file and SHA256SUMS.txt
 #   pypi    Trusted Publishing (no stored token), from the protected `pypi`
 #           environment; the one irreversible step, so it runs last
 #   publish the draft becomes the public release, which Zenodo archives
 #   verify  installs the published version from PyPI on clean Linux (x86_64,
-#           ARM) and macOS machines and runs the smoke test and the README
-#           examples: what users get, not what was built
+#           ARM), macOS and Windows machines and runs the smoke test and the
+#           README examples: what users get, not what was built
 #
 # Re-running a failed workflow is safe: the draft step refreshes a draft and
 # refuses to touch a release that is already public.
@@ -25,6 +25,10 @@ on:
 
 permissions:
   contents: read
+
+env:
+  # Windows compiles with clang-cl and LLVM's libomp, from the runner's LLVM.
+  BEAM_LLVM_PREFIX: C:\Program Files\LLVM
 
 concurrency:
   group: release-${{ github.ref }}
@@ -69,12 +73,23 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: pypa/cibuildwheel@b3395e271a35f73dad77f21802abe9b986dfe299 # v4.3.1
         with:
           output-dir: wheelhouse
+      - name: Wheels that bundle libomp carry its licence
+        shell: bash
+        run: |
+          python - <<'PY'
+          import glob, zipfile
+          for w in sorted(glob.glob("wheelhouse/*.whl")):
+              names = zipfile.ZipFile(w).namelist()
+              if any("libomp" in n and "LICENSE" not in n for n in names):
+                  assert "BEAM/libomp-LICENSE.txt" in names, f"{w}: libomp without its licence"
+              print("ok", w)
+          PY
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: wheels-${{ matrix.os }}
@@ -119,8 +134,9 @@ jobs:
         run: |
           ls -l dist
           n=$(ls dist/*.whl | wc -l)
-          # 5 Python versions x (Linux x86_64 + Linux aarch64 + macOS arm64)
-          [ "$n" -eq 15 ] || { echo "::error::expected 15 wheels, found $n"; exit 1; }
+          # 5 Python versions x (Linux x86_64 + Linux aarch64 + macOS arm64
+          # + Windows x86_64)
+          [ "$n" -eq 20 ] || { echo "::error::expected 20 wheels, found $n"; exit 1; }
           ls dist/*.tar.gz
           cd dist && sha256sum *.whl *.tar.gz > SHA256SUMS.txt && cat SHA256SUMS.txt
       - name: Create or refresh the draft release
@@ -185,8 +201,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, windows-latest]
         python: ["3.11", "3.15"]
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -198,16 +217,19 @@ jobs:
           VERSION: ${{ needs.guard.outputs.version }}
         run: |
           python -m venv "$RUNNER_TEMP/venv"
+          # A venv keeps its programs in Scripts on Windows, bin elsewhere.
+          BIN="$RUNNER_TEMP/venv/bin"; [ -d "$RUNNER_TEMP/venv/Scripts" ] && BIN="$RUNNER_TEMP/venv/Scripts"
+          echo "VENV_BIN=$BIN" >> "$GITHUB_ENV"
           # A new version can take a few minutes to reach every PyPI mirror.
           # --only-binary: a user's install must get a wheel, not compile.
           for i in 1 2 3 4 5 6 7 8 9 10; do
-            "$RUNNER_TEMP/venv/bin/pip" install --no-cache-dir --only-binary beam-model \
+            "$BIN/python" -m pip install --no-cache-dir --only-binary beam-model \
               "beam-model==$VERSION" pandas && break
             echo "not available yet, retrying in 30 s"; sleep 30
           done
-          "$RUNNER_TEMP/venv/bin/python" -c "import BEAM; assert BEAM.__version__ == '$VERSION', BEAM.__version__"
+          "$BIN/python" -c "import BEAM; assert BEAM.__version__ == '$VERSION', BEAM.__version__"
       - name: Smoke test and README examples
         run: |
           cd "$RUNNER_TEMP"
-          "$RUNNER_TEMP/venv/bin/python" "$GITHUB_WORKSPACE/tools/release/smoke_test.py"
-          "$RUNNER_TEMP/venv/bin/python" "$GITHUB_WORKSPACE/tools/release/check_readme.py" "$GITHUB_WORKSPACE/README.md"
+          "$VENV_BIN/python" "$GITHUB_WORKSPACE/tools/release/smoke_test.py"
+          "$VENV_BIN/python" "$GITHUB_WORKSPACE/tools/release/check_readme.py" "$GITHUB_WORKSPACE/README.md"
