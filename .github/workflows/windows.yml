@@ -91,6 +91,20 @@ jobs:
       - uses: pypa/cibuildwheel@b3395e271a35f73dad77f21802abe9b986dfe299 # v4.3.1
         with:
           output-dir: wheelhouse
+      - name: Each wheel carries the extension, libomp and its licence
+        shell: bash
+        run: |
+          python - <<'EOF'
+          import glob, zipfile
+          wheels = sorted(glob.glob("wheelhouse/*.whl"))
+          assert len(wheels) == 5, f"expected 5 wheels, found {len(wheels)}"
+          for w in wheels:
+              names = set(zipfile.ZipFile(w).namelist())
+              need = {"BEAM/libomp.dll", "BEAM/libomp-LICENSE.txt"}
+              assert need <= names, f"{w}: missing {need - names}"
+              assert any(n.startswith("BEAM/_cbeam") and n.endswith(".pyd") for n in names), w
+              print("ok", w)
+          EOF
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: wheels-windows

@@ -7,3 +7,4 @@ recursive-include include *.h
 recursive-include src *.c *.h
 include README.md LICENSE CITATION.cff
 include src/BEAM/pretrained/registry.json
+include licenses/*.txt

@@ -190,8 +190,15 @@ else:
     LIBRARY_DIRS, OMP_DLL, MACROS, LIBRARIES = [], None, [], ["m"]
 
 
+# LLVM's OpenMP runtime, bundled into Windows and macOS wheels, is under the
+# Apache License 2.0 with LLVM Exceptions; a copy travels with it.
+OMP_LICENSE = HERE / "licenses" / "LLVM-OpenMP-LICENSE.txt"
+BUNDLES_LIBOMP = OMP_DLL is not None or (sys.platform == "darwin" and libomp_prefix())
+
+
 class BuildExt(build_ext):
-    """On Windows: compile with clang-cl, and ship libomp.dll beside the module."""
+    """On Windows: compile with clang-cl, and ship libomp.dll beside the module.
+    Wherever libomp is bundled, its licence goes beside the module too."""
 
     def build_extensions(self):
         if WINDOWS and self.compiler.compiler_type == "msvc":
@@ -199,9 +206,11 @@ class BuildExt(build_ext):
                 self.compiler.initialize()
             self.compiler.cc = str(llvm_prefix() / "bin" / "clang-cl.exe")
         super().build_extensions()
+        dest = Path(self.get_ext_fullpath("BEAM._cbeam")).parent
         if OMP_DLL is not None:
-            dest = Path(self.get_ext_fullpath("BEAM._cbeam")).parent
             shutil.copy2(OMP_DLL, dest / OMP_DLL.name)
+        if BUNDLES_LIBOMP:
+            shutil.copy2(OMP_LICENSE, dest / "libomp-LICENSE.txt")
 
 setup(
     ext_modules=[Extension(
