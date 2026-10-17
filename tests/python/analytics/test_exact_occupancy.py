@@ -691,3 +691,19 @@ def test_the_cohort_private_sums_agree_with_the_taylor_form(case, monkeypatch):
         _held(x, truth, tol=1e-9)
         _held(y, truth, tol=1e-9)
         assert abs(x.value - y.value) <= 1e-12 * abs(y.value), (d, x, y)
+
+
+def test_the_cache_lock_uses_windows_locking_where_there_is_no_flock(tmp_path, monkeypatch):
+    """On Windows there is no fcntl; the lock file is locked with msvcrt instead."""
+    import sys
+    import types
+    from BEAM.analytics.exact_occupancy import _locked
+    calls = []
+    fake = types.SimpleNamespace(LK_LOCK=1, LK_UNLCK=0,
+                                 locking=lambda fd, mode, n: calls.append((mode, n)))
+    monkeypatch.setitem(sys.modules, "fcntl", None)       # import fcntl fails
+    monkeypatch.setitem(sys.modules, "msvcrt", fake)
+    with _locked(tmp_path / "lines.npz"):
+        assert calls == [(fake.LK_LOCK, 1)]
+    assert calls == [(fake.LK_LOCK, 1), (fake.LK_UNLCK, 1)]
+    assert (tmp_path / "lines.npz.lock").exists()

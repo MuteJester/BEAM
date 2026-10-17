@@ -91,6 +91,12 @@ archs = ["x86_64", "aarch64"]
 manylinux-x86_64-image = "manylinux_2_28"
 manylinux-aarch64-image = "manylinux_2_28"
 
+[tool.cibuildwheel.windows]
+# 64-bit Intel/AMD only. clang-cl compiles (setup.py), and libomp.dll is copied
+# beside the extension, so the wheel needs no repair step.
+archs = ["AMD64"]
+# LLVM is found through BEAM_LLVM_PREFIX (set by the workflow) or PATH.
+
 [tool.cibuildwheel.macos]
 archs = ["arm64"]
 # Apple clang ships no OpenMP runtime; Homebrew's libomp is bundled into the

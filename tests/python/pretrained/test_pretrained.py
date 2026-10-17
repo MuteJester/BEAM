@@ -107,3 +107,12 @@ def test_newer_format_asks_for_an_upgrade(published):
     published["write"](format=MODEL_FORMAT + 1)
     with pytest.raises(ValueError, match="upgrade beam-model"):
         BEAM.load_pretrained("tiny", progress=False)
+
+
+def test_cache_lives_in_local_app_data_on_windows(tmp_path, monkeypatch):
+    from BEAM.pretrained import cache_dir
+    monkeypatch.delenv("BEAM_CACHE_DIR", raising=False)
+    monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    monkeypatch.setattr("sys.platform", "win32")
+    assert cache_dir() == tmp_path / "beam-model"

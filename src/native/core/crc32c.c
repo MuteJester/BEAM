@@ -134,7 +134,9 @@ uint32_t beam_crc32c_software(uint32_t crc, const void *data, size_t len) {
  * same instruction. It is an optimisation, not a correctness step, and no test
  * can be written that fails when it is removed.
  */
-#if defined(__x86_64__) || defined(__i386__)
+/* __builtin_cpu_supports needs the GCC runtime: GCC, Clang and MinGW have it;
+ * clang-cl, which links against the Microsoft runtime, does not. */
+#if (defined(__x86_64__) || defined(__i386__)) && defined(__GNUC__)
 #define BEAM_HAVE_CRC_HW 1
 #include <x86intrin.h>
 

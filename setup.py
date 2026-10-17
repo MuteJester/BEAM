@@ -27,10 +27,12 @@ because it is believed.
 """
 import os
 import platform
+import shutil
 import sys
 from pathlib import Path
 
 from setuptools import Extension, setup
+from setuptools.command.build_ext import build_ext
 
 HERE = Path(__file__).parent
 
@@ -106,6 +108,48 @@ def libomp_prefix():
     return None
 
 
+def llvm_prefix():
+    """The LLVM installation holding clang-cl, or None (Windows only).
+
+    BEAM_LLVM_PREFIX wins; otherwise the directory above clang-cl on PATH.
+    """
+    if os.environ.get("BEAM_LLVM_PREFIX"):
+        return Path(os.environ["BEAM_LLVM_PREFIX"])
+    exe = shutil.which("clang-cl")
+    return Path(exe).resolve().parent.parent if exe else None
+
+
+def windows_flags():
+    """clang-cl flags for Windows: (compile, link, library dirs, libomp.dll).
+
+    Microsoft's cl.exe cannot compile the C core, which uses GCC vector
+    extensions; clang-cl can, and produces objects for the Microsoft linker and
+    runtime that CPython itself uses. OpenMP comes from LLVM's libomp; its DLL
+    is copied beside the extension (see BuildExt), where Windows looks for it.
+    """
+    prefix = llvm_prefix()
+    if prefix is None or not (prefix / "bin" / "clang-cl.exe").is_file():
+        sys.exit("BEAM on Windows is compiled with clang-cl, from LLVM "
+                 "(https://releases.llvm.org); none was found on PATH. Set "
+                 "BEAM_LLVM_PREFIX to the LLVM directory, or install BEAM "
+                 "inside WSL: https://learn.microsoft.com/windows/wsl/install")
+    # -ffp-contract=off: as on Linux and macOS, no fused multiply-add.
+    compile_args = ["/O2", "/std:c11", "/clang:-ffp-contract=off"]
+    link_args, library_dirs, dll = [], [], None
+    lib, bin_ = prefix / "lib", prefix / "bin"
+    if (lib / "libomp.lib").is_file() and (bin_ / "libomp.dll").is_file():
+        compile_args.append("-fopenmp")
+        library_dirs.append(str(lib))
+        link_args.append("libomp.lib")
+        dll = bin_ / "libomp.dll"
+    else:
+        print("BEAM: LLVM's libomp not found; building without multithreading",
+              file=sys.stderr)
+    if target_is_x86():
+        compile_args.append("-mpopcnt")
+    return compile_args, link_args, library_dirs, dll
+
+
 def platform_flags():
     """Compile and link flags for this platform: (compile, link)."""
     # -ffp-contract=off: the C core relies on no fused multiply-add, so that
@@ -128,14 +172,36 @@ def platform_flags():
             print("BEAM: libomp not found (brew install libomp); "
                   "building without multithreading", file=sys.stderr)
     else:
-        sys.exit("BEAM builds on Linux and macOS. On Windows, install it "
-                 "inside WSL: https://learn.microsoft.com/windows/wsl/install")
+        sys.exit("BEAM builds on Linux, macOS and Windows. On another system, "
+                 "build it from source with GCC or Clang and OpenMP.")
     if target_is_x86():
         compile_args.append("-mpopcnt")
     return compile_args, link_args
 
 
-COMPILE_ARGS, LINK_ARGS = platform_flags()
+WINDOWS = sys.platform == "win32"
+if WINDOWS:
+    COMPILE_ARGS, LINK_ARGS, LIBRARY_DIRS, OMP_DLL = windows_flags()
+    # M_PI and friends are behind _USE_MATH_DEFINES in the Microsoft headers.
+    MACROS = [("_USE_MATH_DEFINES", None), ("_CRT_SECURE_NO_WARNINGS", None)]
+    LIBRARIES = []
+else:
+    COMPILE_ARGS, LINK_ARGS = platform_flags()
+    LIBRARY_DIRS, OMP_DLL, MACROS, LIBRARIES = [], None, [], ["m"]
+
+
+class BuildExt(build_ext):
+    """On Windows: compile with clang-cl, and ship libomp.dll beside the module."""
+
+    def build_extensions(self):
+        if WINDOWS and self.compiler.compiler_type == "msvc":
+            if not self.compiler.initialized:
+                self.compiler.initialize()
+            self.compiler.cc = str(llvm_prefix() / "bin" / "clang-cl.exe")
+        super().build_extensions()
+        if OMP_DLL is not None:
+            dest = Path(self.get_ext_fullpath("BEAM._cbeam")).parent
+            shutil.copy2(OMP_DLL, dest / OMP_DLL.name)
 
 setup(
     ext_modules=[Extension(
@@ -143,8 +209,11 @@ setup(
         sources=manifest("python_binding_sources.txt") + manifest("native_sources.txt"),
         depends=headers(),
         include_dirs=["include", "src/native/internal"],
+        define_macros=MACROS,
         extra_compile_args=COMPILE_ARGS,
         extra_link_args=LINK_ARGS,
-        libraries=["m"],
+        library_dirs=LIBRARY_DIRS,
+        libraries=LIBRARIES,
     )],
+    cmdclass={"build_ext": BuildExt},
 )

@@ -279,18 +279,39 @@ def _log_ratio_diff(w1: float, w2: float, z: np.ndarray) -> np.ndarray:
 
 @contextlib.contextmanager
 def _locked(path: Path):
-    """An exclusive lock beside `path`, where the platform has one."""
+    """An exclusive lock beside `path`: flock on POSIX, msvcrt on Windows."""
     try:
         import fcntl
-    except ImportError:          # no advisory locks: merging still helps
+    except ImportError:
+        fcntl = None
+    if fcntl is not None:
+        with open(f"{path}.lock", "a") as fh:
+            fcntl.flock(fh, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(fh, fcntl.LOCK_UN)
+        return
+    try:
+        import msvcrt
+    except ImportError:          # no locks at all: merging still helps
         yield
         return
-    with open(f"{path}.lock", "a") as fh:
-        fcntl.flock(fh, fcntl.LOCK_EX)
+    with open(f"{path}.lock", "a+b") as fh:
+        # Locks the first byte, which may lie past the end of an empty file.
+        # LK_LOCK gives up after about ten seconds; keep waiting, as flock does.
+        while True:
+            fh.seek(0)
+            try:
+                msvcrt.locking(fh.fileno(), msvcrt.LK_LOCK, 1)
+                break
+            except OSError:
+                continue
         try:
             yield
         finally:
-            fcntl.flock(fh, fcntl.LOCK_UN)
+            fh.seek(0)
+            msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
 
 
 # ── the sampling deficit ────────────────────────────────────────

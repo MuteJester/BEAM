@@ -5,6 +5,10 @@
 #include "beam/internal.h"
 #include "beam/vmath.h"
 
+#ifdef _WIN32
+#include <malloc.h>   /* _aligned_malloc, _aligned_free */
+#endif
+
 
 /* ── Shared scratch for a forward sweep ──────────────────────── */
 
@@ -1197,7 +1201,22 @@ static void *line_alloc(size_t n_doubles) {
     /* Whole cache lines: a plane row is a multiple of sixteen orders. */
     size_t bytes = n_doubles * sizeof(double);
     bytes = (bytes + 63u) / 64u * 64u;
+#ifdef _WIN32
+    /* The Windows C runtime has no aligned_alloc; its aligned blocks must be
+     * returned with _aligned_free, which line_release does. */
+    return _aligned_malloc(bytes ? bytes : 64u, 64u);
+#else
     return aligned_alloc(64u, bytes ? bytes : 64u);
+#endif
+}
+
+/* Returns a block from line_alloc. */
+static void line_release(void *p) {
+#ifdef _WIN32
+    _aligned_free(p);
+#else
+    free(p);
+#endif
 }
 
 /* One thread's scratch, `beam_line_scratch_doubles` long: a tile of one
@@ -1327,8 +1346,9 @@ struct BeamLineWork {
 
 void beam_line_work_free(BeamLineWork *wk) {
     if (!wk) return;
-    free(wk->w); free(wk->tail); free(wk->cur); free(wk->next); free(wk->pt);
-    free(wk->scr); free(wk->alive); free(wk->dead); free(wk->used);
+    free(wk->w); free(wk->tail); line_release(wk->cur); line_release(wk->next);
+    line_release(wk->pt); line_release(wk->scr);
+    free(wk->alive); free(wk->dead); free(wk->used);
     free(wk->gs); free(wk->ex);
     free(wk);
 }
@@ -1599,8 +1619,9 @@ struct BeamRealWork {
 
 void beam_real_work_free(BeamRealWork *wk) {
     if (!wk) return;
-    free(wk->w); free(wk->tail); free(wk->cur); free(wk->next); free(wk->pt);
-    free(wk->scr); free(wk->alive); free(wk->dead); free(wk->used);
+    free(wk->w); free(wk->tail); line_release(wk->cur); line_release(wk->next);
+    line_release(wk->pt); line_release(wk->scr);
+    free(wk->alive); free(wk->dead); free(wk->used);
     free(wk->gs); free(wk->ex);
     free(wk);
 }

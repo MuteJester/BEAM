@@ -12,7 +12,8 @@ before it is ever loaded, and checked again on every later load, so a
 truncated or altered file is never read as a model.
 
 The cache is ``$BEAM_CACHE_DIR`` if set, else ``$XDG_CACHE_HOME/beam-model``
-(``~/.cache/beam-model`` on Linux, ``~/Library/Caches/beam-model`` on macOS).
+(``~/.cache/beam-model`` on Linux, ``~/Library/Caches/beam-model`` on macOS,
+``%LOCALAPPDATA%\\beam-model`` on Windows).
 Once a model is cached, loading it needs no network.
 
 ``$BEAM_PRETRAINED_REGISTRY`` points at a different registry file, for a
@@ -98,6 +99,8 @@ def cache_dir() -> Path:
         return Path(os.environ["XDG_CACHE_HOME"]) / "beam-model"
     if sys.platform == "darwin":
         return Path.home() / "Library" / "Caches" / "beam-model"
+    if sys.platform == "win32" and os.environ.get("LOCALAPPDATA"):
+        return Path(os.environ["LOCALAPPDATA"]) / "beam-model"
     return Path.home() / ".cache" / "beam-model"
 
 
