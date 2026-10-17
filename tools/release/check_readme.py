@@ -96,17 +96,22 @@ def main() -> None:
     if not code:
         sys.exit(f"{readme}: no python blocks found")
 
+    home = Path.cwd()
     with tempfile.TemporaryDirectory() as tmp:
         work = Path(tmp)
         os.chdir(work)
-        namespace = {"__name__": "__readme__"}
-        rng = random.Random(7)
-        example_files(work, rng)
-        if not args.pretrained:
-            stand_in_foundation(work, rng)
-        namespace["sequences"] = cdr3s(rng, 400)
-        namespace["counts"] = [rng.randint(1, 9) for _ in namespace["sequences"]]
-        run(code, namespace, show=args.pretrained)
+        try:
+            namespace = {"__name__": "__readme__"}
+            rng = random.Random(7)
+            example_files(work, rng)
+            if not args.pretrained:
+                stand_in_foundation(work, rng)
+            namespace["sequences"] = cdr3s(rng, 400)
+            namespace["counts"] = [rng.randint(1, 9) for _ in namespace["sequences"]]
+            run(code, namespace, show=args.pretrained)
+        finally:
+            # Windows cannot delete the working directory, so leave it first.
+            os.chdir(home)
     print(f"{readme.name}: all {len(code)} python blocks ran", file=sys.stderr)
 
 
