@@ -12,15 +12,16 @@ import Example from '../../../components/Example.astro';
 it?
 
 A model is built by counting short stretches of sequence across a repertoire, weighted by how
-many cells carry each sequence. Building takes seconds to tens of seconds for a typical
-repertoire.
+many cells carry each sequence. Building takes seconds: on a 16-core machine, 4 seconds for a
+repertoire of 50,000 cells and 8 seconds for 2 million cells (1.7 million distinct sequences).
 
 The examples on this page use a stand-in repertoire: 50,000 cells drawn from the reference model.
 Replace it with your own sequences.
 
 ## From Python lists
 
-Give the CDR3 sequences and, optionally, how many cells (or templates, or reads) carry each.
+Give the sequences, here CDR3s, and, optionally, how many cells (or templates, or reads) carry
+each.
 Without abundances every sequence counts once.
 
 <Example src="own-model/from_lists" />
@@ -28,6 +29,18 @@ Without abundances every sequence counts once.
 The model of this repertoire gives `CASSLGQGYEQYF` a probability of 1.9 × 10⁻⁵, against 3.3 × 10⁻⁵
 under the reference model: 50,000 cells carry less information than 38,538 repertoires, and the
 model reflects what this sample contains.
+
+## How long a sequence can be
+
+A model represents sequences of up to `max_length` residues, and skips longer ones when it is
+built. The default is 27 for amino acids and 81 for nucleotides. `max_length="data"` takes the
+length of the longest sequence you give, and a number sets it yourself.
+
+<Example src="own-model/max_length" />
+
+Time and memory grow with `max_length`, and every sequence up to it gets a probability, so set it
+no longer than your sequences need. `from_sequence_file` and `from_parquet` read a file once
+without holding it, so they cannot take the length from the data: give them a number.
 
 ## From an AIRR table
 
@@ -73,7 +86,7 @@ probability mixtures of models directly.
 
 ## Nucleotide sequences
 
-The same model works on nucleotide CDR3s: name the alphabet when building.
+The same model works on nucleotide sequences: name the alphabet when building.
 
 ```python
 model = BeamModel(nucleotide_cdr3s, alphabet="nt")   # A, C, G, T and N
@@ -86,6 +99,7 @@ model = BeamModel(nucleotide_cdr3s, alphabet="nt")   # A, C, G, T and N
 - **Abundance units differ between platforms.** Templates, UMIs and reads are not the same
   thing. Within one study use one unit; across studies keep in mind that counts are not directly
   comparable.
-- **Long sequences are dropped, not truncated.** The default maximum is 27 amino acids. Check
-  `n_skipped` after building.
+- **Long sequences are dropped, not truncated.** The default maximum length is 27 for amino
+  acids and 81 (27 codons) for nucleotides; set `max_length`, or `max_length="data"`, as in
+  [How long a sequence can be](#how-long-a-sequence-can-be). Check `n_skipped` after building.
 </Aside>

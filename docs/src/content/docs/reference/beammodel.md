@@ -27,7 +27,7 @@ BeamModel(sequences, *, abundances=None, alphabet="aa", order=None,
 | `alphabet` | `"aa"` (the 20 amino acids) or `"nt"` (`A C G T N`). Always named; never detected. |
 | `order` | How many neighbouring residues each expert looks at. Default 4 for `aa` (also the maximum), 6 for `nt` (maximum 9). |
 | `weights` | Weights of the start-anchored and end-anchored experts. Keep them summing to 1. |
-| `max_length` | Longest sequence represented, 2 to 255. Default 27 for `aa`, 81 for `nt`. |
+| `max_length` | Longest sequence represented, 2 to 255. Default 27 for `aa`, 81 for `nt`. `"data"` takes the longest training sequence the alphabet accepts (not available to the streaming readers). |
 | `alpha`, `alpha_length` | Strengths of the [hierarchical prior](/BEAM/explanations/how-beam-works/#sequences-the-model-has-never-seen). Default: estimated from the data. |
 | `sparse` | Store only observed contexts (default). `False` stores every context: the same model, at gigabytes of memory. |
 

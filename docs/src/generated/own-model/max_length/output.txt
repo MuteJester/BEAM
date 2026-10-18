@@ -1,0 +1,3 @@
+max_length=default    represents up to 27 residues, skipped 2
+max_length="data"     represents up to 31 residues, skipped 0
+max_length=40         represents up to 40 residues, skipped 0
