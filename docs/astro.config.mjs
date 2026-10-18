@@ -40,7 +40,11 @@ export default defineConfig({
 			favicon: '/favicon.svg',
 			head: [{ tag: 'link', attrs: { rel: 'icon', href: '/BEAM/favicon.ico', sizes: '32x32' } }],
 			// Section links beside the search box, before the GitHub icon.
-			components: { SocialIcons: './src/components/HeaderLinks.astro' },
+			// "On this page" drawn as a progress rail (src/components/Toc.astro).
+			components: {
+				SocialIcons: './src/components/HeaderLinks.astro',
+				TableOfContents: './src/components/Toc.astro',
+			},
 			social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/MuteJester/BEAM' }],
 			editLink: { baseUrl: 'https://github.com/MuteJester/BEAM/edit/main/docs/' },
 			customCss: ['katex/dist/katex.min.css', './src/styles/theme.css'],

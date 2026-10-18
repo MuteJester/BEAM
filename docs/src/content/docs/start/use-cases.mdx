@@ -1,27 +1,29 @@
 ---
 title: What can I do with BEAM?
-description: Questions BEAM answers about T cell receptor (TCR) repertoires and CDR3 sequences, from sequence probability and sequencing depth to publicness, diversity and comparing repertoires, cell types and conditions.
+description: Questions BEAM answers about collections of amino-acid or nucleotide sequences, such as T cell receptor (TCR) repertoires and their CDR3s, from sequence probability and sequencing depth to publicness, diversity and comparing repertoires, cell types and conditions.
 sidebar:
   order: 0
 ---
 
-BEAM is a probability model of T cell receptor β (TCRβ) CDR3 sequences. Find your question
-below; each links to a worked example you can run.
+BEAM is a probability model of amino-acid or nucleotide sequences, learned from a collection of
+sequences and, if you have them, their abundances. The paper and the examples on this site use
+T cell receptor β (TCRβ) CDR3s, but the same questions apply to any collection of sequences you
+can build a model from. Find your question below; each links to a worked example you can run.
 
 ## Single sequences
 
 | Question | Where |
 |---|---|
-| What is the probability of this TCR CDR3 sequence? | [How likely is a sequence?](/BEAM/guides/score/) |
-| Which residues make a CDR3 likely or unlikely? | [Which residues drive a score](/BEAM/guides/score/#which-residues-drive-a-score) |
-| How do I generate realistic synthetic CDR3 sequences, or a background set? | [Generating sequences](/BEAM/guides/generate/) |
+| What is the probability of this sequence, for example a TCR CDR3? | [How likely is a sequence?](/BEAM/guides/score/) |
+| Which residues make a sequence likely or unlikely? | [Which residues drive a score](/BEAM/guides/score/#which-residues-drive-a-score) |
+| How do I generate realistic synthetic sequences, or a background set? | [Generating sequences](/BEAM/guides/generate/) |
 | Which group, cell type or condition does this sequence look like? | [Comparing groups](/BEAM/guides/compare-groups/#which-group-does-a-sequence-look-like) |
 
 ## Sequencing depth, diversity and overlap
 
 | Question | Where |
 |---|---|
-| How many TCR sequences should I sequence? How many distinct clonotypes will I see? | [How deeply should I sequence?](/BEAM/guides/sequencing-depth/) |
+| How deeply should I sequence? How many distinct sequences (clonotypes) will I see? | [How deeply should I sequence?](/BEAM/guides/sequencing-depth/) |
 | Have I sequenced enough? How likely is the next cell to be new? | [How diverse is my sample?](/BEAM/guides/diversity/) |
 | How biased is the Shannon entropy (diversity) I measure in a sample? | [How diverse is my sample?](/BEAM/guides/diversity/#how-much-diversity-a-sample-shows) |
 | How many sequences will two samples share by chance? | [How many sequences will two samples share?](/BEAM/guides/overlap/) |
@@ -30,16 +32,16 @@ below; each links to a worked example you can run.
 
 | Question | Where |
 |---|---|
-| How many people will carry this TCR? Is it public? | [How public is a sequence?](/BEAM/guides/publicness/) |
+| How many people will carry this sequence? Is it public? | [How public is a sequence?](/BEAM/guides/publicness/) |
 | Which sequences of my repertoire are likely to be public? | [The most public sequences of a repertoire](/BEAM/guides/publicness/#the-most-public-sequences-of-a-repertoire) |
 | How many sequences in a cohort are private, and how many shared? | [The publicness of a whole cohort](/BEAM/guides/publicness/#the-publicness-of-a-whole-cohort) |
-| What do public TCR sequences look like? | [What public sequences look like](/BEAM/guides/publicness/#what-public-sequences-look-like) |
+| What do public sequences look like? | [What public sequences look like](/BEAM/guides/publicness/#what-public-sequences-look-like) |
 
 ## Comparing repertoires, cell types and conditions
 
 | Question | Where |
 |---|---|
-| How different are two TCR repertoires, and why? | [How different are two repertoires?](/BEAM/guides/compare-repertoires/) |
+| How different are two repertoires, and why? | [How different are two repertoires?](/BEAM/guides/compare-repertoires/) |
 | Which sequence patterns differ between two repertoires? | [Reading the patterns](/BEAM/guides/compare-repertoires/#reading-the-patterns) |
 | How do I compare cell types (CD4/CD8, naive/memory), tissues or patient groups? | [Comparing groups](/BEAM/guides/compare-groups/) |
 | How do I cluster many repertoires, or find a sample's nearest neighbours? | [Clustering repertoires](/BEAM/guides/compare-groups/#clustering-repertoires) |
@@ -53,4 +55,4 @@ below; each links to a worked example you can run.
 | Should I weight by abundance, or count each sequence once? | [Abundance or unique sequences?](/BEAM/explanations/abundance/) |
 | Does my model describe my data well? | [Checking a model](/BEAM/guides/check-a-model/) |
 | How do I keep my own cohort out of the reference? | [Leaving a cohort out](/BEAM/explanations/which-model/#leaving-a-cohort-out) |
-| How does BEAM work, and how does it relate to OLGA, SoNIA or TCRdist? | [How BEAM works](/BEAM/explanations/how-beam-works/), [BEAM and other tools](/BEAM/resources/other-tools/) |
+| How does BEAM work? | [How BEAM works](/BEAM/explanations/how-beam-works/) |
