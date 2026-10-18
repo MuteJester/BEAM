@@ -22,6 +22,14 @@ gives every possible sequence a probability: for the reference model of TCRβ CD
 that one T cell drawn at random from the population has exactly that CDR3. Summed over all
 possible sequences, these probabilities add up to one.
 
+That is a very large space. The reference model, of human TCRβ CDR3 amino-acid sequences, covers
+sequences of up to 27 residues, the longest in its corpus, and every string of 1 to 27 of the 20
+standard amino acids is a possible sequence: about 1.4 × 10³⁵ of them, 95% of them of length 27
+alone (20²⁷ ≈ 1.3 × 10³⁵). Every one has a probability, including the vast majority that no one
+has observed, and BEAM's sums run over all of them, by dynamic programming rather than by listing
+them. Building a model from more sequences does not add or remove possibilities: it moves
+probability within this space, towards the patterns the sequences show.
+
 A model is **built** from a repertoire, or from many, by counting short stretches of
 sequence. It reads every residue twice: once by its position counted from the start of the
 sequence, and once counted from the end. The two readings are combined, which captures the
