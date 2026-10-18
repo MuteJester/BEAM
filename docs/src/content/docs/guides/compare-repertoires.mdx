@@ -1,6 +1,6 @@
 ---
 title: How different are two repertoires, and why?
-description: An exact distance between two repertoires' models, split into differences in sequence length and in local sequence patterns, with the patterns that differ most.
+description: A distance between two repertoires' models, computed over every possible sequence and split into differences in sequence length and in local sequence patterns, with the patterns that differ most.
 sidebar:
   order: 9
 ---
@@ -8,12 +8,13 @@ sidebar:
 import { Aside } from '@astrojs/starlight/components';
 import Example from '../../../components/Example.astro';
 import Interactive from '../../../components/Interactive.astro';
-import DistanceBreakdown from '../../../components/viz/DistanceBreakdown.svelte';
+import DistanceAnatomy from '../../../components/viz/DistanceAnatomy.svelte';
 
 **The question:** how different are these two repertoires, and in what way?
 
-Build a model from each repertoire and compare the models. `compare` gives an exact distance
-between them, and splits it into parts that say *where* the difference lies:
+Build a model from each repertoire and compare the models. `compare` gives the distance between
+them, computed from the models over every possible sequence rather than from the sequences each
+sample happened to contain, and splits it into parts that say *where* the difference lies:
 
 - a part due to **different length distributions**, for example one repertoire having longer
   CDR3s;
@@ -38,18 +39,52 @@ distance between two such samples is the noise floor against which a real differ
 
 <Example src="compare/different" />
 
-The distance is much larger than the noise floor, and the split says why: a large share comes
-from the different length distributions, and the strongest local patterns point at the
-sequence ends that were made more common.
+The distance, 0.45, is well above the noise floor of 0.17, and the split says why: two thirds
+of it comes from the different length distributions, and the strongest local patterns point
+straight at the `…NEQFF` ending that was made more common.
+
+## What the distance is made of
+
+The distance compares the two models at two levels: how often each sequence length occurs, and,
+within each length, how often each short stretch of sequence (a **word** of $w$ residues,
+$w = 5$ at the default order) occurs at each position (a **window**). Its square is a sum of
+non-negative terms, one level inside the next:
+
+$$
+D^2 \;=\; \underbrace{\tfrac12 \sum_L \Big(\sqrt{\pi_A(L)} - \sqrt{\pi_B(L)}\Big)^2}_{\text{length part}}
+\;+\; \underbrace{\sum_L \sqrt{\pi_A(L)\,\pi_B(L)}\;\frac{1}{V_L} \sum_{v=1}^{V_L}
+h^2\big(P_A^{(L,v)}, P_B^{(L,v)}\big)}_{\text{pattern part}}
+$$
+
+- $\pi_A(L)$ and $\pi_B(L)$ are the two models' probabilities of length $L$;
+- $P_A^{(L,v)}(y)$ is model A's probability of word $y$ in window $v$, among sequences of length
+  $L$, computed over every possible sequence of that length; there are $V_L$ windows at length $L$;
+- $h^2(P, Q) = \tfrac12 \sum_y \big(\sqrt{P(y)} - \sqrt{Q(y)}\big)^2$ is the squared Hellinger
+  distance between two distributions: 0 when they agree, 1 when they share nothing.
+
+$D$ is the Hellinger distance between the two models' joint distributions of length, window and
+word, so it lies between 0 and 1, is symmetric, and obeys the triangle inequality. Walk through
+it level by level, and choose any window to see the words behind it:
 
 <Interactive
 	fallback="compare/different/split"
-	fallbackAlt="Stacked bars per CDR3 length of the length part and the local-pattern part of the squared distance between the two repertoires."
-	title="Where the difference lies"
-	description="The bar at the top splits the squared distance into its length part (orange) and its local-pattern part (teal). The chart shows both parts at each CDR3 length. Choose a length to list its local patterns that differ most, with their probability in each repertoire."
+	fallbackAlt="Stacked bars per CDR3 length of the length part and the pattern part of the squared distance between the two repertoires."
+	title="Anatomy of a distance"
+	description="The bar at the top is D² split into its length part (orange) and its pattern part (teal). Step 1 shows the two length distributions and each length's term; step 2 shows every window's share of the pattern part; step 3 shows the words of the chosen window, with one word's term worked out from the formula; step 4 adds everything up. Each step shows the attribute of compare's result that holds its numbers."
 >
-	<DistanceBreakdown client:visible />
+	<DistanceAnatomy client:visible />
 </Interactive>
+
+### Every part, from `compare`
+
+`compare` returns every level of the sum, so the analysis above can be run on any pair of models:
+
+<Example src="compare/parts" />
+
+Each level adds up to the one above it: the lengths' terms to the two parts, the windows to each
+length's pattern term, and the words to their window. The strongest word's term, worked out by
+hand from the formula, matches the one `compare` returns. `top_k` sets how many words are listed,
+strongest first; `remainder` holds the rest, so nothing is left out of the total.
 
 ## Reading the patterns
 
@@ -64,5 +99,7 @@ pattern term measures a difference in sequence content, not a consequence of dif
 - **Repertoire size matters.** Models of small repertoires are noisier, so their distances are
   larger. Compare repertoires of similar sizes, or subsample to a common size.
 - **Same settings.** Both models must have the same alphabet and order.
-- **Comparing takes about a minute** for models of the default order.
+- **Comparing takes about 40 seconds** for models of the default order 4, on a 16-core
+  machine and whatever the repertoires' size, and about 3 seconds at order 3, which suits
+  comparing many pairs.
 </Aside>

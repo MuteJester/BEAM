@@ -71,3 +71,11 @@
 	color: var(--sl-color-gray-2);
 	margin: 0.75rem 0 0;
 }
+
+/* A wide display equation scrolls inside the text column instead of running
+   into the "On this page" panel. */
+.sl-markdown-content .katex-display {
+	overflow-x: auto;
+	overflow-y: hidden;
+	padding-block: 0.25rem;
+}

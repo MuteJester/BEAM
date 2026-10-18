@@ -1,0 +1,1 @@
+distance 0.4523: 19 lengths, 209 windows, 783 words kept

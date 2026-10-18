@@ -1,0 +1,11 @@
+D^2 = 0.204619   (D = 0.4523)
+  length part  r.length_squared_distance   = 0.138776
+  pattern part r.pattern_squared_distance  = 0.065843
+  sum of x.contribution over r.lengths         = 0.138776
+  sum of x.pattern_contribution over r.lengths = 0.065843
+  sum of w.contribution over r.windows         = 0.065843
+  listed words 0.025204 + remainder 0.040639
+
+strongest word: NEQFF at length 14, positions 9-13
+  pi_A = 0.2237  pi_B = 0.0343  p = 0.0795  q = 0.6922  V = 10
+  by hand 0.001325   w.contribution 0.001325
