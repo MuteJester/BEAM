@@ -1,6 +1,6 @@
 ---
 title: How diverse is my sample, really?
-description: The Shannon entropy and Hill diversity of a TCR repertoire, how much of it a sample of a given depth shows, the sampling bias of plug-in diversity estimates, and the chance that the next cell sequenced is new.
+description: The Shannon entropy and Hill diversity of a repertoire, such as a TCR repertoire, how much of it a sample of a given depth shows, the sampling bias of plug-in diversity estimates, and the chance that the next cell sequenced is new.
 sidebar:
   order: 6
 ---
@@ -14,8 +14,8 @@ does that number reflect, and have I sequenced enough?
 
 Diversity indices computed from a sample, such as Shannon entropy, are biased: a finite sample
 misses the rare sequences, so it looks less diverse than the population it came from. BEAM
-computes the population's diversity exactly from its model, and how much of it a sample of a
-given depth is expected to show.
+computes the population's diversity directly from its model, over every possible sequence, and
+how much of it a sample of a given depth is expected to show.
 
 ## The diversity of the population
 
@@ -48,8 +48,8 @@ not yet in the sample.
 
 A sample of 100,000 cells shows only 59% of the population's Shannon entropy; even ten billion
 cells show 95%. The chance that the next cell is new falls slowly as well: after a million cells,
-the next cell still has an 82.5% chance of carrying a sequence not yet seen. The rare sequences, each individually
-improbable, make up the missing part.
+the next cell still has an 82.5% chance of carrying a sequence not yet seen. The rare
+sequences, each individually improbable, make up the missing part.
 
 Use this to:
 
