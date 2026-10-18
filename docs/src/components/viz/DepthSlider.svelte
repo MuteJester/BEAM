@@ -106,13 +106,13 @@
 				sample; the sample's Shannon entropy is expected to reach <strong>{pct(data.sample_entropy[index] / data.entropy)}</strong>
 				of the population's.
 			</div>
-			<div class="muted">Every value here is exact to a relative error of at most {boundUp(bound)}.</div>
+			<div class="muted">Every value here carries a guaranteed relative error of at most {boundUp(bound)}.</div>
 		</div>
 		<div bind:this={chart} class="chart" role="img" aria-label="Expected distinct sequences, and those also expected in a second sample, against the number of cells sampled, with the chosen depth marked"></div>
 	{:else if failed}
 		<p class="muted">The data for this figure could not be loaded.</p>
 	{:else}
-		<p class="muted">Loading the exact values…</p>
+		<p class="muted">Loading…</p>
 	{/if}
 </div>
 

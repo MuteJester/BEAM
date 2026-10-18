@@ -121,7 +121,7 @@
 	{:else if failed}
 		<p class="muted">The data for this figure could not be loaded.</p>
 	{:else}
-		<p class="muted">Loading the exact distributions…</p>
+		<p class="muted">Loading…</p>
 	{/if}
 </div>
 

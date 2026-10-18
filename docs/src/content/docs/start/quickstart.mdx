@@ -8,8 +8,8 @@ sidebar:
 import { Steps, Aside } from '@astrojs/starlight/components';
 import Example from '../../../components/Example.astro';
 
-This page takes you from an installed BEAM to your first exact answer. Every output below is what
-the code printed when this page was built.
+This page takes you from an installed BEAM to your first answer computed over every possible
+sequence. Every output below is what the code printed when this page was built.
 
 <Steps>
 
@@ -33,12 +33,12 @@ the code printed when this page was built.
 
 3. **Draw new sequences.**
 
-   `sample` draws sequences in exact proportion to their probability. The same `seed` gives the
+   `sample` draws sequences in proportion to their probability. The same `seed` gives the
    same sequences; give different seeds for independent draws (without one, the seed is 0).
 
    <Example src="quickstart/sample" />
 
-4. **Answer a sampling question exactly.**
+4. **Answer a sampling question without simulating.**
 
    If you sequence 100,000 TCRs from this population, how many *different* sequences will you
    see? BEAM computes the expected number directly, with a guaranteed bound on its error,

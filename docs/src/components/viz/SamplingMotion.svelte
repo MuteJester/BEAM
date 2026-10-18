@@ -97,10 +97,10 @@
 				<li><span class="mono">{s}</span><span class="logp">ln P = {recentLogP[i].toFixed(1)}</span></li>
 			{/each}
 		</ol>
-		<div bind:this={chart} class="chart" role="img" aria-label="Length distribution of the draws so far against the model's exact length distribution"></div>
+		<div bind:this={chart} class="chart" role="img" aria-label="Length distribution of the draws so far against the model's computed length distribution"></div>
 		<div class="legend">
 			<span><span class="swatch a"></span>share of the draws so far</span>
-			<span><span class="swatch b"></span>the model's exact length distribution</span>
+			<span><span class="swatch b"></span>the model's length distribution, computed</span>
 		</div>
 	{:else if failed}
 		<p class="muted">The data for this figure could not be loaded.</p>

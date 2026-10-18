@@ -1,0 +1,3 @@
+computed:  96,771.4 ± 60.5 (one standard deviation; relative error bounds 5e-13 and 2e-11)
+simulated: mean 96,769.3, standard deviation 68.2, range 96,551 to 96,936
+simulations within two computed standard deviations: 94 of 100

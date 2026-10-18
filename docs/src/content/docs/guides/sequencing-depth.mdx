@@ -50,6 +50,24 @@ Each answer carries its **bound**, a guaranteed limit on the relative error (her
 $10^{-13}$). The first `richness` call on a large model takes a minute or two while the
 integrals it needs are prepared; after that every depth is answered almost instantly.
 
+## How much does the count vary?
+
+`richness(n)` is the *expected* number of distinct sequences; the count in one sample varies
+around it. `richness_sd(n)` gives the standard deviation of that count, computed in the same way
+as the expectation, without simulation (`richness_variance(n)` gives its square).
+
+<Example src="depth/spread" />
+
+The spread is small: 8 sequences at 10,000 cells, 60 at 100,000 and about 1,400 at ten million,
+under a tenth of a percent of the count at every depth. Two samples of the same depth from one
+population therefore differ by little through chance alone, typically by about 1.4 standard
+deviations. A count further than two standard deviations from the expected one is more than
+chance under this model: the sample does not behave like independent draws from it, for example
+because of clonal expansion, or it comes from a different population.
+
+The first call on a large model takes a few minutes, like the first `richness` call; later calls
+at other depths reuse what it prepared.
+
 ## What would sequencing deeper add?
 
 `richness_difference(n2, n1)` gives the new distinct sequences gained going from `n1` to `n2`

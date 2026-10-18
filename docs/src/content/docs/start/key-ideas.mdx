@@ -1,19 +1,26 @@
 ---
 title: Key ideas
-description: What a BEAM model is, what "exact" means, and what sequencing depth and publicness mean here, in plain words.
+description: What a BEAM model is, why its answers need no simulation, and what sequencing depth and publicness mean here, in plain words.
 sidebar:
   order: 3
 ---
 
 import { Aside } from '@astrojs/starlight/components';
+import Interactive from '../../../components/Interactive.astro';
+import ModelLevels from '../../../components/ModelLevels.astro';
+import TwoAnchors from '../../../components/viz/TwoAnchors.svelte';
+import SimulatedVsComputed from '../../../components/viz/SimulatedVsComputed.svelte';
+import DepthSlider from '../../../components/viz/DepthSlider.svelte';
+import PublicnessExplorer from '../../../components/viz/PublicnessExplorer.svelte';
 
 Five ideas are enough to read every page of these docs.
 
-## A probability for every CDR3
+## A probability for every sequence
 
-A BEAM model is a probability distribution over CDR3β amino-acid sequences. It gives every
-sequence a probability: the chance that one T cell drawn at random from the population has
-exactly that CDR3. Summed over all possible sequences, these probabilities add up to exactly one.
+A BEAM model is a probability distribution over sequences, of amino acids or of nucleotides. It
+gives every possible sequence a probability: for the reference model of TCRβ CDR3s, the chance
+that one T cell drawn at random from the population has exactly that CDR3. Summed over all
+possible sequences, these probabilities add up to one.
 
 A model is **built** from a repertoire, or from many, by counting short stretches of
 sequence. It reads every residue twice: once by its position counted from the start of the
@@ -24,18 +31,47 @@ A model also gives a sensible probability to sequences it has never seen. A plau
 gets a moderate probability; a string that looks nothing like a CDR3 gets a vanishingly small
 one.
 
-## Exact, not simulated
+<Interactive
+	title="Reading a sequence from both ends"
+	description="Each residue is scored twice: by the reading from the start (teal) and by the reading from the end (orange). The bars show how unexpected the residue was to each; press Play to read the sequence one residue at a time."
+	fallback="score/explain/explain"
+	fallbackAlt="Bar chart of how unexpected each residue of CASSLGQGYEQYF is, read from the start and from the end."
+>
+	<TwoAnchors client:visible />
+</Interactive>
+
+[More: how the two readings become one probability →](/BEAM/explanations/how-beam-works/)
+
+## Computed, not simulated
 
 Many questions about a repertoire are sums over every possible sequence: how many distinct
 sequences will 100,000 cells contain? There are far too many sequences to list, so the usual
 answer is simulation: draw many samples and count, and accept some random error.
 
-BEAM is built so that these sums can be computed directly. The answers it gives carry a
-**guaranteed bound** on their error, typically below one part in a trillion, so asking the same
-question again gives the same answer within that bound, with no random noise. Differences between groups are therefore not hidden by
-simulation noise.
+BEAM is built so that these sums can be computed directly, over every combinatorially possible
+sequence, without listing or sampling them. Where a sum is evaluated numerically, the answer
+carries a **guaranteed bound** on its error: BEAM aims for one part in 10¹⁰ by default, and in
+the examples on this site the bounds are between 10⁻¹³ and 2 × 10⁻¹². The same question always
+gives the same answer, so differences between groups are not hidden by simulation noise.
 
-## Depth: how many TCRs you sample
+<Interactive
+	title="Simulated, or computed once"
+	description="How many distinct sequences do 100,000 cells from the reference population contain? Each dot is one simulation: 100,000 cells drawn from the model and counted. The teal line is BEAM's expected count and the shaded band how far one sample's count varies around it (one and two standard deviations), both computed once. Run the simulations and watch them land in the band and their mean settle on the line."
+	fallback="viz/simulated/estimates"
+	fallbackAlt="One hundred simulated counts of distinct sequences in 100,000 cells scattered within a shaded band of two computed standard deviations around BEAM's expected count, with their running mean converging to it."
+>
+	<SimulatedVsComputed client:visible />
+</Interactive>
+
+BEAM computes both the expected count, 96,771.4, and how much the count of one sample varies
+around it: a standard deviation of 60.5 (`richness_sd`). Their guaranteed relative errors are below
+4.6 × 10⁻¹³ and 2.4 × 10⁻¹¹. Of the 100 simulations, 94 fell within two standard deviations of the
+expected count, about the 95 one would expect, and their mean, 96,769 ± 14 (two standard
+errors), agrees with it.
+
+[More: what the error bounds mean →](/BEAM/explanations/what-exact-means/)
+
+## Depth: how many cells you sample
 
 The **depth** of a sample is the number of T cells (or receptor molecules) drawn from the
 population. Because common sequences are drawn many times, a sample of depth 100,000 contains
@@ -46,15 +82,33 @@ distribution. That is the right baseline for "what would I expect by chance", bu
 model clonal expansion within one person. Keep that in mind when comparing predictions with a
 real repertoire.
 
+<Interactive
+	title="Depth and distinct sequences"
+	description="Drag the slider to change the number of cells sampled. Teal: the expected number of distinct sequences. Orange: how many of them a second sample of the same depth would also contain. The dashed line is where every cell would carry a new sequence."
+>
+	<DepthSlider client:visible />
+</Interactive>
+
+[More: planning sequencing depth →](/BEAM/guides/sequencing-depth/)
+
 ## Publicness
 
 A sequence is **public** when many people carry it. Given a cohort, described by how deeply each
 person's repertoire was sampled, BEAM gives the expected number of people whose sample contains a
 sequence, and the full distribution of that number.
 
+<Interactive
+	title="How many people carry a sequence"
+	description="Choose a cohort size, a sampling depth and a sequence, or set any probability with the slider. The bars show the probability that each number of people carries the sequence."
+>
+	<PublicnessExplorer client:visible />
+</Interactive>
+
+[More: publicness of sequences and cohorts →](/BEAM/guides/publicness/)
+
 ## The reference model and your own models
 
-The **reference model** (`BEAM.load_pretrained("foundation")`) was built from 38,538 published
+The **reference model** (`BEAM.load_pretrained("human_tcrb_cdr3_aa_foundation")`) was built from 38,538 published
 human TCRβ repertoires. It describes this broad, aggregated population, which makes it the
 natural reference for "how likely is this sequence in people in general".
 
@@ -62,6 +116,8 @@ You can also build a model from a **single repertoire**, which then describes th
 sample, or from a **group** of repertoires, such as one cell type or one patient cohort. See
 [Which model do I need?](/BEAM/explanations/which-model/), and for whether to weight by
 abundance, [Abundance or unique sequences?](/BEAM/explanations/abundance/)
+
+<ModelLevels />
 
 <Aside type="caution" title="Writing CDR3 sequences">
 BEAM's reference model was built from CDR3 sequences written **with** the conserved cysteine at
@@ -75,6 +131,6 @@ residues long.
 
 - [How likely is a sequence?](/BEAM/guides/score/): scoring, and what makes a score high or low.
 - [Building a model from your data](/BEAM/guides/build-a-model/): models of your own repertoires.
-- [How deeply should I sequence?](/BEAM/guides/sequencing-depth/): exact sampling calculations.
+- [How deeply should I sequence?](/BEAM/guides/sequencing-depth/): sampling calculations without simulation.
 - [What can I do with BEAM?](/BEAM/start/use-cases/): every question, with where it is answered.
 - [How BEAM works](/BEAM/explanations/how-beam-works/): the model behind the numbers.

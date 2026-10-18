@@ -78,7 +78,7 @@
 		<p class="readout" aria-live="polite">
 			<span class="mono">{row.sequence}</span> ({row.length} residues{row.motif ? `, carries ${data.motif}` : ''}):
 			most probable under group <strong>{best}</strong>; it was drawn from group {row.drawn_from}. If the three group
-			models were exact and the groups equally likely beforehand, the chance it came from A, B or C would be
+			models were the true distributions and the groups equally likely beforehand, the chance it came from A, B or C would be
 			{pct(posterior.A)}, {pct(posterior.B)} and {pct(posterior.C)}.
 		</p>
 		<p class="readout muted">
