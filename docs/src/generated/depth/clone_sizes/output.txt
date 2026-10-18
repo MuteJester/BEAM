@@ -1,0 +1,7 @@
+ times seen   expected   ordinary sample   expanded sample
+         1     94,570            94,559            35,976
+         2      1,714             1,727             8,262
+         3        306               317             3,126
+         5         38                35               870
+        10          2                 3               147
+      > 10         12                12               807

@@ -10,18 +10,19 @@ import Example from '../../../components/Example.astro';
 import Figure from '../../../components/Figure.astro';
 import Interactive from '../../../components/Interactive.astro';
 import DepthSlider from '../../../components/viz/DepthSlider.svelte';
+import OccupancySpectrum from '../../../components/viz/OccupancySpectrum.svelte';
 
-**The question:** if I sample *n* T cells, how many different CDR3 sequences should I expect to
-see, and how much would sequencing deeper add?
+**The question:** if I sample *n* cells, how many different sequences should I expect to see,
+and how much would sequencing deeper add?
 
 Because common sequences are drawn again and again, a sample of *n* cells contains fewer than
 *n* distinct sequences, and each additional cell is less likely to bring something new. BEAM
-computes the expected number of distinct sequences exactly, for any depth, from the model of the
-population.
+computes the expected number of distinct sequences for any depth directly from the model of the
+population, summing over every possible sequence rather than simulating samples.
 
 <Interactive
 	title="Explore sequencing depth"
-	description="Drag the slider to change the number of cells sampled. Teal: expected distinct sequences in the sample. Orange: how many of them a second, independent sample of the same depth would also contain. The dashed line is the ceiling where every cell carries a new sequence. All values are exact, computed from the reference model."
+	description="Drag the slider to change the number of cells sampled. Teal: expected distinct sequences in the sample. Orange: how many of them a second, independent sample of the same depth would also contain. The dashed line is the ceiling where every cell carries a new sequence. Every value is computed from the reference model, without simulation."
 >
 	<DepthSlider client:visible />
 </Interactive>
@@ -79,16 +80,41 @@ Doubling 100,000 cells to 200,000 still adds 93,093 new sequences: 93% of the ex
 something new. Doubling 100 million cells adds new sequences with only 44% of the extra
 cells. This is the diminishing return to plan a sequencing budget with.
 
-## Seen once, twice or more
+## Seen once, twice or more: the occupancy spectrum
 
-`frequency(n, j)` is the expected number of sequences seen exactly `j` times in `n` cells.
+`frequency(n, j)` is the expected number of sequences seen exactly `j` times in a sample of `n`
+cells. Over $j = 1, 2, 3, \dots$ these make up the sample's **occupancy spectrum**: how its
+distinct sequences divide into those seen once, twice and more often.
 
 <Example src="depth/frequency" />
 
-At a million cells, most distinct sequences are seen exactly once, and only a few hundred ten
-times. In a real repertoire, sequences seen many times are mostly expanded clones; this
-calculation is what the population alone would produce, so it is the baseline to compare clone
-sizes against.
+<Interactive
+	title="The occupancy spectrum at any depth"
+	description="Drag the slider to change the number of cells sampled. Each bar is the expected number of sequences seen exactly that many times in the sample; the orange bar collects those seen more than 20 times. Switch to the share of cells to see how the cells divide among the classes. Every value is computed from the reference model."
+>
+	<OccupancySpectrum client:visible />
+</Interactive>
+
+At a million cells, 93.7% of the distinct sequences are seen exactly once, and the 306 seen
+more than 20 times carry 1.2% of the cells. At a billion cells, 83% are still seen once, while
+4.1 million sequences seen more than 20 times carry 44% of the cells: the common sequences of
+the population take a growing share of a deeper sample.
+
+### Comparing a sample with the spectrum
+
+The expected spectrum is what the population alone produces at a given depth, with every cell an
+independent draw from it. Count how many sequences of a sample were seen exactly $j$ times and
+set the counts beside `frequency(n, j)` at the sample's depth: a sample with expanded clones
+has many more sequences seen many times than the population produces.
+
+<Example src="depth/clone_sizes" />
+
+An ordinary sample of 100,000 cells from the reference population follows the expected
+spectrum closely: 94,559 sequences seen once against 94,570 expected, and 12 seen more than ten
+times, as expected. A donor with expanded clones departs from it at once: 35,976 sequences seen
+once, and 807 seen more than ten times where the population alone produces 12. The excess at
+the high end is the expanded clones, and how far the spectrum departs shows how strongly the
+repertoire is expanded.
 
 For how much of the population's **diversity** a sample of a given depth shows, and the chance
 that the next cell sequenced is new, see [How diverse is my sample?](/BEAM/guides/diversity/).

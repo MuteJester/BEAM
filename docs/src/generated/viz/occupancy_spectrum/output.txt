@@ -1,0 +1,5 @@
+        1,000 cells:           999 distinct,  99.9% seen once,           0 seen more than 20 times
+       31,623 cells:        31,179 distinct,  98.9% seen once,           0 seen more than 20 times
+    1,000,000 cells:       879,776 distinct,  93.7% seen once,         306 seen more than 20 times
+   31,622,777 cells:    19,990,129 distinct,  87.4% seen once,      89,477 seen more than 20 times
+1,000,000,000 cells:   376,652,048 distinct,  83.0% seen once,   4,132,109 seen more than 20 times
