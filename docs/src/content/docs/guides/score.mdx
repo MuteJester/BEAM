@@ -113,8 +113,11 @@ an error that says why.
 <Example src="score/invalid" />
 
 <Aside type="caution" title="Pitfalls">
-- **Use `junction_aa`, not `cdr3_aa`.** The reference model's sequences include the conserved
-  start (C) and end (F or W). Leaving them out scores a different string.
+- **Score sequences written as the model's were.** A model knows only the form of the
+  sequences it was built from, so trimmed or extended ends, or a different reading frame, score
+  as different, rarer strings. For the reference model, that form is `junction_aa`,
+  with the conserved start (C) and end (F or W); see
+  [Writing CDR3 sequences](/BEAM/start/key-ideas/#the-reference-model-and-your-own-models).
 - **Probabilities describe the population the model was built from.** Under the reference
   model, "likely" means common across many published human repertoires, not likely in any one
   person.
