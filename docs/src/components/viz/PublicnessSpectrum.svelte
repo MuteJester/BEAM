@@ -22,6 +22,31 @@
 	});
 
 	const counts = $derived(data?.[`${size}x${depth}`]?.counts ?? []);
+
+	// As in the paper's spectrum panel: sequences per unit publicness on
+	// log-spaced bins, drawn at each bin's geometric centre, with the top bin
+	// dropped. Sequences common enough to be in nearly everyone pile up there,
+	// at "carried by all", which is a boundary, not part of the curve.
+	function binned(c: number[], perDecade = 8): { k: number; v: number }[] {
+		const n = c.length;
+		const steps = Math.floor(perDecade * Math.log10(n + 1)) + 1;
+		const edges = new Set<number>([1, n + 1]);
+		for (let i = 0; i <= steps; i++) edges.add(Math.round(10 ** ((i / steps) * Math.log10(n + 1))));
+		const e = [...edges].filter((x) => x >= 1 && x <= n + 1).sort((a, b) => a - b);
+		const out: { k: number; v: number }[] = [];
+		for (let i = 0; i + 1 < e.length; i++) {
+			const lo = e[i];
+			const hi = e[i + 1];
+			let sum = 0;
+			let logs = 0;
+			for (let k = lo; k < hi; k++) {
+				sum += c[k - 1];
+				logs += Math.log(k);
+			}
+			out.push({ k: Math.exp(logs / (hi - lo)), v: sum / (hi - lo) });
+		}
+		return out.slice(0, -1);
+	}
 	const seen = $derived(counts.reduce((a, b) => a + b, 0));
 	const everyone = $derived(counts.length ? counts[counts.length - 1] : 0);
 
@@ -29,15 +54,18 @@
 		themeTick;
 		if (!counts.length || !chart) return;
 		const c = themeColors();
-		const pts = counts.map((v, i) => ({ k: i + 1, v })).filter((d) => d.v >= 0.01);
+		const pts = binned(counts).filter((d) => d.v >= 0.01);
 		const plot = Plot.plot({
 			width: chart.clientWidth,
 			height: 280,
 			marginLeft: 64,
 			style: { color: c.text, background: 'transparent', fontSize: '12px' },
 			x: { type: 'log', label: `Number of people carrying a sequence (out of ${size}) →` },
-			y: { type: 'log', label: '↑ Expected number of sequences', grid: true },
-			marks: [Plot.dot(pts, { x: 'k', y: 'v', fill: c.accent, r: 2.5 })],
+			y: { type: 'log', label: '↑ Expected sequences per unit publicness', grid: true },
+			marks: [
+				Plot.line(pts, { x: 'k', y: 'v', stroke: c.accent, strokeWidth: 1.5 }),
+				Plot.dot(pts, { x: 'k', y: 'v', fill: c.accent, r: 3 }),
+			],
 		});
 		chart.replaceChildren(plot);
 	});

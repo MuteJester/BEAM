@@ -18,15 +18,23 @@ print(f"private (in one person):          {counts[1]:,.0f}  ({counts[1] / seen:.
 for k in (2, 5, 10, 50, 100):
     print(f"in exactly {k:3} people:            {counts[k]:,.1f}")
 
-# The grid is an approximation; check it against the exact, grid-free calculation
-exact = ExactOccupancy(model).equal_depth_cohort(100_000, 100)
-print(f"exact: {exact['seen'].value:,.0f} distinct, {exact['private'].value:,.0f} private "
-      f"(grid within {abs(seen / exact['seen'].value - 1):.1e} and "
-      f"{abs(counts[1] / exact['private'].value - 1):.1e})")
+# The grid is an approximation; check it against the grid-free calculation
+direct = ExactOccupancy(model).equal_depth_cohort(100_000, 100)
+print(f"grid-free: {direct['seen'].value:,.0f} distinct, {direct['private'].value:,.0f} private "
+      f"(grid within {abs(seen / direct['seen'].value - 1):.1e} and "
+      f"{abs(counts[1] / direct['private'].value - 1):.1e})")
 # --- hide
+# As in the paper's spectrum panel: sequences per unit publicness on log-spaced
+# bins, the top bin (sequences in nearly everyone, collected at k = 100) left out.
+n_people = len(counts) - 1
+edges = np.unique(np.round(np.logspace(0, np.log10(n_people + 1), 17)).astype(int))
+centres, per_unit = [], []
+for lo, hi in zip(edges[:-2], edges[1:-1]):
+    ks = np.arange(lo, hi)
+    centres.append(np.exp(np.log(ks).mean()))
+    per_unit.append(counts[lo:hi].sum() / len(ks))
 with figure("spectrum", size=(6.4, 3.4)) as (fig, ax):
-    k = np.arange(1, len(counts))
-    ax.loglog(k, counts[1:], "o", ms=3)
+    ax.loglog(centres, per_unit, "o-", ms=4)
     ax.set_xlabel("number of people carrying a sequence (out of 100)")
-    ax.set_ylabel("expected number of sequences")
+    ax.set_ylabel("expected sequences\nper unit publicness")
 # --- show

@@ -17,8 +17,8 @@ print(f"private (in one person):          {counts[1]:,.0f}  ({counts[1] / seen:.
 for k in (2, 5, 10, 50, 100):
     print(f"in exactly {k:3} people:            {counts[k]:,.1f}")
 
-# The grid is an approximation; check it against the exact, grid-free calculation
-exact = ExactOccupancy(model).equal_depth_cohort(100_000, 100)
-print(f"exact: {exact['seen'].value:,.0f} distinct, {exact['private'].value:,.0f} private "
-      f"(grid within {abs(seen / exact['seen'].value - 1):.1e} and "
-      f"{abs(counts[1] / exact['private'].value - 1):.1e})")
+# The grid is an approximation; check it against the grid-free calculation
+direct = ExactOccupancy(model).equal_depth_cohort(100_000, 100)
+print(f"grid-free: {direct['seen'].value:,.0f} distinct, {direct['private'].value:,.0f} private "
+      f"(grid within {abs(seen / direct['seen'].value - 1):.1e} and "
+      f"{abs(counts[1] / direct['private'].value - 1):.1e})")

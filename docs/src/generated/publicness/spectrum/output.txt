@@ -5,4 +5,4 @@ in exactly   5 people:            38,443.4
 in exactly  10 people:            7,463.3
 in exactly  50 people:            130.5
 in exactly 100 people:            38.6
-exact: 7,232,134 distinct, 6,462,810 private (grid within 3.1e-05 and 3.5e-05)
+grid-free: 7,232,134 distinct, 6,462,810 private (grid within 3.1e-05 and 3.5e-05)
