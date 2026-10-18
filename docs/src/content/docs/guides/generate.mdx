@@ -1,6 +1,6 @@
 ---
 title: Generating sequences
-description: Draw realistic CDR3 sequences from a model, of any length or a fixed one, with their probabilities.
+description: Draw realistic sequences from a model, such as TCR CDR3s, of any length or a fixed one, with their probabilities.
 sidebar:
   order: 2
 ---
@@ -16,7 +16,7 @@ use as a background or a null set?
 
 ## Drawing sequences
 
-`sample` draws sequences **exactly in proportion to their probability**: a sequence twice as
+`sample` draws sequences **in proportion to their probability**: a sequence twice as
 probable is drawn twice as often. Give `length` to draw only sequences of that length.
 
 `seed` chooses the draw: the same seed always gives the same sequences, and **leaving it out
@@ -42,20 +42,20 @@ Draw many sequences and their lengths follow the model's length distribution, as
 	src="generate/lengths"
 	name="lengths"
 	alt="Bar chart of the length distribution of 50,000 sampled CDR3s with the model's length probabilities overlaid as points; they match closely."
-	caption="Lengths of 50,000 sequences drawn from the reference model, against its exact length distribution."
+	caption="Lengths of 50,000 sequences drawn from the reference model, against its length distribution computed from the model."
 />
 
 <Interactive
 	title="Sampling in motion"
-	description="Press Draw to watch sequences being drawn from the reference model, newest first, with their log probabilities. The bars show the share of each length among the draws so far; the dots are the model's exact length distribution, which the bars approach as draws accumulate."
+	description="Press Draw to watch sequences being drawn from the reference model, newest first, with their log probabilities. The bars show the share of each length among the draws so far; the dots are the model's length distribution, computed rather than sampled, which the bars approach as draws accumulate."
 >
 	<SamplingMotion client:visible />
 </Interactive>
 
 ## Not every draw is a textbook CDR3
 
-The model gives some probability to every sequence of up to 27 residues, including sequences
-it has never seen. Most of what it draws has the conserved start and end, but not all:
+The reference model gives some probability to every sequence of up to 27 residues, including
+sequences it has never seen. Most of what it draws has the conserved start and end, but not all:
 
 <Example src="generate/canonical" />
 
@@ -65,9 +65,13 @@ sequences it never observed, and some of that goes to non-canonical ones. Filter
 your use needs canonical CDR3s only.
 
 <Aside type="caution" title="Pitfalls">
-- **Draws are independent.** Sampling 50,000 sequences is drawing 50,000 cells from the
-  population, with repeats. It does not reproduce the clonal structure of one person's
-  repertoire.
+- **Draws reproduce what the model was built from.** Each draw is one cell drawn independently
+  from the population the model describes, so repeats come only from probability. A model built
+  from one person's repertoire, weighted by abundance, gives expanded clones high probability,
+  and its draws repeat them at roughly their frequency in that repertoire. The reference model
+  pools many people, so its draws reflect no one person's clones; a model of unique sequences
+  has no clonal structure to reproduce. See
+  [Abundance or unique sequences?](/BEAM/explanations/abundance/)
 - **A fixed `length` changes the question.** `sample(n, length=12)` draws from the sequences of
   length 12 only. Use it when length is controlled by design, not to imitate a repertoire.
 </Aside>
