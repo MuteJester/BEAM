@@ -55,7 +55,7 @@ conserved start and end residues.
 | `log_pseq_batch(seqs)` | Log probabilities of a list, as a NumPy array; parallel where available. |
 | `log_pseq_chunks(iterable, chunk_size=)` | Log probabilities of an iterable, one array per chunk. |
 | `log_pseq_file(path, ...)`, `log_pseq_parquet(path, column=)` | Scores every sequence in a file. |
-| `explain(seq)` | Per-residue log scores from both experts, which reconstruct the score exactly. Raises `ValueError` naming why a sequence cannot be scored. |
+| `explain(seq)` | For each residue, the log probability from each expert (`forward`, `backward`) and their weighted combination (`combined`, $\ln\psi_i$), with `log_length_prior` and `log_partition`; together they reconstruct the score. Raises `ValueError` naming why a sequence cannot be scored. See [Which residues drive a score](/BEAM/guides/score/#which-residues-drive-a-score). |
 | `log_pseq_by_position(seq)` | The score split per position; the sum is the score. |
 
 ## Generating

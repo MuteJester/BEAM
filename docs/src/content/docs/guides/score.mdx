@@ -1,6 +1,6 @@
 ---
 title: How likely is a sequence?
-description: Score one CDR3 or millions, compare sequences of different lengths, and see which residues make a sequence likely or unlikely.
+description: Score one sequence or millions, such as TCR CDR3s, compare sequences of different lengths, and see which residues make a sequence likely or unlikely.
 sidebar:
   order: 1
 ---
@@ -9,11 +9,12 @@ import { Aside } from '@astrojs/starlight/components';
 import Example from '../../../components/Example.astro';
 import Figure from '../../../components/Figure.astro';
 
-**The question:** how probable is this CDR3β sequence in a population, and why?
+**The question:** how probable is this sequence in a population, and why?
 
-A BEAM model gives every sequence a probability: the chance that one T cell drawn at random has
-exactly that CDR3. With the reference model, that population is the 38,538 human repertoires it
-was built from.
+A BEAM model gives every sequence a probability: the chance that one sequence drawn at random
+from the population the model describes is exactly that one. With the reference model, it is the
+chance that one T cell drawn at random from the 38,538 human repertoires it was built from has
+exactly that CDR3β; the examples on this page use it.
 
 ## One sequence, or a few
 
@@ -55,29 +56,58 @@ $P(s \mid L)$ asks "how typical is this sequence for its length".
 
 ## Which residues drive a score
 
-`explain` splits a score into one term per residue, from each of the model's two readings: one
-counting positions from the start of the sequence, one counting from the end. A term is shown
-as **surprisal** in bits: 0 means the residue was entirely expected, and each extra bit means
-half as likely.
+BEAM scores every residue twice, by two experts: one reads the sequence from the start, the
+other from the end. For residue $s_i$ of a sequence of length $L$, using the $k$ neighbouring
+residues as context ($k = 4$ for the reference model):
+
+$$
+\psi_i \;=\; q_F\big(s_i \mid i,\; s_{i-k}^{\,i-1}\big)^{w_F}\;
+q_B\big(s_i \mid L-i+1,\; s_{i+1}^{\,i+k}\big)^{w_B},
+\qquad
+P(s) \;=\; \frac{\pi(L)}{Z(L)} \prod_{i=1}^{L} \psi_i
+$$
+
+- $q_F(s_i \mid i, \dots)$ is the probability the expert reading from the start gives residue
+  $s_i$, from its position $i$ and the $k$ residues before it;
+- $q_B(s_i \mid L-i+1, \dots)$ is the same for the expert reading from the end, from the
+  position counted from the end and the $k$ residues after it;
+- $\psi_i$ is the residue's combined factor: the geometric mean of the two, with weights
+  $w_F = w_B = \tfrac{1}{2}$;
+- $\pi(L)$ is the probability of the length, and $Z(L)$ the normaliser: the product of the
+  $\psi_i$ summed over every sequence of length $L$.
+
+`explain` returns all of these as natural logarithms: for each residue `forward` ($\ln q_F$),
+`backward` ($\ln q_B$) and `combined` ($\ln \psi_i$), and for the sequence `log_length_prior`
+($\ln \pi(L)$) and `log_partition` ($\ln Z(L)$). Below, each residue's terms are shown as
+**surprisal** in bits, $-\log_2$: 0 means the residue was entirely expected, and each extra bit
+means half as likely.
 
 <Example src="score/explain" />
 
 <Figure
 	src="score/explain"
 	name="explain"
-	alt="Bar chart of surprisal per residue of CASSLGQGYEQYF, for the reading from the start and the reading from the end."
-	caption="Surprisal of each residue of CASSLGQGYEQYF under the two readings of the reference model."
+	alt="Bar chart of surprisal per residue of CASSLGQGYEQYF for the reading from the start and the reading from the end, with the combined surprisal of each residue drawn as a line."
+	caption="Surprisal of each residue of CASSLGQGYEQYF under the two readings of the reference model (bars) and combined (line)."
 />
 
 The reading from the start is sure of the opening `CASS`, the reading from the end is sure of
 the closing `Q` and `F`, and both are uncertain in the middle (`LGQGY`), where the junction between
-the gene segments makes CDR3s diverse. The terms reconstruct the score exactly, so this is an
-explanation of the probability, not an illustration of it.
+the gene segments makes CDR3s diverse. Where one expert is sure and the other is not, as at the
+`Y` in position 9, the combined factor sits between them. The terms reconstruct the score
+exactly, as the last lines show, so this is an explanation of the probability, not an
+illustration of it.
+
+A $\psi_i$ is a factor of the score, not a probability of the residue on its own: the product of
+the two experts is normalised as a whole, by $Z(L)$. Because $Z(L)$ is the same for every
+sequence of length $L$, the $\psi_i$ of different residues, or of one position in different
+sequences of the same length, can be compared directly.
 
 ## What the model cannot score
 
 A sequence longer than the model's maximum length (27 residues for the reference model), or
-containing a character outside the 20 standard amino acids, has probability 0. `explain` raises
+containing a character outside the model's alphabet (the 20 standard amino acids for the
+reference model), has probability 0. `explain` raises
 an error that says why.
 
 <Example src="score/invalid" />
