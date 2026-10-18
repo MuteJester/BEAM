@@ -79,10 +79,9 @@ sequences at the top are the ones a cohort study would see again and again.
 Instead of one sequence at a time, ask about **every** sequence at once: how many sequences are
 expected to be carried by exactly 1, 2, …, all of the people in a cohort. This is the cohort's
 **publicness spectrum**. BEAM computes it over every sequence the model can produce, grouped onto
-a fine grid of probabilities (`pseq_analysis().atoms`). The grid is an approximation, so the
-example checks it against the grid-free counts of distinct and private sequences; a
-coarser grid of 4,096 values needs about a third of the memory and moves the spectrum by about
-1.5%.
+a fine grid of probabilities (`pseq_analysis().atoms`). The example's grid of 16,384 values
+agrees with the grid-free counts of distinct and private sequences to within 3 × 10⁻⁵; a grid of
+4,096 values needs about a third of the memory and stays within about 1.5%.
 
 <Example src="publicness/spectrum" />
 
