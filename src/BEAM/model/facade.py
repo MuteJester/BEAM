@@ -20,7 +20,7 @@ from typing import Any
 
 import numpy as np
 
-from ..constants import (BEAM_ALPHABET, BEAM_MAX_LENGTH,
+from ..constants import (BEAM_ALPHABET, BEAM_MAX_LENGTH, BEAM_MAX_LENGTH_CEILING,
                          BEAM_MAX_MOMENT, BEAM_MAX_ORDER, BEAM_RESIDUES)
 from . import alphabets
 from .validation import _check_int, _is_scalar_arg
@@ -53,6 +53,25 @@ def _default_column(column: str | None, config: dict) -> str:
         raise ValueError(
             f"no default column for alphabet {alphabet!r}; name one "
             f"explicitly") from None
+
+
+def _longest_usable(seqs: list, alphabet: str) -> int:
+    """max_length for ``max_length="data"``: the longest training sequence
+    the alphabet accepts, at least 2 and at most the format's ceiling.
+
+    A sequence the build would skip anyway, for a character outside the
+    alphabet, does not count. Candidates are tried from the longest down,
+    so only the few longest are checked character by character.
+    """
+    lengths = np.fromiter((len(s) if isinstance(s, str) else 0 for s in seqs),
+                          dtype=np.int64, count=len(seqs))
+    longest = 0
+    for i in np.argsort(-lengths, kind="stable"):
+        if lengths[i] <= longest:
+            break
+        if alphabets.accepts(alphabet, seqs[i]):
+            longest = int(lengths[i])
+    return min(max(longest, 2), BEAM_MAX_LENGTH_CEILING)
 
 
 def _orders_vector(orders: Iterable[float]) -> np.ndarray:
@@ -120,13 +139,16 @@ class BeamModel:
             for amino acids, 9 for nucleotides, because the real bound is on
             ``radix ** order``. Defaults to the alphabet's measured optimum:
             4 and 6 respectively.
-        coefficients: Log-linear mixing weights for the wide, mid and
-            length-conditioned experts. **They must sum to 1.** The sum is not
-            a free parameter: it is a pure cross-length calibration knob, and
-            moving it off 1 leaves within-length ranking untouched while
-            wrecking global ranking.
+        weights: ``(w_F, w_B)``, the exponents of the forward (N-anchored)
+            and backward (C-anchored) experts in each residue's factor,
+            ``q_F ** w_F * q_B ** w_B``. The default ``(0.5, 0.5)`` is their
+            geometric mean. They should sum to 1; ``(1, 0)`` and ``(0, 1)``
+            score each expert alone.
         max_length: Longest sequence the model represents. Defaults to 27 for
             amino acids and 81 for nucleotides, three bases to the residue.
+            ``"data"`` takes the length of the longest training sequence the
+            alphabet accepts, so none is skipped for its length (up to the
+            file format's ceiling of 255). Time and memory grow with it.
         alpha: Prior strengths of the hierarchical Bayesian smoothing, one
             per context level 0..order, or one number for all of them.
             Every sequence up to ``max_length`` has positive probability, and
@@ -183,6 +205,8 @@ class BeamModel:
                 raise ValueError(
                     f"abundances has {len(abund)} entries but sequences has "
                     f"{len(seqs)}")
+        if isinstance(max_length, str) and max_length == "data":
+            max_length = _longest_usable(seqs, alphabet)
         cargs = _config_args(alphabet=alphabet, order=order,
                              max_length=max_length, weights=weights,
                              alpha=alpha, alpha_length=alpha_length,

@@ -375,3 +375,46 @@ def test_c_and_python_defaults_describe_the_same_model():
     for field in ("order", "max_length", "weights", "alphabet", "alpha",
                   "alpha_length", "alpha_auto", "alpha_length_auto", "sparse"):
         assert back[field] == handed[field], field
+
+
+# ── max_length from the data ─────────────────────────────────────
+
+SHORT = ["CASSLGQGYEQYF", "CASSPGTGELFF", "CSARDRTGNGYTF"] * 4
+LONG = "CASSLGQGYEQYFCASSLGQGYEQYFCASSL"          # 31 residues, past the default 27
+
+
+def test_max_length_can_be_taken_from_the_data():
+    default = BeamModel(SHORT + [LONG], order=2)
+    assert default.config["max_length"] == 27 and default.n_skipped == 1
+    fitted = BeamModel(SHORT + [LONG], order=2, max_length="data")
+    assert fitted.config["max_length"] == len(LONG) and fitted.n_skipped == 0
+    assert math.isfinite(fitted.log_pseq(LONG))
+
+
+def test_max_length_from_the_data_ignores_sequences_that_would_be_skipped():
+    junk = "CASS" + "X" * 40                  # X is not an amino acid: skipped either way
+    m = BeamModel(SHORT + [junk], order=2, max_length="data")
+    assert m.config["max_length"] == max(map(len, SHORT)) and m.n_skipped == 1
+
+
+def test_max_length_from_the_data_stops_at_the_formats_ceiling():
+    m = BeamModel(SHORT + ["C" + "A" * 299], order=2, max_length="data")
+    assert m.config["max_length"] == 255 and m.n_skipped == 1
+
+
+def test_max_length_from_the_data_reaches_from_dataframe():
+    pd = pytest.importorskip("pandas")
+    table = pd.DataFrame({"junction_aa": SHORT + [LONG], "duplicate_count": 1})
+    m = BeamModel.from_dataframe(table, sequence_column="junction_aa",
+                                 abundance_column="duplicate_count", order=2,
+                                 max_length="data")
+    assert m.config["max_length"] == len(LONG)
+
+
+def test_streaming_builds_refuse_max_length_from_the_data(tmp_path):
+    path = tmp_path / "seqs.tsv"
+    path.write_text("\n".join(f"{s}\t1" for s in SHORT) + "\n")
+    for build in (lambda: BeamModel.from_sequence_file(path, max_length="data"),
+                  lambda: BeamModel.builder(max_length="data")):
+        with pytest.raises(ValueError, match="BeamModel"):
+            build()

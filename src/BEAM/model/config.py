@@ -81,6 +81,13 @@ def _config_args(*, order, max_length, weights, alpha=None, alpha_length=None,
         order = info["default_order"]
     if max_length is None:
         max_length = info["default_max_length"]
+    if isinstance(max_length, str) and max_length == "data":
+        # BeamModel resolves "data" to a number before it gets here; a
+        # streamed build cannot, because it has not seen the sequences yet.
+        raise ValueError(
+            "max_length='data' takes the length of the longest sequence, so "
+            "it needs every sequence before building: use BeamModel(sequences, "
+            "...) or BeamModel.from_dataframe(...), or give max_length a number")
 
     # The order ceiling is the alphabet's own, because the real bound is on
     # radix**order and the two radices are far apart: 21**9 does not fit the
