@@ -1,0 +1,2 @@
+the prior written out agrees with BEAM's experts to 8.9e-16
+CASSLGQGYEQYF: ln P = -10.3203; length 13: 1,608,421 nodes, 28,968,420 edges, ln Z = -1.7671

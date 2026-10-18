@@ -1,5 +1,5 @@
-length term   ln pi(L)  =   -1.7650
-residue terms           =  -10.3225
-normaliser    ln Z(L)   =   -1.7671
-ln P(s), assembled      =  -10.3203
-ln P(s), from log_pseq  =  -10.3203
+length term   ln pi(L)        =   -1.7650
+residue terms sum of ln psi_i =  -10.3225
+normaliser    ln Z(L)         =   -1.7671
+ln P(s), assembled            =  -10.3203
+ln P(s), from log_pseq        =  -10.3203
