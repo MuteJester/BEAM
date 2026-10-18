@@ -8,7 +8,7 @@ from _docs import figure, save_data  # hide
 # --- hide
 import BEAM
 from _standins import population
-ref = BEAM.load_pretrained("foundation")
+ref = BEAM.load_pretrained("human_tcrb_cdr3_aa_foundation")
 labels = [g for g in "ABC" for _ in range(4)]
 repertoires = [population(ref, g, 50_000, seed=100 + i) for i, g in enumerate(labels)]
 # --- show

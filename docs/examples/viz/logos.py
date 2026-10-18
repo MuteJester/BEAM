@@ -3,7 +3,7 @@ import BEAM
 from _docs import save_data
 
 BEAM.set_memory_budget(16 << 30)
-model = BEAM.load_pretrained("foundation")
+model = BEAM.load_pretrained("human_tcrb_cdr3_aa_foundation")
 pack = lambda g: {"bits": [[round(float(v), 4) for v in row] for row in g.height_bits],  # noqa: E731
                   "consensus": g.consensus_sequence, "fraction": float(g.fraction),
                   "information": round(float(g.information_bits.sum()), 3)}

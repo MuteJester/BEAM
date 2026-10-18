@@ -5,7 +5,7 @@ from BEAM.analytics.exact_occupancy import ExactOccupancy
 from _docs import figure  # hide
 
 BEAM.set_memory_budget(32 << 30)       # a fine probability grid needs about 20 GB
-model = BEAM.load_pretrained("foundation")
+model = BEAM.load_pretrained("human_tcrb_cdr3_aa_foundation")
 
 # Every sequence the model can produce, grouped onto a fine grid of probabilities
 p, w = model.pseq_analysis().atoms(16384).as_arrays()

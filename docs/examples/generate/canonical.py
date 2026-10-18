@@ -1,6 +1,6 @@
 import BEAM
 
-model = BEAM.load_pretrained("foundation")
+model = BEAM.load_pretrained("human_tcrb_cdr3_aa_foundation")
 draws = model.sample(50_000, seed=11)
 
 starts_c = sum(s.startswith("C") for s in draws) / len(draws)

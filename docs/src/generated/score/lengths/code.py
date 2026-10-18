@@ -1,6 +1,6 @@
 import BEAM
 
-model = BEAM.load_pretrained("foundation")
+model = BEAM.load_pretrained("human_tcrb_cdr3_aa_foundation")
 p_length = model.length_distribution          # {length: probability}
 
 for cdr3 in ["CASSLGQGYEQYF", "CASSLGQGAYNEQFF", "CASSPRDRGLAGGYNEQFF"]:

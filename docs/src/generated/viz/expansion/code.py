@@ -6,7 +6,7 @@ from BEAM.analytics.distance import compare
 from _docs import save_data
 from _standins import population, expand
 
-ref = BEAM.load_pretrained("foundation")
+ref = BEAM.load_pretrained("human_tcrb_cdr3_aa_foundation")
 cells = population(ref, "A", 30_000, seed=7)
 unique = BeamModel(sorted(set(cells)), order=3)
 rows = []

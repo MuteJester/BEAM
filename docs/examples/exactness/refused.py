@@ -1,7 +1,7 @@
 from BEAM import BeamModel, Mixture
 # --- hide
 import BEAM
-reference = BEAM.load_pretrained("foundation")
+reference = BEAM.load_pretrained("human_tcrb_cdr3_aa_foundation")
 donor_a = BeamModel(reference.sample(5_000, seed=72), order=2, max_length=20)
 donor_b = BeamModel(reference.sample(5_000, seed=73), order=2, max_length=20)
 # --- show

@@ -4,7 +4,7 @@ from BEAM.analytics.distance import compare
 from _docs import figure  # hide
 
 # --- hide
-reference = BEAM.load_pretrained("foundation")
+reference = BEAM.load_pretrained("human_tcrb_cdr3_aa_foundation")
 donor_a = BeamModel(reference.sample(50_000, seed=51))
 # A shifted population: long CDR3s and the ...NEQFF ending are over-represented.
 pool = reference.sample(400_000, seed=53)

@@ -1,7 +1,7 @@
 import numpy as np
 import BEAM
 
-model = BEAM.load_pretrained("foundation")
+model = BEAM.load_pretrained("human_tcrb_cdr3_aa_foundation")
 
 # A large batch: 200,000 sequences, here drawn from the model itself.
 cdr3s = model.sample(200_000, seed=7)

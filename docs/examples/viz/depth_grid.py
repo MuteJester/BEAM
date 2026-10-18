@@ -4,7 +4,7 @@ import BEAM
 from BEAM.analytics.exact_occupancy import ExactOccupancy
 from _docs import save_data
 
-model = BEAM.load_pretrained("foundation")
+model = BEAM.load_pretrained("human_tcrb_cdr3_aa_foundation")
 occupancy = ExactOccupancy(model)
 
 depths = np.logspace(3, 11, 161)            # 20 points per decade, up to 1e11

@@ -4,7 +4,7 @@ from BEAM import BeamModel
 from BEAM.analytics.distance import compare
 from _docs import save_data
 
-reference = BEAM.load_pretrained("foundation")
+reference = BEAM.load_pretrained("human_tcrb_cdr3_aa_foundation")
 donor_a = BeamModel(reference.sample(50_000, seed=51))
 pool = reference.sample(400_000, seed=53)
 donor_b = BeamModel([s for s in pool if len(s) >= 15 or s.endswith("NEQFF")][:50_000])

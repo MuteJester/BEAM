@@ -2,7 +2,7 @@ from collections import Counter
 import BEAM
 from _docs import figure  # hide
 
-model = BEAM.load_pretrained("foundation")
+model = BEAM.load_pretrained("human_tcrb_cdr3_aa_foundation")
 draws = model.sample(50_000, seed=11)
 
 observed = Counter(len(s) for s in draws)

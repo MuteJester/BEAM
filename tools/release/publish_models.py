@@ -1,6 +1,6 @@
 """Publish BEAM models as a `models-vN` release, then register them.
 
-    python tools/release/publish_models.py prepare  models/models-v1.json --file foundation=/path/beam_foundation.beam
+    python tools/release/publish_models.py prepare  models/models-v1.json --file human_tcrb_cdr3_aa_foundation=/path/human_tcrb_cdr3_aa_foundation.beam
     python tools/release/publish_models.py github   models/models-v1.json
     python tools/release/publish_models.py register models/models-v1.json --zenodo-record 1234567 --doi 10.5281/zenodo.1234567
 

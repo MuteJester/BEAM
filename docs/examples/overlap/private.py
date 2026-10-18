@@ -1,7 +1,7 @@
 import BEAM
 from BEAM.analytics.exact_occupancy import ExactOccupancy
 
-model = BEAM.load_pretrained("foundation")
+model = BEAM.load_pretrained("human_tcrb_cdr3_aa_foundation")
 occupancy = ExactOccupancy(model)
 
 # A cohort of 10 people, each sampled to 100,000 cells

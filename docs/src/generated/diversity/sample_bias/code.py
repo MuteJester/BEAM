@@ -2,7 +2,7 @@ import math
 import BEAM
 from BEAM.analytics.exact_occupancy import ExactOccupancy
 
-model = BEAM.load_pretrained("foundation")
+model = BEAM.load_pretrained("human_tcrb_cdr3_aa_foundation")
 occupancy = ExactOccupancy(model)
 H = model.entropy()
 

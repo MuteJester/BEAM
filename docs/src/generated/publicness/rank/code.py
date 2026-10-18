@@ -2,7 +2,7 @@ import numpy as np
 import BEAM
 from BEAM import PublicnessModel
 
-model = BEAM.load_pretrained("foundation")
+model = BEAM.load_pretrained("human_tcrb_cdr3_aa_foundation")
 # repertoire: the distinct CDR3s of one sample
 cohort = PublicnessModel([100_000] * 100)
 

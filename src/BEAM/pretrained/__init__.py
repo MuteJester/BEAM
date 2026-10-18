@@ -2,7 +2,7 @@
 
     import BEAM
     BEAM.pretrained_models()                     # what is available
-    model = BEAM.load_pretrained("foundation")   # a ready BeamModel
+    model = BEAM.load_pretrained("human_tcrb_cdr3_aa_foundation")   # a ready BeamModel
 
 The models are released separately from the code, under GitHub releases
 tagged ``models-vN`` and archived on Zenodo with a DOI. ``registry.json``,

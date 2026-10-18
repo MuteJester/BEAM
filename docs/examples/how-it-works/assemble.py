@@ -1,7 +1,7 @@
 import math
 import BEAM
 
-model = BEAM.load_pretrained("foundation")
+model = BEAM.load_pretrained("human_tcrb_cdr3_aa_foundation")
 s = "CASSLGQGYEQYF"
 L = len(s)
 

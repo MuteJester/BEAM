@@ -9,8 +9,8 @@ sidebar:
 import BEAM
 
 BEAM.pretrained_models()                     # what is available
-model = BEAM.load_pretrained("foundation")   # a ready BeamModel
-path = BEAM.pretrained_path("foundation")    # the local file, downloading it if needed
+model = BEAM.load_pretrained("human_tcrb_cdr3_aa_foundation")   # a ready BeamModel
+path = BEAM.pretrained_path("human_tcrb_cdr3_aa_foundation")    # the local file, downloading it if needed
 ```
 
 | Name | Description |

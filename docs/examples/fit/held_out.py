@@ -4,7 +4,7 @@ from _docs import figure  # hide
 # --- hide
 import BEAM
 from _standins import population
-ref = BEAM.load_pretrained("foundation")
+ref = BEAM.load_pretrained("human_tcrb_cdr3_aa_foundation")
 cells = population(ref, "B", 80_000, seed=91)
 # --- show
 # cells: one repertoire's cells. Build on 80% of them; keep 20% aside to check against.

@@ -2,7 +2,7 @@ import numpy as np
 import BEAM
 from BEAM import BeamModel
 
-reference = BEAM.load_pretrained("foundation")          # 38,538 repertoires: the population
+reference = BEAM.load_pretrained("human_tcrb_cdr3_aa_foundation")          # 38,538 repertoires: the population
 # --- hide
 from _standins import population
 donors = [population(reference, "B", 30_000, seed=s) for s in (1, 2, 3)]

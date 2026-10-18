@@ -2,7 +2,7 @@ from BEAM import BeamModel
 from BEAM.analytics.exact_occupancy import ExactOccupancy
 # --- hide
 import BEAM
-model = BeamModel(BEAM.load_pretrained("foundation").sample(20_000, seed=71), order=2)
+model = BeamModel(BEAM.load_pretrained("human_tcrb_cdr3_aa_foundation").sample(20_000, seed=71), order=2)
 # --- show
 
 occupancy = ExactOccupancy(model)

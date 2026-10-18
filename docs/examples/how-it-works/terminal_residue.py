@@ -1,6 +1,6 @@
 import BEAM
 
-model = BEAM.load_pretrained("foundation")
+model = BEAM.load_pretrained("human_tcrb_cdr3_aa_foundation")
 
 real = "CASSLGQGYEQYF"
 swapped = "CASSLGQGYEQYW"          # the same, with the final F changed to W

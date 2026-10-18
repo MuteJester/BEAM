@@ -3,7 +3,7 @@ from BEAM import BeamModel
 # --- hide
 import BEAM
 from _standins import population
-reference = BEAM.load_pretrained("foundation")
+reference = BEAM.load_pretrained("human_tcrb_cdr3_aa_foundation")
 cells_1 = population(reference, "A", 20_000, seed=21)
 cells_2 = population(reference, "A", 20_000, seed=22)
 probe = reference.sample(1_000, seed=23)

@@ -2,7 +2,7 @@ import numpy as np
 import BEAM
 from BEAM import PublicnessModel
 
-model = BEAM.load_pretrained("foundation")
+model = BEAM.load_pretrained("human_tcrb_cdr3_aa_foundation")
 # --- hide
 from collections import Counter
 repertoire = list(Counter(model.sample(20_000, seed=41)))

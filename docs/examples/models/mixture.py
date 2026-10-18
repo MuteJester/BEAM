@@ -2,7 +2,7 @@ from BEAM import BeamModel, Mixture
 # --- hide
 import BEAM
 from _standins import population
-ref = BEAM.load_pretrained("foundation")
+ref = BEAM.load_pretrained("human_tcrb_cdr3_aa_foundation")
 def group_cells(kind, seeds):
     return [s for seed in seeds for s in population(ref, kind, 20_000, seed=seed)]
 group_a = BeamModel(group_cells("A", (51, 52)))

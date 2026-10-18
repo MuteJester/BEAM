@@ -2,7 +2,7 @@ import numpy as np
 import BEAM
 from BEAM import PublicnessModel
 
-model = BEAM.load_pretrained("foundation")
+model = BEAM.load_pretrained("human_tcrb_cdr3_aa_foundation")
 cohort = PublicnessModel([50_000] * 100)
 
 pmf = cohort.pmf(model.pseq("CASSLGQGAYNEQFF"))    # P(exactly k carriers), k = 0..100

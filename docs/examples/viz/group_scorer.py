@@ -5,7 +5,7 @@ from BEAM import BeamModel
 from _docs import figure, save_data
 from _standins import population, has_motif
 
-ref = BEAM.load_pretrained("foundation")
+ref = BEAM.load_pretrained("human_tcrb_cdr3_aa_foundation")
 seeds = {"A": (71, 72, 73), "B": (74, 75, 76), "C": (77, 78, 79)}
 train = {g: [s for seed in ss for s in population(ref, g, 30_000, seed=seed)] for g, ss in seeds.items()}
 models = {g: BeamModel(cells, order=3) for g, cells in train.items()}   # as in groups/which_group

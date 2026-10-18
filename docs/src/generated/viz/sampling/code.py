@@ -2,7 +2,7 @@
 import BEAM
 from _docs import save_data
 
-model = BEAM.load_pretrained("foundation")
+model = BEAM.load_pretrained("human_tcrb_cdr3_aa_foundation")
 draws = model.simulate(3000, seed=17)
 lengths = model.length_distribution
 save_data("sampling", {

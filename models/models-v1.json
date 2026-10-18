@@ -4,8 +4,8 @@
   "license": "CC-BY-4.0",
   "citation": "T. Konstantinovsky and G. Yaari. A computable probability landscape for T cell receptor repertoire sampling and comparison. (Submitted.)",
   "models": {
-    "foundation": {
-      "file": "beam_foundation.beam",
+    "human_tcrb_cdr3_aa_foundation": {
+      "file": "human_tcrb_cdr3_aa_foundation.beam",
       "description": "The population reference model: a BEAM model of human TCRβ CDR3 amino-acid sequences built from 38,538 repertoires.",
       "built_from": "38,538 human TCRβ repertoires from 447 published immunosequencing studies (2009-2025), aggregated from immuneACCESS, TCRdb 2.0, the AIRR Data Commons, mal-ID, VDJbase and Britanova et al. after removing exact and near-identical duplicate repertoires: 926,909,993 distinct CDR3β amino-acid sequences of 3 to 27 residues spelled from the twenty standard amino acids. Sequences are written with the conserved cysteine and terminal phenylalanine or tryptophan (junction form), which 99.6% and 98.6% of them carry; no filter was applied to those residues. Abundance is the template count where the platform reported one, otherwise one per distinct sequence per repertoire. The manuscript's Methods and Supplementary Information describe the corpus in full.",
       "built_with": "BEAM at commit d470328 (the build used for the manuscript)",

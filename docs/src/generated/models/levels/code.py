@@ -2,7 +2,7 @@ import numpy as np
 import BEAM
 from BEAM import BeamModel
 
-reference = BEAM.load_pretrained("foundation")          # 38,538 repertoires: the population
+reference = BEAM.load_pretrained("human_tcrb_cdr3_aa_foundation")          # 38,538 repertoires: the population
 # donors: three repertoires from one group (stand-in population B: longer CDR3s)
 per_repertoire = [BeamModel(cells) for cells in donors]   # one model per repertoire
 group = BeamModel([s for cells in donors for s in cells])  # the group's cells, pooled

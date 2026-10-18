@@ -1,7 +1,7 @@
 from BEAM import BeamModel
 # --- hide
 import BEAM
-reference = BEAM.load_pretrained("foundation")
+reference = BEAM.load_pretrained("human_tcrb_cdr3_aa_foundation")
 a = BeamModel(reference.sample(20_000, seed=31))
 b = BeamModel(reference.sample(20_000, seed=32))
 # --- show

@@ -3,7 +3,7 @@ import math
 from BEAM import BeamModel
 # --- hide
 import BEAM
-reference = BEAM.load_pretrained("foundation")
+reference = BEAM.load_pretrained("human_tcrb_cdr3_aa_foundation")
 sequences = [s for s in reference.sample(20_000, seed=61) if len(s) <= 4] or ["CAS"]
 sequences += ["CASF", "CAW", "CSF", "CAF"]
 # --- show

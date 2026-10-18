@@ -3,7 +3,7 @@ import BEAM
 from _docs import figure  # hide
 
 BEAM.set_memory_budget(32 << 30)          # the fine probability grid below needs about 20 GB
-model = BEAM.load_pretrained("foundation")
+model = BEAM.load_pretrained("human_tcrb_cdr3_aa_foundation")
 
 # 1. By length: the model's probability against the share of all possible strings
 strings = {L: 20.0 ** L for L in range(1, 28)}

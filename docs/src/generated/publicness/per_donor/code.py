@@ -2,7 +2,7 @@ import numpy as np
 import BEAM
 from BEAM.analytics.exact_occupancy import ExactOccupancy
 
-model = BEAM.load_pretrained("foundation")
+model = BEAM.load_pretrained("human_tcrb_cdr3_aa_foundation")
 occupancy = ExactOccupancy(model)
 
 depths = np.logspace(4, 6, 10)            # ten donors, 10,000 to 1,000,000 cells

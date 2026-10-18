@@ -3,7 +3,7 @@ from BEAM import BeamModel
 from BEAM.analytics.distance import compare
 
 # --- hide
-reference = BEAM.load_pretrained("foundation")
+reference = BEAM.load_pretrained("human_tcrb_cdr3_aa_foundation")
 donor_a = BeamModel(reference.sample(50_000, seed=51))
 donor_a2 = BeamModel(reference.sample(50_000, seed=52))
 # --- show

@@ -5,7 +5,7 @@ from BEAM import PublicnessModel
 from _docs import save_data
 
 BEAM.set_memory_budget(32 << 30)
-model = BEAM.load_pretrained("foundation")
+model = BEAM.load_pretrained("human_tcrb_cdr3_aa_foundation")
 p, w = model.pseq_analysis().atoms(16384).as_arrays()   # fine grid: see publicness/spectrum
 out = {}
 for n in (10, 100, 1000):

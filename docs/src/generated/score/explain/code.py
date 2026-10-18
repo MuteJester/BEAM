@@ -1,7 +1,7 @@
 import math
 import BEAM
 
-model = BEAM.load_pretrained("foundation")
+model = BEAM.load_pretrained("human_tcrb_cdr3_aa_foundation")
 e = model.explain("CASSLGQGYEQYF")
 
 print("pos  residue  from start (bits)  from end (bits)")

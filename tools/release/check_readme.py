@@ -3,7 +3,7 @@
     python tools/release/check_readme.py README.md               # CI
     python tools/release/check_readme.py README.md --pretrained  # before a release
 
-By default the published "foundation" model is replaced by a small stand-in
+By default the published human_tcrb_cdr3_aa_foundation model is replaced by a small stand-in
 built here, and the example input files the README names are generated, so the
 check needs no network and runs in seconds. It proves the examples run against
 the current API; it does not check the numbers in their comments.
@@ -49,7 +49,7 @@ def example_files(workdir: Path, rng: random.Random) -> None:
 
 
 def stand_in_foundation(workdir: Path, rng: random.Random) -> None:
-    """Register a small model under the name "foundation".
+    """Register a small model under the published reference model's name.
 
     Order 2 keeps the exact occupancy integrals to seconds; the examples only
     need a model with the published one's interface.
@@ -63,7 +63,7 @@ def stand_in_foundation(workdir: Path, rng: random.Random) -> None:
     (f,) = list(server.iterdir())
     data = f.read_bytes()
     registry = workdir / "registry.json"
-    registry.write_text(json.dumps({"schema": 1, "models": {"foundation": {
+    registry.write_text(json.dumps({"schema": 1, "models": {"human_tcrb_cdr3_aa_foundation": {
         "release": "stand-in", "file": f.name, "bytes": len(data),
         "sha256": hashlib.sha256(data).hexdigest(), "format": MODEL_FORMAT,
         "description": "README stand-in", "urls": [f.as_uri()]}}}))

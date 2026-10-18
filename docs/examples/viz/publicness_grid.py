@@ -4,7 +4,7 @@ import BEAM
 from BEAM import PublicnessModel
 from _docs import save_data
 
-model = BEAM.load_pretrained("foundation")
+model = BEAM.load_pretrained("human_tcrb_cdr3_aa_foundation")
 probabilities = np.logspace(-10, -3, 71)        # 10 points per decade
 examples = ["CASSLGQGYEQYF", "CASSLGQGAYNEQFF", "CASSPRDRGLAGGYNEQFF", "CASSIRSSYEQYF"]
 cohorts = {f"{n}x{d}": [d] * n for n in (10, 100, 500) for d in (10_000, 100_000, 1_000_000)}

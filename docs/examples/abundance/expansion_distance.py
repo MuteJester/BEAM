@@ -3,7 +3,7 @@ from BEAM.analytics.distance import compare
 # --- hide
 import BEAM
 from _standins import population, expand
-ref = BEAM.load_pretrained("foundation")
+ref = BEAM.load_pretrained("human_tcrb_cdr3_aa_foundation")
 s1, c1 = expand(population(ref, "A", 30_000, seed=61), seed=62, strength=2.5)   # expanded
 s2, c2 = expand(population(ref, "A", 30_000, seed=63), seed=64, strength=0)     # not expanded
 # --- show

@@ -3,7 +3,7 @@ from BEAM import BeamModel
 # --- hide
 import BEAM
 from _standins import population
-ref = BEAM.load_pretrained("foundation")
+ref = BEAM.load_pretrained("human_tcrb_cdr3_aa_foundation")
 corpus_cells = [s for seed in range(30, 40) for s in population(ref, "A", 20_000, seed=seed)]
 cohort_cells = [s for seed in range(40, 43) for s in population(ref, "C", 20_000, seed=seed)]
 # --- show

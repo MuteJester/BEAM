@@ -3,7 +3,7 @@ import math
 import BEAM
 from _docs import save_data
 
-model = BEAM.load_pretrained("foundation")
+model = BEAM.load_pretrained("human_tcrb_cdr3_aa_foundation")
 w_start, w_end = model.config["weights"]
 out = {"weights": [w_start, w_end], "sequences": []}
 for s in ["CASSLGQGYEQYF", "CASSPRDRGLAGGYNEQFF", "CSARDRTGNGYTF", "CASSLGQGYEQYW"]:

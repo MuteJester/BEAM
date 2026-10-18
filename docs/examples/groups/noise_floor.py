@@ -4,7 +4,7 @@ from BEAM.analytics.distance import compare
 # --- hide
 import BEAM
 from _standins import population
-ref = BEAM.load_pretrained("foundation")
+ref = BEAM.load_pretrained("human_tcrb_cdr3_aa_foundation")
 donor_1 = population(ref, "A", 60_000, seed=121)
 donor_2 = population(ref, "A", 60_000, seed=122)
 donor_b = population(ref, "B", 60_000, seed=123)

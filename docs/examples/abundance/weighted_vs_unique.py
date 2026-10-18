@@ -4,7 +4,7 @@ from BEAM import BeamModel
 from _docs import figure  # hide
 # --- hide
 from _standins import population, expand
-ref = BEAM.load_pretrained("foundation")
+ref = BEAM.load_pretrained("human_tcrb_cdr3_aa_foundation")
 seqs, counts = expand(population(ref, "A", 50_000, seed=7), seed=8, strength=2.5)
 # --- show
 # seqs: the distinct CDR3s of one repertoire; counts: how many cells carry each

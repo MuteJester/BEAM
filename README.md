@@ -51,7 +51,7 @@ Silicon, macOS 14 or newer) and **Windows** (x86-64), for Python 3.11 to 3.15.
 ```python
 import BEAM
 
-model = BEAM.load_pretrained("foundation")    # downloads once (~90 MB), then cached
+model = BEAM.load_pretrained("human_tcrb_cdr3_aa_foundation")    # downloads once (~90 MB), then cached
 
 model.pseq("CASSLGQGYEQYF")                    # probability of one sequence
 # 3.3e-05
