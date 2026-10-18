@@ -1,6 +1,6 @@
 import itertools
 import numpy as np
-from scipy.cluster.hierarchy import fcluster, linkage
+from scipy.cluster.hierarchy import dendrogram, fcluster, linkage
 from scipy.spatial.distance import squareform
 from BEAM import BeamModel
 from BEAM.analytics.distance import compare

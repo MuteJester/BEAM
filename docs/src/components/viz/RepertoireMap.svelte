@@ -6,16 +6,17 @@
 		labels: string[];
 		names: string[];
 		distance: number[][];
-		xy: number[][];
 		clusters: number[];
+		linkage: number[][];
+		order: number[];
+		cut: number;
 	}
 
 	let data = $state<MapData | null>(null);
-	let selected = $state(0);
+	let selected = $state<number | null>(null);
 	let themeTick = $state(0);
 	let failed = $state(false);
-	let heat: HTMLDivElement | undefined = $state();
-	let scatter: HTMLDivElement | undefined = $state();
+	let width = $state(560);
 
 	$effect(() => {
 		fetch(dataUrl('groups/cluster/map.json'))
@@ -25,97 +26,122 @@
 		return onThemeChange(() => themeTick++);
 	});
 
-	const groupColour = (g: string, c: ReturnType<typeof themeColors>) =>
-		({ A: c.accent, B: c.second, C: '#6c7bd9' })[g] ?? c.muted;
+	const groupColour: Record<string, string> = { A: '#438f91', B: '#ef785f', C: '#6c7bd9' };
 
-	const nearest = $derived.by(() => {
-		if (!data) return -1;
-		const row = data.distance[selected];
-		let best = -1;
-		row.forEach((d, j) => {
-			if (j !== selected && (best < 0 || d < row[best])) best = j;
+	// Layout: the tree on top, the matrix below, one column and row per repertoire in tree order.
+	const layout = $derived.by(() => {
+		if (!data) return null;
+		const n = data.names.length;
+		const left = 58;
+		const cell = Math.max(16, Math.min(32, (width - left - 16) / n));
+		const treeH = 110;
+		const band = 8;
+		const top = treeH + band + 6;
+		const pos = new Map<number, number>(); // leaf -> column
+		data.order.forEach((leaf, k) => pos.set(leaf, k));
+		// Each merge joins two clusters at a height; leaves are ids < n.
+		const node: { x: number; h: number }[] = [];
+		const xOf = (id: number) => (id < n ? left + (pos.get(id)! + 0.5) * cell : node[id - n].x);
+		const hOf = (id: number) => (id < n ? 0 : node[id - n].h);
+		const maxH = Math.max(...data.linkage.map((r) => r[2]));
+		const y = (h: number) => treeH - (h / maxH) * (treeH - 10);
+		const links: string[] = [];
+		data.linkage.forEach(([a, b, h]) => {
+			const xa = xOf(a);
+			const xb = xOf(b);
+			links.push(`M${xa},${y(hOf(a))}V${y(h)}H${xb}V${y(hOf(b))}`);
+			node.push({ x: (xa + xb) / 2, h });
 		});
-		return best;
+		const values = data.distance.flat().filter((d) => d > 0);
+		const colour = Plot.scale({
+			color: { type: 'linear', scheme: 'viridis', domain: [0, Math.max(...values)] },
+		});
+		return { n, left, cell, treeH, band, top, links, cutY: y(data.cut), colour };
 	});
 
-	$effect(() => {
-		themeTick;
-		if (!data || !heat || !scatter) return;
-		const c = themeColors();
-		const cells = data.distance.flatMap((row, i) =>
-			row.map((d, j) => ({ i: data!.names[i], j: data!.names[j], d })),
-		);
-		const h = Plot.plot({
-			width: Math.min(heat.clientWidth, 380),
-			height: 340,
-			marginLeft: 36,
-			marginBottom: 36,
-			style: { color: c.text, background: 'transparent', fontSize: '11px' },
-			x: { domain: data.names, label: null, tickRotate: -90 },
-			y: { domain: data.names, label: null },
-			color: { scheme: 'viridis', legend: true, label: 'distance' },
-			marks: [
-				Plot.cell(cells, { x: 'j', y: 'i', fill: 'd', inset: 0.5 }),
-				Plot.cell(
-					cells.filter((r) => r.i === data!.names[selected] || r.j === data!.names[selected]),
-					{ x: 'j', y: 'i', stroke: c.text, fill: 'none', strokeWidth: 0.6 },
-				),
-			],
+	const info = $derived.by(() => {
+		if (!data || selected === null) return null;
+		const i = selected;
+		const row = data.distance[i];
+		let nearest = -1;
+		row.forEach((d, j) => {
+			if (j !== i && (nearest < 0 || d < row[nearest])) nearest = j;
 		});
-		heat.replaceChildren(h);
-		const pts = data.xy.map(([x, y], k) => ({ x, y, name: data!.names[k], g: data!.labels[k], k }));
-		const s = Plot.plot({
-			width: Math.min(scatter.clientWidth, 380),
-			height: 340,
-			inset: 24,
-			style: { color: c.text, background: 'transparent', fontSize: '11px' },
-			x: { axis: null },
-			y: { axis: null },
-			marks: [
-				Plot.link([{ a: pts[selected], b: pts[nearest] }], {
-					x1: (d) => d.a.x,
-					y1: (d) => d.a.y,
-					x2: (d) => d.b.x,
-					y2: (d) => d.b.y,
-					stroke: c.text,
-					strokeDasharray: '3,3',
-				}),
-				Plot.dot(pts, {
-					x: 'x',
-					y: 'y',
-					r: (d) => (d.k === selected ? 9 : 6),
-					fill: (d) => groupColour(d.g, c),
-					stroke: (d) => (d.k === selected ? c.text : 'none'),
-				}),
-				// Within-group differences are spread over many dimensions and nearly
-				// vanish in two, so members of a group overlap: label only the selected
-				// repertoire and its nearest neighbour.
-				Plot.text(
-					pts.filter((d) => d.k === selected || d.k === nearest),
-					{ x: 'x', y: 'y', text: 'name', dy: -14, fill: c.text, fontWeight: 600 },
-				),
-			],
-		});
-		scatter.replaceChildren(s);
+		const means: Record<string, number> = {};
+		for (const g of ['A', 'B', 'C']) {
+			const ds = row.filter((_, j) => j !== i && data!.labels[j] === g);
+			means[g] = ds.reduce((s, d) => s + d, 0) / ds.length;
+		}
+		return { i, nearest, means };
 	});
 </script>
 
-<div class="map">
-	{#if data}
-		<div class="row" role="group" aria-label="Repertoire">
-			<span class="muted">Repertoire</span>
-			{#each data.names as name, k}
-				<button class:active={selected === k} aria-pressed={selected === k} onclick={() => (selected = k)}>{name}</button>
+<div class="map" bind:clientWidth={width}>
+	{#if data && layout}
+		{@const L = layout}
+		<svg
+			width={L.left + L.n * L.cell + 96}
+			height={L.top + L.n * L.cell + 54}
+			role="group"
+			aria-label="Clustering tree of twelve repertoires above the matrix of their distances; colour bands give each repertoire's group"
+		>
+			<!-- the tree, from the distances alone -->
+			{#each L.links as d}
+				<path {d} class="link" />
 			{/each}
-		</div>
-		<div class="panels">
-			<div bind:this={heat} class="panel" role="img" aria-label="Distance between every pair of repertoires"></div>
-			<div bind:this={scatter} class="panel" role="img" aria-label="The repertoires laid out so that distances are preserved as well as possible"></div>
+			<line x1={L.left} x2={L.left + L.n * L.cell + 6} y1={L.cutY} y2={L.cutY} class="cut" />
+			<text x={L.left + L.n * L.cell + 10} y={L.cutY - 2} class="cut-label">cut into</text>
+			<text x={L.left + L.n * L.cell + 10} y={L.cutY + 11} class="cut-label">3 clusters</text>
+
+			<!-- the group each repertoire came from -->
+			{#each data.order as leaf, k}
+				<rect x={L.left + k * L.cell + 1} y={L.treeH + 2} width={L.cell - 2} height={L.band} fill={groupColour[data.labels[leaf]]} />
+				<rect x={L.left - L.band - 6} y={L.top + k * L.cell + 1} width={L.band} height={L.cell - 2} fill={groupColour[data.labels[leaf]]} />
+			{/each}
+
+			<!-- the distance matrix, in tree order -->
+			{#each data.order as ri, r}
+				{#each data.order as ci, c}
+					<rect
+						x={L.left + c * L.cell}
+						y={L.top + r * L.cell}
+						width={L.cell - 1}
+						height={L.cell - 1}
+						fill={L.colour.apply(data.distance[ri][ci])}
+						class:hl={selected !== null && (ri === selected || ci === selected)}
+						class:dim={selected !== null && ri !== selected && ci !== selected}
+					><title>{data.names[ri]} – {data.names[ci]}: {data.distance[ri][ci].toFixed(4)}</title></rect>
+				{/each}
+				<text
+					x={L.left - L.band - 10}
+					y={L.top + r * L.cell + L.cell / 2 + 4}
+					text-anchor="end"
+					class="name"
+					class:sel={selected === ri}
+					role="button"
+					tabindex="0"
+					aria-pressed={selected === ri}
+					onclick={() => (selected = selected === ri ? null : ri)}
+					onkeydown={(e) => (e.key === 'Enter' || e.key === ' ') && (selected = selected === ri ? null : ri)}
+				>{data.names[ri]}</text>
+				<text x={L.left + r * L.cell + L.cell / 2} y={L.top + L.n * L.cell + 14} text-anchor="middle" class="name small">{data.names[ri]}</text>
+			{/each}
+		</svg>
+		<div class="legend">
+			{#each ['A', 'B', 'C'] as g}
+				<span><span class="swatch" style:background={groupColour[g]}></span>group {g}</span>
+			{/each}
+			<span class="muted">matrix colour: distance, dark = close</span>
 		</div>
 		<p class="readout" aria-live="polite">
-			<strong>{data.names[selected]}</strong> (group {data.labels[selected]}): nearest repertoire
-			<strong>{data.names[nearest]}</strong> (group {data.labels[nearest]}), at distance
-			{data.distance[selected][nearest].toFixed(4)}.
+			{#if info}
+				<strong>{data.names[info.i]}</strong> (group {data.labels[info.i]}): nearest repertoire
+				<strong>{data.names[info.nearest]}</strong> (group {data.labels[info.nearest]}) at
+				{data.distance[info.i][info.nearest].toFixed(3)}. Mean distance to the other repertoires of each group:
+				{#each ['A', 'B', 'C'] as g, k}{k ? ', ' : ''}{g} {info.means[g].toFixed(3)}{/each}.
+			{:else}
+				Choose a repertoire's name to see its nearest neighbour and its distances to each group.
+			{/if}
 		</p>
 	{:else if failed}
 		<p class="muted">The data for this figure could not be loaded.</p>
@@ -127,41 +153,62 @@
 <style>
 	.map {
 		display: grid;
-		gap: 0.6rem;
+		gap: 0.5rem;
+		font-size: var(--sl-text-sm);
 	}
-	.row {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 0.3rem;
-		align-items: center;
+	svg {
+		max-width: 100%;
+		overflow: visible;
 	}
-	.panels {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 1rem;
+	.link {
+		fill: none;
+		stroke: var(--sl-color-gray-3);
+		stroke-width: 1.5;
 	}
-	.panel {
-		flex: 1 1 300px;
-		min-height: 340px;
+	.cut {
+		stroke: #ef785f;
+		stroke-dasharray: 4 3;
 	}
-	button {
-		flex: none;
-		font: inherit;
-		font-size: var(--sl-text-xs);
-		padding: 0.1rem 0.5rem;
-		border-radius: 999px;
-		border: 1px solid var(--sl-color-gray-5);
-		background: transparent;
-		color: var(--sl-color-white);
+	.cut-label {
+		font-size: 11px;
+		fill: #ef785f;
+	}
+	.name {
+		font-size: 11px;
+		fill: var(--sl-color-gray-2);
 		cursor: pointer;
 	}
-	button.active {
-		background: var(--sl-color-accent);
-		border-color: var(--sl-color-accent);
-		color: var(--sl-color-black);
+	.name.small {
+		font-size: 10px;
+		cursor: default;
+	}
+	.name.sel {
+		fill: var(--sl-color-white);
+		font-weight: 700;
+	}
+	rect.dim {
+		opacity: 0.45;
+	}
+	rect.hl {
+		stroke: var(--sl-color-white);
+		stroke-width: 0.6;
+	}
+	.legend {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.3rem 1rem;
+		font-size: var(--sl-text-xs);
+		color: var(--sl-color-gray-2);
+	}
+	.swatch {
+		display: inline-block;
+		width: 0.75rem;
+		height: 0.75rem;
+		border-radius: 2px;
+		margin-inline-end: 0.3rem;
+		vertical-align: -0.1rem;
 	}
 	.readout {
-		font-size: var(--sl-text-sm);
 		margin: 0;
 	}
 	.muted {
