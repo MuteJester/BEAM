@@ -35,6 +35,21 @@ def test_explain_sums_to_the_score(model, corpus):
         assert want == pytest.approx(e["log_pseq"], abs=1e-9)
 
 
+def test_explain_returns_each_residues_combined_factor(model, corpus):
+    """`combined` is log psi_i = w_F log q_F + w_B log q_B, the residue's factor
+    of Phi_L(s); with the length prior and the normaliser it gives the score."""
+    seqs, _ = corpus
+    wf, wb = model.config["weights"]
+    for s in seqs[:20]:
+        e = model.explain(s)
+        np.testing.assert_allclose(e["combined"], wf * e["forward"] + wb * e["backward"],
+                                   rtol=0, atol=1e-12)
+        assert e["log_length_prior"] == model.log_length_prior(len(s))
+        assert e["log_partition"] == model.log_partition(len(s))
+        total = float(np.sum(e["combined"])) + e["log_length_prior"] - e["log_partition"]
+        assert total == pytest.approx(e["log_pseq"], abs=1e-9)
+
+
 def test_c_terminus_expert_is_doing_work(model):
     """Swapping the terminal residue for one no J gene produces must cost
     orders of magnitude. A single left-to-right chain cannot see this."""

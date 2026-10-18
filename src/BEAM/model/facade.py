@@ -1057,19 +1057,25 @@ class BeamModel:
     def explain(self, sequence: str) -> dict[str, Any]:
         """Per-residue decomposition of a score.
 
-        Returns the residues, and each one's N-anchored and C-anchored
-        natural-log probability before mixing. This is what makes the model
-        legible: the N-anchored expert is confident at the start, the
-        C-anchored expert at the end, and both are surprised across the
-        junction.
+        Returns the residues, and for each one, in natural logs:
 
-        The two arrays reconstruct ``log_pseq`` exactly, using the mixing
-        weights from :attr:`config`::
+        - ``forward``: log q_F(s_i | i, s_{i-k..i-1}), the probability the
+          N-anchored expert gives the residue, from its position counted
+          from the start and the k residues before it;
+        - ``backward``: log q_B(s_i | L-i+1, s_{i+1..i+k}), the same for the
+          C-anchored expert, counting from the end and reading the k
+          residues after it;
+        - ``combined``: log psi_i = w_F log q_F + w_B log q_B, the residue's
+          factor of Phi_L(s), the weighted geometric mean of the two.
 
-            wf, wb = model.config["weights"]
-            raw = sum(wf * f + wb * b
-                      for f, b in zip(e["forward"], e["backward"]))
-            raw + model.log_length_prior(L) - model.log_partition(L)
+        This is what makes the model legible: the N-anchored expert is
+        confident at the start, the C-anchored expert at the end, and both
+        are surprised across the junction.
+
+        With the length prior and the normaliser, also returned, they
+        reconstruct ``log_pseq`` exactly::
+
+            sum(e["combined"]) + e["log_length_prior"] - e["log_partition"]
 
         with ONE exception: a sequence of a length the model never observed
         has ``log_pseq == -inf`` while its per-residue terms stay finite,
@@ -1086,11 +1092,16 @@ class BeamModel:
         fwd, bwd = _c.explain(self._g, sequence)
         fwd = np.asarray(fwd, dtype=np.float64)
         bwd = np.asarray(bwd, dtype=np.float64)
+        wf, wb = self.config["weights"]
+        L = len(sequence)
         return {
             "sequence": sequence,
             "residues": list(sequence),
             "forward": fwd,
             "backward": bwd,
+            "combined": wf * fwd + wb * bwd,
+            "log_length_prior": self.log_length_prior(L),
+            "log_partition": self.log_partition(L),
             "depth_from_n": np.arange(len(sequence)),
             "depth_from_c": np.arange(len(sequence))[::-1],
             "log_pseq": self.log_pseq(sequence),
