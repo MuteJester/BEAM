@@ -707,3 +707,74 @@ def test_the_cache_lock_uses_windows_locking_where_there_is_no_flock(tmp_path, m
         assert calls == [(fake.LK_LOCK, 1)]
     assert calls == [(fake.LK_LOCK, 1), (fake.LK_UNLCK, 1)]
     assert (tmp_path / "lines.npz.lock").exists()
+
+
+# ── the spread of richness ───────────────────────────────────────
+
+def _variance_direct(p, n):
+    """Var[distinct sequences in n draws], from every probability, in long double.
+
+    The pair sum over s != t, (1-p_s-p_t)^n - (1-p_s)^n (1-p_t)^n, expanded in
+    powers of p_s p_t: R(2n) - R(n) + sum_k (-1)^k [F_k(n)^2 / C(n,k)
+    - C(n,k) F_2k(2n) / C(2n,2k)], with F_k(m) = C(m,k) sum_s p^k (1-p)^(m-k).
+    `test_the_reference_variance_is_the_defining_pair_sum` holds it to the
+    pair sum itself.
+    """
+    p = p[p > 0]
+    n = int(n)
+
+    def r(m):
+        return np.sum(_seen(p, m))
+
+    def f(m, k):
+        logs = _log_binom(m, k) + k * np.log(p) + (m - k) * np.log1p(-p)
+        return np.sum(np.exp(logs))
+
+    v = r(2 * n) - r(n)
+    for k in range(1, min(n, 60) + 1):
+        lc = _log_binom(n, k)
+        term = f(n, k) ** 2 / np.exp(np.longdouble(lc)) - np.exp(
+            np.longdouble(lc - _log_binom(2 * n, 2 * k))) * f(2 * n, 2 * k)
+        v += (-1) ** k * term
+    return float(v)
+
+
+def test_the_reference_variance_is_the_defining_pair_sum():
+    rng = np.random.default_rng(3)
+    for size, n in [(5, 3), (40, 10), (200, 25), (300, 70)]:
+        p = rng.dirichlet(np.full(size, 0.3)).astype(np.longdouble)
+        miss = _miss(p, n)
+        with np.errstate(invalid="ignore"):      # the diagonal, 2 p_s > 1, is zeroed
+            pair = _miss(p[:, None] + p[None, :], n) - miss[:, None] * miss[None, :]
+        np.fill_diagonal(pair, 0)
+        direct = float(np.sum(miss - miss * miss) + np.sum(pair))
+        assert _variance_direct(p, n) == pytest.approx(direct, rel=1e-12)
+
+
+@pytest.mark.parametrize("n", [2, 7, 60, 1000, 10_000, 100_000, 1_000_000])
+def test_richness_variance(case, n):
+    m, p, occ = case
+    _held(occ.richness_variance(n), _variance_direct(p, n), tol=1e-8)
+
+
+def test_richness_sd_is_the_square_root_with_its_own_bound(case):
+    m, p, occ = case
+    exact = math.sqrt(_variance_direct(p, 1000))
+    _held(occ.richness_sd(1000), exact, tol=1e-8)
+
+
+def test_one_draw_or_none_has_no_spread(case):
+    m, p, occ = case
+    for n in (0, 1):
+        v = occ.richness_variance(n)
+        assert (v.value, v.bound) == (0.0, 0.0)
+
+
+def test_richness_variance_needs_a_whole_number_of_draws(case):
+    m, p, occ = case
+    for bad in (2.5, -1, float("nan")):
+        with pytest.raises(ValueError):
+            occ.richness_variance(bad)
+    # 10.0 is 10; cached lines may move the last bit, never past the bounds
+    a, b = occ.richness_variance(10.0), occ.richness_variance(10)
+    assert abs(a.value - b.value) <= (a.bound + b.bound) * abs(b.value)

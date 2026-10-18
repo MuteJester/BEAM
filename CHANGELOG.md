@@ -19,7 +19,8 @@ probability landscape for T cell receptor repertoire sampling and comparison*.
 - Exact scoring (`pseq`, `log_pseq`, batched, streaming and Arrow input),
   exact sampling, saving and loading.
 - Exact occupancy quantities with rigorous error bounds (`ExactOccupancy`):
-  expected richness at any sequencing depth, overlap between samples, and
+  expected richness at any sequencing depth and its standard deviation
+  (`richness_sd`, `richness_variance`), overlap between samples, and
   sequences private to one repertoire of a cohort.
 - `PublicnessModel`: the distribution of how many repertoires in a cohort
   contain a sequence.

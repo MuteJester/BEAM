@@ -36,6 +36,14 @@ Every method returns a `BoundedValue`, a list of them, or (for the cohort summar
 | `equal_depth_cohort(depth, n)` | sequences seen at all, and seen in exactly one sample, across `n` samples of one depth. |
 | `novelty_many(ns)` | the chance that draw `n` is a sequence not drawn before. |
 
+The number of distinct sequences in one sample varies around `richness(n)`; these give how much,
+for `n` a whole number of draws, computed in the same way:
+
+| Method | Gives |
+|---|---|
+| `richness_sd(n)` | the standard deviation of the number of distinct sequences in `n` draws. |
+| `richness_variance(n)` | its variance. |
+
 ## BoundedValue
 
 | Field | Meaning |

@@ -977,6 +977,65 @@ class ExactOccupancy:
         return series if series is not None and series.bound < contour.bound \
             else contour
 
+    def richness_variance(self, n: float) -> BoundedValue:
+        """Var[distinct sequences in n draws], for a whole number of draws n.
+
+        The spread around `richness(n)`. Over pairs of sequences s != t the
+        variance is sum (1-P_s-P_t)^n - (1-P_s)^n (1-P_t)^n, plus the diagonal
+        R(2n) - R(n). Expanding (1-P_s-P_t)^n = ((1-P_s)(1-P_t) - P_s P_t)^n
+        in powers of P_s P_t turns the pair sum into frequencies, so with
+        F_k(m) = `frequency(m, k)`:
+
+            R(2n) - R(n) + sum_{k>=1} (-1)^k [F_k(n)^2 / C(n,k)
+                                              - C(n,k) F_2k(2n) / C(2n,2k)].
+
+        Stopped before term K, each pair's remainder is at most C(n,K) c^K,
+        c = P_s P_t / ((1-P_s)(1-P_t)) <= 1 (Taylor), so all of them together
+        are at most F_K(n)^2 / C(n,K): the terms stop once that is within
+        rel_tol of the total. On the reference model two terms do.
+        """
+        n = _check_depth(n)
+        if not n.is_integer():
+            raise ValueError(f"n must be a whole number of draws, got {n!r}")
+        if n <= 1.0:
+            return BoundedValue(0.0, 0.0, "exact")
+        ni = int(n)
+        base = self.richness_difference(2.0 * n, n)      # R(2n) - R(n)
+        total = base.value
+        err = abs(base.value) * base.bound
+        mag = abs(base.value)
+        k = 1
+        while k <= ni:
+            fk = self.frequency(n, k)
+            c = math.comb(ni, k)
+            a = fk.value * (fk.value / c)                  # F_k(n)^2 / C(n,k)
+            if k > 1:
+                # Stopping here leaves at most F_k(n)^2 / C(n,k), at F_k's upper end.
+                tail = a * (1.0 + fk.bound) ** 2
+                if tail <= 0.5 * self.rel_tol * abs(total) or k > 60:
+                    err += tail
+                    break
+            f2k = self.frequency(2.0 * n, 2 * k)
+            b = (c / math.comb(2 * ni, 2 * k)) * f2k.value  # C(n,k) F_2k(2n) / C(2n,2k)
+            total += (a - b) if k % 2 == 0 else (b - a)
+            err += a * (2.0 * fk.bound + fk.bound ** 2) + abs(b) * f2k.bound
+            mag += abs(a) + abs(b)
+            k += 1
+        err += 8.0 * EPS * mag
+        rel = err / (abs(total) - err) if abs(total) > err else math.inf
+        return BoundedValue(max(total, 0.0), rel, "pair series")
+
+    def richness_sd(self, n: float) -> BoundedValue:
+        """Standard deviation of the distinct sequences in n draws: the square
+        root of `richness_variance(n)`, its bound carried through the root."""
+        v = self.richness_variance(n)
+        if v.value == 0.0:
+            return BoundedValue(0.0, v.bound, v.method)
+        e = v.bound
+        # |sqrt(v') - sqrt(v)| <= (1 - sqrt(1 - e)) sqrt(v) when |v' - v| <= e v
+        bound = (1.0 - math.sqrt(1.0 - e)) + EPS if e < 1.0 else math.inf
+        return BoundedValue(math.sqrt(v.value), bound, v.method)
+
     def sharing(self, d1: float, d2: float) -> BoundedValue:
         """E[sequences in both of two independent repertoires of depths d1, d2]
         = R(d1) + R(d2) - R(d1 + d2) = R(d2) - [R(d1 + d2) - R(d1)]."""
