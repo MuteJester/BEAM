@@ -5,10 +5,18 @@
   </picture>
 </p>
 
+[![Documentation](https://img.shields.io/badge/docs-mutejester.github.io%2FBEAM-438f91.svg)](https://mutejester.github.io/BEAM/)
 [![PyPI](https://img.shields.io/pypi/v/beam-model.svg)](https://pypi.org/project/beam-model/)
 [![Python](https://img.shields.io/pypi/pyversions/beam-model.svg)](https://pypi.org/project/beam-model/)
 [![Tests](https://github.com/MuteJester/BEAM/actions/workflows/tests.yml/badge.svg)](https://github.com/MuteJester/BEAM/actions/workflows/tests.yml)
 [![License: GPL v3](https://img.shields.io/badge/license-GPL--3.0-blue.svg)](LICENSE)
+
+<h3 align="center">
+  <a href="https://mutejester.github.io/BEAM/">Documentation</a> ·
+  <a href="https://mutejester.github.io/BEAM/start/quickstart/">Quick start</a> ·
+  <a href="https://mutejester.github.io/BEAM/start/use-cases/">What can I do with BEAM?</a> ·
+  <a href="https://mutejester.github.io/BEAM/explanations/how-beam-works/">How BEAM works</a>
+</h3>
 
 **Every possible sequence, accounted for.**
 
