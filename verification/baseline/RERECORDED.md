@@ -2546,3 +2546,26 @@ out byte-identical, so no copies of them were kept.
 
 No C symbol, C test, numerical reference, thread reference or saved-model byte
 reference changed.
+
+# The API audit and the 0.9.0 version (2026-10-19)
+
+Recorded with `--record preapiaudit`; the previous files are kept as
+`python_api.preapiaudit.txt` and `pytest_cases.preapiaudit.txt`. Numbers,
+thread results, C cases and saved-model bytes did not move, and `exact`
+passed (411 quantities against enumeration), so those files are unchanged.
+
+`python_api.txt`, all intended:
+
+1. `__version__`: `1.0.0.dev0` -> `0.9.0`, the first public release.
+2. `__all__` and two classes added: `LikelihoodPieceError` and
+   `SaddlepointDidNotConverge` ("Raise BEAM errors from the likelihood
+   pieces and record their bins", 2ca9f7b).
+3. `BeamModel.hill_number(self, alpha)` -> `hill_number(self, q)`, the
+   order named as in `Mixture.hill_number` ("Tidy the model's public
+   surface", d060134). No caller passed it by keyword.
+
+`pytest_cases.txt`: 38 cases added and 0 removed. Besides the tests
+of the fixes above, they record cases added since the last recording and never
+written in: the richness standard deviation and variance, `max_length="data"`,
+`explain`'s combined factor, the Windows cache and lock, and the UTF-8
+registry.

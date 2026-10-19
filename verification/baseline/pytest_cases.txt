@@ -55,6 +55,7 @@ tests/python/analytics/test_dynamic_programming.py::test_accumulator_max_bounds_
 tests/python/analytics/test_dynamic_programming.py::test_entropy_matches_brute_force
 tests/python/analytics/test_dynamic_programming.py::test_hill_number_one_is_exp_entropy
 tests/python/analytics/test_dynamic_programming.py::test_hill_number_one_matches_the_limit_from_either_side
+tests/python/analytics/test_dynamic_programming.py::test_hill_number_takes_its_order_as_q
 tests/python/analytics/test_dynamic_programming.py::test_hill_numbers_are_ordered
 tests/python/analytics/test_dynamic_programming.py::test_length_prior_normalises
 tests/python/analytics/test_dynamic_programming.py::test_partition_normalises_by_enumeration
@@ -102,6 +103,8 @@ tests/python/analytics/test_exact_occupancy.py::test_novelty_below_the_smallest_
 tests/python/analytics/test_exact_occupancy.py::test_novelty_below_the_smallest_double_is_zero_and_says_so[nt]
 tests/python/analytics/test_exact_occupancy.py::test_novelty_short_of_its_tolerance_still_tells_the_truth[aa]
 tests/python/analytics/test_exact_occupancy.py::test_novelty_short_of_its_tolerance_still_tells_the_truth[nt]
+tests/python/analytics/test_exact_occupancy.py::test_one_draw_or_none_has_no_spread[aa]
+tests/python/analytics/test_exact_occupancy.py::test_one_draw_or_none_has_no_spread[nt]
 tests/python/analytics/test_exact_occupancy.py::test_poisson_richness[aa]
 tests/python/analytics/test_exact_occupancy.py::test_poisson_richness[nt]
 tests/python/analytics/test_exact_occupancy.py::test_power_sums_saved_with_the_lines_are_not_swept_again[aa]
@@ -110,6 +113,8 @@ tests/python/analytics/test_exact_occupancy.py::test_private_at_depth[aa]
 tests/python/analytics/test_exact_occupancy.py::test_private_at_depth[nt]
 tests/python/analytics/test_exact_occupancy.py::test_private_in_a_cohort[aa]
 tests/python/analytics/test_exact_occupancy.py::test_private_in_a_cohort[nt]
+tests/python/analytics/test_exact_occupancy.py::test_private_in_a_small_cohort[aa]
+tests/python/analytics/test_exact_occupancy.py::test_private_in_a_small_cohort[nt]
 tests/python/analytics/test_exact_occupancy.py::test_rejects_bad_depths[aa]
 tests/python/analytics/test_exact_occupancy.py::test_rejects_bad_depths[nt]
 tests/python/analytics/test_exact_occupancy.py::test_richness[aa]
@@ -122,6 +127,24 @@ tests/python/analytics/test_exact_occupancy.py::test_richness_many_depths_at_onc
 tests/python/analytics/test_exact_occupancy.py::test_richness_many_depths_at_once[nt]
 tests/python/analytics/test_exact_occupancy.py::test_richness_many_is_vectorised_and_agrees_with_one_at_a_time[aa]
 tests/python/analytics/test_exact_occupancy.py::test_richness_many_is_vectorised_and_agrees_with_one_at_a_time[nt]
+tests/python/analytics/test_exact_occupancy.py::test_richness_sd_is_the_square_root_with_its_own_bound[aa]
+tests/python/analytics/test_exact_occupancy.py::test_richness_sd_is_the_square_root_with_its_own_bound[nt]
+tests/python/analytics/test_exact_occupancy.py::test_richness_variance[aa-1000000]
+tests/python/analytics/test_exact_occupancy.py::test_richness_variance[aa-100000]
+tests/python/analytics/test_exact_occupancy.py::test_richness_variance[aa-10000]
+tests/python/analytics/test_exact_occupancy.py::test_richness_variance[aa-1000]
+tests/python/analytics/test_exact_occupancy.py::test_richness_variance[aa-2]
+tests/python/analytics/test_exact_occupancy.py::test_richness_variance[aa-60]
+tests/python/analytics/test_exact_occupancy.py::test_richness_variance[aa-7]
+tests/python/analytics/test_exact_occupancy.py::test_richness_variance[nt-1000000]
+tests/python/analytics/test_exact_occupancy.py::test_richness_variance[nt-100000]
+tests/python/analytics/test_exact_occupancy.py::test_richness_variance[nt-10000]
+tests/python/analytics/test_exact_occupancy.py::test_richness_variance[nt-1000]
+tests/python/analytics/test_exact_occupancy.py::test_richness_variance[nt-2]
+tests/python/analytics/test_exact_occupancy.py::test_richness_variance[nt-60]
+tests/python/analytics/test_exact_occupancy.py::test_richness_variance[nt-7]
+tests/python/analytics/test_exact_occupancy.py::test_richness_variance_needs_a_whole_number_of_draws[aa]
+tests/python/analytics/test_exact_occupancy.py::test_richness_variance_needs_a_whole_number_of_draws[nt]
 tests/python/analytics/test_exact_occupancy.py::test_sampling_deficit[aa-0.3]
 tests/python/analytics/test_exact_occupancy.py::test_sampling_deficit[aa-1.0]
 tests/python/analytics/test_exact_occupancy.py::test_sampling_deficit[aa-1000.0]
@@ -144,6 +167,7 @@ tests/python/analytics/test_exact_occupancy.py::test_series_power_sums_are_taken
 tests/python/analytics/test_exact_occupancy.py::test_series_power_sums_are_taken_only_when_a_series_needs_them[nt]
 tests/python/analytics/test_exact_occupancy.py::test_sharing[aa]
 tests/python/analytics/test_exact_occupancy.py::test_sharing[nt]
+tests/python/analytics/test_exact_occupancy.py::test_the_cache_lock_uses_windows_locking_where_there_is_no_flock
 tests/python/analytics/test_exact_occupancy.py::test_the_cohort_private_sums_agree_with_the_taylor_form[aa]
 tests/python/analytics/test_exact_occupancy.py::test_the_cohort_private_sums_agree_with_the_taylor_form[nt]
 tests/python/analytics/test_exact_occupancy.py::test_the_fingerprint_is_taken_once[aa]
@@ -152,6 +176,7 @@ tests/python/analytics/test_exact_occupancy.py::test_the_fused_contour_sums_agre
 tests/python/analytics/test_exact_occupancy.py::test_the_fused_contour_sums_agree_with_the_matrix_form[nt]
 tests/python/analytics/test_exact_occupancy.py::test_the_power_sums_every_use_needs_are_one_sweep[aa]
 tests/python/analytics/test_exact_occupancy.py::test_the_power_sums_every_use_needs_are_one_sweep[nt]
+tests/python/analytics/test_exact_occupancy.py::test_the_reference_variance_is_the_defining_pair_sum
 tests/python/analytics/test_expected_counts_memory.py::test_a_budget_below_the_working_set_refuses_rather_than_allocating
 tests/python/analytics/test_expected_counts_memory.py::test_the_refusal_is_a_memory_error
 tests/python/analytics/test_expected_counts_memory.py::test_the_working_set_covers_the_answer_it_returned
@@ -432,6 +457,7 @@ tests/python/likelihood/test_lattice.py::test_the_counts_must_account_for_every_
 tests/python/likelihood/test_lattice.py::test_three_categories_match_exact_convolution
 tests/python/likelihood/test_lattice.py::test_two_nearly_fixed_categories_match_exact_convolution
 tests/python/likelihood/test_repertoire.py::test_a_pattern_that_fixes_the_total_is_conditioned_on_exactly
+tests/python/likelihood/test_repertoire.py::test_a_piece_that_cannot_be_computed_is_a_beam_error
 tests/python/likelihood/test_repertoire.py::test_a_sequence_the_model_cannot_represent_makes_it_impossible
 tests/python/likelihood/test_repertoire.py::test_counts_must_be_positive_integers[-1]
 tests/python/likelihood/test_repertoire.py::test_counts_must_be_positive_integers[0]
@@ -458,6 +484,7 @@ tests/python/likelihood/test_repertoire.py::test_the_pieces_multiply_to_the_mult
 tests/python/likelihood/test_repertoire.py::test_the_profile_edges_must_start_at_one_and_rise
 tests/python/likelihood/test_repertoire.py::test_the_profile_piece_is_P_F_given_S_and_N
 tests/python/likelihood/test_repertoire.py::test_the_result_is_not_a_number
+tests/python/likelihood/test_repertoire.py::test_the_result_records_the_bins_it_used
 tests/python/likelihood/test_repertoire.py::test_the_two_totals_differ_by_the_chance_of_exactly_n_reads
 tests/python/likelihood/test_ztp_moments.py::test_a_disallowed_bin_takes_no_mass
 tests/python/likelihood/test_ztp_moments.py::test_one_sequence_is_a_distribution
@@ -760,6 +787,7 @@ tests/python/model/test_algebra.py::test_subtract_restores_the_total_weight
 tests/python/model/test_algebra.py::test_without_a_model_equals_an_explicit_subtract
 tests/python/model/test_algebra.py::test_without_rejects_abundances_for_a_model_operand
 tests/python/model/test_algebra.py::test_without_sequences_builds_the_matching_operand
+tests/python/model/test_algebra.py::test_without_sequences_keeps_a_nucleotide_models_alphabet
 tests/python/model/test_build.py::test_all_identical_sequences_normalise
 tests/python/model/test_build.py::test_degenerate_corpus_matches_the_reference[2]
 tests/python/model/test_build.py::test_degenerate_corpus_matches_the_reference[3]
@@ -774,6 +802,7 @@ tests/python/model/test_cache_accounting.py::test_drop_caches_releases_it
 tests/python/model/test_cache_accounting.py::test_dropping_before_any_analytic_is_safe
 tests/python/model/test_cache_accounting.py::test_dropping_twice_is_safe
 tests/python/model/test_cache_accounting.py::test_the_cache_is_empty_until_an_analytic_runs
+tests/python/model/test_configuration.py::test_an_unreadable_sequence_is_an_invalid_sequence
 tests/python/model/test_configuration.py::test_c_and_python_defaults_describe_the_same_model
 tests/python/model/test_configuration.py::test_calibration_median_converges_with_the_grid
 tests/python/model/test_configuration.py::test_compact_frees_counts
@@ -782,6 +811,10 @@ tests/python/model/test_configuration.py::test_explain_calls_an_unseen_length_pr
 tests/python/model/test_configuration.py::test_explain_reports_the_reason_it_refuses
 tests/python/model/test_configuration.py::test_length_distribution_is_the_prior
 tests/python/model/test_configuration.py::test_log_base_is_range_checked
+tests/python/model/test_configuration.py::test_max_length_can_be_taken_from_the_data
+tests/python/model/test_configuration.py::test_max_length_from_the_data_ignores_sequences_that_would_be_skipped
+tests/python/model/test_configuration.py::test_max_length_from_the_data_reaches_from_dataframe
+tests/python/model/test_configuration.py::test_max_length_from_the_data_stops_at_the_formats_ceiling
 tests/python/model/test_configuration.py::test_moment_order_is_range_checked
 tests/python/model/test_configuration.py::test_n_sequences_is_the_ingested_weight
 tests/python/model/test_configuration.py::test_negative_counts_are_refused
@@ -799,6 +832,7 @@ tests/python/model/test_configuration.py::test_scalar_arguments_return_scalars
 tests/python/model/test_configuration.py::test_single_anchor_weights_are_accepted
 tests/python/model/test_configuration.py::test_skips_unusable_sequences
 tests/python/model/test_configuration.py::test_spectrum_bin_floor_is_explained
+tests/python/model/test_configuration.py::test_streaming_builds_refuse_max_length_from_the_data
 tests/python/model/test_configuration.py::test_topology_refuses_length_zero_and_describes_an_unseen_length
 tests/python/model/test_configuration.py::test_unusable_corpus_says_why
 tests/python/model/test_error_reporting.py::test_a_budget_refusal_reports_a_figure_in_a_readable_unit
@@ -831,6 +865,7 @@ tests/python/model/test_file_inputs.py::test_log_pseq_parquet_preserves_row_orde
 tests/python/model/test_file_inputs.py::test_novelty_is_the_richness_increment
 tests/python/model/test_file_inputs.py::test_pseq_accepts_a_list_and_a_log_flag
 tests/python/model/test_format_compatibility.py::test_a_current_file_round_trips
+tests/python/model/test_format_compatibility.py::test_a_newer_file_asks_for_a_newer_beam
 tests/python/model/test_format_compatibility.py::test_an_older_development_file_is_refused_with_the_remedy
 tests/python/model/test_format_compatibility.py::test_not_a_model_file_says_so
 tests/python/model/test_format_compatibility.py::test_the_format_word_decides_before_the_checksum
@@ -960,6 +995,7 @@ tests/python/model/test_scoring.py::test_an_unobserved_length_takes_its_share_of
 tests/python/model/test_scoring.py::test_an_unseen_sequence_is_possible_and_ranked_below_what_was_seen
 tests/python/model/test_scoring.py::test_batch_matches_scalar
 tests/python/model/test_scoring.py::test_c_terminus_expert_is_doing_work
+tests/python/model/test_scoring.py::test_explain_returns_each_residues_combined_factor
 tests/python/model/test_scoring.py::test_explain_sums_to_the_score
 tests/python/model/test_scoring.py::test_rejects_non_amino_acid
 tests/python/model/test_scoring.py::test_the_support_is_every_string_whatever_the_data
@@ -1045,6 +1081,7 @@ tests/python/model/test_weight_buffers.py::test_other_dtypes_still_build_the_sam
 tests/python/model/test_weight_buffers.py::test_other_dtypes_still_build_the_same_model[int32]
 tests/python/model/test_weight_buffers.py::test_other_dtypes_still_build_the_same_model[int64]
 tests/python/model/test_weight_buffers.py::test_the_buffer_path_is_actually_taken
+tests/python/pretrained/test_pretrained.py::test_cache_lives_in_local_app_data_on_windows
 tests/python/pretrained/test_pretrained.py::test_damaged_cache_is_fetched_again
 tests/python/pretrained/test_pretrained.py::test_falls_back_to_the_next_mirror
 tests/python/pretrained/test_pretrained.py::test_listed
@@ -1053,6 +1090,7 @@ tests/python/pretrained/test_pretrained.py::test_model_format_matches_what_save_
 tests/python/pretrained/test_pretrained.py::test_newer_format_asks_for_an_upgrade
 tests/python/pretrained/test_pretrained.py::test_second_load_needs_no_network
 tests/python/pretrained/test_pretrained.py::test_shipped_registry_is_readable
+tests/python/pretrained/test_pretrained.py::test_the_registry_is_read_as_utf8
 tests/python/pretrained/test_pretrained.py::test_unknown_name_lists_what_exists
 tests/python/pretrained/test_pretrained.py::test_wrong_bytes_are_refused_and_not_kept
 tests/python/publicness/test_publicness.py::test_aggregate_is_the_multiplicity_weighted_sum_of_atoms
