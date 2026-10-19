@@ -149,6 +149,17 @@ def test_private_in_a_cohort(case):
     _held(eo.private(depths), exact, tol=1e-9)
 
 
+def test_private_in_a_small_cohort(case):
+    """Five repertoires, each about a fifth of the cohort: the series in
+    d / T then needs more than twenty terms, past where m! fits in 64 bits."""
+    m, p, eo = case
+    for depths in ([1e5] * 5, [9e4, 1e5, 1.1e5, 1e5, 1e5]):
+        depths = np.asarray(depths)
+        T = depths.sum()
+        exact = float(np.sum([np.sum(_seen(p, d) * _miss(p, T - d)) for d in depths]))
+        _held(eo.private(depths), exact, tol=1e-9)
+
+
 def test_equal_depth_cohort(case):
     """N repertoires of one depth, N up to 1e10 where R(N d) - R((N-1) d)
     differ in their tenth digit."""

@@ -1101,7 +1101,9 @@ class ExactOccupancy:
                 out[m - 1] = -acc
             return out
 
-        powers = np.stack([(-uniq) ** m / math.factorial(m)
+        # m! as a float: past m = 20 the integer no longer fits in 64 bits, and
+        # numpy would make an object array of the quotient.
+        powers = np.stack([(-uniq) ** m / float(math.factorial(m))
                            for m in range(1, mmax + 1)])        # (mmax, depths)
 
         def kernel(z):
