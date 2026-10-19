@@ -9,6 +9,7 @@
 [![PyPI](https://img.shields.io/pypi/v/beam-model.svg)](https://pypi.org/project/beam-model/)
 [![Python](https://img.shields.io/pypi/pyversions/beam-model.svg)](https://pypi.org/project/beam-model/)
 [![Tests](https://github.com/MuteJester/BEAM/actions/workflows/tests.yml/badge.svg)](https://github.com/MuteJester/BEAM/actions/workflows/tests.yml)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23470065.svg)](https://doi.org/10.5281/zenodo.23470065)
 [![License: GPL v3](https://img.shields.io/badge/license-GPL--3.0-blue.svg)](LICENSE)
 
 <h3 align="center">
@@ -287,7 +288,9 @@ Questions and ideas are welcome in
 
 ## Citing BEAM
 
-If BEAM is useful in your work, please cite the paper above. GitHub's **"Cite
+If BEAM is useful in your work, please cite the paper above, and the software
+itself by its DOI, [10.5281/zenodo.23470065](https://doi.org/10.5281/zenodo.23470065) (every version; each release
+also has its own). GitHub's **"Cite
 this repository"** button (from [`CITATION.cff`](CITATION.cff)) gives the
 reference in BibTeX and APA.
 

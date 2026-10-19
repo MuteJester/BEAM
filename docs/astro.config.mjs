@@ -30,6 +30,7 @@ const STRUCTURED_DATA = {
 		'A probability model for biological sequences such as T cell receptor CDR3s, learned from sequences alone with optional abundances: sequence probabilities, sequencing depth, publicness and repertoire comparison, summed over every possible sequence without simulation.',
 	url: SITE_URL,
 	codeRepository: 'https://github.com/MuteJester/BEAM',
+	identifier: 'https://doi.org/10.5281/zenodo.23470065',
 	programmingLanguage: ['Python', 'C'],
 	runtimePlatform: 'Python 3.11+',
 	license: 'https://spdx.org/licenses/GPL-3.0-or-later.html',
