@@ -52,9 +52,10 @@ Silicon, macOS 14 or newer) and **Windows** (x86-64), for Python 3.11 to 3.15.
 ```python
 import BEAM
 
-model = BEAM.load_pretrained("human_tcrb_cdr3_aa_foundation")    # downloads once (~90 MB), then cached
+# downloads once (~90 MB), then cached
+model = BEAM.load_pretrained("human_tcrb_cdr3_aa_foundation")
 
-model.pseq("CASSLGQGYEQYF")                    # probability of one sequence
+model.pseq("CASSLGQGYEQYF")        # probability of one sequence
 # 3.3e-05
 ```
 
@@ -82,8 +83,8 @@ from the end, and `explain` shows how each residue contributes to the score:
 
 ```python
 e = model.explain("CASSLGQGYEQYF")
-e["forward"]                          # each residue's log probability, read from the start
-e["backward"]                         # ... and read from the end
+e["forward"]     # each residue's log probability, read from the start
+e["backward"]    # ... and read from the end
 ```
 
 <p align="center">
@@ -131,11 +132,14 @@ from BEAM.analytics.exact_occupancy import ExactOccupancy
 
 occupancy = ExactOccupancy(model)
 
-occupancy.richness(100_000).value               # distinct sequences in 100,000 cells
+# distinct sequences in 100,000 cells, and in a million
+occupancy.richness(100_000).value
 # 96771.4...
-occupancy.richness(1_000_000).value             # ... and in a million
+occupancy.richness(1_000_000).value
 # 879776.1...
-occupancy.sharing(100_000, 100_000).value       # shared by two samples of 100,000
+
+# sequences shared by two samples of 100,000 cells
+occupancy.sharing(100_000, 100_000).value
 # 3678.4...
 ```
 
@@ -163,10 +167,11 @@ them are expected to carry a sequence.
 ```python
 from BEAM import PublicnessModel
 
-cohort = PublicnessModel([50_000] * 100)        # 100 people, 50,000 cells each
+# 100 people, 50,000 cells sampled from each
+cohort = PublicnessModel([50_000] * 100)
 
 mean, variance = cohort.moments(model.pseq("CASSLGQGYEQYF"))
-mean                                            # expected number of people
+mean                     # expected number of people who carry it
 # 80.8
 ```
 
@@ -205,9 +210,11 @@ a = repertoire_model("donor_A.tsv")
 b = repertoire_model("donor_B.tsv")
 
 result = compare(a, b)
-result.distance                                     # 0 = identical
-result.length_squared_distance / result.squared_distance   # share due to lengths
-result.patterns[:5]                                 # the patterns that differ most
+result.distance          # 0 = identical
+result.patterns[:5]      # the patterns that differ most
+
+# the share of the distance due to lengths
+result.length_squared_distance / result.squared_distance
 ```
 
 <p align="center">
@@ -229,9 +236,13 @@ Comparing two repertoires takes under a minute.
 ```python
 from BEAM import BeamModel
 
-model = BeamModel(sequences, abundances=counts)     # from Python lists
-model = BeamModel.from_sequence_file("cdr3.tsv")    # one "SEQUENCE<TAB>COUNT" per line
-model.save("my_repertoire")                         # -> my_repertoire.beam
+# from Python lists
+model = BeamModel(sequences, abundances=counts)
+
+# from a file with one "SEQUENCE<TAB>COUNT" per line
+model = BeamModel.from_sequence_file("cdr3.tsv")
+
+model.save("my_repertoire")          # writes my_repertoire.beam
 model = BeamModel.from_file("my_repertoire.beam")
 ```
 
