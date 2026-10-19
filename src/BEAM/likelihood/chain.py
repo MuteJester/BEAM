@@ -370,10 +370,12 @@ def repertoire_likelihood(model, sequences: Sequence[str], counts: Iterable, *,
             log_prob_total_reads=r.log_pois_N, pieces=(), n_reads=r.N,
             n_unique=r.n, n_unspellable=r.n_unspellable, model_mass=math.nan,
             bins=bins if atoms is None else None, profile_edges=edges)
-    if atoms is None:
+    given = atoms is not None
+    if not given:
         a = model.pseq_analysis()
         atoms, atoms_coarse = a.atoms(bins), a.atoms(max(2, bins // 2))
-    p, m, mass, used_bins = _spectrum(model, bins, atoms)
+    p, m, mass, _ = _spectrum(model, bins, atoms)
+    used_bins = None if given else bins
     log_nN, log_pN, n_expected, _, err_n = _log_richness_given_reads(
         p, m, r.N, r.n, mass)
     how = "P(n, N) by saddlepoint over the model spectrum, over the exact P(N)"

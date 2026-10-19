@@ -39,6 +39,8 @@ The total factors, given $N$, into a chain of pieces, each answering one questio
 
 Each piece's `exact` flag says whether it is computed directly (`True`) or by a saddlepoint
 approximation (`False`), with `error` its size in nats. The pieces add up to `log_likelihood`.
+A piece that cannot be computed, for example where the model makes an observed abundance pattern
+nearly impossible, raises `LikelihoodPieceError`; the total likelihood is unaffected.
 
 ```python
 repertoire_likelihood(model, sequences, counts, *, bins=8192, profile_edges="auto",

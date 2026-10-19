@@ -308,3 +308,32 @@ def test_richness_survives_a_spectrum_of_1e24_sequences(tiny, rep):
     assert rich.expected[0] == pytest.approx(
         2e24 * -math.expm1(N * math.log1p(-1e-25)) + 3 * -math.expm1(N * math.log1p(-0.01)),
         rel=1e-12)
+
+
+def test_a_piece_that_cannot_be_computed_is_a_beam_error():
+    """A piece of the likelihood that cannot be computed is one of BEAM's own
+    refusals, so `except BEAM.BeamError` catches it; it is still a
+    RuntimeError, as it always was."""
+    import BEAM
+    from BEAM import BeamModel, pair_likelihood
+    m = BeamModel(["CASSLGQGYEQYF", "CASSPGTGELFF", "CASSLGQGAYNEQFF", "CASSQETQYF"],
+                  abundances=[5, 3, 2, 1], order=2)
+    with pytest.raises(BEAM.LikelihoodPieceError):
+        pair_likelihood(m, ["CASSLGQGYEQYF", "CASSPGTGELFF"], [3, 1],
+                        ["CASSLGQGYEQYF", "CASSQETQYF"], [2, 2])
+    assert issubclass(BEAM.LikelihoodPieceError, BEAM.BeamError)
+    assert issubclass(BEAM.LikelihoodPieceError, RuntimeError)
+    assert issubclass(BEAM.SaddlepointDidNotConverge, BEAM.LikelihoodPieceError)
+
+
+def test_the_result_records_the_bins_it_used():
+    """`bins` is the number of spectrum bins behind the pieces, and None only
+    when the caller passed the spectrum in."""
+    from BEAM import BeamModel
+    from BEAM.likelihood import repertoire_likelihood
+    m = BeamModel(["CASSLGQGYEQYF", "CASSPGTGELFF", "CASSLGQGAYNEQFF", "CASSQETQYF"],
+                  abundances=[5, 3, 2, 1], order=2)
+    seqs, counts = ["CASSLGQGYEQYF", "CASSPGTGELFF", "CASSQETQYF"], [4, 2, 1]
+    assert repertoire_likelihood(m, seqs, counts, bins=512).bins == 512
+    atoms = m.pseq_analysis().atoms(512)
+    assert repertoire_likelihood(m, seqs, counts, atoms=atoms).bins is None

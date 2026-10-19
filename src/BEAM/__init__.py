@@ -13,11 +13,13 @@ from .errors import (
     BudgetExceeded,
     InternalError,
     InvalidSequence,
+    LikelihoodPieceError,
     ModelFileError,
     ModelMismatch,
     NoLivePaths,
     NotFinalized,
     OutOfMemory,
+    SaddlepointDidNotConverge,
 )
 from ._model import (
     BeamModel,
@@ -56,7 +58,7 @@ __all__ = [
     # import, and until now the query classes lived three packages deep.
     "BeamError", "BeamTypeError", "BeamValueError", "BudgetExceeded",
     "InternalError", "InvalidSequence", "ModelFileError", "ModelMismatch", "NoLivePaths",
-    "NotFinalized", "OutOfMemory",
+    "NotFinalized", "OutOfMemory", "LikelihoodPieceError", "SaddlepointDidNotConverge",
     "QueryError", "ImpossibleCondition", "UnsupportedQuery", "QueryTooLarge",
     "MixtureError", "IncompatibleMembers", "UnsupportedOrder",
     "MixtureTooLarge",

@@ -58,6 +58,8 @@ __all__ = [
     "OutOfMemory",
     "ModelFileError",
     "InternalError",
+    "LikelihoodPieceError",
+    "SaddlepointDidNotConverge",
 ]
 
 
@@ -156,6 +158,22 @@ class ModelFileError(BeamError, OSError):
     does not fit the memory budget raises :class:`BudgetExceeded`, which is a
     ``MemoryError`` and deliberately not an ``OSError``.
     """
+
+
+class LikelihoodPieceError(BeamError, RuntimeError):
+    """One piece of a repertoire likelihood could not be computed.
+
+    The repertoire's TOTAL likelihood is unaffected -- it is the multinomial,
+    and needs no piece -- only its split into pieces fails, for example where
+    an abundance bin holds sequences the model gives almost no chance of
+    reaching.
+    """
+
+
+class SaddlepointDidNotConverge(LikelihoodPieceError):
+    """A conditional piece needs a saddlepoint whose tilt runs to infinity: an
+    abundance bin holds sequences the model gives almost no chance of
+    reaching, so the observed count there cannot be met."""
 
 
 class InternalError(BeamError, RuntimeError):

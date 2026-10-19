@@ -35,20 +35,13 @@ import numpy as np
 from scipy.special import expit, gammainc, gammaln
 
 from .. import _cbeam as _c
+from ..errors import SaddlepointDidNotConverge
 from .lattice import categorical_sum_log_pmf
 
 __all__ = ["present_and_reads_log_pmf", "counts_given_set_log_pmf",
            "expected_bins_given_reads", "SaddlepointDidNotConverge"]
 
 
-class SaddlepointDidNotConverge(RuntimeError):
-    """A conditional piece could not be computed: an abundance bin holds
-    sequences the model gives almost no chance of reaching, so the tilt that
-    would put the observed count there runs to infinity.
-
-    The repertoire's TOTAL likelihood is unaffected -- it is the multinomial,
-    and needs no saddlepoint. Only the split into pieces fails.
-    """
 
 
 def _ztp_reduce(lam, t_bins, edges, allowed, tau):
@@ -124,7 +117,7 @@ def _normal_term(hess):
     d = hess.shape[0]
     sign, logdet = np.linalg.slogdet(hess)
     if sign <= 0:
-        raise RuntimeError("the saddlepoint Hessian is not positive definite")
+        raise SaddlepointDidNotConverge("the saddlepoint Hessian is not positive definite")
     cond = 1.0 / np.diag(np.linalg.inv(hess))
     return -0.5 * (d * math.log(2.0 * math.pi) + logdet), float(np.sum(1.0 / (12.0 * cond)))
 

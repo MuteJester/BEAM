@@ -56,6 +56,8 @@ import math
 
 import numpy as np
 
+from ..errors import LikelihoodPieceError, SaddlepointDidNotConverge
+
 __all__ = ["categorical_sum_log_pmf"]
 
 _GRAD_TOL = 1e-10
@@ -194,8 +196,8 @@ def _solve_tilt(lq, mult, others, x_o):
                 cand = _tilt(lq, mult, others, x_o, t + s * step)
         t = t + s * step
         phi, grad, hess, log_r = cand
-    raise RuntimeError("the saddlepoint equation did not converge in "
-                       f"{_MAX_NEWTON} Newton steps; gradient {grad}")
+    raise SaddlepointDidNotConverge("the saddlepoint equation did not converge in "
+                                    f"{_MAX_NEWTON} Newton steps; gradient {grad}")
 
 
 # ── Exact P_t for the nearly fixed categories ──────────────────
@@ -247,7 +249,7 @@ def _exact_tilted_log_pmf(log_r, mult, cols, target) -> float:
     # heavy units: positive convolution, rescaled as it goes
     m_heavy = mult[heavy]
     if np.any(np.abs(m_heavy - np.round(m_heavy)) > 1e-9):
-        raise RuntimeError(
+        raise LikelihoodPieceError(
             "a nearly fixed category is reached by spectrum bins holding a "
             "fractional number of sequences, which cannot be convolved "
             "exactly; ask for more bins")
@@ -275,8 +277,8 @@ def _exact_tilted_log_pmf(log_r, mult, cols, target) -> float:
     for beta in itertools.product(*(range(v + 1) for v in want)):
         total += E[beta] * H[tuple(w - b for w, b in zip(want, beta))]
     if not total > 0:
-        raise RuntimeError("the exact convolution of a nearly fixed category "
-                           f"came out non-positive ({total!r})")
+        raise LikelihoodPieceError("the exact convolution of a nearly fixed category "
+                                   f"came out non-positive ({total!r})")
     return log_light + log_scale + math.log(total)
 
 
@@ -352,7 +354,7 @@ def categorical_sum_log_pmf(log_q, mult, counts, *,
             S = S - B @ np.linalg.pinv(hess[np.ix_(fixed, fixed)]) @ B.T
         sign, logdet = np.linalg.slogdet(S)
         if sign <= 0:
-            raise RuntimeError("the saddlepoint Hessian is not positive definite")
+            raise SaddlepointDidNotConverge("the saddlepoint Hessian is not positive definite")
         log_pt -= 0.5 * (d * math.log(2.0 * math.pi) + logdet)
         err = float(np.sum(1.0 / (12.0 * np.diag(S))))
     return log_factor + phi + log_pt, d == 0, err
