@@ -7,5 +7,6 @@ by_sequence = BeamModel(seqs)                    # each distinct sequence counts
 
 top = seqs[int(np.argmax(counts))]
 print(f"largest clone {top}: {max(counts) / sum(counts):.2%} of the cells")
-print(f"P(largest clone)  weighted by cells: {by_cells.pseq(top):.2e}   unique: {by_sequence.pseq(top):.2e}")
+print(f"P(largest clone)  weighted by cells: {by_cells.pseq(top):.2e}   "
+      f"unique: {by_sequence.pseq(top):.2e}")
 print(f"distinct sequences: {len(seqs):,}   cells: {sum(counts):,}")
