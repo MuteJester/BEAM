@@ -41,6 +41,20 @@ def test_the_format_word_decides_before_the_checksum(tmp_path):
         BeamModel.from_file(p)
 
 
+def test_a_newer_file_asks_for_a_newer_beam(tmp_path):
+    """A file in a format newer than this build reads came from a later BEAM:
+    the remedy is upgrading, not rebuilding from an earlier build."""
+    p = tmp_path / "m.beam"
+    BeamModel(SEQS).save(p)
+    raw = bytearray(p.read_bytes())
+    struct.pack_into("<I", raw, 4, 10)
+    p.write_bytes(bytes(raw))
+    with pytest.raises(ModelFileError) as info:
+        BeamModel.from_file(p)
+    msg = str(info.value)
+    assert "format 10" in msg and "newer" in msg and "earlier" not in msg, msg
+
+
 def test_a_current_file_round_trips(tmp_path):
     m = BeamModel(SEQS, abundances=range(1, len(SEQS) + 1), order=3,
                   alpha=(1.0, 2.0, 3.0, 4.0), alpha_length=6.0)

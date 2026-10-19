@@ -369,6 +369,16 @@ BeamModel *beam_model_load(const char *path) {
                               "beam_model_load: '%s' is not a BEAM model file "
                               "(wrong magic number)", path), NULL;
     }
+    if (h.format > BEAM_FORMAT) {
+        const unsigned got = (unsigned)h.format;
+        fclose(f);
+        return (void)BEAM_FAIL(BEAM_ERR_IO_VERSION,
+                              "beam_model_load: '%s' is a format %u BEAM model "
+                              "written by a newer version of BEAM, and this "
+                              "build reads only format %u. Upgrade BEAM "
+                              "(pip install -U beam-model)", path, got,
+                              (unsigned)BEAM_FORMAT), NULL;
+    }
     if (h.format != BEAM_FORMAT) {
         const unsigned got = (unsigned)h.format;
         fclose(f);
