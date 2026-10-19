@@ -43,6 +43,7 @@ classifiers = [
 
 [project.urls]
 Homepage = "https://github.com/MuteJester/BEAM"
+Documentation = "https://mutejester.github.io/BEAM/"
 Source = "https://github.com/MuteJester/BEAM"
 Issues = "https://github.com/MuteJester/BEAM/issues"
 Changelog = "https://github.com/MuteJester/BEAM/blob/main/CHANGELOG.md"

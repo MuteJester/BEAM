@@ -1,9 +1,10 @@
 name: Docs
 
-# Builds the documentation site (docs/) on every change to it. The build
-# fails on a broken internal link or an example that was never recorded.
-# Publishing to GitHub Pages is a separate, manual step until launch: run
-# this workflow by hand with deploy = true.
+# Builds the documentation site (docs/) on every change to it, and publishes
+# it to GitHub Pages (https://mutejester.github.io/BEAM/) whenever main
+# changes: the site follows main, not the releases. The build fails on a
+# broken internal link or an example that was never recorded. Pull requests
+# are built, never published; "Run workflow" rebuilds and republishes main.
 on:
   push:
     branches: [main]
@@ -11,11 +12,6 @@ on:
   pull_request:
     paths: ["docs/**", ".github/workflows/docs.yml"]
   workflow_dispatch:
-    inputs:
-      deploy:
-        description: Publish the built site to GitHub Pages
-        type: boolean
-        default: false
 
 permissions:
   contents: read
@@ -55,9 +51,13 @@ jobs:
           path: docs/dist
 
   deploy:
-    if: github.event_name == 'workflow_dispatch' && inputs.deploy
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     needs: build
     runs-on: ubuntu-latest
+    # One publication at a time, and a newer one waits instead of cancelling.
+    concurrency:
+      group: pages
+      cancel-in-progress: false
     permissions:
       pages: write
       id-token: write

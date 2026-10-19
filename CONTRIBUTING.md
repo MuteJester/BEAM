@@ -79,7 +79,8 @@ independent check against brute-force enumeration fails.
 | `tests/reference/` | An independent reimplementation the model is checked against |
 | `verification/` | The verification gate and its baselines |
 | `tools/release/` | Release tooling: smoke test, README check, changelog, model publishing |
-| `docs/api/python/` | API reference |
+| `docs/` | The documentation website (Astro Starlight); `docs/examples/` are its recorded examples |
+| `docs/api/python/` | Older API notes, superseded by the website's reference |
 
 ## The model file format
 

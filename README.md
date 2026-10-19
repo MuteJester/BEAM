@@ -269,14 +269,9 @@ simulation noise.
 
 ## Documentation
 
-The API reference is in [`docs/api/python/`](docs/api/python/):
-[the model](docs/api/python/model.md),
-[scoring and analytics](docs/api/python/analytics.md),
-[publicness](docs/api/python/publicness.md),
-[the probability of a whole repertoire](docs/api/python/likelihood.md),
-[mixtures of repertoires](docs/api/python/mixture.md),
-[diversity](docs/api/python/diversity.md) and
-[queries](docs/api/python/query.md).
+The documentation website, **[mutejester.github.io/BEAM](https://mutejester.github.io/BEAM/)**,
+has guides for each question above, explanations of how BEAM works with interactive figures,
+and the [API reference](https://mutejester.github.io/BEAM/reference/beammodel/).
 
 Questions and ideas are welcome in
 [Discussions](https://github.com/MuteJester/BEAM/discussions); bugs in
