@@ -15,7 +15,7 @@ path = BEAM.pretrained_path("human_tcrb_cdr3_aa_foundation")    # the local file
 
 | Name | Description |
 |---|---|
-| `foundation` | Built from 38,538 human TCRβ repertoires from 447 published studies; 926,909,993 distinct CDR3β sequences. About 90 MB to download, about 1 GB in memory. |
+| `human_tcrb_cdr3_aa_foundation` | Built from 38,538 human TCRβ repertoires from 447 published studies; 926,909,993 distinct CDR3β sequences. About 90 MB to download, about 1 GB in memory. |
 
 ## Download and checking
 
@@ -24,7 +24,8 @@ before it is first loaded and on every later load; a damaged file is downloaded 
 file that does not match is never loaded. Once cached, loading needs no network.
 
 The cache is `$BEAM_CACHE_DIR` if set, otherwise `$XDG_CACHE_HOME/beam-model` if that is set,
-otherwise `~/.cache/beam-model` on Linux and `~/Library/Caches/beam-model` on macOS.
+otherwise `~/.cache/beam-model` on Linux, `~/Library/Caches/beam-model` on macOS and
+`%LOCALAPPDATA%\beam-model` on Windows.
 
 ## Where the models come from
 

@@ -1,0 +1,130 @@
+---
+/** A diagram of the two ways to combine models: merging counts and mixing models. Static: no data. */
+const seq = (start: string, sa: string, end: string, sb: string) => ({ start, sa, end, sb });
+const own = [seq('CASS', 'a', 'YEQYF', 'a'), seq('CSA', 'b', 'TEAFF', 'b')];
+const mixed = [seq('CASS', 'a', 'TEAFF', 'b'), seq('CSA', 'b', 'YEQYF', 'a')];
+---
+
+<figure class="pvm not-content" aria-label="Merging adds two groups' counts into one model, which also writes sequences that start like one group and end like the other; a mixture picks a group, then writes a whole sequence from it">
+	<div class="card">
+		<div class="title">Merged: add the counts</div>
+		<div class="groups">
+			<div><span class="tag a">group A</span><span class="s"><b class="a">CASS</b><i>······</i><b class="a">YEQYF</b></span></div>
+			<div><span class="tag b">group B</span><span class="s"><b class="b">CSA</b><i>·······</i><b class="b">TEAFF</b></span></div>
+		</div>
+		<div class="step">↓ one table: every row holds n<sub>A</sub> + n<sub>B</sub></div>
+		<div class="writes">
+			<span class="lab">writes</span>
+			{own.map((x) => <span class="s"><b class={x.sa}>{x.start}</b><i>······</i><b class={x.sb}>{x.end}</b></span>)}
+			{mixed.map((x) => <span class="s new"><b class={x.sa}>{x.start}</b><i>······</i><b class={x.sb}>{x.end}</b></span>)}
+			<span class="lab">dashed: recombined, in neither group</span>
+		</div>
+		<p>Each row sees only a position and a few residues, so the model joins one group's start to the other's end.</p>
+	</div>
+	<div class="card">
+		<div class="title">Mixture: keep the models</div>
+		<div class="groups">
+			<div><span class="tag a">group A</span><span class="s"><b class="a">CASS</b><i>······</i><b class="a">YEQYF</b></span></div>
+			<div><span class="tag b">group B</span><span class="s"><b class="b">CSA</b><i>·······</i><b class="b">TEAFF</b></span></div>
+		</div>
+		<div class="step">↓ pick a group (½ each), then a whole sequence from it</div>
+		<div class="writes">
+			<span class="lab">writes</span>
+			{own.map((x) => <span class="s"><b class={x.sa}>{x.start}</b><i>······</i><b class={x.sb}>{x.end}</b></span>)}
+		</div>
+		<p>P(s) = ½ P<sub>A</sub>(s) + ½ P<sub>B</sub>(s): a sequence neither group writes stays unlikely.</p>
+	</div>
+</figure>
+
+<style>
+	.pvm {
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+		gap: 1rem;
+		margin: 1.5rem 0;
+		--a: var(--sl-color-accent);
+		--b: #ef785f;
+	}
+	.card {
+		border: 1px solid var(--sl-color-gray-5);
+		border-radius: 0.5rem;
+		padding: 0.9rem;
+		display: grid;
+		gap: 0.6rem;
+		align-content: start;
+	}
+	.title {
+		font-weight: 600;
+		text-align: center;
+	}
+	.groups {
+		display: grid;
+		gap: 0.3rem;
+		justify-content: center;
+	}
+	.groups > div {
+		display: flex;
+		gap: 0.5rem;
+		align-items: center;
+	}
+	.tag {
+		font-size: var(--sl-text-xs);
+		padding: 0.05rem 0.4rem;
+		border-radius: 0.3rem;
+		border: 1px solid currentColor;
+		min-width: 4.2rem;
+		text-align: center;
+	}
+	.tag.a {
+		color: var(--a);
+	}
+	.tag.b {
+		color: var(--b);
+	}
+	.s {
+		font-family: var(--sl-font-mono);
+		font-size: var(--sl-text-sm);
+		white-space: nowrap;
+	}
+	.s b {
+		font-weight: 700;
+	}
+	.s i {
+		font-style: normal;
+		color: var(--sl-color-gray-4);
+	}
+	b.a {
+		color: var(--a);
+	}
+	b.b {
+		color: var(--b);
+	}
+	.step {
+		font-size: var(--sl-text-xs);
+		color: var(--sl-color-gray-3);
+		text-align: center;
+	}
+	.writes {
+		display: grid;
+		gap: 0.2rem;
+		justify-items: center;
+		padding: 0.5rem;
+		border-radius: 0.35rem;
+		background: var(--sl-color-gray-6);
+	}
+	.lab {
+		font-size: var(--sl-text-xs);
+		color: var(--sl-color-gray-3);
+	}
+	.s.new {
+		outline: 1px dashed var(--sl-color-gray-3);
+		outline-offset: 2px;
+		border-radius: 2px;
+	}
+	.card p {
+		margin: 0;
+		font-size: var(--sl-text-xs);
+		color: var(--sl-color-gray-2);
+		text-align: center;
+	}
+</style>

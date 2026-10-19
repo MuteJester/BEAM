@@ -1,0 +1,8 @@
+sequence           group A   group B   mixture    merged
+CASSLGQGYEQYF      4.9e-04   4.1e-31   2.5e-04   1.7e-04
+CSARGNTEAFF        1.1e-32   9.3e-04   4.7e-04   3.0e-04
+CASSLGQGTEAFF      2.8e-19   2.6e-15   1.3e-15   6.2e-05
+
+merged model: 47.5% of its probability starts like one group and ends like the other
+D2: group A 44,304, group B 38,210, mixture 82,063, merged 127,208
+beta diversity of the mixture: 2.00 (gamma 82,063 / alpha 41,032)

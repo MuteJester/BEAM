@@ -8,6 +8,7 @@ sidebar:
 import { Aside } from '@astrojs/starlight/components';
 import Example from '../../../components/Example.astro';
 import ModelLevels from '../../../components/ModelLevels.astro';
+import PoolVsMix from '../../../components/PoolVsMix.astro';
 
 A BEAM model describes **whatever set of cells it is built from**. Choosing that set is the first
 decision of any analysis, and it decides which questions the model can answer.
@@ -23,8 +24,8 @@ This is the model to use when the unit of comparison is the sample:
 - following one person over time, or matching samples of the same person;
 - planning the depth for this kind of sample.
 
-A model of one sample is only as detailed as the sample: a few thousand cells describe the
-common sequences well and the rare ones through the prior.
+A model of one sample describes its common sequences from their counts and its rare ones through
+the prior; the more cells it is built from, the more detail it holds.
 
 ## One model per group
 
@@ -79,26 +80,88 @@ cohort is one of the studies it was built from; the paper evaluated its predicti
 Emerson cohort this way. The subtraction is only right if the cohort's counts are exactly the
 counts the reference holds for it: the same filtered sequences (3 to 27 standard amino acids)
 and the same weights (template counts where the platform reported them, otherwise one per
-distinct sequence per repertoire). BEAM cannot check this, so build the cohort's counts with the
-corpus's rules, or pass them directly with `without(sequences, abundances=...)`.
+distinct sequence per repertoire). Build the cohort's counts with these rules, or pass them
+directly with `without(sequences, abundances=...)`.
 
-## Pooling counts or mixing models
+## Merging counts or mixing models
 
-Pooling cells builds one model of the combined repertoire. A **mixture** keeps the members
-separate: pick a member at random, then a sequence from that member. Mixtures are what diversity
-*between* members is defined on. Beta diversity counts how many effectively distinct members a
-group has. The example uses stand-in groups; at Hill order 2, beta diversity is driven by the
-most common sequences:
+Models of several repertoires or groups can be combined in two ways, and the two describe
+different things.
+
+**Merging** adds the members' counts and builds one model from the total: the same model as
+building from all their cells at once (`a.merged(b)`, [above](#one-model-per-group)). Every row
+of each expert then holds the members' counts together,
+
+$$
+n(\text{row}, x) \;=\; \sum_m n_m(\text{row}, x)
+$$
+
+Each row sees only a position and a few residues of context, so the merged model learns the
+members' local patterns and recombines them: it can start a sequence the way one member does and
+end it the way another does.
+
+A **mixture** keeps the members' models whole. With weights $w_m$ that add up to one (equal by
+default),
+
+$$
+P_{\text{mix}}(s) \;=\; \sum_m w_m\, P_m(s)
+$$
+
+pick member $m$ with probability $w_m$, then draw a whole sequence from that member's model. A
+sequence that no member writes stays unlikely.
+
+<PoolVsMix />
+
+Two groups that differ at both ends show the difference:
+
+<Example src="models/pool_or_mix" />
+
+CASSLGQGTEAFF starts like group A and ends like group B. The mixture gives it almost nothing; the
+merged model gives it almost 50 billion times more, and puts almost half of all its probability
+on such recombined sequences. That is also why the merged model is more diverse than the two
+groups together.
+
+Which one to use:
+
+- **Merge** to describe a group as one population, with all of its evidence behind every row.
+  The group models above and the reference model are merged models, and recombining the
+  members' patterns is what lets them generalise to sequences no member happened to contain.
+- **Mix** when the members must stay distinct, above all to measure the diversity *between*
+  them.
+
+### Diversity between members
+
+Diversity is measured with Hill numbers. At order $q$,
+
+$$
+D_q(P) \;=\; \Big(\sum_s P(s)^q\Big)^{1/(1-q)}
+$$
+
+is the effective number of sequences; at $q = 2$ it is $1 / \sum_s P(s)^2$, the inverse of the
+chance that two draws are the same sequence. For a mixture of $M$ members:
+
+- **gamma**, $D_q(P_{\text{mix}})$, is the diversity of the group as a whole;
+- **alpha** is the diversity of a typical member: the members' $D_q$ averaged by a power mean of
+  order $1 - q$, which at $q = 2$ is their harmonic mean;
+- **beta** $= \text{gamma} / \text{alpha}$ is the effective number of distinct members, from 1
+  when all members are identical to $M$ when they share no sequence.
+
+The two groups above share no sequence, so beta is 2.00: gamma 82,063 against alpha 41,032. The
+merged model cannot take gamma's place: its 127,208 effective sequences include the recombined
+ones, which belong to no member, so the ratio would no longer count members.
+
+With stand-in groups that overlap, beta falls between the two extremes:
 
 <Example src="models/mixture" />
 
-Two groups drawn from one population count as one (1.04). Three different populations count as
-about one and a half: at order 2 the measure is driven by the most common sequences, and the three
-stand-in populations share most of theirs. Differences in rarer sequences need lower orders or
-the distance.
+Two groups drawn from one population count as one (1.04); three groups drawn from three
+different populations count as 1.56. At order 2 the measure is driven by the most common
+sequences, which the three stand-in populations largely share; their differences in rarer
+sequences show at lower orders and in the distance.
 
 <Aside type="tip" title="Rule of thumb">
 Compare **samples** with per-repertoire models, **groups** with group models (or with the
 distances between their members' models), and use a **reference** for questions about the
-population as a whole.
+population as a whole. Merge models to describe a group as one population; mix them to keep its
+members apart.
 </Aside>
