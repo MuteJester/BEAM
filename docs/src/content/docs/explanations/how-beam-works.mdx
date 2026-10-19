@@ -1,6 +1,6 @@
 ---
 title: How BEAM works
-description: Two readings of every residue, a normaliser summed over every sequence, and a prior for the unseen, explained with the reference model.
+description: Two readings of every residue, a prior for what was never seen, and a normaliser summed over every sequence, explained with the reference model.
 sidebar:
   order: 1
 ---
@@ -8,7 +8,8 @@ sidebar:
 import { Aside } from '@astrojs/starlight/components';
 import Example from '../../../components/Example.astro';
 import Interactive from '../../../components/Interactive.astro';
-import TwoAnchors from '../../../components/viz/TwoAnchors.svelte';
+import ExpertWalk from '../../../components/viz/ExpertWalk.svelte';
+import WeighExperts from '../../../components/viz/WeighExperts.svelte';
 import LogoExplorer from '../../../components/viz/LogoExplorer.svelte';
 import Figure from '../../../components/Figure.astro';
 import CountingAnimation from '../../../components/viz/CountingAnimation.svelte';
@@ -16,87 +17,159 @@ import AssembleAnimation from '../../../components/viz/AssembleAnimation.svelte'
 import LayeredSweep from '../../../components/viz/LayeredSweep.svelte';
 import PriorBackoff from '../../../components/viz/PriorBackoff.svelte';
 
-BEAM stands for **B**idirectional **E**xpert-**A**nchored **M**odel. This page explains the three
-ideas behind it. None of them is needed to use BEAM, but they explain how its answers are
-computed over every possible sequence rather than estimated by simulation.
+BEAM stands for **B**idirectional **E**xpert-**A**nchored **M**odel. This page builds the model up
+step by step: two experts read every residue, their counts become probabilities through a prior,
+and a single sweep sums over every possible sequence. None of it is needed to use BEAM, but it
+explains how its answers are computed over every possible sequence rather than estimated by
+simulation.
 
 ## Every residue is read twice
 
-A CDR3 is assembled from gene segments. Its start is encoded by the V gene and its end by the J
-gene; the middle is the junction, where nucleotides are added and removed at random. So the
-start of a CDR3 is best described by counting positions **from the front**, and the end by
-counting **from the back**: the residue three from the end of a CDR3 is constrained by the J
-gene, whatever the CDR3's length.
+Many sequence families are anchored at both ends. A CDR3, the example on this page, is assembled
+from gene segments: its start is encoded by the V gene and its end by the J gene; the middle is
+the junction, where nucleotides are added and removed at random. So the start of a CDR3 is best
+described by counting positions **from the front**, and the end by counting **from the back**:
+the residue three from the end of a CDR3 is constrained by the J gene, whatever the CDR3's
+length.
 
-BEAM has two components, called experts, one for each direction:
+### An expert and its window
 
-- the **forward**, start-anchored expert scores residue $i$ given its position from the front
-  and the few residues before it;
-- the **backward**, end-anchored expert scores the same residue given its position from the
-  back and the few residues after it.
+BEAM reads every sequence with two components, called **experts**. An expert walks along a
+sequence one residue at a time, and at each residue it predicts what is there from two things
+only:
 
-Each residue gets both scores, and they are combined. The result knows the conserved start
-*and* the conserved end, without being told which V or J genes exist. Change only the last
-residue of a typical CDR3 from F to W, an ending that is rare in TCRβ CDR3s, and the
-end-anchored expert objects strongly:
+- **where it is**, counted from its own end of the sequence;
+- **what it has just read**: the $k$ residues before it, its *context window*. The reference
+  model reads $k = 4$.
+
+Its prediction is a probability for each of the 20 amino acids, learned from the training
+sequences ([below](#a-model-is-a-table-of-counts)). The **forward** expert walks from the start,
+so its window holds the residues before; the **backward** expert walks from the end, reading the
+sequence backwards, so its window holds the residues after. Both walk the whole sequence, and
+they cross in the middle:
+
+<Interactive
+	title="Two experts walk a sequence"
+	description="Press Walk to move both experts along CASSLGQGYEQYF, one residue per step: the forward expert (teal) from the start, the backward expert (orange) from the end. Each window frames what its expert looks at: the four residues it has just read (shaded) and the residue it predicts (shown as ? until revealed); dashed tiles lie past the end of the sequence. Each card shows its expert's prediction under the reference model, a probability for each amino acid. Once the residues are revealed, the strip under the sequence keeps the probability each expert gave: the forward expert's above the line, the backward expert's below it."
+>
+	<ExpertWalk client:visible />
+</Interactive>
+
+Both experts are sure of the opening `CAS` and the closing `F`, giving each of them 0.89 or more.
+In the junction between them both are less certain, and they often disagree: at residue 5, L,
+the forward expert gives 0.25 and the backward expert 0.10; at residue 9, Y, the forward expert
+gives 0.05, while the backward expert, which has just read `EQYF`, gives 0.71.
+
+### Two experts, one factor
+
+Every residue therefore gets two probabilities, $q_F$ from the forward expert and $q_B$ from the
+backward expert. BEAM combines them into the residue's **factor**, their weighted geometric mean:
+
+$$
+\psi_i \;=\; q_F^{\,w_F}\; q_B^{\,w_B}, \qquad w_F = w_B = \tfrac{1}{2} \text{ by default.}
+$$
+
+A geometric mean is high only when both experts find the residue plausible; when one of them
+objects, the factor falls. So the model knows the conserved start *and* the conserved end,
+without being told which V or J genes exist. Change only the last residue of a typical CDR3 from
+F to W, an ending that is rare in TCRβ CDR3s, and both experts object: the backward expert has
+rarely seen a sequence end in W, and the forward expert has rarely seen W follow `YEQY`.
 
 <Example src="how-it-works/terminal_residue" />
 
 <Interactive
-	title="Reading a CDR3 from both ends"
-	description="Each residue of the chosen sequence is scored by both experts. Bars show surprisal in bits: how unexpected the residue was to the expert reading from the start (teal) and to the one reading from the end (orange). The numbers under each residue are its position from the start and from the end. At the end, the scores are assembled into the sequence's probability."
-	fallback="score/explain/explain"
-	fallbackAlt="Bar chart of surprisal per residue of CASSLGQGYEQYF for the two experts."
+	title="Weighing two experts"
+	description="Choose a residue of the sequence: the two experts' windows close in on it, the forward expert's from the left and the backward expert's from the right. The rows are their two predictions for that residue and, below them, the combined factor ψ for every amino acid. Choose a column to read out its factor, for instance W at the last residue, and move the slider to change the weights; at either end of the slider, one expert alone decides. The factors need not add up to one: the normaliser, below, takes care of that."
 >
-	<TwoAnchors client:visible />
+	<WeighExperts client:visible />
 </Interactive>
-
-The pattern repeats across sequences: the start-anchored expert is confident over the opening
-`CASS`, the end-anchored expert over the closing J motif, and both are uncertain in the middle.
 
 ## A model is a table of counts
 
 Building a model is counting. Each expert keeps a table with one row for every position,
 counted from its own end, and every context of the $k$ residues before it in its reading
-direction; each row records how often each residue came next. The reference model reads
-$k = 4$ residues of context. The animation counts a small training set of six CDR3s with
-$k = 2$, so that its rows fit on screen:
+direction; each row records how often each residue came next. The animation counts a small
+training set of six CDR3s with $k = 2$, so that its rows fit on screen:
 
 <Interactive
 	title="Counting a training set"
-	description="Press Count to read the training sequences residue by residue. The white residue is being counted: the forward expert counts it in the row of its position from the start and the two residues before it (teal outline), the backward expert in the row of its position from the end and the two residues after it (orange outline). Each card shows that row's counts so far."
+	description="Press Count to walk both experts through the training sequences together. At each residue, the forward expert counts it in the row of its position from the start and the two residues before it (teal window), and the backward expert in the row of its position from the end and the two residues after it (orange window). Each card shows that row's counts so far."
 >
 	<CountingAnimation client:visible />
 </Interactive>
 
 An expert's probability of a residue comes from its row: from the counts where the row was seen
-often, and from the prior, described [below](#sequences-the-model-has-never-seen), where it was
-seen rarely or never.
+often, and from a prior where it was seen rarely or never, as the next section explains.
+
+## Sequences the model has never seen
+
+A repertoire contains a vanishing fraction of all possible CDR3s, so a model must say something
+sensible about sequences it never saw. The longer an expert's context, the more specific its
+prediction, but the more rarely that exact context was seen: four given residues at a given
+position may have been seen thousands of times, a few times, or never. BEAM resolves this with a
+**hierarchical prior**: each level's prediction is a weighted average of what its own context was
+seen to do and what the next shorter context predicts,
+
+$$
+P_j(x) \;=\; \lambda_j\,\frac{n_j(x)}{n_j} \;+\; (1 - \lambda_j)\,P_{j-1}(x),
+\qquad \lambda_j \;=\; \frac{n_j}{n_j + \alpha_j}
+$$
+
+- $n_j$ is how often the context of $j$ residues was seen at this position, and $n_j(x)$ how
+  often residue $x$ followed it;
+- $\lambda_j$ is the weight on those counts. It grows with $n_j$: a context seen far more often
+  than $\alpha_j$ times speaks for itself, and one never seen passes on the shorter context's
+  prediction unchanged;
+- the chain starts from every residue equally likely and climbs from the position alone
+  ($j = 0$) to the full context ($j = k$).
+
+<Interactive
+	title="The prior, level by level"
+	description="Choose a sequence, an expert and a residue; the window marks the context. From the bottom up, each level mixes what its context was seen to do (teal) with what the level below predicts (indigo). Its answer (white) lies between the two, closer to the one with more weight, and is handed up to the next level (dashed line); the top row is the expert's probability, the value explain returns. The model is built from 20,000 cells drawn from the reference model. The slider multiplies every strength α: lower values trust thin counts, higher values lean on short contexts. The lower panel shows how likely 5,000 new cells are at each multiple, relative to the best."
+>
+	<PriorBackoff client:visible />
+</Interactive>
+
+This is the right thing to do for four reasons:
+
+- **Trust follows the evidence.** A context's counts get weight in proportion to how often it
+  was seen, so a context seen twice cannot overrule a shorter one seen thousands of times.
+- **Nothing is ruled out.** Every residue keeps some probability from the levels below, so a new
+  sequence is less likely, never impossible.
+- **It is the Bayesian answer.** $P_j$ is the posterior mean of the context's distribution
+  under a Dirichlet prior centred on the shorter context's prediction, with strength $\alpha_j$.
+- **The data choose the strengths.** BEAM sets each $\alpha_j$ to the value under which its own
+  counts are most probable, their evidence, without holding any data out. New sequences are on
+  average 98% as likely under the strengths it chooses as under the best multiple of them, and
+  the strengths adapt to how much data there is: built from 20,000 cells, the model gives four
+  residues of context a strength of 3.1 million, passing the three-residue prediction through
+  almost unchanged, while the reference model, built from far more sequences, gives the same
+  level a strength of 78.
+
+The result: a plausible new CDR3 gets a moderate probability, a junk string gets a vanishingly
+small one, and every sequence up to the maximum length is possible.
+
+<Aside type="note" title="What a model stores">
+A model stores **counts**, not probabilities. That is why two models can be pooled
+(`merged`), and why a saved model reloads to exactly the same probabilities. Only the contexts
+that were observed are stored.
+</Aside>
 
 ## Assembling a probability
 
-For a sequence $s = s_1 \cdots s_L$ of length $L$, with the experts reading $k$ residues of
-context ($k = 4$ for the reference model), the log probability is
+A sequence's probability is the product of its residues' factors and the probability of its
+length, divided by a normaliser. For a sequence $s = s_1 \cdots s_L$ of length $L$,
 
 $$
-\ln P(s) \;=\; \ln \pi(L) \;+\; \sum_{i=1}^{L} \ln \psi_i \;-\; \ln Z(L)
-$$
-
-$$
-\psi_i \;=\; q_F\big(s_i \mid i,\, s_{i-k}^{\,i-1}\big)^{w_F}\;
-q_B\big(s_i \mid L-i+1,\, s_{i+1}^{\,i+k}\big)^{w_B}
+P(s) \;=\; \frac{\pi(L)}{Z(L)} \prod_{i=1}^{L} \psi_i
 $$
 
 - $\pi(L)$ is the probability of the length;
-- $q_F$ is the forward (start-anchored) expert's probability of residue $s_i$, from its position
-  $i$ and the $k$ residues before it, and $q_B$ the backward (end-anchored) expert's, from its
-  position counted from the end and the $k$ residues after it, weighted by $w_F$ and $w_B$ (one
-  half each by default);
-- $Z(L)$ is the **normaliser**: the same weighted product summed over *every* sequence of length
-  $L$, so that the probabilities of all length-$L$ sequences add up to one.
+- $\psi_i$ is residue $i$'s factor, from [the two experts](#two-experts-one-factor);
+- $Z(L)$ is the **normaliser**: the same product of factors summed over *every* sequence of
+  length $L$, so that, given the length, the probabilities add up to one.
 
-$\psi_i$ is the residue's factor, the weighted geometric mean of the two experts; `explain`
-returns all of these terms (see
+`explain` returns all of these terms in logs (see
 [Which residues drive a score](/BEAM/guides/score/#which-residues-drive-a-score)), and they add
 up to the model's own score:
 
@@ -104,26 +177,35 @@ up to the model's own score:
 
 <Interactive
 	title="Assembling a probability"
-	description="Press Assemble to score CASSLGQGYEQYF residue by residue under the reference model. Bars: how unexpected each residue is to the forward expert (teal) and the backward expert (orange), in bits; line: their combination, the residue's factor ψ. The running sum of ln ψ builds up, and the length's probability and the normaliser complete it."
+	description="Press Assemble to build the probability of CASSLGQGYEQYF under the reference model, one factor at a time. The axis is a log scale, so each factor below one moves the running value to the right by its size: first the probability of the length, then each residue's factor ψ (the two experts' windows mark the residue), and last the division by the normaliser Z(13), which moves it back to the left. The end point is the sequence's probability, as log_pseq returns it."
 >
 	<AssembleAnimation client:visible />
 </Interactive>
 
 ## Summing over every sequence
 
-There are $20^L$ sequences of length $L$, more than $10^{16}$ for a typical CDR3 of 13 residues.
-Summing over them one by one is impossible. BEAM never does: each expert looks only a few
-residues back or ahead, so the scores of all sequences of one length can be arranged as paths
-through a **layered graph**, one layer per position. Summing over every path is then a single
-sweep through the layers, a *dynamic program*. Sweeping the reference model's graph for length
-13 adds up every one of $20^{13} \approx 8 \times 10^{16}$ sequences:
+The normaliser $Z(L)$ adds up the product of factors of every sequence of length $L$. There are
+$20^L$ of them, more than $10^{16}$ for a typical CDR3 of 13 residues, so listing them is
+impossible, and BEAM never does. Each factor depends only on a residue and the $k$ residues
+around it, so once the start of a sequence is written, everything still to come depends only on
+its last $k$ residues: its **state**. All the starts that end in the same state can be added up
+and carried forward as one number.
+
+BEAM therefore sweeps the positions from start to end, keeping one running total per state. A
+state's total is the sum, over the states it can be reached from, of their totals times the
+factor of the step; after the last position, the totals add up to $Z(L)$. This is a *dynamic
+program* over a **layered graph**, one layer per position. The animation sweeps a small model of
+DNA sequences with $k = 2$, small enough to draw every state:
 
 <Interactive
 	title="One sweep through the layered graph"
-	description="Each column is one position of a length-13 sequence, and each dot stands for many states of the reference model's graph: the last few residues written. Press Sweep: at each position, every state collects the sum over all the ways of reaching it, so after the last position the total is Z(13). The readout gives the real number of states and the running total, from log_partition_by_layer."
+	description="Press Sweep to sweep a model built from ten short DNA sequences of 6 to 11 bases, with k = 2, for length 8. Each column is one position, and each dot a state: the last two residues written (N stands for an unread base), grouped by the residue written last. At each step, every state collects the totals of the five states it can be reached from, each times the factor of the step: the forward expert's factor for the new residue and the backward expert's for the residue two back, which the new residue completes. Dot size is the state's share of its column's total, and line width the share each edge brings. Choose a dot to see its sum. The bars compare the sequences summed so far with the edges walked."
 >
 	<LayeredSweep client:visible />
 </Interactive>
+
+The reference model's graph for length 13 has 1,608,421 states and 28,968,420 edges, and one
+sweep through it adds up every one of $20^{13} \approx 8 \times 10^{16}$ sequences.
 
 The same idea gives every other quantity on this site that sums over all sequences: expected
 numbers of distinct sequences, overlaps, publicness and distances are computed by sweeps through
@@ -135,10 +217,10 @@ On a model small enough to list every sequence, the total probability can be che
 
 ## Where the probability lives
 
-Under the reference model, every string of up to 27 amino acids has some probability, but almost all of the probability
-sits on a tiny fraction of them. By length, most possible strings are long, while most CDR3s are
-13 to 16 residues; and within each length, a small share of the strings carries most of the
-probability.
+Under the reference model, every string of up to 27 amino acids has some probability, but almost
+all of the probability sits on a tiny fraction of them. By length, most possible strings are
+long, while most CDR3s are 13 to 16 residues; and within each length, a small share of the
+strings carries most of the probability.
 
 <Example src="how-it-works/where_probability_lives" />
 
@@ -168,34 +250,3 @@ conserved end and the variable junction between them.
 >
 	<LogoExplorer client:visible />
 </Interactive>
-
-## Sequences the model has never seen
-
-A repertoire contains a vanishing fraction of all possible CDR3s, so a model must say something
-sensible about sequences it never saw. BEAM uses a **hierarchical prior**: when a context of the
-last $k$ residues was seen rarely or never, its prediction leans on the prediction of the
-shorter context of $k-1$ residues, and so on down to the position alone:
-
-$$
-P_k(x) \;=\; \frac{n_k(x) + \alpha_k\, P_{k-1}(x)}{n_k + \alpha_k}
-$$
-
-where $n_k(x)$ counts how often residue $x$ followed the context, $n_k$ is the total count of
-the context, and $\alpha_k$ sets how strongly the shorter context is trusted. BEAM chooses the
-strengths $\alpha_k$ from the data themselves, by maximising the evidence of the counts.
-
-<Interactive
-	title="The prior, level by level"
-	description="Choose a sequence, one of its residues and an expert. From the bottom up: every residue equally likely, then the position alone, then one and two residues of context, each mixing its own counts (teal) with the level below (indigo). The slider scales every prior strength α; at the strength BEAM fitted, the result is BEAM's own value. Uses the small model of six CDR3s."
->
-	<PriorBackoff client:visible />
-</Interactive>
-
-The result: a plausible new CDR3 gets a moderate probability, a junk string gets a vanishingly
-small one, and every sequence up to the maximum length is possible.
-
-<Aside type="note" title="What a model stores">
-A model stores **counts**, not probabilities. That is why two models can be pooled
-(`merged`), and why a saved model reloads to exactly the same probabilities. Only the contexts
-that were observed are stored.
-</Aside>

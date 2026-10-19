@@ -1,6 +1,6 @@
 <script lang="ts">
-	import * as Plot from '@observablehq/plot';
-	import { dataUrl, onThemeChange, sci, themeColors } from './theme';
+	import { dataUrl, sci } from './theme';
+	import SequenceLens from './SequenceLens.svelte';
 
 	interface Assemble {
 		sequence: string;
@@ -13,30 +13,28 @@
 	}
 
 	let a = $state<Assemble | null>(null);
-	let shown = $state(0); // residues assembled so far; L + 1 adds the length terms
+	let shown = $state(0); // rows of the product revealed: the length, each residue, then the normaliser
 	let playing = $state(false);
-	let themeTick = $state(0);
 	let failed = $state(false);
-	let chart: HTMLDivElement | undefined = $state();
+	let width = $state(640);
 
 	$effect(() => {
 		fetch(dataUrl('viz/model_parts/model_parts.json'))
 			.then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
 			.then((d) => (a = d.assemble))
 			.catch(() => (failed = true));
-		return onThemeChange(() => themeTick++);
 	});
 
 	const L = $derived(a ? a.sequence.length : 0);
-	const done = $derived(a !== null && shown > L);
-	const partial = $derived(a ? a.combined.slice(0, Math.min(shown, L)).reduce((s, v) => s + v, 0) : 0);
+	const total = $derived(L + 2);
+	const done = $derived(a !== null && shown >= total);
 
 	$effect(() => {
 		if (!playing || !a) return;
 		const timer = setInterval(() => {
-			if (shown > L) playing = false;
+			if (shown >= total) playing = false;
 			else shown += 1;
-		}, 650);
+		}, 700);
 		return () => clearInterval(timer);
 	});
 
@@ -45,75 +43,82 @@
 		playing = done || !playing;
 	}
 
-	const LN2 = Math.log(2);
-	$effect(() => {
-		themeTick;
-		if (!a || !chart) return;
-		const c = themeColors();
-		const n = Math.min(shown, L);
-		const rows = Array.from({ length: n }, (_, i) => ({
-			i: i + 1,
-			f: -a!.forward[i] / LN2,
-			b: -a!.backward[i] / LN2,
-			psi: -a!.combined[i] / LN2,
-		}));
-		const plot = Plot.plot({
-			width: chart.clientWidth,
-			height: 220,
-			marginLeft: 48,
-			style: { color: c.text, background: 'transparent', fontSize: '12px' },
-			x: {
-				domain: [0.4, L + 0.6],
-				label: null,
-				ticks: Array.from({ length: L }, (_, i) => i + 1),
-				tickFormat: (v: number) => a!.sequence[v - 1] ?? '',
-			},
-			y: {
-				domain: [0, 1.1 * Math.max(...[...a.forward, ...a.backward].map((v) => -v / LN2))],
-				label: '↑ surprisal (bits)',
-				grid: true,
-			},
-			marks: [
-				Plot.rectY(rows, { x1: (d) => d.i - 0.38, x2: (d) => d.i, y: 'f', fill: c.accent, fillOpacity: 0.85 }),
-				Plot.rectY(rows, { x1: (d) => d.i, x2: (d) => d.i + 0.38, y: 'b', fill: c.second, fillOpacity: 0.85 }),
-				Plot.line(rows, { x: 'i', y: 'psi', stroke: '#6c7bd9', strokeWidth: 2 }),
-				Plot.dot(rows, { x: 'i', y: 'psi', fill: '#6c7bd9', r: 3.5 }),
-				Plot.ruleY([0], { stroke: c.muted }),
-			],
+	// One row per factor of P(s), each a step on a log scale from the running value before it to
+	// the one after: the length's probability, every residue's factor, and division by Z(L).
+	const LN10 = Math.log(10);
+	const rows = $derived.by(() => {
+		if (!a) return [];
+		const out: { label: string; factor: string; from: number; to: number; kind: string; residue: number | null }[] = [];
+		let v = 0;
+		out.push({ label: `length ${L}`, factor: `× π(${L}) = ${Math.exp(a.log_length_prior).toFixed(3)}`, from: 0, to: a.log_length_prior, kind: 'len', residue: null });
+		v = a.log_length_prior;
+		a.combined.forEach((c, i) => {
+			out.push({ label: `${i + 1}  ${a!.sequence[i]}`, factor: `× ψ = ${Math.exp(c).toFixed(3)}`, from: v, to: v + c, kind: 'psi', residue: i });
+			v += c;
 		});
-		chart.replaceChildren(plot);
+		out.push({ label: 'normaliser', factor: `÷ Z(${L}) = ${Math.exp(a.log_partition).toFixed(3)}`, from: v, to: v - a.log_partition, kind: 'z', residue: null });
+		return out;
 	});
+	const current = $derived(shown > 0 ? rows[shown - 1] : null);
+	const lowest = $derived(Math.min(...rows.map((r) => r.to)) / LN10);
+	const decades = $derived(Math.ceil(-lowest));
+
+	const labelW = 76;
+	const factorW = 104;
+	const rowH = 17;
+	const top = 36;
+	const plotW = $derived(Math.max(160, width - labelW - factorW - 8));
+	const xOf = (lnv: number) => labelW + (plotW * (-lnv / LN10)) / decades;
 </script>
 
-<div class="assemble">
+<div class="assemble" bind:clientWidth={width}>
 	{#if a}
 		<div class="controls">
 			<button class="primary" onclick={toggle}>{playing ? 'Pause' : done ? 'Assemble again' : shown ? 'Resume' : 'Assemble'}</button>
-			<button onclick={() => ((playing = false), (shown = Math.min(L + 1, shown + 1)))}>Step ▶</button>
+			<button onclick={() => ((playing = false), (shown = Math.min(total, shown + 1)))}>Step ▶︎</button>
 			<button onclick={() => ((playing = false), (shown = 0))}>Reset</button>
 		</div>
-		<div class="seq mono" aria-label="Sequence being scored">
-			{#each [...a.sequence] as ch, i}
-				<span class="res" class:done={i < shown} class:here={i === shown - 1 && shown <= L}>{ch}</span>
+
+		<SequenceLens
+			sequence={a.sequence}
+			k={4}
+			windows={current?.residue != null ? [{ target: current.residue, dir: 'f' }, { target: current.residue, dir: 'b' }] : []}
+		/>
+
+		<svg width={labelW + plotW + factorW} height={top + rows.length * rowH + 6} role="img"
+			aria-label="The probability of CASSLGQGYEQYF built up factor by factor on a log scale: the length's probability, each residue's factor, then division by the normaliser">
+			<text x={labelW} y={10} class="axis">running value, on a log scale →</text>
+			{#each Array(decades + 1) as _, d}
+				<line x1={labelW + (plotW * d) / decades} x2={labelW + (plotW * d) / decades} y1={top - 4} y2={top + rows.length * rowH} class="grid" />
+				<text x={labelW + (plotW * d) / decades} y={top - 8} text-anchor="middle" class="tick">{d === 0 ? '1' : `10⁻${'⁰¹²³⁴⁵⁶⁷⁸⁹'[d]}`}</text>
 			{/each}
-		</div>
-		<div bind:this={chart} role="img" aria-label="Surprisal of each residue under the forward and backward experts, and the combined factor"></div>
-		<div class="legend">
-			<span><span class="swatch f"></span>forward expert, −log₂ q<sub>F</sub></span>
-			<span><span class="swatch b"></span>backward expert, −log₂ q<sub>B</sub></span>
-			<span><span class="swatch psi"></span>combined, −log₂ ψ<sub>i</sub></span>
-		</div>
+			{#each rows as r, j}
+				{@const y = top + j * rowH}
+				<g class="row {r.kind}" class:hidden={j >= shown} class:now={j === shown - 1}>
+					<text x={labelW - 8} y={y + rowH - 5} text-anchor="end" class="lab">{r.label}</text>
+					<rect x={Math.min(xOf(r.from), xOf(r.to))} y={y + 3} width={Math.max(1.5, Math.abs(xOf(r.to) - xOf(r.from)))} height={rowH - 6} rx="2" class="seg" />
+					{#if j > 0}
+						<line x1={xOf(r.from)} x2={xOf(r.from)} y1={y - 3} y2={y + 3} class="link" />
+					{/if}
+					<text x={labelW + plotW + 6} y={y + rowH - 5} class="fac">{r.factor}</text>
+				</g>
+			{/each}
+			{#if done}
+				<circle cx={xOf(rows[rows.length - 1].to)} cy={top + (rows.length - 0.5) * rowH} r="4" class="end" />
+			{/if}
+		</svg>
+
 		<div class="sum mono" aria-live="polite">
-			{#if shown === 0}
-				<span class="muted">Press Assemble to multiply the residues' factors one by one.</span>
-			{:else if shown <= L}
-				<span>residue {shown} ({a.sequence[shown - 1]}): ln ψ = {a.combined[shown - 1].toFixed(4)}</span>
-				<span>Σ ln ψ so far = <strong>{partial.toFixed(4)}</strong></span>
+			{#if !current}
+				<span class="muted">Press Assemble to build P(s) one factor at a time, on a log scale: each factor below one moves it to the right.</span>
+			{:else if current.kind === 'len'}
+				<span>start from the probability of the length: π({L}) = {Math.exp(a.log_length_prior).toFixed(4)}</span>
+			{:else if current.kind === 'psi'}
+				<span>residue {shown - 1} ({a.sequence[shown - 2]}): × ψ = {Math.exp(current.to - current.from).toFixed(4)}, the two experts' weighted geometric mean</span>
+				<span>running value π({L}) × ψ₁ ⋯ ψ<sub>{shown - 1}</sub> = <strong>{sci(Math.exp(current.to), 3)}</strong></span>
 			{:else}
-				<span>Σ ln ψ = {partial.toFixed(4)}</span>
-				<span>+ ln π(L) = {a.log_length_prior.toFixed(4)}  − ln Z(L) = {(-a.log_partition).toFixed(4)}</span>
-				<span>ln P(s) = <strong>{(partial + a.log_length_prior - a.log_partition).toFixed(4)}</strong>, as log_pseq returns
-					({a.log_pseq.toFixed(4)}); P(s) = {sci(Math.exp(a.log_pseq), 3)}</span>
+				<span>divide by the normaliser Z({L}) = {Math.exp(a.log_partition).toFixed(4)}, so that all length-{L} sequences together get π({L})</span>
+				<span>P(s) = <strong>{sci(Math.exp(current.to), 3)}</strong>; ln P(s) = {current.to.toFixed(4)}, as log_pseq returns ({a.log_pseq.toFixed(4)})</span>
 			{/if}
 		</div>
 	{:else if failed}
@@ -144,64 +149,67 @@
 		cursor: pointer;
 	}
 	button.primary {
-		background: var(--sl-color-accent);
-		border-color: var(--sl-color-accent);
-		color: var(--sl-color-black);
-	}
-	.seq {
-		display: flex;
-		gap: 3px;
-	}
-	.res {
-		display: inline-grid;
-		place-items: center;
-		width: 1.6rem;
-		height: 1.6rem;
-		border-radius: 0.3rem;
-		background: var(--sl-color-gray-6);
-		opacity: 0.5;
-		transition: opacity 0.2s ease;
-	}
-	.res.done {
-		opacity: 1;
-	}
-	.res.here {
 		background: var(--sl-color-white);
+		border-color: var(--sl-color-white);
 		color: var(--sl-color-black);
+	}
+	svg {
+		max-width: 100%;
+		overflow: visible;
+	}
+	.grid {
+		stroke: var(--sl-color-gray-5);
+		stroke-dasharray: 2 3;
+	}
+	.axis {
+		font-size: 11px;
+		font-style: italic;
+		fill: var(--sl-color-gray-3);
+	}
+	.tick {
+		font-size: 11px;
+		fill: var(--sl-color-gray-3);
+	}
+	.row {
+		transition: opacity 0.3s ease;
+	}
+	.row.hidden {
+		opacity: 0;
+	}
+	.lab,
+	.fac {
+		font-size: 11px;
+		font-family: var(--sl-font-mono);
+		fill: var(--sl-color-gray-2);
+	}
+	.row.now .lab,
+	.row.now .fac {
+		fill: var(--sl-color-white);
 		font-weight: 700;
 	}
-	.legend {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 0.3rem 1rem;
-		font-size: var(--sl-text-xs);
-		color: var(--sl-color-gray-2);
+	.seg {
+		fill: #6c7bd9;
 	}
-	.swatch {
-		display: inline-block;
-		width: 0.7rem;
-		height: 0.7rem;
-		border-radius: 2px;
-		margin-inline-end: 0.3rem;
-		vertical-align: -0.1rem;
+	.row.len .seg {
+		fill: var(--sl-color-gray-3);
 	}
-	.swatch.f {
-		background: var(--sl-color-accent);
+	.row.z .seg {
+		fill: var(--sl-color-accent);
 	}
-	.swatch.b {
-		background: #ef785f;
+	.link {
+		stroke: var(--sl-color-gray-3);
 	}
-	.swatch.psi {
-		background: #6c7bd9;
+	.end {
+		fill: var(--sl-color-white);
 	}
 	.sum {
 		display: grid;
 		gap: 0.2rem;
 		font-size: var(--sl-text-xs);
 		padding: 0.5rem 0.7rem;
-		border-left: 3px solid var(--sl-color-accent);
+		border-left: 3px solid #6c7bd9;
 		background: var(--sl-color-gray-7, var(--sl-color-black));
-		min-height: 3.6rem;
+		min-height: 3.2rem;
 	}
 	.mono {
 		font-family: var(--sl-font-mono);

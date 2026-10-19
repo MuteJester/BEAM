@@ -1,0 +1,4 @@
+strengths fitted from the counts: 6.8, 16.9, 26.6, 177.4, 3,073,406.8
+the ladder written out agrees with BEAM's experts to 2.7e-15
+98% of the held-out cells are sequences the model never saw
+mean ln P of a held-out cell: -20.396 at BEAM's strengths, -20.374 at the best multiple (x1.78); -23.401 at x0.01, -22.413 at x100

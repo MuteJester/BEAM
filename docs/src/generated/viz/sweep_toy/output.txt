@@ -1,0 +1,4 @@
+390,625 sequences of length 8; the sweep keeps at most 25 states per position and walks 805 edges
+Z(8) from the sweep:          0.318756396824
+Z(8) from listing everything: 0.318756396824
+log_partition(8):             0.318756396824

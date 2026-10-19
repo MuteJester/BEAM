@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { dataUrl } from './theme';
+	import SequenceLens from './SequenceLens.svelte';
 
 	let train = $state<string[]>([]);
 	let k = $state(2);
@@ -37,7 +38,9 @@
 	function rowOf(s: string, i: number, backward: boolean) {
 		const r = backward ? [...s].reverse().join('') : s;
 		const j = backward ? s.length - 1 - i : i;
-		return { position: j + 1, ctx: pad(r.slice(Math.max(0, j - k), j)), residue: r[j] };
+		const ctx = pad(r.slice(Math.max(0, j - k), j));
+		// In sequence order, as the window shows it: the backward expert's context follows the residue.
+		return { position: j + 1, ctx: backward ? [...ctx].reverse().join('') : ctx, residue: r[j] };
 	}
 	function countsUpTo(backward: boolean) {
 		const rows = new Map<string, Map<string, number>>();
@@ -75,25 +78,25 @@
 	{#if steps.length && cur && fwd && bwd}
 		<div class="controls">
 			<button class="primary" onclick={toggle}>{playing ? 'Pause' : finished ? 'Count again' : t ? 'Resume' : 'Count'}</button>
-			<button onclick={() => ((playing = false), (t = Math.min(steps.length - 1, t + 1)))}>Step ▶</button>
+			<button onclick={() => ((playing = false), (t = Math.min(steps.length - 1, t + 1)))}>Step ▶︎</button>
 			<button onclick={() => ((playing = false), (t = 0))}>Reset</button>
 			<span class="muted">sequence {cur.si + 1} of {train.length}, residue {cur.i + 1}</span>
 		</div>
 
-		<div class="seqs" aria-label="Training sequences">
+		<SequenceLens
+			sequence={train[cur.si]}
+			{k}
+			windows={[{ target: cur.i, dir: 'f' }, { target: cur.i, dir: 'b' }]}
+			minLength={Math.max(...train.map((s) => s.length))}
+		/>
+		<div class="queue" aria-label="Training sequences">
 			{#each train as s, si}
-				<div class="seq" class:done={si < cur.si} class:now={si === cur.si}>
-					{#each [...s] as ch, i}
-						{@const fwdCtx = si === cur.si && i < cur.i && i >= cur.i - k}
-						{@const bwdCtx = si === cur.si && i > cur.i && i <= cur.i + k}
-						<span class="res" class:here={si === cur.si && i === cur.i} class:fctx={fwdCtx} class:bctx={bwdCtx}>{ch}</span>
-					{/each}
-				</div>
+				<span class="mono q" class:done={si < cur.si} class:now={si === cur.si}>{s}</span>
 			{/each}
 		</div>
 
 		<div class="cards">
-			{#each [{ c: fwd, name: 'Forward expert', side: 'from the start', ctxWord: 'after', cls: 'f' }, { c: bwd, name: 'Backward expert', side: 'from the end (reading backwards)', ctxWord: 'after', cls: 'b' }] as e}
+			{#each [{ c: fwd, name: 'Forward expert', side: 'from the start', ctxWord: 'after', cls: 'f' }, { c: bwd, name: 'Backward expert', side: 'from the end', ctxWord: 'followed by', cls: 'b' }] as e}
 				<div class="card {e.cls}">
 					<div class="title">{e.name}</div>
 					<div class="key">
@@ -142,46 +145,26 @@
 		cursor: pointer;
 	}
 	button.primary {
-		background: var(--sl-color-accent);
-		border-color: var(--sl-color-accent);
-		color: var(--sl-color-black);
-	}
-	.seqs {
-		display: grid;
-		gap: 0.25rem;
-	}
-	.seq {
-		display: flex;
-		gap: 2px;
-		opacity: 0.45;
-	}
-	.seq.done {
-		opacity: 0.7;
-	}
-	.seq.now {
-		opacity: 1;
-	}
-	.res {
-		display: inline-grid;
-		place-items: center;
-		width: 1.45rem;
-		height: 1.45rem;
-		font-family: var(--sl-font-mono);
-		font-size: var(--sl-text-xs);
-		border-radius: 0.25rem;
-		border: 2px solid transparent;
-		background: var(--sl-color-gray-6);
-	}
-	.res.here {
 		background: var(--sl-color-white);
+		border-color: var(--sl-color-white);
 		color: var(--sl-color-black);
+	}
+	.queue {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.3rem 0.8rem;
+		font-size: var(--sl-text-xs);
+	}
+	.q {
+		color: var(--sl-color-gray-4);
+	}
+	.q.done {
+		color: var(--sl-color-gray-3);
+		text-decoration: line-through;
+	}
+	.q.now {
+		color: var(--sl-color-white);
 		font-weight: 700;
-	}
-	.res.fctx {
-		border-color: var(--sl-color-text-accent);
-	}
-	.res.bctx {
-		border-color: #ef785f;
 	}
 	.cards {
 		display: grid;

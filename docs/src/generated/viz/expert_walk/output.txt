@@ -1,0 +1,2 @@
+each prediction sums to 1 within 2.8e-15
+position 5 (L): forward expert gives it 0.252, backward expert 0.104
