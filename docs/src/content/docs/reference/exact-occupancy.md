@@ -53,7 +53,7 @@ for `n` a whole number of draws, computed in the same way:
 | `method` | How it was computed (series or contour integral). |
 
 `float(bounded_value)` raises `TypeError` on purpose, so a bound is never dropped by accident.
-See [What "exact" means](/BEAM/explanations/what-exact-means/).
+See [Computed, not simulated](/BEAM/explanations/computed-not-simulated/).
 
 ## Saving the prepared integrals
 

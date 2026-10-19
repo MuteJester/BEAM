@@ -27,4 +27,4 @@ All members must share alphabet, order and maximum length.
 | `entropy_estimate(n, seed=)` | A sampled estimate of the Shannon entropy, with its standard error. | Labelled as sampled. |
 | `support_size()` | Number of distinct sequences any member can produce. | Exact. |
 
-Why $q = 1$ is treated differently: see [What "exact" means](/BEAM/explanations/what-exact-means/#refused).
+Why $q = 1$ is treated differently: see [Computed, not simulated](/BEAM/explanations/computed-not-simulated/#bounds-instead-of-an-approximation).

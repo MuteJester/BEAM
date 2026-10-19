@@ -1,0 +1,62 @@
+---
+title: Computed, not simulated
+description: How BEAM's answers are computed over every possible sequence instead of estimated by simulation, how precise each kind of answer is, and what BEAM declines to approximate.
+sidebar:
+  order: 4
+---
+
+import { Aside } from '@astrojs/starlight/components';
+import Example from '../../../components/Example.astro';
+
+Every number BEAM returns is computed from the model over every possible sequence, not estimated
+from simulated samples, so the same input always gives the same answer. The answers come in
+three kinds, and BEAM always tells you which kind you have.
+
+## Computed directly
+
+Probabilities of sequences, the normaliser, length probabilities, and every sum over all
+sequences that a sweep through the model's graph can compute directly; draws from the model
+follow its probabilities precisely. These carry only ordinary floating-point rounding, about
+one part in $10^{15}$: the total probability of all sequences is one to that precision (see
+[How BEAM works](/BEAM/explanations/how-beam-works/#summing-over-every-sequence)).
+
+## Computed with a guaranteed error bound
+
+Quantities such as the expected number of distinct sequences at a depth, overlaps between
+samples and sequences private to one person are integrals that BEAM evaluates numerically. Each
+result comes as a **bounded value**: the number, together with a rigorous upper bound on its
+relative error. The bound is not an estimate of the error; the true value is guaranteed to lie
+within it.
+
+<Example src="exactness/bounded" />
+
+A bounded value cannot be turned into a plain number by accident: read `.value` once you have
+looked at `.bound`. Typical bounds lie between about $10^{-13}$ and $10^{-11}$; a value that
+could not be brought within the requested tolerance is returned with the bound it has, never
+silently.
+
+## Bounds instead of an approximation
+
+A few quantities have no closed form for any model. For these BEAM returns what can be computed,
+guaranteed lower and upper bounds, rather than an approximation that could be mistaken for the
+value itself. The diversity of a group of repertoires is one: at Hill order 2 it is computed
+directly, but at order 1 (Shannon diversity) the logarithm of a sum of models does not break
+into per-position pieces, so BEAM brackets it instead:
+
+<Example src="exactness/refused" />
+
+The bracket is never wider than the entropy of the mixing weights, $\ln 2$ for two equal
+members.
+
+<Aside type="tip" title="Why bounds and not an estimate?">
+A number without its caveat gets copied into a table, and the caveat stays behind in the
+prose. Asking for the bounds costs one line of code; an estimate presented as a value can cost
+a wrong number in a paper.
+</Aside>
+
+## What the computation covers
+
+Computing what the **model** says, over every possible sequence, is one question. Whether the
+model describes your repertoire well is another: it depends on the data the model was built
+from and on the sampling assumptions (independent draws, no clonal expansion). The guides
+state, for each calculation, what it assumes.
