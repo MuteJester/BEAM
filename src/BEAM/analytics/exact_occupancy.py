@@ -53,7 +53,7 @@ is true of any non-negative number, and marked "unresolved".
 
 What this does NOT replace: counts of sequences in a RANGE of probability --
 the spectrum's histograms. Those are threshold counts; see
-`docs/api/python/analytics.md`.
+:meth:`BeamModel.pseq_analysis`.
 """
 from __future__ import annotations
 

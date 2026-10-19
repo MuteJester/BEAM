@@ -65,7 +65,7 @@ machinery at all.
 
 At full amino-acid configuration what runs out first is not the sweep but
 holding the models -- 218 MB each at order 4, so 32 of them is 7 GB. See
-``docs/api/python/mixture.md`` for the measured tables.
+https://mutejester.github.io/BEAM/reference/mixture/.
 """
 from .errors import (IncompatibleMembers, MixtureError, MixtureTooLarge,
                      UnsupportedOrder)

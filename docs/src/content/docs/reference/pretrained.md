@@ -17,6 +17,12 @@ path = BEAM.pretrained_path("human_tcrb_cdr3_aa_foundation")    # the local file
 |---|---|
 | `human_tcrb_cdr3_aa_foundation` | Built from 38,538 human TCRβ repertoires from 447 published studies; 926,909,993 distinct CDR3β sequences, written in junction form (from the conserved C to the closing F or W), up to 27 residues; order 4. About 90 MB to download, about 1 GB in memory once loaded. |
 
+:::note[The reference model arrives with BEAM 1.0]
+The reference model is published with BEAM 1.0.0, together with its paper. Until then
+`pretrained_models()` lists nothing and `load_pretrained` cannot download it; build models from
+your own sequences in the meantime ([Building a model](/BEAM/guides/build-a-model/)).
+:::
+
 `load_pretrained(name, *, progress=True)` and `pretrained_path(name, *, progress=True)` print
 download progress; `progress=False` silences it. `pretrained_models()` returns, for each model,
 its `name`, `release`, `file`, `bytes`, `sha256`, `format`, `description`, `urls`, `doi`,

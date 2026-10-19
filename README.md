@@ -70,6 +70,10 @@ model.pseq("CASSLGQGYEQYF")        # probability of one sequence
 
 The reference model uses about 1 GB of memory once loaded.
 
+> **The reference model arrives with BEAM 1.0.0**, published together with the
+> paper. Until then, everything else works on models you build from your own
+> sequences: see [Using your own data](#using-your-own-data).
+
 ## Examples
 
 ### How likely is a sequence?

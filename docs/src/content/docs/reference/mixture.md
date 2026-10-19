@@ -34,6 +34,11 @@ Weights must be non-negative and sum to 1; they are refused, not rescaled, when 
 Why $q = 1$ is treated differently: see
 [Computed, not simulated](/BEAM/explanations/computed-not-simulated/#bounds-instead-of-an-approximation).
 
+The cost grows with the number of members $M$: every quantity at an integer order $q \ge 2$ takes
+one sweep over the sequences for every combination of $q$ members, $M(M+1)/2$ at $q = 2$. Time
+one `log_inner_product(0, 1)` on your own models before computing a large `gram_matrix()`; with
+many large members, holding the models in memory runs out before the sweeps do.
+
 ## Scoring and drawing
 
 | Method | Returns |

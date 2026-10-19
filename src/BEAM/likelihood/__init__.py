@@ -13,7 +13,7 @@ and the ones before it -- how many unique, which ones, the abundance pattern,
 which sequence has which count -- and for two repertoires the number they
 share. The totals are exact; the pieces are labelled.
 
-See ``docs/api/python/likelihood.md``.
+See https://mutejester.github.io/BEAM/reference/likelihood/.
 """
 from .chain import (DEFAULT_PROFILE_EDGES, abundance_spectrum,
                     auto_profile_edges, pair_likelihood, repertoire_likelihood)

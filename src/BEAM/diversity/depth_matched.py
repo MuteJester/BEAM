@@ -241,7 +241,7 @@ def _plan_threads(n_workers: int | None, n_tasks: int) -> tuple[int, int]:
     long before sixteen threads, because a fit's lengths are few and unequal.
     Eight of two is taken over sixteen of one because it holds half as many
     models at once. The cap of eight bounds that memory on a larger machine,
-    where the best split was not measured. See docs/api/python/diversity.md.
+    where the best split was not measured.
     """
     cap = threads()
     budget = cap if cap > 0 else effective_threads()

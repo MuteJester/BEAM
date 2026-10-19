@@ -27,7 +27,7 @@ same sequences, so the band measures what reweighting what you have does, not
 what a new sample would give: at ``q = 1`` it was about 3% wide where held-out
 disjoint blocks of one repertoire spread over about 50%.
 
-See ``docs/api/python/diversity.md``.
+See https://mutejester.github.io/BEAM/reference/diversity/.
 """
 from .depth_matched import DEFAULT_ORDERS, depth_matched_hill_profiles
 from .results import DepthMatchedProfiles, ResamplingBand
