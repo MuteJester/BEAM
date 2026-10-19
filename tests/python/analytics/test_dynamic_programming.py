@@ -58,6 +58,11 @@ def test_length_prior_normalises(model):
     assert model.length_pmf().sum() == pytest.approx(1.0, abs=1e-12)
 
 
+def test_hill_number_takes_its_order_as_q(model):
+    """The order is `q`, as in `Mixture.hill_number`; `alpha` is the prior's."""
+    assert model.hill_number(q=2.0) == model.hill_number(2.0)
+
+
 def test_hill_number_one_is_exp_entropy(model):
     """`hill_number(1)` is a special case that CALLS the entropy DP, so this
     identity is true by construction and cannot fail. It is kept only as a

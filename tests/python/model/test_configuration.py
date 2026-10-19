@@ -186,6 +186,16 @@ def test_explain_reports_the_reason_it_refuses(small):
         small.explain(None)
 
 
+def test_an_unreadable_sequence_is_an_invalid_sequence(small):
+    """Each refusal is BEAM's InvalidSequence, which is still a ValueError."""
+    import BEAM
+    for bad in ("CASSXQYF", "", "C" * 40):
+        with pytest.raises(BEAM.InvalidSequence):
+            small.explain(bad)
+        with pytest.raises(BEAM.InvalidSequence):
+            small.log_pseq_by_position(bad)
+
+
 def test_explain_calls_an_unseen_length_producible(small):
     """A length the corpus never had is priced by the length prior, not ruled
     out by it, so `explain` must present it as an ordinary finite score

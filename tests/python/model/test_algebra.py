@@ -179,6 +179,18 @@ def test_without_sequences_builds_the_matching_operand(corpus):
         base.total_weight - float(sum(abund[:200])))
 
 
+def test_without_sequences_keeps_a_nucleotide_models_alphabet():
+    """The operand built from sequences takes the model's alphabet: building it
+    with the amino-acid default refused the nucleotide model's order 6."""
+    rng = random.Random(5)
+    seqs = ["".join(rng.choice("ACGT") for _ in range(rng.randint(8, 14)))
+            for _ in range(600)]
+    base = BeamModel(seqs, alphabet="nt")
+    a = base.without(seqs[:100])
+    b = base.without(BeamModel(seqs[:100], alphabet="nt"))
+    assert np.array_equal(a.log_pseq_batch(seqs[:50]), b.log_pseq_batch(seqs[:50]))
+
+
 def test_merged_does_not_mutate_either_operand(corpus):
     seqs, abund = corpus
     a = BeamModel(seqs[:400], abundances=abund[:400], order=2, max_length=20)

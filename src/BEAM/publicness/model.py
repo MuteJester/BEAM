@@ -22,8 +22,9 @@ from .cohort import _next_power_of_two_above, _depth_groups
 class PublicnessModel:
     """Poisson-binomial occupancy model for one fixed cohort of depths.
 
-    ``depths`` is the per-repertoire sampling depth, in distinct sequences
-    contributed. The model is independent of any graph: it turns a sequence
+    ``depths`` is the per-repertoire sampling depth: the number of draws
+    (cells or templates) taken from it, so a repertoire of depth ``d`` contains
+    a sequence of probability ``p`` with probability ``1 - (1 - p)**d``. The model is independent of any graph: it turns a sequence
     probability into the distribution of how many repertoires contain that
     sequence, and :meth:`expected_counts` aggregates that over a whole
     p-sequence spectrum.

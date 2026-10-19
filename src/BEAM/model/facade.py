@@ -30,7 +30,7 @@ from ..math.saddlepoint import _normal_pdf, _normal_cdf
 from ..runtime import effective_threads, memory_budget, set_threads, threads
 
 from .. import _cbeam as _c
-from ..errors import BeamTypeError, BeamValueError
+from ..errors import BeamTypeError, BeamValueError, InvalidSequence
 from .._simulation_result import SimulationResult
 from .._banded_result import BandedMarginals
 
@@ -38,8 +38,9 @@ from .._banded_result import BandedMarginals
 def _default_column(column: str | None, config: dict) -> str:
     """The sequence column to read when the caller names none.
 
-    `cdr3_aa` for amino acids and `cdr3` for nucleotides, which are the AIRR
-    fields for a junction and its translation. Reading the wrong one is not a
+    `cdr3_aa` for amino acids and `cdr3` for nucleotides, the AIRR fields for
+    the CDR3 without its conserved anchors (the junction, anchors included, is
+    `junction_aa` and `junction`). Reading the wrong one is not a
     subtle failure -- an amino-acid model handed nucleotides skips every row --
     but it is a silent one until the corpus comes back empty, so the default
     follows the alphabet rather than making the caller remember.
@@ -903,10 +904,11 @@ class BeamModel:
         """Natural log of the sequence probability.
 
         Returns ``-inf``, rather than raising, for a sequence the model
-        cannot produce: empty, longer than ``max_length``, containing a
-        non-amino-acid character, or of a length never observed in training.
-        Use :meth:`explain`, which raises and names the rule, when the reason
-        matters.
+        cannot read: empty, longer than ``max_length``, or containing a
+        character outside its alphabet. Every readable sequence has a non-zero
+        probability: the hierarchical prior covers unseen contexts and the
+        length prior every length up to ``max_length``. Use :meth:`explain`,
+        which raises and names the rule, when the reason matters.
         """
         return float(_c.log_pseq(self._g, sequence))
 
@@ -1101,10 +1103,9 @@ class BeamModel:
 
             sum(e["combined"]) + e["log_length_prior"] - e["log_partition"]
 
-        with ONE exception: a sequence of a length the model never observed
-        has ``log_pseq == -inf`` while its per-residue terms stay finite,
-        because the length prior — not any residue — is what rules it out. The
-        returned ``length_is_producible`` flag says which case you are in.
+        for every sequence it accepts: the length prior gives every length up
+        to ``max_length`` a non-zero probability, so ``length_is_producible``
+        is True whenever ``explain`` returns.
 
         Raises:
             ValueError: if the sequence is empty, longer than ``max_length``,
@@ -1138,21 +1139,22 @@ class BeamModel:
 
         The C layer collapses all three refusals into one error code and does
         not populate a message, so without this the caller is told only
-        "invalid argument".
+        "invalid argument". Each is an :class:`InvalidSequence`, which is also
+        a ``ValueError``.
         """
         if not isinstance(sequence, str):
-            raise TypeError(f"sequence must be a string, got "
+            raise BeamTypeError(f"sequence must be a string, got "
                             f"{type(sequence).__name__}")
         hi = int(self.config["max_length"])
         if not sequence:
-            raise ValueError("sequence is empty")
+            raise InvalidSequence("sequence is empty")
         if len(sequence) > hi:
-            raise ValueError(
+            raise InvalidSequence(
                 f"sequence has length {len(sequence)}, longer than "
                 f"max_length={hi}")
         bad = alphabets.offenders(self.alphabet, sequence)
         if bad:
-            raise ValueError(
+            raise InvalidSequence(
                 f"sequence contains {bad!r}, which the {self.alphabet!r} "
                 f"alphabet does not accept; its residues are "
                 f"{alphabets.symbols(self.alphabet)!r}")
@@ -1211,7 +1213,7 @@ class BeamModel:
         """
         L = len(sequence)
         if L == 0:
-            raise BeamValueError("log_pseq_by_position: the sequence is empty")
+            raise InvalidSequence("log_pseq_by_position: the sequence is empty")
         ex = self.explain(sequence)
         w_f, w_b = (float(x) for x in self.config["weights"])
         psi = (w_f * np.asarray(ex["forward"], dtype=np.float64)
@@ -1304,13 +1306,14 @@ class BeamModel:
         h = float(_c.entropy(self._g))
         return h if base == math.e else h / math.log(base)
 
-    def hill_number(self, alpha: float) -> float:
-        """Effective number of sequences at order ``alpha``.
+    def hill_number(self, q: float) -> float:
+        """Effective number of sequences at order ``q``.
 
-        ``alpha=0`` is the support size, ``alpha=1`` the exponential of the
-        entropy, ``alpha=2`` the inverse collision probability.
+        ``q=0`` is the support size, ``q=1`` the exponential of the entropy,
+        ``q=2`` the inverse collision probability. (The order is ``q``, as in
+        :meth:`Mixture.hill_number`; ``alpha`` names the prior's strengths.)
         """
-        return float(_c.hill_number(self._g, float(alpha)))
+        return float(_c.hill_number(self._g, float(q)))
 
     def accumulator_max(self) -> float:
         """Largest value the spectrum DP's accumulator reaches, in nats.
@@ -2765,13 +2768,6 @@ class BeamModel:
         The model is re-finalized afterwards.
 
         .. warning::
-           :attr:`n_observed` and :attr:`n_skipped` are NOT decremented — the
-           C layer adjusts them on :meth:`add` and leaves them alone here — so
-           after a subtraction they count everything ever added rather than
-           what is currently in the tables. :attr:`total_weight` *is* adjusted
-           and is the number to trust.
-
-        .. warning::
            If the subtraction empties the tables the re-finalize fails and the
            model is left unusable: the counts are already gone by then and
            there is no rollback. Build a fresh model rather than subtracting a
@@ -2945,7 +2941,8 @@ class BeamModel:
         if not isinstance(other, BeamModel):
             cfg = self.config
             other = BeamModel(
-                list(other), abundances=abundances, order=cfg["order"],
+                list(other), abundances=abundances, alphabet=cfg["alphabet"],
+                order=cfg["order"],
                 max_length=cfg["max_length"], weights=cfg["weights"],
                 alpha=cfg["alpha"], alpha_length=cfg["alpha_length"],
                 sparse=cfg["sparse"])

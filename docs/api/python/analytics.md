@@ -506,14 +506,14 @@ Use it for contours and keep `log_mellin_complex` as the reference.
 
 ```python
 entropy(*, base=math.e) -> float
-hill_number(alpha) -> float
+hill_number(q) -> float
 hill_numbers(orders) -> np.ndarray
 hill_profile(orders) -> np.ndarray   # the same profile, one pass per length
 hill_curve(orders=None) -> dict   # {"orders", "hill"}
 diversity_profile() -> dict       # D0, D1, D2
 effective_diversity() -> float    # D1
 ```
-`alpha=0` gives the support size, `alpha=1` the exponential of the entropy, `alpha=2` the inverse collision probability. `D0` inherits the caveat on `path_count`; `D1` is the number to quote.
+`q=0` gives the support size, `q=1` the exponential of the entropy, `q=2` the inverse collision probability. `D0` inherits the caveat on `path_count`; `D1` is the number to quote.
 
 `hill_profile` is the fast way to a whole profile. Every order but the two corners is `exp(log_mellin(q) / (1 - q))`, with all of them from one `log_mellin_many` call; `q = 0` is `path_count()` and `q` within `1e-12` of 1 is `exp(entropy())`, the routes `hill_number` itself takes. On a donor-scale model the default 31 orders take 0.42 s against 4.25 s for `hill_numbers`.
 
