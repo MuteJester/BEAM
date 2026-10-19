@@ -3,7 +3,8 @@ message: >-
   If you use BEAM in your work, please cite it using the metadata below.
 title: "BEAM: a computable probability landscape for T cell receptor repertoires"
 type: software
-version: 1.0.0
+version: 0.9.0
+date-released: 2026-10-19
 license: GPL-3.0-or-later
 repository-code: "https://github.com/MuteJester/BEAM"
 url: "https://github.com/MuteJester/BEAM"

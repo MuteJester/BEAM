@@ -18,7 +18,7 @@ def section(text: str, version: str) -> str:
 
 if __name__ == "__main__":
     version = sys.argv[1]
-    body = section(Path("CHANGELOG.md").read_text(), version)
+    body = section(Path("CHANGELOG.md").read_text(encoding="utf-8"), version)
     if not body:
         sys.exit(f"CHANGELOG.md has no '## [{version}]' section with content")
     print(body)

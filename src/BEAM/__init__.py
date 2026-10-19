@@ -80,4 +80,4 @@ __all__ = [
     "load_pretrained", "pretrained_models", "pretrained_path",
     "PretrainedModel",
 ]
-__version__ = "1.0.0.dev0"
+__version__ = "0.9.0"
