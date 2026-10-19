@@ -70,7 +70,7 @@ def _registry_path() -> Path:
 
 
 def _registry() -> dict[str, PretrainedModel]:
-    data = json.loads(_registry_path().read_text())
+    data = json.loads(_registry_path().read_text(encoding="utf-8"))   # JSON is UTF-8
     if data.get("schema") != 1:
         raise ValueError(f"{_registry_path()}: unsupported registry schema "
                          f"{data.get('schema')!r}")

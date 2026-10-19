@@ -116,3 +116,23 @@ def test_cache_lives_in_local_app_data_on_windows(tmp_path, monkeypatch):
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
     monkeypatch.setattr("sys.platform", "win32")
     assert cache_dir() == tmp_path / "beam-model"
+
+
+def test_the_registry_is_read_as_utf8(published, tmp_path):
+    """JSON is UTF-8 whatever the platform's default encoding: read with
+    Windows' cp1252, a description holding "10⁻⁷" failed to load at all."""
+    import os
+    import subprocess
+    import sys
+    registry = tmp_path / "registry.json"
+    entry = {**published["entry"], "description": "TCRβ, 10⁻⁷"}
+    registry.write_text(json.dumps({"schema": 1, "models": {"tiny": entry}},
+                                   ensure_ascii=False), encoding="utf-8")
+    env = {**os.environ, "BEAM_PRETRAINED_REGISTRY": str(registry),
+           "PYTHONIOENCODING": "utf-8"}
+    run = subprocess.run(
+        [sys.executable, "-X", "warn_default_encoding", "-W", "error::EncodingWarning",
+         "-c", "import BEAM; print(BEAM.pretrained_models()[0].description)"],
+        env=env, capture_output=True, text=True, encoding="utf-8")
+    assert run.returncode == 0, run.stderr
+    assert run.stdout.strip() == "TCRβ, 10⁻⁷"

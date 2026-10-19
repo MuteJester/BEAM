@@ -31,7 +31,7 @@ ENDS = ["YEQYF", "TEQYF", "GELFF", "NTEAFF", "TDTQYF"]
 
 
 def blocks(readme: Path) -> list[str]:
-    return re.findall(r"```python\n(.*?)```", readme.read_text(), re.S)
+    return re.findall(r"```python\n(.*?)```", readme.read_text(encoding="utf-8"), re.S)
 
 
 def cdr3s(rng: random.Random, n: int) -> list[str]:
@@ -43,9 +43,10 @@ def example_files(workdir: Path, rng: random.Random) -> None:
     """The input files the README's examples read."""
     for name in ("donor_A.tsv", "donor_B.tsv"):
         rows = [f"{s}\t{rng.randint(1, 20)}" for s in cdr3s(rng, 1500)]
-        (workdir / name).write_text("junction_aa\tduplicate_count\n" + "\n".join(rows) + "\n")
+        (workdir / name).write_text("junction_aa\tduplicate_count\n" + "\n".join(rows) + "\n",
+                                  encoding="utf-8")
     (workdir / "cdr3.tsv").write_text(
-        "\n".join(f"{s}\t{rng.randint(1, 5)}" for s in cdr3s(rng, 500)) + "\n")
+        "\n".join(f"{s}\t{rng.randint(1, 5)}" for s in cdr3s(rng, 500)) + "\n", encoding="utf-8")
 
 
 def stand_in_foundation(workdir: Path, rng: random.Random) -> None:
@@ -66,7 +67,7 @@ def stand_in_foundation(workdir: Path, rng: random.Random) -> None:
     registry.write_text(json.dumps({"schema": 1, "models": {"human_tcrb_cdr3_aa_foundation": {
         "release": "stand-in", "file": f.name, "bytes": len(data),
         "sha256": hashlib.sha256(data).hexdigest(), "format": MODEL_FORMAT,
-        "description": "README stand-in", "urls": [f.as_uri()]}}}))
+        "description": "README stand-in", "urls": [f.as_uri()]}}}), encoding="utf-8")
     os.environ["BEAM_PRETRAINED_REGISTRY"] = str(registry)
     os.environ["BEAM_CACHE_DIR"] = str(workdir / "cache")
 
