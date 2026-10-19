@@ -6,6 +6,8 @@ All notable changes to BEAM are recorded here. The format follows
 for what counts as a breaking change, including changes to the model file
 format.
 
+## [Unreleased]
+
 ## [0.9.0] - 2026-10-19
 
 The first public release, made while the manuscript *A computable probability

@@ -2569,3 +2569,8 @@ of the fixes above, they record cases added since the last recording and never
 written in: the richness standard deviation and variance, `max_length="data"`,
 `explain`'s combined factor, the Windows cache and lock, and the UTF-8
 registry.
+
+# The 1.0.0 development cycle (2026-10-19)
+
+After the 0.9.0 release, `--record prenextcycle`: one line, `__version__`
+`0.9.0` -> `1.0.0.dev0`. Every other file, and `exact`, unchanged.
