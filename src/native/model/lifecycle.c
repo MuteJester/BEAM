@@ -107,22 +107,42 @@ BeamModel *beam_model_new(const BeamModelConfig *cfg) {
 
     /*
      * A sparse table addresses its rows with a uint32, and the row count
-     * below is cast to one. `max_len * n_ctx` reaches 2.57e9 at the largest
-     * configuration the ceilings currently allow -- inside the 4.29e9 a
-     * uint32 holds, but by less than a factor of two. That is the same bound
-     * the capped wide table had, because the cap was itself clamped to
-     * `max_length - 1`, so removing it moved nothing here. The margin is not
-     * a thing to rely on silently: a truncating cast would size the row
-     * directory from the wrapped value and every lookup past the wrap would
-     * alias another row's counts.
+     * below is cast to one. `max_len * n_ctx` reaches 4,293,098,496 at the
+     * largest configuration the ceilings now allow (nt order 9 at max_length
+     * 426, which is BEAM_MAX_ROWS / 6^9), within 1,868,543 rows of
+     * BEAM_MAX_ROWS: a margin of 0.04%. That is not a margin to rely on
+     * silently: a truncating cast would size the row directory from the
+     * wrapped value and every lookup past the wrap would alias another row's
+     * counts.
      *
-     * Checked here rather than in beam_config_valid because it needs the
-     * derived dimensions, and checked for every model rather than only sparse
-     * ones so that raising a ceiling cannot make the dense path the only one
-     * that still works.
+     * config.c refuses this first, on every path into beam_model_new
+     * including the loader, with the same product against the same constant,
+     * and refuses strictly more besides through the per-alphabet cap and the
+     * order ceiling. The guard below is therefore defence in depth for the
+     * next ceiling raise. It is kept for every model rather
+     * than only sparse ones so that raising a ceiling cannot make the dense
+     * path the only one that still works.
      */
     {
         const uint64_t rows = (uint64_t)m->max_len * m->n_ctx;
+
+        /* Per direction. BEAM_MAX_ROWS, not UINT32_MAX: beam_rank_blocks and
+         * beam_frozen_bitwords add a constant before dividing, and
+         * BEAM_ROW_MISSING is UINT32_MAX itself. Checked ahead of the budget,
+         * because no budget can fix a row count and a caller must not be
+         * told to raise one. */
+        if (rows > BEAM_MAX_ROWS) {
+            beam_set_error(BEAM_ERR_PARAM_OUT_OF_RANGE,
+                          "the %s alphabet at order %u with max_length %u "
+                          "needs %llu table rows, and a row index may hold "
+                          "%llu",
+                          a->name, (unsigned)c.order, (unsigned)c.max_length,
+                          (unsigned long long)rows,
+                          (unsigned long long)BEAM_MAX_ROWS);
+            free(m);
+            return NULL;
+        }
+
         /*
          * And refuse a configuration that cannot fit before allocating for
          * it, rather than after.
@@ -159,17 +179,6 @@ BeamModel *beam_model_new(const BeamModelConfig *cfg) {
                           (unsigned)c.order, (unsigned)c.max_length,
                           c.sparse ? "sparse" : "dense",
                           bv, bu);
-            free(m);
-            return NULL;
-        }
-
-        if (rows > UINT32_MAX) {
-            beam_set_error(BEAM_ERR_PARAM_OUT_OF_RANGE,
-                          "the %s alphabet at order %u with max_length %u "
-                          "needs %llu table rows, which does not fit the 32 "
-                          "bits a row index is held in",
-                          a->name, (unsigned)c.order, (unsigned)c.max_length,
-                          (unsigned long long)rows);
             free(m);
             return NULL;
         }

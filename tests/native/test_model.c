@@ -3477,6 +3477,60 @@ static void test_a_zero_forward_weight_leaves_no_nan_edge_weights(void) {
     PASS();
 }
 
+static void test_an_illegal_row_count_is_not_blamed_on_the_budget(void) {
+    /*
+     * nt, order 9, max_length 500: 5.04e9 rows against BEAM_MAX_ROWS, which
+     * no budget can fix. beam_model_new validates before it sizes anything,
+     * so this is the config validator's sentence, and the lifecycle row guard
+     * behind it is unreachable from here by construction. If a later ceiling
+     * raise makes the guard reachable again, its place ahead of the budget
+     * guard is what keeps its message honest.
+     */
+    const uint64_t before = beam_model_memory_budget();
+    beam_model_set_memory_budget(1ull << 62);
+    BeamModelConfig cfg;
+    beam_model_config_default_for(BEAM_ALPHABET_NT, &cfg);
+    cfg.order = 9;
+    cfg.max_length = 500;
+    BeamModel *m = beam_model_new(&cfg);
+    const BeamError err = beam_last_error();
+    const char *msg = beam_error_message();
+    const int has_rows = strstr(msg, "table rows") != NULL;
+    const int has_budget = strstr(msg, "budget") != NULL;
+    beam_model_set_memory_budget(before);
+    if (m) beam_model_destroy(m);
+    ASSERT_MSG(m == NULL, "the configuration is refused");
+    ASSERT_MSG(err == BEAM_ERR_PARAM_OUT_OF_RANGE, "refused as out of range");
+    ASSERT_MSG(has_rows, "the caller is told what overflowed");
+    ASSERT_MSG(!has_budget, "raising the budget cannot fix a row count");
+    PASS();
+}
+
+static void test_legal_rows_with_real_memory_demand_get_the_budget_answer(void) {
+    /*
+     * nt, order 8, max_length 512: 859,963,392 rows per direction, legal
+     * against BEAM_MAX_ROWS, and 1.72e9 across both directions, so its sparse
+     * demand exceeds the 4 GiB default. The budget's answer must survive the
+     * guard reorder.
+     */
+    const uint64_t before = beam_model_memory_budget();
+    beam_model_set_memory_budget(4ull << 30);
+    BeamModelConfig cfg;
+    beam_model_config_default_for(BEAM_ALPHABET_NT, &cfg);
+    cfg.order = 8;
+    cfg.max_length = 512;
+    cfg.sparse = true;
+    BeamModel *m = beam_model_new(&cfg);
+    const BeamError err = beam_last_error();
+    const int has_budget = strstr(beam_error_message(), "budget") != NULL;
+    beam_model_set_memory_budget(before);
+    if (m) beam_model_destroy(m);
+    ASSERT_MSG(m == NULL, "the configuration is refused");
+    ASSERT_MSG(err == BEAM_ERR_BUDGET, "refused as over budget");
+    ASSERT_MSG(has_budget, "a budget refusal names the budget");
+    PASS();
+}
+
 int main(void) {
     printf("\n=== BEAM (Ensemble of Dual Graph Experts) ===\n");
 
@@ -3562,6 +3616,8 @@ int main(void) {
     RUN_TEST(test_clamped_marginals_survive_a_wide_dynamic_range);
     RUN_TEST(test_a_negative_tilt_does_not_overflow_the_sweeps);
     RUN_TEST(test_a_zero_forward_weight_leaves_no_nan_edge_weights);
+    RUN_TEST(test_an_illegal_row_count_is_not_blamed_on_the_budget);
+    RUN_TEST(test_legal_rows_with_real_memory_demand_get_the_budget_answer);
 
     printf("\n  %d passed, %d failed\n\n", pass_count, fail_count);
     return fail_count == 0 ? 0 : 1;
