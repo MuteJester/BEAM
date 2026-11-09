@@ -403,8 +403,18 @@ BeamModel *beam_model_load(const char *path) {
                               "alphabet id %u, which this build does not know",
                               path, a), NULL;
     }
+    /*
+     * A plausibility check on the bytes, not a legality check on the model.
+     * `max_length` is bounded by BEAM_LENGTH_BUFFER -- what the fixed arrays
+     * hold -- and not by the field's width: a header past that cannot be
+     * anything this library wrote, and reading it would let every scoring
+     * path encode into a 512-byte stack array at a length the model believes
+     * is legal. Whether a length is legal AT THIS ORDER, and under this
+     * alphabet's own cap, is a different question, raised below by
+     * `beam_model_new` as a config error with a sentence of its own.
+     */
     if (h.storage_sparse > 1u || h.prior_auto > 3u || h.order > 255u
-        || h.max_length > 255u) {
+        || h.max_length > BEAM_LENGTH_BUFFER) {
         fclose(f);
         return (void)BEAM_FAIL(BEAM_ERR_IO_CORRUPT,
                               "beam_model_load: '%s' has a header field out of "
@@ -414,7 +424,7 @@ BeamModel *beam_model_load(const char *path) {
     BeamModelConfig cfg;
     beam_model_config_default_for((BeamAlphabet)h.alphabet, &cfg);
     cfg.order           = (uint8_t)h.order;
-    cfg.max_length      = (uint8_t)h.max_length;
+    cfg.max_length      = h.max_length;
     cfg.sparse          = h.storage_sparse == 1u;
     cfg.weight_forward  = h.weight_forward;
     cfg.weight_backward = h.weight_backward;

@@ -280,17 +280,40 @@ int edge_parse_config(PyObject *args, BeamModelConfig *cfg,
      * validates these properly, but `_cbeam` is an importable boundary and
      * must not be the one place where a nonsense argument silently becomes a
      * plausible one.
+     *
+     * One range each, and for two DIFFERENT reasons, which is why they are no
+     * longer one test.
+     *
+     * `order` is still cast to a uint8_t, so the story above is still its
+     * story: 258 would wrap to 2 and build a working model at an order nobody
+     * asked for.
+     *
+     * `max_length` is a uint32_t now, and nothing that reaches its test can
+     * wrap -- `(uint32_t)` of a non-negative `int` is lossless, and the `"i"`
+     * parser raises OverflowError past INT_MAX before this sees a value. Its
+     * bound is a different fact: BEAM_LENGTH_BUFFER is what the fixed arrays
+     * hold, so a longer length cannot be served by any alphabet whatever the
+     * config says. It is refused here because refusing early is cheap, not
+     * because a wrap is possible. Whether a length is legal FOR ITS ALPHABET
+     * at its order is the config validator's question, and it answers with a
+     * better sentence.
      */
-    if (order < 0 || order > 255 || max_length < 0 || max_length > 255) {
+    if (order < 0 || order > 255) {
         PyErr_Format(PyExc_ValueError,
-                     "order and max_length must each be in 0..255 "
-                     "(got %d, %d); a larger value would wrap to an "
-                     "unrelated but legal setting",
-                     order, max_length);
+                     "order must be in 0..255 (got %d); a larger value "
+                     "would wrap to an unrelated but legal setting", order);
+        return 0;
+    }
+    if (max_length < 0 || max_length > (int)BEAM_LENGTH_BUFFER) {
+        PyErr_Format(PyExc_ValueError,
+                     "max_length must be in 0..%u (got %d); that is what the "
+                     "model's fixed length-indexed arrays hold, so no "
+                     "alphabet can serve a longer one",
+                     (unsigned)BEAM_LENGTH_BUFFER, max_length);
         return 0;
     }
     cfg->order = (uint8_t)order;
-    cfg->max_length = (uint8_t)max_length;
+    cfg->max_length = (uint32_t)max_length;
     cfg->weight_forward = wf; cfg->weight_backward = wb;
     cfg->sparse = (bool)sparse;
     /* None leaves a strength to the data: finalize estimates it from the

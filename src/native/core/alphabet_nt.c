@@ -82,6 +82,10 @@ const BeamAlphabetInfo beam_alphabet_nt = {
     .max_order          = 9,
     /* Three bases to the amino acid, against the amino-acid default of 27. */
     .default_max_length = 81,
+    /* A full V(D)J read runs to roughly 400 bases, which is what the model
+     * has to be able to cover; 512 leaves headroom above that without a
+     * second ceiling decision falling due. */
+    .max_max_length     = BEAM_NT_LENGTH_CAP,
     /* Resolve every depth. The cap is a concession to the amino-acid wide
      * table's size at radix 21, and radix 6 does not need it. */
     .char_to_idx        = beam_nt_char_to_idx,

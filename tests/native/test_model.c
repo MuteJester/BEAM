@@ -38,6 +38,8 @@
  * header is the price of testing them at all.
  */
 #include "../../src/native/internal/beam/internal.h"
+/* The config validator and its sentence, which internal.h does not pull in. */
+#include "beam/model_build.h"
 
 static int pass_count = 0, fail_count = 0;
 
@@ -495,6 +497,67 @@ static void test_either_storage_layout_is_a_valid_configuration(void) {
         ASSERT_MSG(reported == (sparse != 0),
                    "the resolved configuration must report the layout asked "
                    "for");
+    }
+    PASS();
+}
+
+/*
+ * `max_length` is a uint32_t, so the type is no longer the bound.
+ *
+ * It was a uint8_t, and config.c cited that AS the bound -- nothing tested an
+ * upper limit because nothing could exceed 255. Widening the field deleted
+ * that bound, so a cap had to go back in its place, and this is what pins
+ * that the refusal still happens and still says enough to act on: the field,
+ * the value it was given, and which alphabet's cap it broke.
+ */
+static void test_a_config_past_its_alphabets_ceiling_is_refused_by_name(void) {
+    char why[BEAM_CONFIG_REASON_MAX];
+    BeamModelConfig c;
+    beam_model_config_default_for(BEAM_ALPHABET_AA, &c);
+    c.order = 2u;
+    c.max_length = 300u;
+
+    const char *r = beam_config_invalid_reason(&c, why, sizeof why);
+    ASSERT_MSG(r != NULL, "300 is past the amino-acid cap and must be refused");
+    ASSERT_MSG(strstr(r, "max_length") != NULL, "the refusal names the field");
+    ASSERT_MSG(strstr(r, "300") != NULL, "and the value it was given");
+    ASSERT_MSG(strstr(r, "aa") != NULL,
+               "and the alphabet whose cap it broke, because the cap is "
+               "per-alphabet and the caller cannot otherwise tell which one "
+               "applied");
+    PASS();
+}
+
+/*
+ * The cap is per-alphabet, and that is the whole reason it lives in the
+ * descriptor rather than in a macro.
+ *
+ * 300 residues is an ordinary nucleotide read and is accepted; 300 amino
+ * acids is refused at EVERY order the amino-acid alphabet allows, so the
+ * refusal cannot be mistaken for the order-dependent row rule finding a
+ * cheaper order. Validation only, deliberately: an nt model at order 6 over
+ * 300 positions is a real build and not something a unit test should wait
+ * for.
+ */
+static void test_an_amino_acid_ceiling_is_not_the_nucleotide_one(void) {
+    char why[BEAM_CONFIG_REASON_MAX];
+
+    BeamModelConfig nt;
+    beam_model_config_default_for(BEAM_ALPHABET_NT, &nt);
+    nt.order = 6u;
+    nt.max_length = 300u;
+    ASSERT_MSG(beam_config_invalid_reason(&nt, why, sizeof why) == NULL,
+               "300 bases at order 6 is the configuration this widening "
+               "exists for");
+
+    const BeamAlphabetInfo *a = beam_alphabet_info(BEAM_ALPHABET_AA);
+    for (uint32_t order = 2; order <= a->max_order; ++order) {
+        BeamModelConfig aa;
+        beam_model_config_default_for(BEAM_ALPHABET_AA, &aa);
+        aa.order = (uint8_t)order;
+        aa.max_length = 300u;
+        ASSERT_MSG(beam_config_invalid_reason(&aa, why, sizeof why) != NULL,
+                   "300 amino acids is refused at every legal order");
     }
     PASS();
 }
@@ -2692,6 +2755,169 @@ static void test_corrupt_file_is_rejected(void) {
     PASS();
 }
 
+/*
+ * Overwrite the `max_length` word of a saved model and re-seal it.
+ *
+ * `expect_was` is checked before the word is overwritten, exactly as the
+ * alphabet rewrite in test_alphabet.c does: had the header layout moved, this
+ * would otherwise corrupt some other field and the loader's refusal would
+ * prove nothing about the length. The checksum is recomputed over everything
+ * before it, so the file differs from a valid one in that word alone and the
+ * refusal cannot be a checksum failure standing in for the range check.
+ */
+static bool rewrite_max_length_word(const char *path, uint32_t expect_was,
+                                    uint32_t max_length) {
+    FILE *f = fopen(path, "rb");
+    if (!f) return false;
+    if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return false; }
+    const long end = ftell(f);
+    rewind(f);
+    unsigned char *b = (unsigned char *)malloc((size_t)end);
+    if (!b || fread(b, 1, (size_t)end, f) != (size_t)end) {
+        free(b); fclose(f); return false;
+    }
+    fclose(f);
+
+    /* The fifth word: magic, format, alphabet, order, max_length. */
+    const size_t at = 4u * sizeof(uint32_t);
+    uint32_t was = 0;
+    if ((size_t)end < at + sizeof was + sizeof(uint32_t)) { free(b); return false; }
+    memcpy(&was, b + at, sizeof was);
+    if (was != expect_was) { free(b); return false; }
+    memcpy(b + at, &max_length, sizeof max_length);
+
+    const size_t body = (size_t)end - sizeof(uint32_t);
+    const uint32_t crc = beam_crc32c_update(0u, b, body);
+    memcpy(b + body, &crc, sizeof crc);
+
+    f = fopen(path, "wb");
+    if (!f) { free(b); return false; }
+    const bool ok = fwrite(b, 1, (size_t)end, f) == (size_t)end;
+    fclose(f);
+    free(b);
+    return ok;
+}
+
+/**
+ * A header length past the fixed arrays is corruption, not a longer model.
+ *
+ * This is the hole the widening would otherwise open. While `max_length` was
+ * a uint8_t the loader's `> 255` check could not fire and the type was the
+ * bound; widened, a `.beam` file declaring 1000 would be accepted, finalized,
+ * and then every scoring path would encode into its `uint8_t
+ * buf[BEAM_LENGTH_BUFFER]` -- a 512-byte stack array -- at a length the model
+ * believes is legal. Reachable from pure Python through `BeamModel.load`, on
+ * a file the caller need not have written.
+ *
+ * So the loader bounds the header by the arrays, and the refusal is IO
+ * corruption: the file says whether its bytes are plausible. A length that is
+ * merely illegal at this order is a different question, answered later by the
+ * config validator with a sentence of its own.
+ *
+ * The rewrite with the model's own length is the control: it must load, which
+ * proves the patch leaves an otherwise valid file behind.
+ */
+static void test_a_header_length_past_the_arrays_is_corrupt(void) {
+    BeamModel *m = build(2, 12);
+    ASSERT_MSG(m != NULL, "build");
+    const char *path = "build/test_header_length.tmp";
+
+    ASSERT_MSG(beam_model_save(m, path) == BEAM_OK, "save");
+    ASSERT_MSG(rewrite_max_length_word(path, 12u, 12u), "rewrite with 12");
+    BeamModel *same = beam_model_load(path);
+    ASSERT_MSG(same != NULL, "the control rewrite must still load");
+    ASSERT_MSG(beam_model_config(same)->max_length == 12u, "at its own length");
+    beam_model_destroy(same);
+
+    ASSERT_MSG(beam_model_save(m, path) == BEAM_OK, "save again");
+    ASSERT_MSG(rewrite_max_length_word(path, 12u, 1000u),
+               "declare 1000 and repair the checksum");
+
+    beam_clear_error();
+    BeamModel *back = beam_model_load(path);
+    const BeamError code = beam_last_error();
+    const bool blamed_header = strstr(beam_error_message(), "header") != NULL;
+    if (back) beam_model_destroy(back);
+    remove(path);
+
+    ASSERT_MSG(back == NULL,
+               "a header beyond the fixed arrays must not load, whatever its "
+               "checksum says");
+    ASSERT_MSG(code == BEAM_ERR_IO_CORRUPT,
+               "and must be refused as corruption, since the bytes cannot be "
+               "what any writer wrote");
+    ASSERT_MSG(blamed_header, "the refusal must say the header is at fault");
+
+    /* The bound is the arrays, not the field width: everything the arrays
+     * hold stays plausible to the loader even when no alphabet permits it,
+     * because whether a model is LEGAL is the config validator's question. */
+    ASSERT_MSG(beam_model_save(m, path) == BEAM_OK, "save once more");
+    ASSERT_MSG(rewrite_max_length_word(path, 12u, BEAM_LENGTH_BUFFER),
+               "declare exactly what the arrays hold");
+    beam_clear_error();
+    BeamModel *wide = beam_model_load(path);
+    const bool corrupt = beam_last_error() == BEAM_ERR_IO_CORRUPT;
+    if (wide) beam_model_destroy(wide);
+    remove(path);
+    ASSERT_MSG(!corrupt,
+               "a length the arrays hold is not a corrupt header; it is "
+               "refused, if at all, as an illegal configuration");
+
+    beam_model_destroy(m);
+    PASS();
+}
+
+/**
+ * A sequence past `max_length` scores -INFINITY, and nothing says why.
+ *
+ * Characterization, not endorsement. `beam_model_log_pseq` returns a bare
+ * `double` and has no error channel, so an over-length sequence is
+ * indistinguishable from one the model merely finds very improbable: both are
+ * -INFINITY, both leave the error state clean. `beam_model_explain` takes the
+ * same sequence and returns BEAM_ERR_INVALID_SEQUENCE with a sentence, which
+ * is what shows the inconsistency is in the return contract rather than in
+ * the encoder.
+ *
+ * Repairing it means changing what the library's most-called function
+ * returns, which is separate work. This is here so the choice is recorded and
+ * a change to it is deliberate.
+ *
+ * Overlaps test_alphabet.c's `test_only_an_unreadable_sequence_scores_minus_infinity`,
+ * which enumerates WHICH sequences score -INFINITY. What is only here is the
+ * error-state assertion -- that nothing is set -- which is the half that makes
+ * this a statement about the return contract. If one of the two changes, change
+ * the other.
+ */
+static void test_an_over_length_sequence_scores_minus_infinity(void) {
+    BeamModel *m = build(2, 10);
+    ASSERT_MSG(m != NULL, "build");
+
+    /* Readable, within the length, and never observed: the model's own "very
+     * improbable" answer, which has to stay finite for the comparison below
+     * to mean anything. */
+    const double unlikely = beam_model_log_pseq(m, "WWKWWKWWKW");
+    ASSERT_MSG(isfinite(unlikely) && unlikely < 0.0,
+               "an unseen but readable sequence is improbable, not impossible");
+
+    beam_clear_error();
+    const double over = beam_model_log_pseq(m, "WWKWWKWWKWW");
+    ASSERT_MSG(over == -INFINITY, "one residue past max_length scores -inf");
+    ASSERT_MSG(beam_last_error() == BEAM_OK,
+               "and sets no error, so the caller cannot tell a length "
+               "mistake from a genuinely improbable sequence");
+
+    double fwd[BEAM_LENGTH_BUFFER], bwd[BEAM_LENGTH_BUFFER];
+    uint32_t len = 0;
+    ASSERT_MSG(beam_model_explain(m, "WWKWWKWWKWW", fwd, bwd, &len)
+                   == BEAM_ERR_INVALID_SEQUENCE,
+               "the same sequence through a function that CAN refuse is "
+               "refused, which is what makes the silence above a contract "
+               "choice rather than an encoder bug");
+
+    beam_model_destroy(m);
+    PASS();
+}
+
 /* ── Compaction ──────────────────────────────────────────────── */
 
 static void test_compact_keeps_scores(void) {
@@ -3261,6 +3487,8 @@ int main(void) {
     RUN_TEST(test_a_compacted_model_cannot_report_depth_occupancy);
     RUN_TEST(test_single_anchor_weights_are_accepted);
     RUN_TEST(test_either_storage_layout_is_a_valid_configuration);
+    RUN_TEST(test_a_config_past_its_alphabets_ceiling_is_refused_by_name);
+    RUN_TEST(test_an_amino_acid_ceiling_is_not_the_nucleotide_one);
     RUN_TEST(test_sparse_rows_boundaries_and_erase);
     RUN_TEST(test_sparse_growth_failure_is_atomic);
     RUN_TEST(test_sparse_matches_dense_bit_for_bit);
@@ -3310,6 +3538,8 @@ int main(void) {
     RUN_TEST(test_save_load_round_trip);
     RUN_TEST(test_legacy_format_files_are_refused_by_name);
     RUN_TEST(test_corrupt_file_is_rejected);
+    RUN_TEST(test_a_header_length_past_the_arrays_is_corrupt);
+    RUN_TEST(test_an_over_length_sequence_scores_minus_infinity);
     RUN_TEST(test_compact_keeps_scores);
 
     RUN_TEST(test_log_mellin_endpoints);

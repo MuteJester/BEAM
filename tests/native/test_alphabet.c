@@ -92,8 +92,14 @@ static void test_defaults_sit_inside_their_own_ceilings(void) {
 
         ASSERT_MSG(a->default_max_length >= 2,
                    "a model of one residue is not a model");
-        ASSERT_MSG(a->default_max_length <= BEAM_MAX_LENGTH_CEILING,
-                   "max_length is a uint8_t and cannot exceed its ceiling");
+        /* The cap pair mirrors the order pair: the default must be a legal
+         * length, and the cap must stay inside the cross-alphabet maximum
+         * that sizes the buffers. */
+        ASSERT_MSG(a->default_max_length <= a->max_max_length,
+                   "the default length must be one this alphabet accepts");
+        ASSERT_MSG(a->max_max_length <= BEAM_MAX_LENGTH_CEILING,
+                   "no alphabet may cap length above the cross-alphabet "
+                   "maximum, which is what the fixed arrays are sized by");
 
     }
     PASS();
@@ -141,46 +147,94 @@ static void test_the_order_ceiling_keeps_context_counts_in_range(void) {
 }
 
 /*
- * A sparse table addresses its rows with a uint32, and the row counts are
- * cast to one at construction.
+ * The length rule, by exhaustion over the whole legal domain.
  *
- * The ceiling is safe at each alphabet's default order; a higher order is
- * bounded by the product `max_length * radix^order`, so only an order above
- * the default may overshoot. This pin is weaker than the real rule: it checks
- * the ceiling, not every (alphabet, order, length) triple. Until the
- * config-time refusal lands, the row guard in beam_model_new is what refuses
- * an oversized configuration.
+ * Two bounds act on `max_length` and the sweep has to see both: the
+ * alphabet's own cap, and what a `uint32_t` row index allows at this order,
+ * since the table is `max_length * radix^order` rows. The smaller of the two
+ * is the bound, and it is read from `BEAM_MAX_ROWS` and the descriptor rather
+ * than written out, so the test cannot drift from the rule it checks.
+ *
+ * The legal domain is 11 pairs, not 16: an order below 2 and an order above
+ * the alphabet's own ceiling are both refused by the ORDER rule, which leaves
+ * three amino-acid orders and eight nucleotide ones. Sweeping a naive 2 x 9
+ * grid instead would include amino acids at orders 5-9, where the order rule
+ * refuses the config before the length rule runs at all -- and "the accepted
+ * boundary is the non-overflow boundary" passes VACUOUSLY there, testing a
+ * rule that never executed. So each pair is asserted against the reason it is
+ * actually refused for, and the two counters at the end refuse a sweep whose
+ * domain shrank or whose row branch went unvisited.
+ *
+ * This replaces a weaker pin that asserted the ceiling fits a uint32 row
+ * index at each alphabet's DEFAULT order. That headroom is what the
+ * nucleotide ceiling deliberately spends; the boundary, per pair, is what
+ * replaces it.
  */
-static void test_the_ceiling_fits_a_uint32_row_index_at_the_default_order(void) {
-    const uint64_t ceiling = BEAM_MAX_LENGTH_CEILING;
-    unsigned overshoots = 0;
+static void test_every_legal_pair_accepts_exactly_up_to_its_own_bound(void) {
+    unsigned legal = 0, bounded_by_rows = 0;
     for (unsigned k = 0; k < BEAM_ALPHABET_COUNT; ++k) {
         const BeamAlphabetInfo *a = beam_alphabet_info((BeamAlphabet)k);
 
-        uint64_t n_ctx = 1;
-        for (unsigned i = 0; i < a->default_order; ++i) n_ctx *= a->radix;
-        ASSERT_MSG(ceiling * n_ctx <= UINT32_MAX,
-                   "the wide table's row count at the default order must "
-                   "fit a uint32 at the ceiling");
+        /*
+         * The OTHER table, which the rule below does not model.
+         *
+         * The config rule bounds `max_length * radix^order`, the wide table's
+         * shape. The length-conditioned table is
+         * `(max_length + 1) * max_length * radix^2` rows and is bounded by
+         * nothing in the validator, so it is pinned here -- it was pinned by
+         * the interim test this one replaces, and losing a pin is a
+         * regression however wide the margin. The margin is wide: 28,788,480
+         * rows at the amino-acid cap and 9,455,616 at the nucleotide one,
+         * against a bound of 4.29e9.
+         */
+        const uint64_t cap = a->max_max_length;
+        ASSERT_MSG((cap + 1u) * cap * (uint64_t)a->radix * a->radix
+                       <= BEAM_MAX_ROWS,
+                   "the length-conditioned table's row count must fit a row "
+                   "index at this alphabet's cap");
 
-        const uint64_t rows_len = (ceiling + 1u) * ceiling
-                                * (uint64_t)a->radix * a->radix;
-        ASSERT_MSG(rows_len <= UINT32_MAX,
-                   "and so must the length-conditioned table's");
+        for (uint32_t order = 2; order <= BEAM_MAX_ORDER; ++order) {
+            char why[BEAM_CONFIG_REASON_MAX];
+            BeamModelConfig c;
+            beam_model_config_default_for(a->id, &c);
+            c.order = (uint8_t)order;
 
-        for (unsigned o = 2; o <= a->max_order; ++o) {
-            uint64_t n = 1;
-            for (unsigned i = 0; i < o; ++i) n *= a->radix;
-            if (ceiling * n > UINT32_MAX) {
-                ASSERT_MSG(o > a->default_order,
-                           "an order at or below the default must admit the "
-                           "full ceiling; only a higher order may overshoot");
-                ++overshoots;
+            if (order > a->max_order) {
+                c.max_length = a->default_max_length;
+                const char *r = beam_config_invalid_reason(&c, why, sizeof why);
+                /* Matched on the order rule's OWN clause. A bare "order"
+                 * would also be satisfied by the row rule's "at order %u",
+                 * so it would pass whichever of the two fired. */
+                ASSERT_MSG(r && strstr(r, "order=") != NULL
+                           && strstr(r, "permits") != NULL,
+                           "the order rule refuses this pair, and says so in "
+                           "its own words rather than a word two rules share");
+                continue;               /* the length rule never runs here */
             }
+            ++legal;
+
+            const uint64_t n_ctx = beam_ipow_u64(a->radix, order);
+            const uint64_t by_rows = BEAM_MAX_ROWS / n_ctx;
+            const uint64_t bound = by_rows < a->max_max_length
+                                 ? by_rows : a->max_max_length;
+            if (by_rows < a->max_max_length) ++bounded_by_rows;
+
+            c.max_length = (uint32_t)bound;
+            ASSERT_MSG(beam_config_invalid_reason(&c, why, sizeof why) == NULL,
+                       "the bound itself is accepted");
+            c.max_length = (uint32_t)bound + 1u;
+            const char *r = beam_config_invalid_reason(&c, why, sizeof why);
+            ASSERT_MSG(r && strstr(r, "max_length") != NULL,
+                       "one past it is refused, naming max_length");
         }
     }
-    ASSERT_MSG(overshoots > 0,
-               "no legal pair overshoots, so the rule above went untested");
+    ASSERT_MSG(legal == 11u,
+               "the legal domain is three amino-acid orders and eight "
+               "nucleotide ones; a smaller sweep is testing less");
+    ASSERT_MSG(bounded_by_rows > 0u,
+               "at least one legal pair must be bounded by the row index "
+               "rather than by its alphabet's cap, or the row rule went "
+               "untested");
     PASS();
 }
 
@@ -728,7 +782,7 @@ static BeamModel *nt_model(uint32_t order, uint32_t max_length) {
     BeamModelConfig c;
     beam_model_config_default_for(BEAM_ALPHABET_NT, &c);
     c.order = (uint8_t)order;
-    c.max_length = (uint8_t)max_length;
+    c.max_length = max_length;
     return beam_model_new(&c);
 }
 
@@ -750,6 +804,66 @@ static void test_a_nucleotide_model_builds_and_scores(void) {
     const double lp = beam_model_log_pseq(m, "TGTGCCAGCAGT");
     ASSERT_MSG(isfinite(lp) && lp < 0.0,
                "an observed nucleotide sequence must score finitely");
+    beam_model_destroy(m);
+    PASS();
+}
+
+/*
+ * Goal 1, end to end: a nucleotide model longer than a byte can count.
+ *
+ * Every other test on the length path builds a model of at most 60 residues,
+ * so nothing would notice if some step along it narrowed back to 255 -- the
+ * widened field, the per-alphabet cap, the loader's bound and the extension
+ * boundary would each still look right in isolation. This builds at 300,
+ * which is the length a full V(D)J read actually needs, observes, finalizes
+ * and scores, and then walks the boundary: a 300-base string the corpus never
+ * spelled must score, and a 301-base one must not.
+ *
+ * Order 2, and that is not incidental. Finalize sweeps the partition function
+ * over every state of every layer for every length the model admits, so its
+ * cost grows with the state space and faster than linearly with max_length.
+ * The claim here is about the LENGTH, which the order does not touch.
+ */
+static void test_a_nucleotide_model_past_the_byte_ceiling_builds_and_scores(void) {
+    BeamModel *m = nt_model(2, 300);
+    ASSERT_MSG(m != NULL, "a nucleotide max_length of 300 must build now");
+    ASSERT_MSG(beam_model_config(m)->max_length == 300u,
+               "and the resolved configuration must keep it, not a byte of it");
+
+    const char *seqs[] = { "TGTGCCAGCAGTTTAGGGGAACAGTAC",
+                           "TGTGCCAGCAGTTTAGGGGAACAGTTC",
+                           "TGTGCCAGTCGGGACAGGGCCTACAAT" };
+    const double ab[] = { 4.0, 2.0, 1.0 };
+    ASSERT_MSG(beam_model_observe(m, seqs, ab, 3) == BEAM_OK, "observe");
+    ASSERT_MSG(beam_model_finalize(m) == BEAM_OK, "finalize");
+
+    const double lp = beam_model_log_pseq(m, seqs[0]);
+    ASSERT_MSG(isfinite(lp) && lp < 0.0,
+               "an observed sequence must score finitely at max_length 300");
+
+    /*
+     * The boundary, which is also what exercises the scratch buffers near
+     * capacity: every scoring path encodes into a stack array, and a build
+     * whose arrays were still sized by the old byte ceiling would smash its
+     * stack here rather than fail a comparison.
+     */
+    char at_limit[301], past_limit[302];
+    memset(at_limit, 'A', 300);    at_limit[300] = '\0';
+    memset(past_limit, 'A', 301);  past_limit[301] = '\0';
+
+    const double lp_at = beam_model_log_pseq(m, at_limit);
+    ASSERT_MSG(isfinite(lp_at) && lp_at < lp,
+               "an unseen sequence of exactly max_length must score finitely, "
+               "and below an observed one");
+    ASSERT_MSG(beam_model_log_pseq(m, past_limit) == -INFINITY,
+               "one base past max_length cannot be read");
+
+    double fwd[BEAM_LENGTH_BUFFER], bwd[BEAM_LENGTH_BUFFER];
+    uint32_t got_len = 0;
+    ASSERT_MSG(beam_model_explain(m, at_limit, fwd, bwd, &got_len) == BEAM_OK,
+               "a 300-base sequence must be read");
+    ASSERT_MSG(got_len == 300u, "and read at its full length");
+
     beam_model_destroy(m);
     PASS();
 }
@@ -920,6 +1034,12 @@ static void test_the_analytics_match_enumeration_for_nucleotides(void) {
  * What still scores -INFINITY. The enumeration above shows every readable
  * string has mass; this is the other half, that the only strings without it
  * are the ones the model cannot read at all.
+ *
+ * Overlaps test_model.c's `test_an_over_length_sequence_scores_minus_infinity`,
+ * which pins the consequence rather than the set: that an over-length sequence
+ * reports -INFINITY and sets NO error, so it cannot be told apart from a
+ * merely improbable one. This test owns which sequences; that one owns the
+ * return contract. If one of the two changes, change the other.
  */
 static void test_only_an_unreadable_sequence_scores_minus_infinity(void) {
     BeamModel *m = nt_tiny(3);
@@ -1260,7 +1380,7 @@ static bool order_builds_and_scores(uint32_t order, uint32_t max_length,
     BeamModelConfig c;
     beam_model_config_default_for(BEAM_ALPHABET_NT, &c);
     c.order = (uint8_t)order;
-    c.max_length = (uint8_t)max_length;
+    c.max_length = max_length;
 
     BeamModel *m = beam_model_new(&c);
     if (!m) {
@@ -1364,14 +1484,44 @@ static void test_the_partition_normalises_above_order_four(void) {
 
 /* ── Runner ──────────────────────────────────────────────────── */
 
-static void test_the_buffer_constant_covers_the_validation_ceiling(void) {
-    ASSERT_MSG(BEAM_LENGTH_BUFFER >= BEAM_MAX_LENGTH_CEILING,
-               "every length-indexed fixed array must be at least as long "
-               "as the longest max_length a config may ask for");
-    for (unsigned k = 0; k < BEAM_ALPHABET_COUNT; ++k)
-        ASSERT_MSG(beam_alphabet_info((BeamAlphabet)k)->default_max_length
-                       <= BEAM_LENGTH_BUFFER,
+static void test_every_descriptor_fits_the_length_constants(void) {
+    /*
+     * The constant-against-constant claim, `BEAM_LENGTH_BUFFER >=
+     * BEAM_MAX_LENGTH_CEILING`, is NOT asserted here. model.h:346 asserts it
+     * at compile time, so a runtime copy could not fail in any binary that
+     * linked -- it would be dead the moment it was written.
+     *
+     * What a static assert cannot reach is a descriptor FIELD, and those are
+     * written out by hand in alphabet_aa.c and alphabet_nt.c. That is what
+     * this test is for.
+     */
+    for (unsigned k = 0; k < BEAM_ALPHABET_COUNT; ++k) {
+        const BeamAlphabetInfo *a = beam_alphabet_info((BeamAlphabet)k);
+        /* On the buffer axis, and nothing statically implies it: the default
+         * is a hand-written number and the arrays are sized by this one. */
+        ASSERT_MSG(a->default_max_length <= BEAM_LENGTH_BUFFER,
                    "an alphabet's default must fit the buffers");
+        /*
+         * The cap on its own axis: the ceiling bounds what a config may ask
+         * for, and alphabet.h ties each cap MACRO to it at compile time,
+         * while model.h ties the ceiling to the buffer. This is the stronger
+         * of the two bounds for that reason.
+         *
+         * It is here rather than left to those static asserts because this
+         * loop walks every REGISTRY ENTRY, while the equality below can only
+         * name the macros that exist. A third alphabet whose descriptor
+         * carried its own literal would be covered here and missed there.
+         */
+        ASSERT_MSG(a->max_max_length <= BEAM_MAX_LENGTH_CEILING,
+                   "nor may its cap exceed what a config may ask for");
+    }
+    /* And for the two alphabets that DO have macros, the descriptor must
+     * carry the macro's value rather than a literal that drifted from it. */
+    ASSERT_MSG(beam_alphabet_info(BEAM_ALPHABET_AA)->max_max_length
+                   == BEAM_AA_LENGTH_CAP
+               && beam_alphabet_info(BEAM_ALPHABET_NT)->max_max_length
+                   == BEAM_NT_LENGTH_CAP,
+               "each descriptor carries its own macro's value");
     PASS();
 }
 
@@ -1382,9 +1532,9 @@ int main(void) {
     printf("[descriptor]\n");
     RUN_TEST(test_descriptors_are_internally_consistent);
     RUN_TEST(test_defaults_sit_inside_their_own_ceilings);
-    RUN_TEST(test_the_buffer_constant_covers_the_validation_ceiling);
+    RUN_TEST(test_every_descriptor_fits_the_length_constants);
     RUN_TEST(test_the_order_ceiling_keeps_context_counts_in_range);
-    RUN_TEST(test_the_ceiling_fits_a_uint32_row_index_at_the_default_order);
+    RUN_TEST(test_every_legal_pair_accepts_exactly_up_to_its_own_bound);
 
     printf("\n[mapping]\n");
     RUN_TEST(test_every_byte_maps_exactly_as_specified);
@@ -1422,6 +1572,7 @@ int main(void) {
 
     printf("\n[nucleotide models]\n");
     RUN_TEST(test_a_nucleotide_model_builds_and_scores);
+    RUN_TEST(test_a_nucleotide_model_past_the_byte_ceiling_builds_and_scores);
     RUN_TEST(test_the_partition_normalises_over_nucleotides);
     RUN_TEST(test_the_analytics_match_enumeration_for_nucleotides);
     RUN_TEST(test_only_an_unreadable_sequence_scores_minus_infinity);
