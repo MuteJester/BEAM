@@ -156,6 +156,17 @@ typedef enum {
 #define BEAM_MAX_LENGTH_CEILING 255u
 
 /**
+ * The size of every length-indexed fixed array (stack buffers holding one
+ * sequence, one per-position profile, and so on).
+ *
+ * Two names, two jobs: this one sizes arrays, BEAM_MAX_LENGTH_CEILING bounds
+ * what a config may ask for. They are equal today. Raising the cap past the
+ * buffer would be a stack overflow rather than a refusal, which is why the
+ * static assert beside BeamModelConfig ties them.
+ */
+#define BEAM_LENGTH_BUFFER      255u
+
+/**
  * Largest order any alphabet permits, and therefore the size of the
  * order-indexed scratch arrays: `slot[]` in the context packers, and
  * `slot[]` in the context packers.
@@ -288,6 +299,14 @@ typedef struct {
      */
     bool sparse;
 } BeamModelConfig;
+
+_Static_assert(BEAM_MAX_LENGTH_CEILING <= BEAM_LENGTH_BUFFER,
+               "a config may not ask for more length than the fixed arrays hold");
+_Static_assert(sizeof(BeamModelConfig) == 128,
+               "BeamModelConfig's layout is what a vendored C caller compiled "
+               "against; changing it needs a deliberate bump here");
+_Static_assert(offsetof(BeamModelConfig, max_length) == 5,
+               "and so does moving a field within it");
 
 /** Fill `cfg` with the measured defaults, for the amino-acid alphabet. */
 void beam_model_config_default(BeamModelConfig *cfg);

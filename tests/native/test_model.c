@@ -1172,7 +1172,7 @@ static void test_results_do_not_depend_on_the_thread_count(void) {
     ASSERT_MSG(m != NULL, "build");
 
     double h1 = 0.0, h4 = 0.0, d1 = 0.0, d4 = 0.0, s1 = 0.0, s4 = 0.0;
-    double dep1[BEAM_MAX_LENGTH_CEILING] = {0}, dep4[BEAM_MAX_LENGTH_CEILING] = {0};
+    double dep1[BEAM_LENGTH_BUFFER] = {0}, dep4[BEAM_LENGTH_BUFFER] = {0};
 
     beam_model_set_threads(1);
     ASSERT_MSG(beam_model_entropy(m, &h1) == BEAM_OK, "entropy at 1 thread");
@@ -1600,7 +1600,7 @@ static void test_layer_weights_reproduce_the_scorer(void) {
     ASSERT_MSG(m != NULL, "build");
 
     const char *seq = "CASSLGEQYF";
-    uint8_t buf[BEAM_MAX_LENGTH_CEILING];
+    uint8_t buf[BEAM_LENGTH_BUFFER];
     uint32_t len = 0;
     ASSERT_MSG(beam_encode(m, seq, buf, &len), "encode");
 
@@ -1665,8 +1665,8 @@ static void test_c_anchor_penalises_a_bad_terminus(void) {
     /* And the C-anchored term at the last position carries that cost by
      * itself, which is the claim above. The total alone would also pass if
      * only the depth-indexed forward chain objected. */
-    double fg[BEAM_MAX_LENGTH_CEILING], bg[BEAM_MAX_LENGTH_CEILING];
-    double fb[BEAM_MAX_LENGTH_CEILING], bb[BEAM_MAX_LENGTH_CEILING];
+    double fg[BEAM_LENGTH_BUFFER], bg[BEAM_LENGTH_BUFFER];
+    double fb[BEAM_LENGTH_BUFFER], bb[BEAM_LENGTH_BUFFER];
     uint32_t len = 0;
     ASSERT_MSG(beam_model_explain(m, "CASSLGEQYF", fg, bg, &len) == BEAM_OK
                && beam_model_explain(m, "CASSLGEQYW", fb, bb, &len) == BEAM_OK,
@@ -1765,7 +1765,7 @@ static void test_explain_reconstructs_the_score(void) {
     BeamModel *m = build(3, 12);
     ASSERT_MSG(m != NULL, "build");
     const char *seq = "CASSLGEQYF";
-    double fwd[BEAM_MAX_LENGTH_CEILING], bwd[BEAM_MAX_LENGTH_CEILING];
+    double fwd[BEAM_LENGTH_BUFFER], bwd[BEAM_LENGTH_BUFFER];
     uint32_t len = 0;
     ASSERT_MSG(beam_model_explain(m, seq, fwd, bwd, &len) == BEAM_OK, "explain");
     ASSERT_MSG(len == strlen(seq), "length");

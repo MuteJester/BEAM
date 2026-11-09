@@ -130,7 +130,7 @@ PyObject *py_explain(PyObject *self, PyObject *args) {
     BeamModel *m = edge_from_capsule(cap);
     if (!m) return NULL;
 
-    double fwd[BEAM_MAX_LENGTH_CEILING], bwd[BEAM_MAX_LENGTH_CEILING];
+    double fwd[BEAM_LENGTH_BUFFER], bwd[BEAM_LENGTH_BUFFER];
     uint32_t len = 0;
     BeamError err = beam_model_explain(m, seq, fwd, bwd, &len);
     if (err != BEAM_OK) return set_beam_error(err);

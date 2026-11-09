@@ -6,8 +6,8 @@
 #include <limits.h>
 
 typedef struct {
-    uint32_t n[BEAM_MAX_LENGTH_CEILING+1];
-    size_t off[BEAM_MAX_LENGTH_CEILING+2];
+    uint32_t n[BEAM_LENGTH_BUFFER+1];
+    size_t off[BEAM_LENGTH_BUFFER+2];
     double *beta, *current, *next, *block;
 } DistanceCache;
 

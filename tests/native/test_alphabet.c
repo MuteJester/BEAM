@@ -693,7 +693,7 @@ static void test_a_model_longer_than_the_old_ceiling_builds_and_scores(void) {
     ASSERT_MSG(beam_model_log_pseq(m, past_limit) == -INFINITY,
                "one residue past max_length cannot be read");
 
-    double fwd[BEAM_MAX_LENGTH_CEILING], bwd[BEAM_MAX_LENGTH_CEILING];
+    double fwd[BEAM_LENGTH_BUFFER], bwd[BEAM_LENGTH_BUFFER];
     uint32_t got_len = 0;
     ASSERT_MSG(beam_model_explain(m, at_limit, fwd, bwd, &got_len) == BEAM_OK,
                "a sequence of exactly max_length must be read");
@@ -1351,6 +1351,17 @@ static void test_the_partition_normalises_above_order_four(void) {
 
 /* ── Runner ──────────────────────────────────────────────────── */
 
+static void test_the_buffer_constant_covers_the_validation_ceiling(void) {
+    ASSERT_MSG(BEAM_LENGTH_BUFFER >= BEAM_MAX_LENGTH_CEILING,
+               "every length-indexed fixed array must be at least as long "
+               "as the longest max_length a config may ask for");
+    for (unsigned k = 0; k < BEAM_ALPHABET_COUNT; ++k)
+        ASSERT_MSG(beam_alphabet_info((BeamAlphabet)k)->default_max_length
+                       <= BEAM_LENGTH_BUFFER,
+                   "an alphabet's default must fit the buffers");
+    PASS();
+}
+
 int main(void) {
     printf("\nBEAM Unit Tests - Alphabets\n");
     printf("==============================================================\n\n");
@@ -1358,6 +1369,7 @@ int main(void) {
     printf("[descriptor]\n");
     RUN_TEST(test_descriptors_are_internally_consistent);
     RUN_TEST(test_defaults_sit_inside_their_own_ceilings);
+    RUN_TEST(test_the_buffer_constant_covers_the_validation_ceiling);
     RUN_TEST(test_the_order_ceiling_keeps_context_counts_in_range);
     RUN_TEST(test_the_widest_table_still_fits_a_uint32_row_index);
 

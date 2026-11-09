@@ -69,7 +69,7 @@ static double log_pseq_encoded(const BeamModel *m, const uint8_t *buf,
 
 double beam_model_log_pseq(const BeamModel *m, const char *seq) {
     if (!m || !m->finalized || !seq) return -INFINITY;
-    uint8_t buf[BEAM_MAX_LENGTH_CEILING];
+    uint8_t buf[BEAM_LENGTH_BUFFER];
     uint32_t len = 0;
     if (!beam_encode(m, seq, buf, &len)) return -INFINITY;
     return log_pseq_encoded(m, buf, len);
@@ -99,7 +99,7 @@ BeamError beam_model_log_pseq_packed(const BeamModel *m, const char *data,
     #pragma omp parallel for schedule(static) num_threads(beam_threads())
 #endif
     for (int64_t i = 0; i < (int64_t)n; ++i) {
-        uint8_t buf[BEAM_MAX_LENGTH_CEILING];
+        uint8_t buf[BEAM_LENGTH_BUFFER];
         uint32_t len = 0;
         const size_t k = (size_t)(offsets[i + 1] - offsets[i]);
         out[i] = beam_encode_n(m, data + offsets[i], k, buf, &len)
@@ -128,7 +128,7 @@ BeamError beam_model_explain(const BeamModel *m, const char *seq,
                                 uint32_t *out_len) {
     if (!m || !seq) return BEAM_ENULL(!m ? "model" : "sequence");
     if (!m->finalized) return BEAM_ENOTBUILT();
-    uint8_t buf[BEAM_MAX_LENGTH_CEILING];
+    uint8_t buf[BEAM_LENGTH_BUFFER];
     uint32_t len = 0;
     if (!beam_encode(m, seq, buf, &len))
         return BEAM_FAIL(BEAM_ERR_INVALID_SEQUENCE,
