@@ -147,13 +147,12 @@ typedef enum {
  * The structural ceiling on `max_length`, as opposed to today's validation
  * limit.
  *
- * `max_length` is a `uint8_t`, so 255 is the most any alphabet could ever ask
- * for, and it is what the length-indexed stack buffers must be sized by once
- * `max_length` becomes a genuinely free parameter. Nucleotide sequences are
- * three times the length of the amino acids they encode, so 27 cannot remain
- * the limit for both.
+ * This bounds what a config may ask for and what the query API accepts as a
+ * length. It does not size arrays: see BEAM_LENGTH_BUFFER. Nucleotide
+ * sequences are three times the length of the amino acids they encode, so 27
+ * cannot remain the limit for both.
  */
-#define BEAM_MAX_LENGTH_CEILING 255u
+#define BEAM_MAX_LENGTH_CEILING 512u
 
 /**
  * The size of every length-indexed fixed array (stack buffers holding one
@@ -164,7 +163,7 @@ typedef enum {
  * buffer would be a stack overflow rather than a refusal, which is why the
  * static assert beside BeamModelConfig ties them.
  */
-#define BEAM_LENGTH_BUFFER      255u
+#define BEAM_LENGTH_BUFFER      512u
 
 /**
  * Largest order any alphabet permits, and therefore the size of the

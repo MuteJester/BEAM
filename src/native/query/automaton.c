@@ -59,12 +59,13 @@ static BeamAutomaton *aut_new(uint32_t length, uint32_t n_residues,
     /*
      * Bounded by the state and length ceilings, so this is nowhere near the
      * model-construction hazard -- but a maximal layer-indexed table is still
-     * 21 MB, and a subsystem that refuses a sweep over budget should not
-     * allocate around it here.
+     * about 42 MB, and a subsystem that refuses a sweep over budget should not
+     * allocate around it here. The figure doubled with the ceiling; the
+     * budget check below, not the ceiling, is what keeps it safe.
      *
      * Only the automaton being built is counted. A composition transiently
-     * holds its two operands as well, so the true peak is about 22 MB against
-     * 21 MB checked; at these ceilings the difference cannot decide anything,
+     * holds its two operands as well, so the true peak is about 44 MB against
+     * 42 MB checked; at these ceilings the difference cannot decide anything,
      * and saying so is better than a comment claiming an accounting this does
      * not do. Found by review.
      */
