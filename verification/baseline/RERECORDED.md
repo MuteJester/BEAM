@@ -2574,3 +2574,60 @@ registry.
 
 After the 0.9.0 release, `--record prenextcycle`: one line, `__version__`
 `0.9.0` -> `1.0.0.dev0`. Every other file, and `exact`, unchanged.
+
+# The long-sequence work: max_length past 255 (2026-11-10)
+
+Nucleotide models now take `max_length` up to 512 (amino-acid models stay at
+255). Nothing was recorded with `--record`; the inventory files were kept in
+step by hand as each change landed, and `python_api.txt` was edited by hand
+once, at the end. `check.py --record` rewrites every baseline, and on a
+Python 3.14 interpreter it would write the 3.14-only rendering of the builtin
+exception members into the API list.
+
+**Every recorded number is unchanged.** The numeric references, the thread
+references, the saved-model byte references and the 78 pinned quantities did not
+move, and `exact.py` gives identical output on `main` and on this branch for its
+411 existing quantities (run from a second worktree built separately; the two
+builds were checked by hash). Goal 2 is therefore true of the numeric contract
+and false of the inventories, which move by design.
+
+`exact.py` gained a nucleotide case at `max_length=300` (5 quantities, 416 in
+all). The support at that length is 5**300 sequences and cannot be enumerated,
+so it checks what can be summed: the length prior over all 300 lengths, and at
+lengths 3 and 4, which can be enumerated, that the within-length conditional
+sums to one and that the joint over the length equals the prior mass.
+
+`c_cases.txt`: 15 cases added, 1 removed (390 lines). Added: the length
+constants, the per-alphabet validation cap, the row-count and budget
+distinctions, the over-length scoring and query behaviour and the format 9 / 10
+read and write cases. Removed: `test_the_widest_table_still_fits_a_uint32_row_index`,
+which pinned a headroom this change deliberately spends. An interim replacement,
+`test_the_ceiling_fits_a_uint32_row_index_at_the_default_order`, pinned the
+ceiling only at each default order; it was added and deleted within this work
+and never reached a recorded inventory, because the sweep over the 11 legal
+(alphabet, order) pairs supersedes it. Both deletions were made in earlier
+commits, not by the commit that records this section.
+
+`pytest_cases.txt`: 22 cases added, 3 removed (1216 lines). Added: the long
+model build, copy, round-trip and thread-independence cases, the
+format 9 / 10 compatibility cases, and the performance-warning cases. Removed:
+`test_max_length_two_is_the_smallest_model` (replaced by
+`test_a_length_one_model_builds` and
+`test_a_two_residue_model_exercises_both_position_kinds`),
+`test_max_length_from_the_data_stops_at_the_formats_ceiling` (renamed
+`..._at_its_alphabets_ceiling`) and the `max_length` row of
+`test_out_of_range_configuration_is_refused` (the ceiling is now per alphabet).
+
+`python_api.txt`: `BeamPerformanceWarning` is added to `__all__` with one class
+block (26 lines, 1350 -> 1376). The block is a copy of the recorded
+`BeamValueError` block in its recorded spelling, because the two classes render
+identically. The new `alphabet_info` key, `max_max_length`, is a key of a
+returned dict and is not part of the recorded API surface.
+
+**The API check still fails on this machine, on purpose.** The ten-line block
+that `check.py` reports for builtin exception members is a rendering
+difference between Python 3.14 (real signatures, `object.__replace__`) and the
+interpreter that made the recording (`(?)`). It is unrelated to this work and
+is a known gate defect. Do not re-record it from 3.14: that would turn a visible
+environment difference into a silent break on 3.11 and 3.12. Compare by member
+name, or re-record under `/usr/bin/python3.12`.
