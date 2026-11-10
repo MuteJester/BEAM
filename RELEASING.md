@@ -30,6 +30,15 @@ The model file format is part of the API. A release that writes a new format
 must still read the previous one, or it is a major release, and the published
 models must be re-issued as a new `models-vN` in the new format.
 
+## The C API
+
+The C headers in `include/beam/` and the static library `libbeam.a` carry no
+compatibility promise before 1.0.0. A release may change a struct's size, a
+field's type or position, or a function's signature, and the CHANGELOG records
+each such change when it happens. A C caller must rebuild against the headers
+of the release it links, and must not mix the headers of one release with the
+library of another.
+
 ## Releasing the package
 
 1. **Prepare on `main`** (by pull request, so CI runs):

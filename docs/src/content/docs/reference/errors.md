@@ -56,3 +56,37 @@ character outside the alphabet) scores `-inf`, a probability of zero. Every read
 including one never seen, has a non-zero probability, and every length from 1 to `max_length`
 has some probability. What raises is a *conditional* on an impossible event, which does not
 exist.
+
+## Warnings, not errors
+
+`BEAM.BeamPerformanceWarning` is a `UserWarning`, not a `BeamError`. It is not
+a refusal: the build it precedes succeeds and returns the model you asked for.
+It says the model will cost far more than its arguments suggest, which is worth
+knowing before the wait rather than during it.
+
+It is emitted for a build above 255 residues, because finalizing runs one
+partition-function computation for every length from 1 to `max_length` — not
+only the lengths your sequences have, since every length up to `max_length` has
+some probability. The cost therefore grows with the square of `max_length`:
+about 24 times the nucleotide default at 400 residues, and about 39 times at
+512, counted in those computations rather than in seconds. It is also emitted
+when `max_length="data"` stops at an alphabet's limit, naming how many
+sequences are longer and will be skipped.
+
+Every route to such a model warns, including `BeamModel.builder`,
+`from_sequence_file`, `from_parquet` and `from_file` — a saved model stores
+counts rather than tables, so loading one re-finalizes and pays the same cost.
+Rebuilds from a model you already have, such as `without`, do not warn again.
+
+Escalate it to an exception with
+
+```python
+warnings.filterwarnings("error", category=BEAM.BeamPerformanceWarning)
+```
+
+and silence it with
+`warnings.simplefilter("ignore", BEAM.BeamPerformanceWarning)`. The
+interpreter's `-W error::BEAM.BeamPerformanceWarning` does **not** work and is
+discarded with "invalid module name": `-W` resolves categories before any
+third-party package is importable. Under pytest, which re-parses `-W` after
+collection, `-W error::BEAM.warnings.BeamPerformanceWarning` does work.
