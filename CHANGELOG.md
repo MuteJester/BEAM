@@ -21,8 +21,8 @@ are listed under Changed.
   length from 1 to `max_length`, not only the observed ones, so the cost grows
   with the square of `max_length`: about 24 times the nucleotide default at
   400. The cost is unchanged and only announced.
-- `BEAM.constants.BEAM_LENGTH_BUFFER`, the size of the per-length buffers,
-  kept separate from the validation limit.
+- `BEAM.pretrained.MODEL_FORMATS_READ`, the set of model-file formats this
+  build reads.
 
 ### Changed
 - **`max_length='data'` on a nucleotide corpus now stops at 512 instead of
@@ -38,6 +38,10 @@ are listed under Changed.
   release finds `alpha` eight bytes from where it looks and reads its prior
   strength out of padding. Rebuild C code against the headers it links; see
   "The C API" in [`RELEASING.md`](RELEASING.md).
+- `BEAM.pretrained.MODEL_FORMAT` now means the format this build *writes*
+  for a model of 255 or fewer residues, where it used to mean the only format
+  this build reads. Code that refused anything but `MODEL_FORMAT` will wrongly
+  refuse a sound format-10 file; test against `MODEL_FORMATS_READ` instead.
 - Models longer than 255 are written as format 10. Builds before this release
   refuse them with a "written by a newer version of BEAM, upgrade" message
   rather than a corruption error. Models of 255 or fewer are still written as
