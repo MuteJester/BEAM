@@ -14,11 +14,19 @@ BEAM_RESIDUES = 20
 #: ``BEAM_MAX_LENGTH_CEILING`` and the default comes from the alphabet.
 BEAM_MAX_LENGTH = 27
 
-#: The structural ceiling on ``max_length``, mirroring
-#: ``BEAM_MAX_LENGTH_CEILING``. The field is a ``uint8_t`` in C, so 255 is the
-#: most any alphabet could ask for. Nucleotide sequences are three times the
-#: length of the amino acids they encode, so 27 cannot bound both.
-BEAM_MAX_LENGTH_CEILING = 255
+#: The cross-alphabet maximum of ``max_length``, mirroring
+#: ``BEAM_MAX_LENGTH_CEILING``: what a configuration may ask for, whichever
+#: alphabet it uses. The field is a ``uint32_t`` in C. It is not the bound
+#: any one model is held to; that is per-alphabet (255 for amino acids, 512
+#: for nucleotides) and comes from the descriptor as
+#: ``alphabets.info(a)["max_max_length"]``.
+BEAM_MAX_LENGTH_CEILING = 512
+
+#: Size of the fixed per-sequence length arrays, mirroring
+#: ``BEAM_LENGTH_BUFFER``. This is a storage size, not a validation limit:
+#: it says how long a sequence the arrays can hold, where
+#: ``BEAM_MAX_LENGTH_CEILING`` says how long a configuration may ask for.
+BEAM_LENGTH_BUFFER = 512
 
 #: Largest order any alphabet permits, mirroring ``BEAM_MAX_ORDER``. It is a
 #: sizing bound, not the validation limit: what a given model may ask for

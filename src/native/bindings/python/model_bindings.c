@@ -194,14 +194,15 @@ PyObject *py_alphabet_info(PyObject *self, PyObject *arg) {
         return NULL;
     }
     return Py_BuildValue(
-        "{s:s,s:i,s:i,s:i,s:i,s:i,s:i,s:s#}",
+        "{s:s,s:i,s:i,s:i,s:i,s:i,s:I,s:I,s:s#}",
         "name", a->name,
         "id", (int)a->id,
         "residues", (int)a->residues,
         "radix", (int)a->radix,
         "default_order", (int)a->default_order,
         "max_order", (int)a->max_order,
-        "default_max_length", (int)a->default_max_length,
+        "default_max_length", (unsigned int)a->default_max_length,
+        "max_max_length", (unsigned int)a->max_max_length,
         "symbols", a->idx_to_char, (Py_ssize_t)a->residues);
 }
 

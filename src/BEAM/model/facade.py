@@ -20,7 +20,7 @@ from typing import Any
 
 import numpy as np
 
-from ..constants import (BEAM_ALPHABET, BEAM_MAX_LENGTH, BEAM_MAX_LENGTH_CEILING,
+from ..constants import (BEAM_ALPHABET, BEAM_MAX_LENGTH,
                          BEAM_MAX_MOMENT, BEAM_MAX_ORDER, BEAM_RESIDUES)
 from . import alphabets
 from .validation import _check_int, _is_scalar_arg
@@ -58,11 +58,17 @@ def _default_column(column: str | None, config: dict) -> str:
 
 def _longest_usable(seqs: list, alphabet: str) -> int:
     """max_length for ``max_length="data"``: the longest training sequence
-    the alphabet accepts, at least 2 and at most the format's ceiling.
+    the alphabet accepts, at least 2 and at most the alphabet's own length
+    cap (255 for amino acids, 512 for nucleotides).
 
     A sequence the build would skip anyway, for a character outside the
     alphabet, does not count. Candidates are tried from the longest down,
     so only the few longest are checked character by character.
+
+    The floor of 2 is deliberate and is not the floor `max_length` accepts,
+    which is 1. An explicit `max_length=1` is honoured, because the caller
+    asked for it; an INFERRED length declines to pick the degenerate model
+    from a corpus whose longest usable sequence is a single residue.
     """
     lengths = np.fromiter((len(s) if isinstance(s, str) else 0 for s in seqs),
                           dtype=np.int64, count=len(seqs))
@@ -72,7 +78,7 @@ def _longest_usable(seqs: list, alphabet: str) -> int:
             break
         if alphabets.accepts(alphabet, seqs[i]):
             longest = int(lengths[i])
-    return min(max(longest, 2), BEAM_MAX_LENGTH_CEILING)
+    return min(max(longest, 2), alphabets.info(alphabet)["max_max_length"])
 
 
 def _orders_vector(orders: Iterable[float]) -> np.ndarray:
@@ -149,7 +155,8 @@ class BeamModel:
             amino acids and 81 for nucleotides, three bases to the residue.
             ``"data"`` takes the length of the longest training sequence the
             alphabet accepts, so none is skipped for its length (up to the
-            file format's ceiling of 255). Time and memory grow with it.
+            alphabet's cap: 255 for amino acids, 512 for nucleotides).
+            Time and memory grow with it.
         alpha: Prior strengths of the hierarchical Bayesian smoothing, one
             per context level 0..order, or one number for all of them.
             Every sequence up to ``max_length`` has positive probability, and

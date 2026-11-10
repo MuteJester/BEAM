@@ -11,8 +11,6 @@ import numpy as np
 import pytest
 
 from BEAM import BeamModel
-from BEAM import _cbeam as _c
-from BEAM.model.config import _config_args
 
 from _helpers import AA, J_MOTIFS, make_corpus
 
@@ -29,16 +27,7 @@ def test_a_long_model_round_trips_with_identical_scores(tmp_path):
     """Format 10, sparse, finalized. The format 9 fixture covers old files;
     this covers new ones. Order 3: the order is incidental to a file-format
     round trip, and max_length=400 is the claim under test."""
-    # The Python surface still clamps max_length to 255 (it is made per
-    # alphabet in a later step), so the model is built one layer down, where
-    # the 400 is already legal. Once the facade accepts it this becomes
-    # BeamModel(READS_400, order=3, max_length=400, alphabet="nt").
-    cargs = list(_config_args(alphabet="nt", order=3, max_length=27,
-                              weights=(0.5, 0.5), alpha=None, alpha_length=None,
-                              sparse=None))
-    assert cargs[1] == 27
-    cargs[1] = 400
-    m = BeamModel._from_capsule(_c.build(READS_400, None, *cargs))
+    m = BeamModel(READS_400, order=3, max_length=400, alphabet="nt")
     before = m.log_pseq_batch(READS_400[:30])
     path = tmp_path / "long.beam"
     m.save(path)

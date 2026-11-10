@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 
-from ..constants import BEAM_MAX_LENGTH_CEILING, BEAM_MAX_MOMENT
+from ..constants import BEAM_MAX_MOMENT
 from . import alphabets
 from .validation import _check_int
 
@@ -92,9 +92,15 @@ def _config_args(*, order, max_length, weights, alpha=None, alpha_length=None,
     # The order ceiling is the alphabet's own, because the real bound is on
     # radix**order and the two radices are far apart: 21**9 does not fit the
     # uint32 the context count lives in, while 6**9 fits comfortably.
-    order = _check_int("order", order, 2, info["max_order"])
-    max_length = _check_int("max_length", max_length, 2,
-                            BEAM_MAX_LENGTH_CEILING)
+    order = _check_int("order", order, 2, info["max_order"],
+                       context=f"for the {alphabet} alphabet")
+    # The length cap is per-alphabet for the same reason: the real bound is on
+    # max_length * radix**order rows (config.c refuses that product), and the
+    # radices differ, so 255 amino-acid residues and 512 bases are different
+    # claims. The floor is 1, as in config.c (`max_length < 1`, ~:109).
+    max_length = _check_int("max_length", max_length, 1,
+                            info["max_max_length"],
+                            context=f"for the {alphabet} alphabet")
     weights = tuple(float(w) for w in weights)
     alpha = _alpha_levels(alpha, order)
     alpha_length = _alpha_length(alpha_length)
