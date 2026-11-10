@@ -163,7 +163,8 @@ static void test_what_reserve_refuses_and_ignores(void) {
     PASS();
 }
 
-int main(void) {
+int main(int argc, char **argv) {
+    beam_test_init(argc, argv);
     printf("\nexact-capacity reserve\n");
     RUN_TEST(test_a_reserved_table_holds_what_a_grown_one_holds);
     RUN_TEST(test_a_reserved_partition_never_grows);

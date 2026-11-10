@@ -268,7 +268,8 @@ static void test_sparse_combined_max_is_over_the_marked_rows(void) {
     PASS();
 }
 
-int main(void) {
+int main(int argc, char **argv) {
+    beam_test_init(argc, argv);
     printf("\nbeam_layer_max\n");
     RUN_TEST(test_sparse_order_4_matches_the_definition);
     RUN_TEST(test_sparse_order_2_matches_the_definition);

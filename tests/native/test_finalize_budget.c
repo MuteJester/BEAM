@@ -191,7 +191,8 @@ static void test_the_driver_and_the_sweep_agree_on_the_size(void) {
     PASS();
 }
 
-int main(void) {
+int main(int argc, char **argv) {
+    beam_test_init(argc, argv);
     printf("\nfinalize under the memory budget\n");
     RUN_TEST(test_a_narrow_budget_finalizes_to_the_same_bits);
     RUN_TEST(test_a_budget_too_small_refuses_and_says_why);

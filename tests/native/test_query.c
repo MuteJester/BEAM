@@ -1624,7 +1624,8 @@ static void test_a_pinned_layer_is_estimated_cheaper_than_a_free_one(void) {
 
 /* ── Main ────────────────────────────────────────────────────── */
 
-int main(void) {
+int main(int argc, char **argv) {
+    beam_test_init(argc, argv);
     printf("\n[constraints]\n");
     RUN_TEST(test_a_new_constraint_admits_every_residue);
     RUN_TEST(test_builders_intersect_rather_than_replace);

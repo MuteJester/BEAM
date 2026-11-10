@@ -571,7 +571,8 @@ out:
     beam_model_destroy(cases[0].m); beam_model_destroy(cases[1].m);
 }
 
-int main(void) {
+int main(int argc, char **argv) {
+    beam_test_init(argc, argv);
     printf("\nfrozen counts\n");
     RUN_TEST(test_integer_counts_round_trip);
     RUN_TEST(test_fractional_counts_round_trip);

@@ -529,7 +529,8 @@ static void test_a_plane_major_table_refuses_the_row_pointer(void) {
     PASS();
 }
 
-int main(void) {
+int main(int argc, char **argv) {
+    beam_test_init(argc, argv);
     printf("\nplane-major backward tables\n");
     RUN_TEST(test_a_transposed_table_reads_back_identically);
     RUN_TEST(test_the_transpose_actually_moves_the_cells);

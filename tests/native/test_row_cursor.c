@@ -170,7 +170,8 @@ static void test_slot0_counts_the_rows_before_it(void) {
     PASS();
 }
 
-int main(void) {
+int main(int argc, char **argv) {
+    beam_test_init(argc, argv);
     printf("\nthe occupied-row cursor\n");
     RUN_TEST(test_the_cursor_matches_the_predicate_when_sealed);
     RUN_TEST(test_the_cursor_matches_the_predicate_when_direct);

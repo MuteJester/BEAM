@@ -1,19 +1,120 @@
 /**
  * @file test_utils.h
- * @brief Shared test-runner macros for tests/c_unit.
+ * @brief Shared test-runner macros for tests/native.
  *
  * Each test file is expected to declare its own file-static counters:
  *   static int pass_count = 0, fail_count = 0;
  *
  * RUN_TEST prints the test name (left-padded), invokes it, and lets the
  * test body call PASS() or ASSERT_MSG() to update the counters.
+ *
+ * Every binary also answers two questions about itself, through
+ * beam_test_init(argc, argv) as main's first statement:
+ *
+ *   --list        print this binary's inventory, one test name per line,
+ *                 and run nothing.
+ *   --run NAME    run only NAME. Repeatable. A NAME this binary does not
+ *                 have is an error, not an empty success.
+ *
+ * --list exists because the inventory used to be grepped out of these
+ * sources by verification/check.py, which reads the source rather than the
+ * program: a RUN_TEST line main never reaches, or one the preprocessor
+ * drops, counted there as a test that ran. Asking the binary cannot make
+ * that mistake.
  */
 #ifndef BEAM_TEST_UTILS_H
 #define BEAM_TEST_UTILS_H
 
+#include <stdarg.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
-#define RUN_TEST(fn) do { printf("  %-55s ", #fn); fn(); } while (0)
+/* argv slots naming the tests to run; empty means all of them. */
+#define BEAM_TEST_MAX_SELECTED 64
+static const char *beam_test_selected[BEAM_TEST_MAX_SELECTED];
+static char beam_test_matched[BEAM_TEST_MAX_SELECTED];
+static int beam_test_selected_count = 0;
+static int beam_test_list_only = 0;
+
+/*
+ * While listing, stdout must carry the inventory and nothing else: it is the
+ * input to verification/check.py and to `make list-tests`, and a parser that
+ * has to pick names out of banner text can silently drop one. The 35 mains
+ * print their own group banners with printf, which this header cannot edit,
+ * so printf is routed through a wrapper that goes quiet while listing. The
+ * names themselves are emitted with fputs, which the macro does not touch.
+ */
+#if defined(__GNUC__)
+__attribute__((format(printf, 1, 2)))
+#endif
+static inline int beam_test_printf(const char *fmt, ...) {
+    if (beam_test_list_only) return 0;
+    va_list ap;
+    va_start(ap, fmt);
+    const int n = vprintf(fmt, ap);
+    va_end(ap);
+    return n;
+}
+#define printf(...) beam_test_printf(__VA_ARGS__)
+
+/* Is `name` selected to run, and record that it was found. */
+static inline int beam_test_wanted(const char *name) {
+    if (beam_test_selected_count == 0) return 1;
+    int wanted = 0;
+    for (int i = 0; i < beam_test_selected_count; i++) {
+        if (strcmp(name, beam_test_selected[i]) == 0) {
+            beam_test_matched[i] = 1;
+            wanted = 1;
+        }
+    }
+    return wanted;
+}
+
+/*
+ * A --run name this binary does not have would otherwise run nothing, report
+ * "0 passed, 0 failed" and exit 0 -- a selection typo indistinguishable from
+ * a suite that passed. Checked at exit because the mains own their own return
+ * statement, and _Exit is what overrides the status one is about to produce.
+ */
+static void beam_test_report_unmatched(void) {
+    if (beam_test_list_only) return;
+    for (int i = 0; i < beam_test_selected_count; i++) {
+        if (!beam_test_matched[i]) {
+            fprintf(stderr, "NO SUCH TEST: %s\n", beam_test_selected[i]);
+            fflush(NULL);
+            _Exit(2);
+        }
+    }
+}
+
+static inline void beam_test_init(int argc, char **argv) {
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--list") == 0) {
+            beam_test_list_only = 1;
+        } else if (strcmp(argv[i], "--run") == 0 && i + 1 < argc) {
+            if (beam_test_selected_count == BEAM_TEST_MAX_SELECTED) {
+                fprintf(stderr, "%s: more than %d --run names\n",
+                        argv[0], BEAM_TEST_MAX_SELECTED);
+                exit(2);
+            }
+            beam_test_selected[beam_test_selected_count++] = argv[++i];
+        } else {
+            fprintf(stderr, "%s: unrecognised argument: %s\n"
+                            "usage: %s [--list] [--run NAME]...\n",
+                    argv[0], argv[i], argv[0]);
+            exit(2);
+        }
+    }
+    if (beam_test_selected_count > 0) atexit(beam_test_report_unmatched);
+}
+
+#define RUN_TEST(fn) do {                                        \
+    if (beam_test_list_only) { fputs(#fn "\n", stdout); break; } \
+    if (!beam_test_wanted(#fn)) break;                           \
+    printf("  %-55s ", #fn);                                     \
+    fn();                                                        \
+} while (0)
 
 #define ASSERT_MSG(cond, msg) do { \
     if (!(cond)) { printf("FAIL: %s\n", msg); fail_count++; return; } \

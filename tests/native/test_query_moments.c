@@ -871,7 +871,8 @@ static void test_a_moment_sweep_is_cheaper_than_a_posterior(void) {
     PASS();
 }
 
-int main(void) {
+int main(int argc, char **argv) {
+    beam_test_init(argc, argv);
     printf("\n[entropy]\n");
     RUN_TEST(test_entropy_matches_enumeration);
     RUN_TEST(test_entropy_reproduces_the_models_own_surprisal_moments);

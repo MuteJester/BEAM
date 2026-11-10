@@ -226,7 +226,8 @@ static void test_the_mixture_sweep_loses_nothing_either(void) {
 }
 
 
-int main(void) {
+int main(int argc, char **argv) {
+    beam_test_init(argc, argv);
     printf("\n==============================================================\n");
     printf("  The per-layer rescale invariant\n");
     printf("==============================================================\n");

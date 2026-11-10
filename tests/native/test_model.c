@@ -3630,7 +3630,8 @@ static void test_legal_rows_with_real_memory_demand_get_the_budget_answer(void) 
     PASS();
 }
 
-int main(void) {
+int main(int argc, char **argv) {
+    beam_test_init(argc, argv);
     printf("\n=== BEAM (Ensemble of Dual Graph Experts) ===\n");
 
     RUN_TEST(test_defaults_are_the_measured_ones);

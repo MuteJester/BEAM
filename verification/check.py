@@ -19,8 +19,8 @@ import numpy as np
 import BEAM
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from check_lib import (collect_ids, compare, python_inventory,
-                       record_targets)
+from check_lib import (c_inventory, collect_ids, compare, python_inventory,
+                       record_targets, refuse_short_c_inventory)
 
 # Argument faults are settled BEFORE the checks run: this script does its
 # work at module level, so a refusal placed after it costs a full gate run
@@ -297,9 +297,21 @@ else:
     check("pytest inventory", sorted(py_got), sorted(py_want))
 
 c_want = (B / "c_cases.txt").read_text().split()   # C names have no spaces
-c_got = re.findall(r"RUN_TEST\((\w+)\)",
-                   "\n".join(f.read_text() for f in (root / "tests/native").glob("*.c")))
-check("C test inventory", sorted(c_got), sorted(c_want))
+# Asked of the binaries, not grepped out of their source: see
+# check_lib.c_inventory. A binary that cannot be asked is reported by name
+# and the comparison is NOT attempted, because a partial inventory measured
+# against the whole baseline buries the one line that says why in 300 lines
+# of "missing".
+c_got, c_problems = c_inventory(root)
+if c_problems:
+    fail.append("C test inventory (build)")
+    print("  FAIL  C test inventory: the binaries could not all be asked")
+    for problem in c_problems:
+        print(f"          {problem}")
+    print("          Not compared against the baseline: an inventory short "
+          "by a whole file would report every one of its tests as missing.")
+else:
+    check("C test inventory", c_got, c_want)
 
 # ── Numerical contract ─────────────────────────────────────────────────────
 c = json.loads((B / "corpus.json").read_text())
@@ -482,6 +494,7 @@ if "--record" in sys.argv:
     if "pytest_cases" in _targets:
         _write("pytest_cases.txt", "\n".join(sorted(py_got_lines)) + "\n")
     if "c_cases" in _targets:
+        refuse_short_c_inventory(c_problems)
         _write("c_cases.txt", "\n".join(sorted(c_got)) + "\n")
     if "numeric" in _targets:
         _num = dict(got)

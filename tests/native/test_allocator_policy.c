@@ -129,7 +129,8 @@ static void test_resident_memory_stays_near_the_model_size(void) {
     PASS();
 }
 
-int main(void) {
+int main(int argc, char **argv) {
+    beam_test_init(argc, argv);
     printf("\nallocator policy\n");
     RUN_TEST(test_the_allocator_policy_is_applied);
     RUN_TEST(test_resident_memory_stays_near_the_model_size);

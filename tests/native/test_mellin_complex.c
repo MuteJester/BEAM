@@ -396,7 +396,8 @@ static void test_line_plans_cover_the_line_within_the_budget(void) {
     PASS();
 }
 
-int main(void) {
+int main(int argc, char **argv) {
+    beam_test_init(argc, argv);
     printf("Mellin transform at complex orders\n");
     RUN_TEST(test_matches_the_enumerated_sum);
     RUN_TEST(test_real_axis_and_conjugates);

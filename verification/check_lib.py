@@ -6,6 +6,59 @@ here.
 """
 from __future__ import annotations
 
+import subprocess
+from pathlib import Path
+
+
+def c_inventory(root: Path) -> tuple[list[str], list[str]]:
+    """Every C test name, asked of the binaries that run them.
+
+    Returns (names, problems). `names` is a multiset kept as a list, in the
+    order the binaries report it; `problems` is empty on a healthy tree.
+
+    The gate used to read these names with a regex over tests/native/*.c.
+    That reads the source rather than the program, so a RUN_TEST line main
+    never reaches -- or one the preprocessor drops -- counted as a test that
+    ran. Asking each binary cannot make that mistake, but it introduces one
+    of its own: a binary left over from before an edit answers for source
+    that no longer compiles. So a binary older than its source, or than the
+    harness header, is a problem rather than an answer.
+
+    Every problem names the file it is about. An unreadable binary must never
+    subtract its tests from the inventory quietly -- the baseline would then
+    be re-recorded shorter, which is the one failure this whole gate exists
+    to prevent.
+    """
+    src_dir, bin_dir = root / "tests" / "native", root / "build" / "tests" / "native"
+    sources = sorted(src_dir.glob("test_*.c"))
+    if not sources:
+        return [], [f"no C test sources under {src_dir}"]
+    # The harness header is a source of every binary: editing it without
+    # rebuilding leaves 35 binaries answering for a mechanism they lack.
+    header_mtime = max((h.stat().st_mtime for h in src_dir.glob("*.h")), default=0.0)
+
+    names: list[str] = []
+    problems: list[str] = []
+    for src in sources:
+        binary = bin_dir / src.stem
+        if not binary.exists():
+            problems.append(f"{src.stem}: not built; run make test")
+            continue
+        if binary.stat().st_mtime < max(src.stat().st_mtime, header_mtime):
+            problems.append(f"{src.stem}: binary is older than its source; run make test")
+            continue
+        r = subprocess.run([str(binary), "--list"], capture_output=True,
+                           text=True, encoding="utf-8")
+        if r.returncode != 0:
+            problems.append(f"{src.stem}: --list exited {r.returncode}")
+            continue
+        listed = r.stdout.split()
+        if not listed:
+            problems.append(f"{src.stem}: listed no tests")
+            continue
+        names.extend(listed)
+    return names, problems
+
 
 def compare(got: list[str], want: list[str]) -> bool:
     """True when the two inventories hold the same names the same number of times.
@@ -91,3 +144,20 @@ def record_targets(argv: list[str]) -> set[str]:
               f"it accepts {', '.join(sorted(RECORDABLE))}")
         raise SystemExit(2)
     return names
+
+
+def refuse_short_c_inventory(problems: list[str]) -> None:
+    """Refuse to record a C baseline that is missing a whole binary's tests.
+
+    Every other baseline can be re-recorded wrongly and re-recorded again.
+    This one cannot: the names it does not contain are the names nothing
+    afterwards knows were ever there. So the gate reports the problem and
+    exits rather than write it.
+    """
+    if not problems:
+        return None
+    print("\n  REFUSED c_cases.txt: the inventory is short by at least one "
+          "binary (named above).")
+    print("  Recording it now would delete those tests from the baseline, "
+          "and nothing afterwards could tell. Build first: make test")
+    raise SystemExit(2)

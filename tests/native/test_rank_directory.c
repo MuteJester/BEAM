@@ -460,7 +460,8 @@ static void test_a_table_numbered_out_of_order_is_refused(void) {
     PASS();
 }
 
-int main(void) {
+int main(int argc, char **argv) {
+    beam_test_init(argc, argv);
     printf("\nrank directory\n");
     RUN_TEST(test_finalize_picks_the_representation_per_table);
     RUN_TEST(test_sealing_changes_no_row);

@@ -181,7 +181,8 @@ static void test_local_distance_refusals(void) {
     beam_model_destroy(unbuilt);beam_model_destroy(p);beam_model_destroy(q);beam_local_distance_free(NULL);PASS();
 }
 
-int main(void) {
+int main(int argc, char **argv) {
+    beam_test_init(argc, argv);
     beam_model_set_threads(2);
     RUN_TEST(test_local_distance_matches_enumeration_all_widths);
     RUN_TEST(test_local_distance_topk_symmetry_identity_and_threads);

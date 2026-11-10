@@ -161,7 +161,8 @@ static void test_exp_bits_do_not_depend_on_the_call_size(void) {
     PASS();
 }
 
-int main(void) {
+int main(int argc, char **argv) {
+    beam_test_init(argc, argv);
     printf("Vector sine and cosine for the line sweep\n");
     RUN_TEST(test_random_angles_within_two_ulp);
     RUN_TEST(test_near_multiples_of_half_pi);

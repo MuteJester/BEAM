@@ -55,6 +55,14 @@ TEST_BINS := $(TEST_SRCS:tests/native/%.c=build/tests/native/%)
 test: $(TEST_BINS)
 	@for t in $(TEST_BINS); do ./$$t || exit 1; done
 
+# verification/check.py reads the C test inventory by asking each binary what
+# it runs, rather than by grepping RUN_TEST out of these sources -- see
+# check_lib.c_inventory for why. This target asks the same question by hand,
+# so the gate's input is reproducible without reading the gate, and so a
+# named suite's contents can be seen without running it.
+list-tests: $(TEST_BINS)
+	@for t in $(TEST_BINS); do echo "== $$t"; ./$$t --list; done
+
 # --wrap=malloc lets test_model make one allocation fail on demand, so the
 # out-of-memory rollback paths are exercised rather than assumed. It is
 # target-specific and must stay that way: --wrap redirects EVERY malloc in the
@@ -78,5 +86,5 @@ build/tests/native/%: tests/native/%.c build/libbeam.a
 clean:
 	rm -rf build
 
-.PHONY: all clean test
+.PHONY: all clean test list-tests
 -include $(DEPS)

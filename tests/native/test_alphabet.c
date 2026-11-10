@@ -1525,7 +1525,8 @@ static void test_every_descriptor_fits_the_length_constants(void) {
     PASS();
 }
 
-int main(void) {
+int main(int argc, char **argv) {
+    beam_test_init(argc, argv);
     printf("\nBEAM Unit Tests - Alphabets\n");
     printf("==============================================================\n\n");
 

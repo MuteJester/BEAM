@@ -363,7 +363,8 @@ static void test_one_block_can_be_released_before_the_rest(void) {
     PASS();
 }
 
-int main(void) {
+int main(int argc, char **argv) {
+    beam_test_init(argc, argv);
     printf("expected-count budget\n");
 
     RUN_TEST(test_the_shipped_budget_answers_and_every_block_is_whole);

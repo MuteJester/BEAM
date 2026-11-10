@@ -647,7 +647,8 @@ static void test_information_refuses_what_it_cannot_answer(void) {
     PASS();
 }
 
-int main(void) {
+int main(int argc, char **argv) {
+    beam_test_init(argc, argv);
     printf("\n[answers known before the model is built]\n");
     RUN_TEST(test_a_deterministic_dependency_carries_one_bit_as_the_prior_vanishes);
     RUN_TEST(test_independent_positions_share_no_information_as_the_prior_vanishes);

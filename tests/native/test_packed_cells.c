@@ -342,7 +342,8 @@ static void test_what_cannot_be_packed_is_left_alone(void) {
     PASS();
 }
 
-int main(void) {
+int main(int argc, char **argv) {
+    beam_test_init(argc, argv);
     printf("\npacked value cells\n");
     RUN_TEST(test_every_cell_is_still_the_prior_of_its_counts);
     RUN_TEST(test_both_accessors_agree);

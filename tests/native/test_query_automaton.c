@@ -494,7 +494,8 @@ static void test_an_automaton_makes_a_constraint_not_free(void) {
     PASS();
 }
 
-int main(void) {
+int main(int argc, char **argv) {
+    beam_test_init(argc, argv);
     printf("\n[motif]\n");
     RUN_TEST(test_the_motif_automaton_is_exactly_substring_search);
     RUN_TEST(test_a_matched_motif_cannot_be_un_matched);

@@ -74,7 +74,8 @@ static void test_fingerprint_refusals_and_root_only(void) {
     PASS();
 }
 
-int main(void) {
+int main(int argc, char **argv) {
+    beam_test_init(argc, argv);
     beam_model_set_threads(2);
     RUN_TEST(test_fingerprint_partition_matches_sequence_enumeration);
     RUN_TEST(test_fingerprint_refusals_and_root_only);

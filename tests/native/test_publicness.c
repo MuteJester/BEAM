@@ -298,7 +298,8 @@ static void test_rejects_bad_arguments(void) {
 
 /* ═══════════════════════════════════════════════════════════════ */
 
-int main(void) {
+int main(int argc, char **argv) {
+    beam_test_init(argc, argv);
     printf("BEAM Unit Tests - Publicness (Poisson-Binomial Occupancy)\n");
     printf("==============================================================\n\n");
 

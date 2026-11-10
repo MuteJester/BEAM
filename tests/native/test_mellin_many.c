@@ -333,7 +333,8 @@ static void test_the_calling_contract(void) {
 }
 
 
-int main(void) {
+int main(int argc, char **argv) {
+    beam_test_init(argc, argv);
     printf("Mellin transform at many orders in one pass\n");
     RUN_TEST(test_every_order_is_its_single_order_value_bitwise);
     RUN_TEST(test_the_company_an_order_keeps_does_not_change_it);

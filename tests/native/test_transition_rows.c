@@ -240,7 +240,8 @@ static void test_budget_refusal_does_not_poison_the_model(void) {
     PASS();
 }
 
-int main(void) {
+int main(int argc, char **argv) {
+    beam_test_init(argc, argv);
     printf("Normalized transition rows\n");
     RUN_TEST(test_matches_exhaustive_sequence_law);
     RUN_TEST(test_order_four_rows_are_normalized_and_log_consistent);

@@ -324,7 +324,8 @@ static void test_the_reported_figure_tracks_the_work(void) {
     PASS();
 }
 
-int main(void) {
+int main(int argc, char **argv) {
+    beam_test_init(argc, argv);
     printf("expected-count accounting\n");
     /*
      * ONE THREAD, and not for speed: the allocation tracker above is a plain

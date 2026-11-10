@@ -1073,7 +1073,8 @@ static void test_the_cost_estimate_precedes_the_sweep(void) {
     PASS();
 }
 
-int main(void) {
+int main(int argc, char **argv) {
+    beam_test_init(argc, argv);
     printf("insights: sequence logos\n");
     RUN_TEST(test_the_unconditional_logo_is_a_direct_sum_over_the_support);
     RUN_TEST(test_a_banded_logo_is_a_filtered_sum_over_the_support);

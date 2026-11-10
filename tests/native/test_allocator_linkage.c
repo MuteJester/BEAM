@@ -96,7 +96,8 @@ static void test_the_policy_applies_without_being_named(void) {
     PASS();
 }
 
-int main(void) {
+int main(int argc, char **argv) {
+    beam_test_init(argc, argv);
     printf("\nallocator policy reaches a link that never names it\n");
     RUN_TEST(test_the_policy_applies_without_being_named);
     printf("\n  %d passed, %d failed\n\n", pass_count, fail_count);

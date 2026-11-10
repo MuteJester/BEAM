@@ -992,7 +992,8 @@ static void test_the_power_gram_matches_the_pairs_one_at_a_time(void) {
 }
 
 
-int main(void) {
+int main(int argc, char **argv) {
+    beam_test_init(argc, argv);
     printf("\n==============================================================\n");
     printf("  Mixture kernels\n");
     printf("==============================================================\n");

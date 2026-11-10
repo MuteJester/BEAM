@@ -300,7 +300,8 @@ static void test_dense_sweeps_each_compute_their_own_semiring(void) {
     each_sweep_computes_its_own_semiring(false);
 }
 
-int main(void) {
+int main(int argc, char **argv) {
+    beam_test_init(argc, argv);
     printf("the backward family\n");
     RUN_TEST(test_sparse_best_completion_never_exceeds_the_total);
     RUN_TEST(test_dense_best_completion_never_exceeds_the_total);

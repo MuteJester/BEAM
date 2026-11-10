@@ -293,7 +293,8 @@ static void test_a_dense_model_finalizes_eagerly_to_the_same_bits(void) {
     PASS();
 }
 
-int main(void) {
+int main(int argc, char **argv) {
+    beam_test_init(argc, argv);
     printf("\nexpanding counts one table at a time\n");
     RUN_TEST(test_lazy_and_eager_finalize_agree);
     RUN_TEST(test_a_loaded_model_keeps_no_count_directory);

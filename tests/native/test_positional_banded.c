@@ -1316,7 +1316,8 @@ static void test_a_grid_over_budget_is_refused(void) {
 }
 
 
-int main(void) {
+int main(int argc, char **argv) {
+    beam_test_init(argc, argv);
     printf("banded positional marginals\n");
     RUN_TEST(test_one_band_over_everything_is_the_exact_marginal);
     RUN_TEST(test_the_band_masses_account_for_the_whole_spectrum);

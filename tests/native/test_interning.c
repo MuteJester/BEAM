@@ -428,7 +428,8 @@ static void test_what_cannot_be_interned_is_left_alone(void) {
     PASS();
 }
 
-int main(void) {
+int main(int argc, char **argv) {
+    beam_test_init(argc, argv);
     printf("\nfinalized row interning\n");
     RUN_TEST(test_interning_changes_no_row);
     RUN_TEST(test_a_pooled_row_is_still_the_prior_of_its_counts);
