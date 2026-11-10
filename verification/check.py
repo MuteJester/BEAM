@@ -19,7 +19,15 @@ import numpy as np
 import BEAM
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from check_lib import collect_ids, compare, python_inventory
+from check_lib import (collect_ids, compare, python_inventory,
+                       record_targets)
+
+# Argument faults are settled BEFORE the checks run: this script does its
+# work at module level, so a refusal placed after it costs a full gate run
+# first -- which is how this one was first written. `--only` without
+# `--record` selects nothing, so it is a typo rather than a no-op.
+if "--only" in sys.argv and "--record" not in sys.argv:
+    record_targets(sys.argv)
 
 B = Path(__file__).resolve().parent / "baseline"
 fail = []
@@ -467,15 +475,21 @@ if "--record" in sys.argv:
         path.write_text(text)
         print(f"  recorded {name}  (previous kept as {prev.name})")
 
-    print("\nRECORDING")
-    _write("python_api.txt", "\n".join(current) + "\n")
-    _write("pytest_cases.txt", "\n".join(sorted(py_got_lines)) + "\n")
-    _write("c_cases.txt", "\n".join(sorted(c_got)) + "\n")
-    _num = dict(got)
-    _num["fixture_sha256"] = digest
-    _num["fixture_bytes"] = fixture_size
-    _write("numeric.json", json.dumps(_num, indent=1, sort_keys=True) + "\n")
-    _write("threads.json", json.dumps(tg, indent=1, sort_keys=True) + "\n")
+    _targets = record_targets(sys.argv)
+    print(f"\nRECORDING {', '.join(sorted(_targets))}")
+    if "python_api" in _targets:
+        _write("python_api.txt", "\n".join(current) + "\n")
+    if "pytest_cases" in _targets:
+        _write("pytest_cases.txt", "\n".join(sorted(py_got_lines)) + "\n")
+    if "c_cases" in _targets:
+        _write("c_cases.txt", "\n".join(sorted(c_got)) + "\n")
+    if "numeric" in _targets:
+        _num = dict(got)
+        _num["fixture_sha256"] = digest
+        _num["fixture_bytes"] = fixture_size
+        _write("numeric.json", json.dumps(_num, indent=1, sort_keys=True) + "\n")
+    if "threads" in _targets:
+        _write("threads.json", json.dumps(tg, indent=1, sort_keys=True) + "\n")
     print("\nRECORDED. Write the RERECORDED.md section naming every line "
           "that moved before committing this.")
     sys.exit(0)

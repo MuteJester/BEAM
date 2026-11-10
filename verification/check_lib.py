@@ -51,3 +51,43 @@ def python_inventory(want_text: str, collected_text: str) -> tuple[list[str], li
     property worth testing is that both sides are built the same way.
     """
     return collect_ids(want_text), collect_ids(collected_text)
+
+
+#: Every baseline `--record` can write, by the name `--only` accepts.
+RECORDABLE = frozenset({"python_api", "pytest_cases", "c_cases",
+                        "numeric", "threads"})
+
+
+def record_targets(argv: list[str]) -> set[str]:
+    """Which baselines this invocation may write.
+
+    `--record TAG` writes all five, which is what it has always done and
+    stays the default. `--only NAME[,NAME...]` narrows it.
+
+    The reason it must be narrowable: `python_api.txt` can only be recorded
+    correctly by the interpreter CI checks against, and on this machine the
+    only interpreter that can import BEAM at all is Python 3.14 -- where
+    recording it would write signatures that do not exist on 3.11. Without
+    `--only`, re-recording a test inventory meant overwriting the API list
+    too, so the only available recorder was the one that must never run.
+
+    `--only` is a separate flag rather than `--record=NAMES` because
+    `--record` already takes the TAG that names the preserved previous copy,
+    and an `--record=NAMES` spelling would not even match the `in sys.argv`
+    test that reaches this code -- it would skip recording silently.
+    """
+    if "--only" not in argv:
+        return set(RECORDABLE)
+    if "--record" not in argv:
+        print("\nREFUSING: --only selects which baselines --record writes, "
+              "and there is no --record here")
+        raise SystemExit(2)
+    i = argv.index("--only")
+    raw = argv[i + 1] if len(argv) > i + 1 else ""
+    names = {n.strip() for n in raw.split(",") if n.strip()}
+    unknown = sorted(names - RECORDABLE)
+    if not names or unknown:
+        print(f"\nREFUSING: --only {raw!r} names {unknown or 'nothing'}; "
+              f"it accepts {', '.join(sorted(RECORDABLE))}")
+        raise SystemExit(2)
+    return names
