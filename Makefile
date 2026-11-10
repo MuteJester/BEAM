@@ -52,8 +52,14 @@ build/%.o: %.c
 TEST_SRCS := $(wildcard tests/native/test_*.c)
 TEST_BINS := $(TEST_SRCS:tests/native/%.c=build/tests/native/%)
 
+# tools/qa/run reports every suite and continues past a failure. The loop
+# this replaces was `for t in $(TEST_BINS); do ./$$t || exit 1; done`, which
+# stopped at the first failing suite and hid up to 34 others, and let every
+# binary claim all 16 cores -- at any real load that is thrashing, not
+# parallelism. The runner caps threads per suite and runs several suites at
+# once instead.
 test: $(TEST_BINS)
-	@for t in $(TEST_BINS); do ./$$t || exit 1; done
+	@tools/qa/run c
 
 # verification/check.py reads the C test inventory by asking each binary what
 # it runs, rather than by grepping RUN_TEST out of these sources -- see

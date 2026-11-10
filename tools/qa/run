@@ -1,0 +1,230 @@
+#!/usr/bin/env python3
+"""Run BEAM's test suites: every one of them, every failure, a thread cap.
+
+`make test` was one line:
+
+    for t in $(TEST_BINS); do ./$t || exit 1; done
+
+which stops at the first failure, so one broken suite hides up to 34 others;
+reports nothing but the shell's exit status; and leaves every binary to claim
+all 16 cores, which at any real load is thrashing rather than parallelism.
+
+This runner reports every suite, continues past failures, and exits non-zero
+if any suite did not pass. It also distinguishes a suite that failed an
+assertion from one the wall-clock ceiling killed and from one that could not
+be run at all: those three need different responses, and a runner that calls
+them all "failed" sends someone looking for a defect that is not there.
+
+The thread cap is applied as an environment variable and never as an
+in-process call. src/native/core/threads.c:24-26 records that BEAM does not
+edit global OpenMP state, and a runner that did would be deciding something
+the library deliberately leaves to the caller.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+import time
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+BOUNDED = ROOT / "verification" / "bounded"
+
+# verification/README.md:25-45: anything that builds a model runs under
+# `bounded`, which turns a lazily-granted allocation BEAM cannot afford into
+# a clean failure inside the process that asked, rather than the OOM killer
+# choosing a victim from the whole machine. Twice that victim was the editor.
+DEFAULT_MEM_GB = 12
+# bounded's own default is 900 s. That is too tight for this suite: at load
+# 40 one suite took 1740 s and passed. A ceiling that turns a slow box into
+# a wall of false failures teaches people to ignore the runner.
+DEFAULT_TIMEOUT = 1800
+DEFAULT_THREADS = 2
+
+# `timeout` reports 124 when it had to kill the child; 137 and 143 are the
+# child dying of KILL or TERM, which is the same event seen from below.
+TIMEOUT_CODES = {124, 137, 143}
+BOUNDED_REFUSED = 3          # bounded could not set the address-space ceiling
+
+
+def discover(bin_dir: Path) -> list[Path]:
+    return sorted(p for p in bin_dir.glob("test_*")
+                  if p.is_file() and os.access(p, os.X_OK))
+
+
+def classify(code: int) -> str:
+    if code == 0:
+        return "pass"
+    if code in TIMEOUT_CODES:
+        return "timeout"
+    if code == BOUNDED_REFUSED:
+        return "error"
+    return "fail"
+
+
+def run_one(binary: Path, *, threads: int, timeout: int, mem_gb: int) -> dict:
+    env = dict(os.environ)
+    env["OMP_NUM_THREADS"] = str(threads)
+    started = time.monotonic()
+    proc = subprocess.run(
+        [str(BOUNDED), "-m", str(mem_gb), "-t", str(timeout), "--", str(binary)],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        env=env)
+    seconds = time.monotonic() - started
+    return {"name": binary.name, "exit": proc.returncode,
+            "status": classify(proc.returncode), "seconds": round(seconds, 2),
+            "output": proc.stdout + proc.stderr}
+
+
+def conditions(*, threads: int, jobs: int, timeout: int, mem_gb: int) -> dict:
+    """What the durations below mean nothing without.
+
+    The same suite took 3.4 minutes on an idle box and 106 minutes at load
+    40. A recorded duration with no record of the load, the thread cap and
+    the core count is not a measurement, and comparing two of them is how a
+    change gets credited with someone else's quiet afternoon.
+    """
+    try:
+        load = [round(x, 2) for x in os.getloadavg()]
+    except (OSError, AttributeError):
+        load = [-1.0, -1.0, -1.0]
+    return {"threads": threads, "jobs": jobs, "cores": os.cpu_count() or 1,
+            "loadavg": load, "timeout_seconds": timeout, "mem_gb": mem_gb,
+            "started": time.strftime("%Y-%m-%dT%H:%M:%S%z")}
+
+
+def report(suite: dict, *, show_output: bool) -> None:
+    if show_output and suite["output"]:
+        print(suite["output"].rstrip("\n"))
+    tag = {"pass": "pass   ", "fail": "FAIL   ",
+           "timeout": "TIMEOUT", "error": "ERROR  "}[suite["status"]]
+    note = ""
+    if suite["status"] == "fail":
+        note = f"  (exit {suite['exit']})"
+    elif suite["status"] == "timeout":
+        note = f"  (killed after {suite['seconds']:.0f} s)"
+    elif suite["status"] == "error":
+        note = "  (could not be run; see above)"
+    print(f"  {tag}  {suite['name']:<46} {suite['seconds']:7.2f} s{note}")
+
+
+def main(argv: list[str] | None = None) -> int:
+    p = argparse.ArgumentParser(prog="tools/qa/run", description=__doc__)
+    p.add_argument("kind", choices=["c"], help="which half of the suite to run")
+    p.add_argument("--bin-dir", type=Path,
+                   default=ROOT / "build" / "tests" / "native")
+    p.add_argument("--jobs", type=int, default=0,
+                   help="suites at once; default fills the cores at the cap")
+    p.add_argument("--threads", type=int, default=DEFAULT_THREADS,
+                   help=f"OMP_NUM_THREADS per suite (default {DEFAULT_THREADS})")
+    p.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT,
+                   help=f"seconds per suite (default {DEFAULT_TIMEOUT})")
+    p.add_argument("--mem-gb", type=int, default=DEFAULT_MEM_GB)
+    p.add_argument("--suite", action="append", default=[],
+                   help="run only this suite. Repeatable.")
+    p.add_argument("--json", type=Path, help="write the results here")
+    p.add_argument("--quiet", action="store_true",
+                   help="print the status lines and the failures, not the "
+                        "output of suites that passed")
+    a = p.parse_args(argv)
+
+    if not a.bin_dir.is_dir():
+        print(f"{p.prog}: no such directory: {a.bin_dir}\n"
+              f"Build the suites first: make test", file=sys.stderr)
+        return 2
+    found = discover(a.bin_dir)
+    if not found:
+        print(f"{p.prog}: no executable test_* under {a.bin_dir}\n"
+              f"Build the suites first: make test", file=sys.stderr)
+        return 2
+
+    if a.suite:
+        by_name = {b.name: b for b in found}
+        unknown = [s for s in a.suite if s not in by_name]
+        if unknown:
+            # A named suite that does not exist must not run nothing and
+            # report success: that is a typo reading as a green suite.
+            print(f"{p.prog}: no such suite: {', '.join(unknown)}",
+                  file=sys.stderr)
+            print(f"  available: {', '.join(sorted(by_name))}", file=sys.stderr)
+            return 2
+        found = [by_name[s] for s in a.suite]
+
+    # One probe, before 35 suites each report the same refusal. The wrapper
+    # is new to CI's C-test job, which is a checkout and `make test`, so an
+    # environment that will not grant the ceiling should say so once and
+    # name the way out -- never run without it, which is the whole point of
+    # the wrapper.
+    probe = subprocess.run([str(BOUNDED), "-m", str(a.mem_gb), "-t", "10",
+                            "--", "true"],
+                           capture_output=True, text=True, encoding="utf-8")
+    if probe.returncode == BOUNDED_REFUSED:
+        print(f"{p.prog}: this environment refuses an address-space ceiling "
+              f"of {a.mem_gb} GB, so nothing was run.", file=sys.stderr)
+        print(f"  {probe.stderr.strip()}", file=sys.stderr)
+        print("  The ceiling is not optional (verification/README.md): BEAM "
+              "can be asked for tables of hundreds of GB, Linux grants them "
+              "lazily, and the failure then lands on whatever the OOM killer "
+              "picks -- twice that was the developer's editor.", file=sys.stderr)
+        print("  Raise the hard limit, or pass --mem-gb to fit under it.",
+              file=sys.stderr)
+        return 2
+
+    threads = max(1, a.threads)
+    jobs = a.jobs if a.jobs > 0 else max(1, (os.cpu_count() or 1) // threads)
+    jobs = min(jobs, len(found))
+    cond = conditions(threads=threads, jobs=jobs, timeout=a.timeout,
+                      mem_gb=a.mem_gb)
+    print(f"{len(found)} suite(s), {jobs} at a time x {threads} thread(s) "
+          f"on {cond['cores']} cores, load {cond['loadavg'][0]}")
+
+    started = time.monotonic()
+    results: list[dict] = []
+    with ThreadPoolExecutor(max_workers=jobs) as pool:
+        futures = [pool.submit(run_one, b, threads=threads, timeout=a.timeout,
+                               mem_gb=a.mem_gb) for b in found]
+        for f in futures:
+            suite = f.result()
+            results.append(suite)
+            # Each suite's output is printed whole, when it finishes, rather
+            # than streamed: with more than one job the streams interleave
+            # into something no one can read.
+            report(suite, show_output=not a.quiet)
+    elapsed = time.monotonic() - started
+
+    bad = [s for s in results if s["status"] != "pass"]
+    if a.quiet:
+        for s in bad:
+            print(f"\n── {s['name']} ({s['status']}) "
+                  f"{'─' * max(0, 54 - len(s['name']))}")
+            print(s["output"].rstrip("\n"))
+
+    counts = {k: sum(1 for s in results if s["status"] == k)
+              for k in ("pass", "fail", "timeout", "error")}
+    print(f"\n{len(results)} suites, {counts['fail']} failed, "
+          f"{counts['timeout']} timed out, {counts['error']} not run, "
+          f"in {elapsed:.1f} s "
+          f"(jobs {jobs} x {threads} threads on {cond['cores']} cores, "
+          f"load {cond['loadavg'][0]} at start)")
+
+    if a.json:
+        a.json.parent.mkdir(parents=True, exist_ok=True)
+        a.json.write_text(json.dumps(
+            {"kind": a.kind, "conditions": cond,
+             "suites": [{k: v for k, v in s.items() if k != "output"}
+                        for s in sorted(results, key=lambda s: s["name"])],
+             "totals": {"suites": len(results), "failed": counts["fail"],
+                        "timed_out": counts["timeout"],
+                        "not_run": counts["error"],
+                        "seconds": round(elapsed, 2)}},
+            indent=1, sort_keys=True) + "\n", encoding="utf-8")
+
+    return 0 if not bad else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
