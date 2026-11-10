@@ -408,10 +408,17 @@ def test_max_length_from_the_data_ignores_sequences_that_would_be_skipped():
 
 
 def test_max_length_from_the_data_stops_at_its_alphabets_ceiling():
-    m = BeamModel(SHORT + ["C" + "A" * 299], order=2, max_length="data")
+    with pytest.warns(BEAM.BeamPerformanceWarning, match="skipped"):
+        m = BeamModel(SHORT + ["C" + "A" * 299], order=2, max_length="data")
     assert m.config["max_length"] == 255 and m.n_skipped == 1
-    nt = BeamModel(["ACGT" * 4] + ["A" * 600], order=2, max_length="data",
-                   alphabet="nt")
+    # The nt clamp fires BOTH warnings: one sequence is dropped, and 512 is
+    # past the trigger. Matching only the first left the second escaping the
+    # block, which printed on every run and failed under -W error.
+    with pytest.warns(BEAM.BeamPerformanceWarning) as clamp:
+        nt = BeamModel(["ACGT" * 4] + ["A" * 600], order=2, max_length="data",
+                       alphabet="nt")
+    said = " ".join(str(w.message) for w in clamp)
+    assert "skipped" in said and "39.5x" in said, said
     assert nt.config["max_length"] == 512 and nt.n_skipped == 1
 
 
@@ -441,7 +448,8 @@ _READS_400 = ["".join(_RNG_LONG.choice("ACGT") for _ in range(400))
 @pytest.fixture(scope="module")
 def long_nt():
     """One 400-base nucleotide model and its one-thread scores, shared."""
-    m = BeamModel(_READS_400, order=3, max_length=400, alphabet="nt")
+    with pytest.warns(BEAM.BeamPerformanceWarning):
+        m = BeamModel(_READS_400, order=3, max_length=400, alphabet="nt")
     previous = BEAM.threads()
     BEAM.set_threads(1)
     try:

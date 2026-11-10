@@ -1082,6 +1082,15 @@ tests/python/model/test_transition_rows.py::test_numpy_integer_indices_and_retur
 tests/python/model/test_transition_rows.py::test_shipped_order_aa_rows_match_conditioned_mask_sweeps[2-CA]
 tests/python/model/test_transition_rows.py::test_shipped_order_aa_rows_match_conditioned_mask_sweeps[5-WYAC]
 tests/python/model/test_transition_rows.py::test_streaming_blocks_match_independent_masked_queries
+tests/python/model/test_warnings.py::test_a_default_length_model_does_not_warn
+tests/python/model/test_warnings.py::test_a_long_model_warns_about_the_quadratic_before_building
+tests/python/model/test_warnings.py::test_a_rebuilt_model_does_not_re_warn
+tests/python/model/test_warnings.py::test_data_length_clamps_at_the_cap_and_counts_what_it_dropped
+tests/python/model/test_warnings.py::test_every_way_to_reach_a_long_model_warns[builder]
+tests/python/model/test_warnings.py::test_every_way_to_reach_a_long_model_warns[from_file]
+tests/python/model/test_warnings.py::test_every_way_to_reach_a_long_model_warns[from_sequence_file]
+tests/python/model/test_warnings.py::test_the_warning_is_a_user_warning
+tests/python/model/test_warnings.py::test_the_warning_points_at_the_callers_own_line
 tests/python/model/test_weight_buffers.py::test_a_float64_array_builds_the_same_model_as_a_list
 tests/python/model/test_weight_buffers.py::test_a_list_of_python_floats_is_unchanged
 tests/python/model/test_weight_buffers.py::test_a_memoryview_builds_the_same_model

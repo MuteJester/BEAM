@@ -21,6 +21,7 @@ from .errors import (
     OutOfMemory,
     SaddlepointDidNotConverge,
 )
+from .warnings import BeamPerformanceWarning
 from ._model import (
     BeamModel,
     Atoms,
@@ -62,6 +63,7 @@ __all__ = [
     "QueryError", "ImpossibleCondition", "UnsupportedQuery", "QueryTooLarge",
     "MixtureError", "IncompatibleMembers", "UnsupportedOrder",
     "MixtureTooLarge",
+    "BeamPerformanceWarning",
 
     "BeamModel", "Atoms", "Builder", "Calibration", "Histogram",
     "PseqAnalysis", "effective_threads", "file_provenance_span",
