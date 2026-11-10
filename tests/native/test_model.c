@@ -562,6 +562,105 @@ static void test_an_amino_acid_ceiling_is_not_the_nucleotide_one(void) {
     PASS();
 }
 
+/* ── The file format word ──────────────────────────────────── */
+
+/* Builds a small model, saves it, and returns the format word read back from
+ * bytes 4..8 of the file; -1 when the model or file could not be made. */
+static long saved_format_word(BeamAlphabet alpha, uint32_t order,
+                              uint32_t max_length, const char *path) {
+    BeamModelConfig c;
+    beam_model_config_default_for(alpha, &c);
+    c.order = (uint8_t)order;
+    c.max_length = max_length;
+    BeamModel *m = beam_model_new(&c);
+    if (!m) return -1;
+    const char *s[] = {alpha == BEAM_ALPHABET_NT ? "ACGTACGTAC" : "CASSLGQYF"};
+    double w[] = {1.0};
+    long word = -1;
+    if (beam_model_observe(m, s, w, 1u) == BEAM_OK
+        && beam_model_finalize(m) == BEAM_OK
+        && beam_model_save(m, path) == BEAM_OK) {
+        FILE *f = fopen(path, "rb");
+        unsigned char b[8];
+        if (f && fread(b, 1, 8, f) == 8)
+            word = (long)b[4] | ((long)b[5] << 8) | ((long)b[6] << 16)
+                 | ((long)b[7] << 24);
+        if (f) fclose(f);
+    }
+    beam_model_destroy(m);
+    return word;
+}
+
+static void test_a_short_model_is_still_written_as_format_9(void) {
+    /* A 0.9.0 build must still open it, and the bytes must not move. */
+    const char *path = "/tmp/beam_fmt_short.beam";
+    long word = saved_format_word(BEAM_ALPHABET_AA, 2u, 27u, path);
+    remove(path);
+    ASSERT_MSG(word == 9, "a model of at most 255 residues is stamped format 9");
+    PASS();
+}
+
+static void test_a_long_model_is_written_as_format_10(void) {
+    const char *path = "/tmp/beam_fmt_long.beam";
+    long word = saved_format_word(BEAM_ALPHABET_NT, 2u, 400u, path);
+    remove(path);
+    ASSERT_MSG(word == 10, "a model longer than 255 residues is stamped 10");
+    PASS();
+}
+
+static void test_both_formats_load(void) {
+    const char *ps = "/tmp/beam_fmt_both_short.beam";
+    const char *pl = "/tmp/beam_fmt_both_long.beam";
+    const long ws = saved_format_word(BEAM_ALPHABET_AA, 2u, 27u, ps);
+    const long wl = saved_format_word(BEAM_ALPHABET_NT, 2u, 400u, pl);
+    BeamModel *a = beam_model_load(ps);
+    BeamModel *b = beam_model_load(pl);
+    remove(ps);
+    remove(pl);
+    const int ok = a != NULL && b != NULL;
+    const uint32_t la = a ? beam_model_config(a)->max_length : 0u;
+    const uint32_t lb = b ? beam_model_config(b)->max_length : 0u;
+    beam_model_destroy(a);
+    beam_model_destroy(b);
+    ASSERT_MSG(ws == 9, "short");
+    ASSERT_MSG(wl == 10, "long");
+    ASSERT_MSG(ok, "both a format 9 and a format 10 file load");
+    ASSERT_MSG(la == 27u, "the short model reports its own max_length");
+    ASSERT_MSG(lb == 400u, "the long model reports its own max_length");
+    PASS();
+}
+
+static void test_a_format_11_file_says_upgrade_beam(void) {
+    /* The format word is read before the checksum, so patching it alone is
+     * enough: a newer file must say "upgrade", not "header corrupt". For a
+     * library whose claim is reproducibility, a false data-loss diagnosis is
+     * the worst available failure. */
+    const char *path = "/tmp/beam_fmt_11.beam";
+    const long word = saved_format_word(BEAM_ALPHABET_AA, 2u, 27u, path);
+    int patched = 0;
+    FILE *f = fopen(path, "r+b");
+    if (f) {
+        const unsigned char eleven[4] = {11, 0, 0, 0};
+        patched = fseek(f, 4, SEEK_SET) == 0 && fwrite(eleven, 1, 4, f) == 4;
+        fclose(f);
+    }
+    BeamModel *m = beam_model_load(path);
+    remove(path);
+    const int loaded = m != NULL;
+    const BeamError code = beam_last_error();
+    const char *msg = beam_error_message();
+    const int upgrade = msg && strstr(msg, "Upgrade BEAM") != NULL;
+    const int corrupt = msg && strstr(msg, "corrupt") != NULL;
+    beam_model_destroy(m);
+    ASSERT_MSG(word == 9 && patched, "save, then patch the format word");
+    ASSERT_MSG(!loaded, "a format 11 file must not load");
+    ASSERT_MSG(code == BEAM_ERR_IO_VERSION,
+               "it is a version error, not a corruption error");
+    ASSERT_MSG(upgrade, "and it says to upgrade");
+    ASSERT_MSG(!corrupt, "and does not say corrupt");
+    PASS();
+}
+
 /* ── Sparse row storage, directly ───────────────────────────── */
 
 static void test_sparse_rows_boundaries_and_erase(void) {
@@ -2680,7 +2779,7 @@ static bool rewrite_format_word(const char *path, uint32_t format) {
 /**
  * A file from an earlier development build is refused as a VERSION, by name.
  *
- * This build reads only its own format. A file of an older one is not
+ * This build reads formats 9 and 10. A file of an older one is not
  * damaged, so it must not be reported as corrupt -- that would send the
  * caller hunting for a disk fault -- and the message has to say which format
  * the file is and what to do about it, because nothing converts it.
@@ -3543,6 +3642,10 @@ int main(void) {
     RUN_TEST(test_either_storage_layout_is_a_valid_configuration);
     RUN_TEST(test_a_config_past_its_alphabets_ceiling_is_refused_by_name);
     RUN_TEST(test_an_amino_acid_ceiling_is_not_the_nucleotide_one);
+    RUN_TEST(test_a_short_model_is_still_written_as_format_9);
+    RUN_TEST(test_a_long_model_is_written_as_format_10);
+    RUN_TEST(test_both_formats_load);
+    RUN_TEST(test_a_format_11_file_says_upgrade_beam);
     RUN_TEST(test_sparse_rows_boundaries_and_erase);
     RUN_TEST(test_sparse_growth_failure_is_atomic);
     RUN_TEST(test_sparse_matches_dense_bit_for_bit);

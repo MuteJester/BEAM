@@ -865,7 +865,10 @@ tests/python/model/test_file_inputs.py::test_log_pseq_parquet_preserves_row_orde
 tests/python/model/test_file_inputs.py::test_novelty_is_the_richness_increment
 tests/python/model/test_file_inputs.py::test_pseq_accepts_a_list_and_a_log_flag
 tests/python/model/test_format_compatibility.py::test_a_current_file_round_trips
+tests/python/model/test_format_compatibility.py::test_a_format_9_file_from_the_previous_build_still_loads
+tests/python/model/test_format_compatibility.py::test_a_format_9_file_is_saved_back_byte_for_byte
 tests/python/model/test_format_compatibility.py::test_a_newer_file_asks_for_a_newer_beam
+tests/python/model/test_format_compatibility.py::test_a_short_model_is_still_saved_as_format_9
 tests/python/model/test_format_compatibility.py::test_an_older_development_file_is_refused_with_the_remedy
 tests/python/model/test_format_compatibility.py::test_not_a_model_file_says_so
 tests/python/model/test_format_compatibility.py::test_the_format_word_decides_before_the_checksum
@@ -962,6 +965,7 @@ tests/python/model/test_partition_by_layer.py::test_the_split_is_not_the_uniform
 tests/python/model/test_partition_by_layer.py::test_the_vector_sums_to_log_pseq
 tests/python/model/test_persistence.py::test_a_file_without_the_flag_still_reestimates
 tests/python/model/test_persistence.py::test_a_finalized_model_loads_under_its_stored_strengths
+tests/python/model/test_persistence.py::test_a_long_model_round_trips_with_identical_scores
 tests/python/model/test_persistence.py::test_a_reload_refinalizes_under_the_stored_prior
 tests/python/model/test_persistence.py::test_corrupt_file_is_rejected
 tests/python/model/test_persistence.py::test_round_trip

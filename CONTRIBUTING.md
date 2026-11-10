@@ -85,7 +85,7 @@ independent check against brute-force enumeration fails.
 
 Saved models start with the magic number `0x4245414D` (`"BEAM"`) and a format
 number, and store counts plus the full configuration, so a loaded model can
-be added to and re-finalized. BEAM writes and reads **format 9**. Any
+be added to and re-finalized. BEAM writes **format 9** for a model of at most 255 residues and **format 10** for a longer one, and reads both. Any
 later format must keep reading format 9 files, or be released as a new major
 version (see [`RELEASING.md`](RELEASING.md)).
 

@@ -32,11 +32,15 @@ from dataclasses import dataclass
 from pathlib import Path
 
 __all__ = ["PretrainedModel", "pretrained_models", "load_pretrained",
-           "pretrained_path", "MODEL_FORMAT"]
+           "pretrained_path", "MODEL_FORMAT", "MODEL_FORMATS_READ"]
 
-#: The model-file format this build reads. A saved model carries it in bytes
-#: 4-8 of its header; the test suite checks this matches what ``save`` writes.
+#: The model-file format this build writes for a model of at most 255
+#: residues. A saved model carries it in bytes 4-8 of its header; the test
+#: suite checks this matches what ``save`` writes.
 MODEL_FORMAT = 9
+
+#: Every model-file format this build reads (10 is written for longer models).
+MODEL_FORMATS_READ = frozenset({9, 10})
 
 _MAGIC = 0x4245414D
 _CHUNK = 1 << 20
@@ -119,10 +123,11 @@ def _lookup(name: str) -> PretrainedModel:
         raise KeyError(f"no published BEAM model named {name!r}; "
                        f"available: {known}")
     m = models[name]
-    if m.format != MODEL_FORMAT:
+    if m.format not in MODEL_FORMATS_READ:
+        readable = " and ".join(str(f) for f in sorted(MODEL_FORMATS_READ))
         raise ValueError(
             f"model {name!r} ({m.release}) is file format {m.format}, and "
-            f"this BEAM reads format {MODEL_FORMAT}: upgrade beam-model "
+            f"this BEAM reads formats {readable}: upgrade beam-model "
             f"(pip install -U beam-model)")
     return m
 
