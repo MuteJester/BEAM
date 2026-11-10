@@ -5,15 +5,42 @@ from __future__ import annotations
 import importlib.util
 import math
 import random
+import struct
 
 import numpy as np
 import pytest
 
+import BEAM
 from BEAM import BeamModel
 
 from _helpers import AA, J_MOTIFS, make_corpus
 
 # ── Persistence ──────────────────────────────────────────────────
+
+# Forty nucleotide reads of exactly 400 bases, seeded so the corpus (and so a
+# failure of the round trip below) is reproducible.
+_RNG_400 = random.Random(400)
+READS_400 = ["".join(_RNG_400.choice("ACGT") for _ in range(400))
+             for _ in range(40)]
+
+
+def test_a_long_model_round_trips_with_identical_scores(tmp_path):
+    """Format 10, sparse, finalized. The format 9 fixture covers old files;
+    this covers new ones. Order 3: the order is incidental to a file-format
+    round trip, and max_length=400 is the claim under test."""
+    with pytest.warns(BEAM.BeamPerformanceWarning):
+        m = BeamModel(READS_400, order=3, max_length=400, alphabet="nt")
+    before = m.log_pseq_batch(READS_400[:30])
+    path = tmp_path / "long.beam"
+    m.save(path)
+    assert struct.unpack_from("<I", path.read_bytes(), 4)[0] == 10
+    # A load re-finalizes from the counts, so it pays the quadratic cost too
+    # and says so.
+    with pytest.warns(BEAM.BeamPerformanceWarning, match="max_length=400"):
+        back = BeamModel.from_file(path)
+    assert back.config["max_length"] == 400
+    assert np.array_equal(back.log_pseq_batch(READS_400[:30]), before)
+
 
 def test_round_trip(tmp_path, corpus):
     seqs, abund = corpus

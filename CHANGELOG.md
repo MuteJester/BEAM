@@ -8,6 +8,59 @@ format.
 
 ## [Unreleased]
 
+Nucleotide models now hold reads of up to 512 bases. Format-9 model files
+still load, and every default call returns identical numbers; the exceptions
+are listed under Changed.
+
+### Added
+- Nucleotide models of up to 512 bases, which covers the ~400-base reads
+  this was built for with room to spare. Amino-acid models keep their
+  limit of 255 residues.
+- `BEAM.BeamPerformanceWarning`, raised before a build that costs far more
+  than it looks. Finalizing runs one partition-function computation for every
+  length from 1 to `max_length`, not only the observed ones, so the cost grows
+  with the square of `max_length`: about 24 times the nucleotide default at
+  400. The cost is unchanged and only announced.
+- `BEAM.pretrained.MODEL_FORMATS_READ`, the set of model-file formats this
+  build reads.
+
+### Changed
+- **`max_length='data'` on a nucleotide corpus now stops at 512 instead of
+  255.** A build that used to skip sequences longer than 255 silently now keeps
+  them, sizes the model larger and emits a `BeamPerformanceWarning`, so the
+  same call on a corpus with 400-base reads returns a different model.
+  An amino-acid corpus returns the same model it did, though a corpus with
+  sequences over 255 now warns as well.
+- **C API break.** `BeamModelConfig.max_length` is now `uint32_t`. The size of
+  the struct and the offset of every field after it moved: `sizeof` went from
+  128 to 136 bytes, `max_length` from offset 5 to 8, and `alpha` from offset 24
+  to 32. A C caller built against 0.9.0's header and linked against this
+  release finds `alpha` eight bytes from where it looks and reads its prior
+  strength out of padding. Rebuild C code against the headers it links; see
+  "The C API" in [`RELEASING.md`](RELEASING.md).
+- `BEAM.pretrained.MODEL_FORMAT` now means the format this build *writes*
+  for a model of 255 or fewer residues, where it used to mean the only format
+  this build reads. Code that refused anything but `MODEL_FORMAT` will wrongly
+  refuse a sound format-10 file; test against `MODEL_FORMATS_READ` instead.
+- Models longer than 255 are written as format 10. Builds before this release
+  refuse them with a "written by a newer version of BEAM, upgrade" message
+  rather than a corruption error. Models of 255 or fewer are still written as
+  format 9, byte for byte as before, and this release reads both.
+- `max_length` is validated per alphabet and per order, because the real limit
+  is `max_length` times the alphabet size to the power of the order against a
+  32-bit row index. Both configuration errors now name the alphabet whose
+  limit they quote, for `order` as well as `max_length`; the order limits are
+  further apart (4 for amino acids, 9 for nucleotides) than the length limits.
+
+### Fixed
+- The lifecycle guards now run in an order in which each refusal can be acted
+  on: a row count no budget can fix is no longer answered with an offer to
+  raise the budget. The row bound was also one rank block too loose.
+- The lower bound on `max_length` in `config.py` was 2 where the C library
+  accepts 1, so Python refused a length that C allowed.
+- `BEAM_MAX_LENGTH_CEILING` in `constants.py` was 255 while the C header said
+  512. It had no live reader.
+
 ## [0.9.0] - 2026-10-19
 
 The first public release, made while the manuscript *A computable probability

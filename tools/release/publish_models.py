@@ -62,7 +62,7 @@ def prepare(spec: dict, sources: dict[str, Path], dist: Path) -> None:
     sys.path.insert(0, str(ROOT / "src"))
     import BEAM
     from BEAM import BeamModel
-    from BEAM.pretrained import MODEL_FORMAT
+    from BEAM.pretrained import MODEL_FORMAT, MODEL_FORMATS_READ
 
     missing = set(spec["models"]) - set(sources)
     if missing:
@@ -78,9 +78,20 @@ def prepare(spec: dict, sources: dict[str, Path], dist: Path) -> None:
             magic, fmt = struct.unpack("<II", f.read(8))
         if magic != 0x4245414D:
             sys.exit(f"{src}: not a BEAM model file")
+        if fmt not in MODEL_FORMATS_READ:
+            readable = sorted(MODEL_FORMATS_READ)
+            sys.exit(f"{src}: file format {fmt}, but this BEAM reads formats "
+                     f"{readable}; rebuild the model with this version")
+        # Readable here is not enough: a models-vN set is downloaded by
+        # whatever BEAM the user already has, so it must be the format every
+        # supported release can open. See "Releasing models" in RELEASING.md.
         if fmt != MODEL_FORMAT:
-            sys.exit(f"{src}: file format {fmt}, but this BEAM reads format "
-                     f"{MODEL_FORMAT}; rebuild the model with this version")
+            sys.exit(f"{src}: file format {fmt}. A published model must be "
+                     f"format {MODEL_FORMAT}, which every release can read; "
+                     f"format {fmt} would be unreadable to any BEAM older "
+                     f"than the one that introduced it. Rebuild it at "
+                     f"max_length 255 or below, or raise the floor with a new "
+                     f"models-vN (see RELEASING.md)")
         print(f"loading {name} from {src} ...", flush=True)
         model = BeamModel.from_file(str(src))
         meta = model.metadata(lengths=False)

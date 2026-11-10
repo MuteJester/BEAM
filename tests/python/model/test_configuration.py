@@ -9,6 +9,7 @@ import random
 import numpy as np
 import pytest
 
+import BEAM
 from BEAM import BeamModel
 from BEAM import _cbeam as _c
 from BEAM._model import _config_args_from_dict
@@ -68,21 +69,20 @@ def test_compact_frees_counts(corpus):
 # ═══════════════════════════════════════════════════════════════
 # Argument validation
 #
-# The C entry points take these as uint8_t and uint32_t and do not populate
-# the library's error-message buffer, so an out-of-range value is either
-# silently truncated into a different model or surfaces as a bare "invalid
-# argument". Both are checked here because both were live.
+# The C entry point still takes `order` as a uint8_t, so an out-of-range order
+# is silently truncated into a different model unless it is checked first.
+# max_length is a uint32_t and is range-checked per alphabet (aa 255, nt 512).
 # ═══════════════════════════════════════════════════════════════
 
 @pytest.mark.parametrize("kwargs,field", [
     (dict(order=260), "order"),          # (uint8_t)260 == 4, the default
     (dict(order=0), "order"),
-    (dict(max_length=283), "max_length"),   # (uint8_t)283 == 27
-    (dict(max_length=1), "max_length"),
+    (dict(max_length=283), "max_length"),   # past the aa cap of 255
     (dict(max_length=0), "max_length"),
 ])
 def test_out_of_range_configuration_is_refused(kwargs, field):
-    """Truncation to uint8 must not silently build a different model."""
+    """An out-of-range order must not truncate into a different model, and
+    a length past the alphabet's cap must be refused."""
     base = dict(order=2, max_length=6)
     base.update(kwargs)
     with pytest.raises(ValueError, match=field):
@@ -407,9 +407,87 @@ def test_max_length_from_the_data_ignores_sequences_that_would_be_skipped():
     assert m.config["max_length"] == max(map(len, SHORT)) and m.n_skipped == 1
 
 
-def test_max_length_from_the_data_stops_at_the_formats_ceiling():
-    m = BeamModel(SHORT + ["C" + "A" * 299], order=2, max_length="data")
+def test_max_length_from_the_data_stops_at_its_alphabets_ceiling():
+    with pytest.warns(BEAM.BeamPerformanceWarning, match="skipped"):
+        m = BeamModel(SHORT + ["C" + "A" * 299], order=2, max_length="data")
     assert m.config["max_length"] == 255 and m.n_skipped == 1
+    # The nt clamp fires BOTH warnings: one sequence is dropped, and 512 is
+    # past the trigger. Matching only the first left the second escaping the
+    # block, which printed on every run and failed under -W error.
+    with pytest.warns(BEAM.BeamPerformanceWarning) as clamp:
+        nt = BeamModel(["ACGT" * 4] + ["A" * 600], order=2, max_length="data",
+                       alphabet="nt")
+    said = " ".join(str(w.message) for w in clamp)
+    assert "skipped" in said and "39.5x" in said, said
+    assert nt.config["max_length"] == 512 and nt.n_skipped == 1
+
+
+def test_a_length_one_model_builds():
+    """config.c accepts max_length 1, so the Python floor must agree -- and it
+    has to work, not merely be accepted. One slot is the whole depth axis, so
+    the twenty length-1 sequences have to carry exactly the whole mass."""
+    m = BeamModel(["C", "A", "S", "F", "C", "A"], order=2, max_length=1)
+    assert m.config["max_length"] == 1
+    assert m.path_count(1) == pytest.approx(20.0)
+    diagnostics = m.pgen_diagnostics()
+    assert diagnostics["is_proper"]
+    assert diagnostics["total_mass"] == pytest.approx(1.0, abs=1e-12)
+
+
+def test_an_amino_acid_model_is_still_capped_at_255():
+    with pytest.raises(BEAM.BeamValueError, match="aa") as e:
+        BeamModel(SHORT, order=2, max_length=300)
+    assert "255" in str(e.value)
+
+
+_RNG_LONG = random.Random(400)
+_READS_400 = ["".join(_RNG_LONG.choice("ACGT") for _ in range(400))
+              for _ in range(40)]
+
+
+@pytest.fixture(scope="module")
+def long_nt():
+    """One 400-base nucleotide model and its one-thread scores, shared."""
+    with pytest.warns(BEAM.BeamPerformanceWarning):
+        m = BeamModel(_READS_400, order=3, max_length=400, alphabet="nt")
+    previous = BEAM.threads()
+    BEAM.set_threads(1)
+    try:
+        reference = m.log_pseq_batch(_READS_400)
+    finally:
+        BEAM.set_threads(previous)
+    return m, reference
+
+
+def test_a_long_nucleotide_model_builds_through_the_facade(long_nt):
+    m, _ = long_nt
+    assert m.config["max_length"] == 400 and m.n_skipped == 0
+
+
+@pytest.mark.parametrize("threads", [1, 2, 8])
+def test_a_long_model_scores_identically_at_every_thread_count(long_nt, threads):
+    """The encode buffer in scoring.c is private to each iteration of an
+    OpenMP loop and grew to 512 bytes; a thread-dependent score would be
+    intermittent."""
+    m, reference = long_nt
+    previous = BEAM.threads()
+    BEAM.set_threads(threads)
+    try:
+        got = m.log_pseq_batch(_READS_400)
+    finally:
+        BEAM.set_threads(previous)
+    assert np.array_equal(got, reference)
+
+
+def test_a_long_model_can_still_be_copied(long_nt):
+    """copy() rebuilds the config through the same validation the constructor
+    uses, so before this a loaded 400-base model could not be copied: its own
+    max_length was refused. A model has to stay copyable to stay expandable."""
+    m, _ = long_nt
+    clone = m.copy()
+    assert clone.config["max_length"] == 400
+    assert np.array_equal(clone.log_pseq_batch(_READS_400[:5]),
+                          m.log_pseq_batch(_READS_400[:5]))
 
 
 def test_max_length_from_the_data_reaches_from_dataframe():

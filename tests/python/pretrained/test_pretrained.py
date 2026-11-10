@@ -15,7 +15,7 @@ import pytest
 
 import BEAM
 from BEAM import BeamModel
-from BEAM.pretrained import MODEL_FORMAT
+from BEAM.pretrained import MODEL_FORMAT, MODEL_FORMATS_READ
 
 SEQS = ["CASSLGQ", "CASSPGT", "CASRLAG", "CSARDRG", "CASSQET", "CAWSVGQ"] * 3
 
@@ -104,7 +104,7 @@ def test_unknown_name_lists_what_exists(published):
 
 
 def test_newer_format_asks_for_an_upgrade(published):
-    published["write"](format=MODEL_FORMAT + 1)
+    published["write"](format=max(MODEL_FORMATS_READ) + 1)
     with pytest.raises(ValueError, match="upgrade beam-model"):
         BEAM.load_pretrained("tiny", progress=False)
 

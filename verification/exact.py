@@ -389,6 +389,34 @@ def tier2(report):
                (mean, float((sub * (cnt - mean) ** 2).sum())))
 
 
+def tier3(report):
+    """The nucleotide oracle past the old 255 ceiling.
+
+    A model at `max_length=300` has a support of 5**300 sequences, so nothing
+    here enumerates it. What is checkable is what can be summed: the length
+    prior over all 300 lengths, and, at the short lengths that CAN be
+    enumerated exhaustively, that the within-length conditional sums to one
+    and that the joint over a length equals that length's prior mass.
+    """
+    import warnings
+    rng = np.random.default_rng(11)
+    corpus = sorted({"".join(rng.choice(list("ACGT"), size=int(rng.integers(3, 6))))
+                     for _ in range(200)})
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", BEAM.BeamPerformanceWarning)
+        m = BEAM.BeamModel(corpus, alphabet="nt", order=2, max_length=300)
+    prior = np.array([m.log_length_prior(L) for L in range(1, 301)])
+    report("nt max_length=300: length prior sums to 1 over 300 lengths",
+           float(np.exp(prior[np.isfinite(prior)]).sum()), 1.0, abs_=ABS)
+    for L in (3, 4):
+        o = Oracle(m, NT, (L,))
+        seqs, cp = o.at(L)
+        report(f"nt max_length=300: within-length conditional at L={L} sums to 1",
+               float(cp.sum()), 1.0, abs_=ABS)
+        report(f"nt max_length=300: joint over L={L} equals its prior mass",
+               o.total, math.exp(m.log_length_prior(L)), abs_=ABS)
+
+
 def run() -> list[str]:
     failures: list[str] = []
     n = 0
@@ -423,7 +451,7 @@ def run() -> list[str]:
     # correct behaviour for the library, but a gate that dies on it reports
     # nothing and an automated caller cannot tell a refusal from a crash in
     # the gate itself.
-    for label, tier in (("tier1", tier1), ("tier2", tier2)):
+    for label, tier in (("tier1", tier1), ("tier2", tier2), ("tier3", tier3)):
         try:
             tier(report)
         except Exception as exc:                      # noqa: BLE001

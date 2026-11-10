@@ -23,6 +23,8 @@
 
 BeamConstraint *beam_query_constraint_new(uint32_t length,
                                           uint32_t n_residues) {
+    /* Bounded by the validation cap, not BEAM_LENGTH_BUFFER: this guards a heap
+     * allocation sized from a public parameter, not a fixed array. */
     if (length == 0u || length > BEAM_MAX_LENGTH_CEILING) {
         beam_set_error(BEAM_ERR_PARAM_OUT_OF_RANGE,
                       "beam_query_constraint_new: length %u is outside "

@@ -70,6 +70,9 @@ def test_the_registry_is_served_from_the_c_descriptor():
     assert aa["residues"] == 20 and aa["radix"] == 21
     assert nt_["residues"] == 5 and nt_["radix"] == 6
     assert nt_["symbols"] == "ACGTN"
+    # The per-alphabet length cap is read from the descriptor, never restated.
+    assert aa["max_max_length"] == 255
+    assert nt_["max_max_length"] == 512
 
 
 def test_an_unknown_alphabet_is_refused_by_name():

@@ -9,18 +9,21 @@ if TYPE_CHECKING:  # annotations only
     from ..analytics.pseq import PseqAnalysis
     from ..analytics.calibration import Calibration
 
+import contextlib
+import contextvars
 import datetime as _datetime
 from importlib.metadata import version as _dist_version, PackageNotFoundError
 import math
 import operator
 import os
+import warnings
 from pathlib import Path
 from collections.abc import Iterable, Sequence
 from typing import Any
 
 import numpy as np
 
-from ..constants import (BEAM_ALPHABET, BEAM_MAX_LENGTH, BEAM_MAX_LENGTH_CEILING,
+from ..constants import (BEAM_ALPHABET, BEAM_MAX_LENGTH,
                          BEAM_MAX_MOMENT, BEAM_MAX_ORDER, BEAM_RESIDUES)
 from . import alphabets
 from .validation import _check_int, _is_scalar_arg
@@ -30,6 +33,7 @@ from ..math.saddlepoint import _normal_pdf, _normal_cdf
 from ..runtime import effective_threads, memory_budget, set_threads, threads
 
 from .. import _cbeam as _c
+from ..warnings import BeamPerformanceWarning
 from ..errors import BeamTypeError, BeamValueError, InvalidSequence
 from .._simulation_result import SimulationResult
 from .._banded_result import BandedMarginals
@@ -58,11 +62,17 @@ def _default_column(column: str | None, config: dict) -> str:
 
 def _longest_usable(seqs: list, alphabet: str) -> int:
     """max_length for ``max_length="data"``: the longest training sequence
-    the alphabet accepts, at least 2 and at most the format's ceiling.
+    the alphabet accepts, at least 2 and at most the alphabet's own length
+    cap (255 for amino acids, 512 for nucleotides).
 
     A sequence the build would skip anyway, for a character outside the
     alphabet, does not count. Candidates are tried from the longest down,
     so only the few longest are checked character by character.
+
+    The floor of 2 is deliberate and is not the floor `max_length` accepts,
+    which is 1. An explicit `max_length=1` is honoured, because the caller
+    asked for it; an INFERRED length declines to pick the degenerate model
+    from a corpus whose longest usable sequence is a single residue.
     """
     lengths = np.fromiter((len(s) if isinstance(s, str) else 0 for s in seqs),
                           dtype=np.int64, count=len(seqs))
@@ -72,7 +82,67 @@ def _longest_usable(seqs: list, alphabet: str) -> int:
             break
         if alphabets.accepts(alphabet, seqs[i]):
             longest = int(lengths[i])
-    return min(max(longest, 2), BEAM_MAX_LENGTH_CEILING)
+    return min(max(longest, 2), alphabets.info(alphabet)["max_max_length"])
+
+
+_warn_frames = contextvars.ContextVar("_beam_warn_frames", default=0)
+_warn_off = contextvars.ContextVar("_beam_warn_off", default=False)
+
+
+@contextlib.contextmanager
+def _cost_warning(*, frames: int = 0, off: bool = False):
+    """Adjust the cost warning for a construction made from inside the library.
+
+    Two facts about a CALL, not about a model, so they travel here rather than
+    in a signature. ``frames`` is how many extra library frames sit between the
+    caller and the constructor, so the warning still points at the caller's own
+    line instead of at this file. ``off`` silences it for a rebuild the caller
+    never configured and has already been warned about once -- `without()`
+    reconstructs `other` from the receiver's own config, and warning there
+    reports a max_length the caller never chose.
+    """
+    f, o = _warn_frames.set(frames), _warn_off.set(off)
+    try:
+        yield
+    finally:
+        _warn_frames.reset(f)
+        _warn_off.reset(o)
+
+
+def _warn_if_expensive(max_length: int, alphabet: str, clamped_from: int,
+                       n_over: int) -> None:
+    """Emit the two performance warnings, before the C build starts.
+
+    They live here and not in C because the library has no warning channel
+    and a C-side one would have to take the GIL from inside an OpenMP region.
+    The stacklevel points at the caller's own line; an entry point one or
+    more library frames further out adds them through `_cost_warning`.
+
+    The ``max_length > 255`` trigger is not a cost threshold: nucleotide's
+    default is 81, so a model at 250 is already a 9x finalize and stays
+    silent. It is the right trigger because 255 is the boundary past which no
+    0.9.0 model could exist, so nobody's existing code starts warning when
+    they upgrade.
+    """
+    if _warn_off.get():
+        return
+    level = 3 + _warn_frames.get()
+    if n_over:
+        warnings.warn(
+            f"max_length='data' was clamped to the {alphabet} cap of "
+            f"{clamped_from}; {n_over} sequence(s) are longer and will be "
+            f"skipped (see n_skipped). One long outlier sizes the whole "
+            f"model.", BeamPerformanceWarning, stacklevel=level)
+    if max_length > 255:
+        default = int(alphabets.info(alphabet)["default_max_length"])
+        multiple = (max_length * (max_length + 1)) / (default * (default + 1))
+        warnings.warn(
+            f"max_length={max_length} is above the {alphabet} default of "
+            f"{default}. finalize runs one partition-function DP per length "
+            f"in 1..max_length, so the cost grows quadratically: about "
+            f"{multiple:.1f}x the finalize work of the default (a count of "
+            f"DP runs, not a timing), most of it on lengths no read has.",
+            BeamPerformanceWarning, stacklevel=level)
 
 
 def _orders_vector(orders: Iterable[float]) -> np.ndarray:
@@ -149,7 +219,8 @@ class BeamModel:
             amino acids and 81 for nucleotides, three bases to the residue.
             ``"data"`` takes the length of the longest training sequence the
             alphabet accepts, so none is skipped for its length (up to the
-            file format's ceiling of 255). Time and memory grow with it.
+            alphabet's cap: 255 for amino acids, 512 for nucleotides).
+            Time and memory grow with it.
         alpha: Prior strengths of the hierarchical Bayesian smoothing, one
             per context level 0..order, or one number for all of them.
             Every sequence up to ``max_length`` has positive probability, and
@@ -206,13 +277,19 @@ class BeamModel:
                 raise ValueError(
                     f"abundances has {len(abund)} entries but sequences has "
                     f"{len(seqs)}")
+        n_over, cap = 0, 0
         if isinstance(max_length, str) and max_length == "data":
             max_length = _longest_usable(seqs, alphabet)
+            cap = alphabets.info(alphabet)["max_max_length"]
+            if max_length == cap:
+                n_over = sum(1 for s in seqs
+                             if isinstance(s, str) and len(s) > cap)
         cargs = _config_args(alphabet=alphabet, order=order,
                              max_length=max_length, weights=weights,
                              alpha=alpha, alpha_length=alpha_length,
                              sparse=sparse)
         max_length = cargs[1]
+        _warn_if_expensive(max_length, alphabet, cap, n_over)
 
         try:
             self._g = _c.build(seqs, abund, *cargs)
@@ -281,7 +358,8 @@ class BeamModel:
         # constructed with the model, so a top-level import would be a
         # cycle.
         from .builder import Builder
-        return Builder(**config)
+        with _cost_warning(frames=1):
+            return Builder(**config)
 
     @classmethod
     def from_sequence_file(
@@ -312,7 +390,8 @@ class BeamModel:
         """
         # Local: constructed with the model, so a top-level import cycles.
         from .builder import Builder
-        b = Builder(**config)
+        with _cost_warning(frames=1):
+            b = Builder(**config)
         for seqs, ab in _iter_delimited(
                 path, sep=sep, sequence_column=sequence_column,
                 abundance_column=abundance_column, has_header=has_header,
@@ -346,7 +425,8 @@ class BeamModel:
         # Local: constructed with the model, so a top-level import cycles.
         from .builder import Builder
         sequence_column = _default_column(sequence_column, config)
-        b = Builder(**config)
+        with _cost_warning(frames=1):
+            b = Builder(**config)
         for seqs, ab in _iter_parquet(path, sequence_column, abundance_column,
                                       batch_size):
             b.observe(seqs, ab)
@@ -376,7 +456,8 @@ class BeamModel:
         seqs = _column(data, sequence_column)
         ab = None if abundance_column is None else [
             float(x) for x in _column(data, abundance_column)]
-        return cls(seqs, abundances=ab, **config)
+        with _cost_warning(frames=1):
+            return cls(seqs, abundances=ab, **config)
 
     # ── Construction ────────────────────────────────────────────
 
@@ -401,7 +482,12 @@ class BeamModel:
         Any path is accepted. The suffix is convention, not a format check --
         the file is identified by its magic number and validated by CRC.
         """
-        return cls._from_capsule(_c.load(os.fspath(path)))
+        m = cls._from_capsule(_c.load(os.fspath(path)))
+        # A load re-finalizes from the stored counts (model_file.c:5-11),
+        # so a long model pays the whole quadratic cost here too.
+        _warn_if_expensive(int(m.config["max_length"]),
+                           str(m.config["alphabet"]), 0, 0)
+        return m
 
     def save(self, path: str | os.PathLike) -> None:
         """Write the model's counts and configuration to ``path``.
@@ -2940,12 +3026,15 @@ class BeamModel:
         """
         if not isinstance(other, BeamModel):
             cfg = self.config
-            other = BeamModel(
-                list(other), abundances=abundances, alphabet=cfg["alphabet"],
-                order=cfg["order"],
-                max_length=cfg["max_length"], weights=cfg["weights"],
-                alpha=cfg["alpha"], alpha_length=cfg["alpha_length"],
-                sparse=cfg["sparse"])
+            # A rebuild from the receiver's own config: the caller chose
+            # none of it and was warned once already at build time.
+            with _cost_warning(off=True):
+                other = BeamModel(
+                    list(other), abundances=abundances,
+                    alphabet=cfg["alphabet"], order=cfg["order"],
+                    max_length=cfg["max_length"], weights=cfg["weights"],
+                    alpha=cfg["alpha"], alpha_length=cfg["alpha_length"],
+                    sparse=cfg["sparse"])
         elif abundances is not None:
             raise TypeError(
                 "abundances applies only when `other` is a list of sequences; "

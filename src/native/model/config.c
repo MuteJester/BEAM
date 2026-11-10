@@ -82,11 +82,51 @@ const char *beam_config_invalid_reason(const BeamModelConfig *c,
     if (c->order < 2 || c->order > a->max_order)
         BEAM_CFG_WHY("order=%u, and the %s alphabet permits 2..%u",
                      (unsigned)c->order, a->name, (unsigned)a->max_order);
-    /* No upper bound is tested on max_length: the field is a uint8_t and
-     * BEAM_MAX_LENGTH_CEILING is 255, so the type is the bound. Every buffer
-     * indexed by a length is sized by that ceiling for the same reason. */
+    /*
+     * `max_length` is a uint32_t, so the TYPE IS NO LONGER THE BOUND. It was
+     * a uint8_t, and the absence of an upper test here was justified by that
+     * -- nothing could exceed 255, and every length-indexed buffer was sized
+     * to match. Widening the field for nucleotide reads deleted that bound,
+     * and these two rules are what replace it. Deleting them again would let
+     * a config, or a `.beam` header, name a length past the fixed arrays.
+     *
+     * Two rules and not one, because there are two different limits:
+     *
+     *   - the cap is PER-ALPHABET, read from the descriptor. Amino acids stop
+     *     at 255 and nucleotides reach 512, so a single macro would either
+     *     refuse the reads this exists to serve or raise the amino-acid limit
+     *     nobody asked to raise.
+     *   - the row rule is ORDER-DEPENDENT, because the real constraint is on
+     *     the product `max_length * radix^order` against a 32-bit row index.
+     *     A scalar cap derived at `max_order` would be pessimistic by
+     *     `radix^(max_order - order)` -- a factor of 216 at nucleotide order
+     *     6 -- and would refuse length 500 there, a configuration needing
+     *     0.54% of the row budget.
+     *
+     * The cap is tested first, so the row message is only ever reached by a
+     * config whose length its alphabet would otherwise allow.
+     */
     if (c->max_length < 1)
         BEAM_CFG_WHY("max_length=0, and a model of no length is not a model");
+    if (c->max_length > a->max_max_length)
+        BEAM_CFG_WHY("max_length=%u, and the %s alphabet accepts 1..%u",
+                     (unsigned)c->max_length, a->name,
+                     (unsigned)a->max_max_length);
+    {
+        /* In 64 bits deliberately: `beam_ipow_u32` wraps silently, and a
+         * bound computed with a helper that wraps would pass everything it
+         * was written to catch. */
+        const uint64_t n_ctx = beam_ipow_u64(a->radix, c->order);
+        const uint64_t rows  = (uint64_t)c->max_length * n_ctx;
+        if (rows > BEAM_MAX_ROWS)
+            BEAM_CFG_WHY("max_length=%u at order %u over the %s alphabet "
+                         "needs %llu table rows, and a row index holds %llu; "
+                         "at this order max_length may reach %u",
+                         (unsigned)c->max_length, (unsigned)c->order, a->name,
+                         (unsigned long long)rows,
+                         (unsigned long long)BEAM_MAX_ROWS,
+                         (unsigned)(BEAM_MAX_ROWS / n_ctx));
+    }
     if (!(c->weight_forward >= 0.0) || !(c->weight_backward >= 0.0))
         BEAM_CFG_WHY("anchor weights are %.17g/%.17g and neither may be "
                      "negative", c->weight_forward, c->weight_backward);

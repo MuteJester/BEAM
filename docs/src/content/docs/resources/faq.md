@@ -14,7 +14,7 @@ to building from source, which needs a C compiler with OpenMP; see
 
 ## Can I use BEAM for sequences other than TCRβ CDR3s?
 
-Yes. BEAM learns from any set of amino-acid or nucleotide sequences up to 255 residues long, so
+Yes. BEAM learns from any set of amino-acid or nucleotide sequences up to 255 residues long for amino acids and 512 for nucleotides, so
 you can build models of BCR CDR3s, TCRα chains or other sequence families from your own data
 ([Building a model](/BEAM/guides/build-a-model/)). For nucleotides use
 `BeamModel(sequences, alphabet="nt")`: the alphabet is `A C G T N`, and the default maximum

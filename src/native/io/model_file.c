@@ -16,10 +16,15 @@
  * memory. Little-endian throughout, which is every platform this library
  * targets.
  *
- * ONE format is read: the one this build writes. BEAM has not been released,
- * so no older file is owed a reader, and a file from an earlier development
- * build is refused with a sentence saying so rather than read through a
- * compatibility path nobody maintains.
+ * Two formats are read, 9 and 10, and they differ only in the stamp: the
+ * layout is identical. A model of at most 255 residues is still written as
+ * 9, byte for byte as 0.9.0 wrote it, so an older build can open it; a longer
+ * one is stamped 10, which an older build refuses as a newer format with an
+ * upgrade remedy, where an unchanged stamp would have it report a sound file
+ * as having a corrupt header (its length check fires before it reads the
+ * field). A file from an earlier development build (below 9) is
+ * refused with a sentence saying so rather than read through a compatibility
+ * path nobody maintains.
  */
 #include <stdio.h>
 #include <stddef.h>
@@ -30,7 +35,16 @@
 
 /* 0x4245414D is 'B','E','A','M' as ASCII, most significant byte first. */
 #define BEAM_MAGIC   0x4245414Du
-#define BEAM_FORMAT  9u
+/* The format a model of at most 255 residues is stamped with: unchanged, so
+ * such a file stays byte-identical and readable by 0.9.0. */
+#define BEAM_FORMAT_WRITE     9u
+/* The largest max_length a format-9 reader can represent: its config field
+ * is a uint8_t. */
+#define BEAM_FORMAT9_MAX_LENGTH  255u
+/* The format a model longer than 255 residues is stamped with. */
+#define BEAM_FORMAT_LONG      10u
+/* The newest format this build reads; anything above it asks for an upgrade. */
+#define BEAM_FORMAT_MAX_READ  10u
 
 typedef struct {
     uint32_t magic;
@@ -72,7 +86,8 @@ typedef struct {
 } BeamHeader;
 
 /* Pinned because these numbers are the file format. */
-_Static_assert(sizeof(BeamHeader) == 184, "the format-9 header is 184 bytes");
+_Static_assert(sizeof(BeamHeader) == 184,
+               "the format-9 and format-10 headers are both 184 bytes");
 
 void beam_model_file_provenance_span(size_t *offset, size_t *bytes) {
     const size_t first = offsetof(BeamHeader, created_unix);
@@ -291,7 +306,13 @@ BeamError beam_model_save(const BeamModel *m, const char *path) {
     BeamHeader h;
     memset(&h, 0, sizeof h);
     h.magic           = BEAM_MAGIC;
-    h.format          = BEAM_FORMAT;
+    /* A short model stays format 9 so a 0.9.0 build still opens it and the
+     * bytes do not change. A length 0.9.0 cannot hold gets a word it refuses
+     * as a newer format ("upgrade"); stamped 9, it would be reported as a
+     * corrupt header, a false data-loss diagnosis for a sound file. */
+    h.format          = m->cfg.max_length > BEAM_FORMAT9_MAX_LENGTH
+                                                 ? BEAM_FORMAT_LONG
+                                                 : BEAM_FORMAT_WRITE;
     h.alphabet        = (uint32_t)m->cfg.alphabet;
     h.order           = m->cfg.order;
     h.max_length      = m->cfg.max_length;
@@ -369,25 +390,27 @@ BeamModel *beam_model_load(const char *path) {
                               "beam_model_load: '%s' is not a BEAM model file "
                               "(wrong magic number)", path), NULL;
     }
-    if (h.format > BEAM_FORMAT) {
+    if (h.format > BEAM_FORMAT_MAX_READ) {
         const unsigned got = (unsigned)h.format;
         fclose(f);
         return (void)BEAM_FAIL(BEAM_ERR_IO_VERSION,
                               "beam_model_load: '%s' is a format %u BEAM model "
                               "written by a newer version of BEAM, and this "
-                              "build reads only format %u. Upgrade BEAM "
-                              "(pip install -U beam-model)", path, got,
-                              (unsigned)BEAM_FORMAT), NULL;
+                              "build reads only format %u and format %u. "
+                              "Upgrade BEAM (pip install -U beam-model)",
+                              path, got, (unsigned)BEAM_FORMAT_WRITE,
+                              (unsigned)BEAM_FORMAT_MAX_READ), NULL;
     }
-    if (h.format != BEAM_FORMAT) {
+    if (h.format != BEAM_FORMAT_WRITE && h.format != BEAM_FORMAT_LONG) {
         const unsigned got = (unsigned)h.format;
         fclose(f);
         return (void)BEAM_FAIL(BEAM_ERR_IO_VERSION,
                               "beam_model_load: '%s' is a format %u BEAM model "
                               "from an earlier development build, and this "
-                              "build reads only format %u. Rebuild the model "
-                              "from its sequences", path, got,
-                              (unsigned)BEAM_FORMAT), NULL;
+                              "build reads only format %u and format %u. "
+                              "Rebuild the model from its sequences", path,
+                              got, (unsigned)BEAM_FORMAT_WRITE,
+                              (unsigned)BEAM_FORMAT_LONG), NULL;
     }
     if (!read_all(f, (unsigned char *)&h + id_bytes, sizeof h - id_bytes, &crc)) {
         fclose(f);
@@ -403,8 +426,18 @@ BeamModel *beam_model_load(const char *path) {
                               "alphabet id %u, which this build does not know",
                               path, a), NULL;
     }
+    /*
+     * A plausibility check on the bytes, not a legality check on the model.
+     * `max_length` is bounded by BEAM_LENGTH_BUFFER -- what the fixed arrays
+     * hold -- and not by the field's width: a header past that cannot be
+     * anything this library wrote, and reading it would let every scoring
+     * path encode into a 512-byte stack array at a length the model believes
+     * is legal. Whether a length is legal AT THIS ORDER, and under this
+     * alphabet's own cap, is a different question, raised below by
+     * `beam_model_new` as a config error with a sentence of its own.
+     */
     if (h.storage_sparse > 1u || h.prior_auto > 3u || h.order > 255u
-        || h.max_length > 255u) {
+        || h.max_length > BEAM_LENGTH_BUFFER) {
         fclose(f);
         return (void)BEAM_FAIL(BEAM_ERR_IO_CORRUPT,
                               "beam_model_load: '%s' has a header field out of "
@@ -414,7 +447,7 @@ BeamModel *beam_model_load(const char *path) {
     BeamModelConfig cfg;
     beam_model_config_default_for((BeamAlphabet)h.alphabet, &cfg);
     cfg.order           = (uint8_t)h.order;
-    cfg.max_length      = (uint8_t)h.max_length;
+    cfg.max_length      = h.max_length;
     cfg.sparse          = h.storage_sparse == 1u;
     cfg.weight_forward  = h.weight_forward;
     cfg.weight_backward = h.weight_backward;

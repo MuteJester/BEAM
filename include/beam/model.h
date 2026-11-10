@@ -119,6 +119,23 @@ typedef enum {
 #define BEAM_NT_RADIX         6u
 #define BEAM_NT_NONE          5u
 
+/*
+ * The longest `max_length` each alphabet permits, which is NOT the same
+ * number and is why the cap lives in the descriptors rather than in one
+ * macro. Amino acids stay where they have always been: nothing asks for a
+ * longer amino-acid model, and holding the number there means no existing
+ * call returns anything different. Nucleotides go to 512 because a full
+ * V(D)J read runs to roughly 400 bases.
+ *
+ * Named `_LENGTH_CAP` and not `_AA_MAX_LENGTH`, because BEAM_MAX_LENGTH
+ * below is the amino-acid DEFAULT of 27, and two macros that close would be
+ * a misreading waiting to happen. These exist as macros at all because a
+ * descriptor FIELD is not a constant expression, so only a macro can be tied
+ * to BEAM_LENGTH_BUFFER by a static assert.
+ */
+#define BEAM_AA_LENGTH_CAP  255u
+#define BEAM_NT_LENGTH_CAP  512u
+
 /**
  * Maxima over all alphabets. These size the few genuinely fixed-length arrays
  * that a runtime alphabet cannot: per-row scratch buffers and the I/O record
@@ -147,13 +164,23 @@ typedef enum {
  * The structural ceiling on `max_length`, as opposed to today's validation
  * limit.
  *
- * `max_length` is a `uint8_t`, so 255 is the most any alphabet could ever ask
- * for, and it is what the length-indexed stack buffers must be sized by once
- * `max_length` becomes a genuinely free parameter. Nucleotide sequences are
- * three times the length of the amino acids they encode, so 27 cannot remain
- * the limit for both.
+ * This bounds what a config may ask for and what the query API accepts as a
+ * length. It does not size arrays: see BEAM_LENGTH_BUFFER. Nucleotide
+ * sequences are three times the length of the amino acids they encode, so 27
+ * cannot remain the limit for both.
  */
-#define BEAM_MAX_LENGTH_CEILING 255u
+#define BEAM_MAX_LENGTH_CEILING 512u
+
+/**
+ * The size of every length-indexed fixed array (stack buffers holding one
+ * sequence, one per-position profile, and so on).
+ *
+ * Two names, two jobs: this one sizes arrays, BEAM_MAX_LENGTH_CEILING bounds
+ * what a config may ask for. They are equal today. Raising the cap past the
+ * buffer would be a stack overflow rather than a refusal, which is why the
+ * static assert beside BeamModelConfig ties them.
+ */
+#define BEAM_LENGTH_BUFFER      512u
 
 /**
  * Largest order any alphabet permits, and therefore the size of the
@@ -168,6 +195,27 @@ typedef enum {
  * on `radix^order` and the radices are far apart.
  */
 #define BEAM_MAX_ORDER       9u
+
+/**
+ * The most table rows any configuration may ask for.
+ *
+ * A row index is a `uint32_t`, so the obvious bound is UINT32_MAX. It is a
+ * little tighter than that, for two reasons that both come from arithmetic
+ * done ON a row count rather than from the count itself:
+ *
+ *   - the sparse directory's block and bit-word counts are computed as
+ *     `(n + K - 1) / K`, which adds a constant to a `uint32_t` before
+ *     dividing, and that addition overflows for `n` within `K` of the top;
+ *   - BEAM_ROW_MISSING is UINT32_MAX, a sentinel for a *slot*, so the usable
+ *     indices stop one short of it.
+ *
+ * Subtracting the directory's block size (256 rows, BEAM_RANK_BLOCK_ROWS,
+ * which a static assert in the storage header ties to this) absorbs both. It
+ * is one row tighter than strictly necessary, which is the right direction to
+ * be wrong in. No ceiling in this build comes close to it; it is stated so
+ * that raising one cannot reach it unnoticed.
+ */
+#define BEAM_MAX_ROWS        (UINT32_MAX - 256u)
 
 /**
  * Starting strengths of the hierarchical prior, in pseudo-observations: every
@@ -208,15 +256,21 @@ typedef struct {
     uint8_t order;
 
     /**
-     * Longest sequence the model will accept, from 1 up to
-     * BEAM_MAX_LENGTH_CEILING. Defaults to the alphabet's own typical
-     * length: 27 for amino acids, 81 for the nucleotides encoding them.
+     * Longest sequence the model will accept, from 1 up to the alphabet's
+     * own cap: 255 for amino acids, 512 for nucleotides. Defaults to the
+     * alphabet's own typical length, 27 and 81 respectively.
+     *
+     * A `uint32_t` and not a `uint8_t`, because a full V(D)J read is roughly
+     * 400 bases. The width is not the bound: the bound is per-alphabet, and
+     * at a high order it is tighter still, since the real constraint is
+     * `max_length * radix^order` against BEAM_MAX_ROWS.
+     * `beam_config_invalid_reason` holds both rules.
      *
      * Free rather than fixed, and worth choosing deliberately: every table is
      * sized by it, so a length far beyond the corpus buys nothing and costs
      * proportionally.
      */
-    uint8_t max_length;
+    uint32_t max_length;
 
     /**
      * Weight on the N-anchored and C-anchored readings. Defaults 0.5, 0.5.
@@ -288,6 +342,22 @@ typedef struct {
      */
     bool sparse;
 } BeamModelConfig;
+
+_Static_assert(BEAM_MAX_LENGTH_CEILING <= BEAM_LENGTH_BUFFER,
+               "a config may not ask for more length than the fixed arrays hold");
+/*
+ * Both numbers moved when `max_length` widened from a uint8_t to a uint32_t:
+ * the field left offset 5 for offset 8, where its own alignment puts it, and
+ * the struct grew from 128 bytes to 136. That is the deliberate bump these
+ * asserts exist to require. They are not here to hold the layout still --
+ * they are here so it cannot move SILENTLY underneath a vendored C caller
+ * that compiled against the old one.
+ */
+_Static_assert(sizeof(BeamModelConfig) == 136,
+               "BeamModelConfig's layout is what a vendored C caller compiled "
+               "against; changing it needs a deliberate bump here");
+_Static_assert(offsetof(BeamModelConfig, max_length) == 8,
+               "and so does moving a field within it");
 
 /** Fill `cfg` with the measured defaults, for the amino-acid alphabet. */
 void beam_model_config_default(BeamModelConfig *cfg);

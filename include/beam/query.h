@@ -75,7 +75,10 @@ typedef struct BeamConstraint_ BeamConstraint;
 /**
  * An unconstrained constraint: every sequence of `length` is admitted.
  *
- * @param length      Sequence length, 1..BEAM_MAX_LENGTH_CEILING.
+ * @param length      Sequence length, 1..BEAM_MAX_LENGTH_CEILING (512). A
+ *                    length beyond what a model holds is not an error here;
+ *                    the model reports it as probability zero. The same holds
+ *                    of a query source up to BEAM_LENGTH_BUFFER residues.
  * @param n_residues  Alphabet size the constraint is expressed over. A query
  *                    refuses a constraint whose alphabet differs from the
  *                    model's, rather than silently reinterpreting bit indices.

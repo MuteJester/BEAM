@@ -24,6 +24,21 @@ static inline uint32_t beam_ipow_u32(uint32_t base, uint32_t exp) {
     return r;
 }
 
+/**
+ * The same, in 64 bits, for computing a bound rather than a dimension.
+ *
+ * `beam_ipow_u32` is a `uint32_t` multiply loop that WRAPS silently, which is
+ * why each alphabet's order ceiling is chosen to keep `radix^max_order` in
+ * range (`alphabet.h`). A bound on the row count is the one place that cannot
+ * use it: the question being asked is whether a product exceeds what 32 bits
+ * hold, and a helper that wraps would answer no every time it mattered.
+ */
+static inline uint64_t beam_ipow_u64(uint64_t base, uint32_t exp) {
+    uint64_t r = 1;
+    while (exp--) r *= base;
+    return r;
+}
+
 /** True if the configuration is self-consistent and within its bounds. */
 /** Room for the longest sentence `beam_config_invalid_reason` can produce. */
 #define BEAM_CONFIG_REASON_MAX 320

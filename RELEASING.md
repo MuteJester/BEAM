@@ -30,6 +30,15 @@ The model file format is part of the API. A release that writes a new format
 must still read the previous one, or it is a major release, and the published
 models must be re-issued as a new `models-vN` in the new format.
 
+## The C API
+
+The C headers in `include/beam/` and the static library `libbeam.a` carry no
+compatibility promise before 1.0.0. A release may change a struct's size, a
+field's type or position, or a function's signature, and the CHANGELOG records
+each such change when it happens. A C caller must rebuild against the headers
+of the release it links, and must not mix the headers of one release with the
+library of another.
+
 ## Releasing the package
 
 1. **Prepare on `main`** (by pull request, so CI runs):
@@ -90,11 +99,18 @@ file and describes how it was built.
 
 1. **Prepare:** `python tools/release/publish_models.py prepare models/models-vN.json`
    loads each model with the current BEAM, refuses one that does not load or
-   is not the current file format, and writes `dist/models-vN/`: the model
+   is not **format 9**, and writes `dist/models-vN/`: the model
    files, a `MODEL_CARD.md`, `MODELS.json` and `SHA256SUMS.txt`.
 2. **GitHub:** `python tools/release/publish_models.py github models/models-vN.json`
    creates the `models-vN` release with those files. It is never marked
    "latest", so the package release stays the one GitHub shows first.
+A published model must be format 9 even though this BEAM reads 9 and 10.
+A `models-vN` set is downloaded by whatever BEAM the user already has, so
+publishing a format-10 model would make it unreadable to every release before
+the one that introduced the format — `load_pretrained` would refuse it with
+"upgrade beam-model". Only raise this floor together with a new `models-vN`
+whose card states the minimum BEAM version.
+
 3. **Zenodo:** create a new upload at <https://zenodo.org/uploads/new>
    (type *Dataset*), add every file from `dist/models-vN/`, copy the title,
    authors and description from `MODEL_CARD.md`, link it to the paper and

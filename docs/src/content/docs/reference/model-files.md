@@ -31,7 +31,7 @@ checksum. `BEAM.file_provenance_span()` returns the `(offset, length)` of the bu
 
 ## Compatibility
 
-This version of BEAM reads and writes file **format 9** (`BEAM.pretrained.MODEL_FORMAT`). The file format is
+This version of BEAM writes file **format 9** for a model of at most 255 residues (`BEAM.pretrained.MODEL_FORMAT`) and **format 10** for a longer one, and reads both (`BEAM.pretrained.MODEL_FORMATS_READ`). The file format is
 part of the API: a release that writes a new format still reads the previous one, or it is a new
 major version. A file from a pre-release development build is refused with a message naming its
 format; rebuild it from its sequences.

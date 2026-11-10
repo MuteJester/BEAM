@@ -38,6 +38,8 @@
  * header is the price of testing them at all.
  */
 #include "../../src/native/internal/beam/internal.h"
+/* The config validator and its sentence, which internal.h does not pull in. */
+#include "beam/model_build.h"
 
 static int pass_count = 0, fail_count = 0;
 
@@ -496,6 +498,166 @@ static void test_either_storage_layout_is_a_valid_configuration(void) {
                    "the resolved configuration must report the layout asked "
                    "for");
     }
+    PASS();
+}
+
+/*
+ * `max_length` is a uint32_t, so the type is no longer the bound.
+ *
+ * It was a uint8_t, and config.c cited that AS the bound -- nothing tested an
+ * upper limit because nothing could exceed 255. Widening the field deleted
+ * that bound, so a cap had to go back in its place, and this is what pins
+ * that the refusal still happens and still says enough to act on: the field,
+ * the value it was given, and which alphabet's cap it broke.
+ */
+static void test_a_config_past_its_alphabets_ceiling_is_refused_by_name(void) {
+    char why[BEAM_CONFIG_REASON_MAX];
+    BeamModelConfig c;
+    beam_model_config_default_for(BEAM_ALPHABET_AA, &c);
+    c.order = 2u;
+    c.max_length = 300u;
+
+    const char *r = beam_config_invalid_reason(&c, why, sizeof why);
+    ASSERT_MSG(r != NULL, "300 is past the amino-acid cap and must be refused");
+    ASSERT_MSG(strstr(r, "max_length") != NULL, "the refusal names the field");
+    ASSERT_MSG(strstr(r, "300") != NULL, "and the value it was given");
+    ASSERT_MSG(strstr(r, "aa") != NULL,
+               "and the alphabet whose cap it broke, because the cap is "
+               "per-alphabet and the caller cannot otherwise tell which one "
+               "applied");
+    PASS();
+}
+
+/*
+ * The cap is per-alphabet, and that is the whole reason it lives in the
+ * descriptor rather than in a macro.
+ *
+ * 300 residues is an ordinary nucleotide read and is accepted; 300 amino
+ * acids is refused at EVERY order the amino-acid alphabet allows, so the
+ * refusal cannot be mistaken for the order-dependent row rule finding a
+ * cheaper order. Validation only, deliberately: an nt model at order 6 over
+ * 300 positions is a real build and not something a unit test should wait
+ * for.
+ */
+static void test_an_amino_acid_ceiling_is_not_the_nucleotide_one(void) {
+    char why[BEAM_CONFIG_REASON_MAX];
+
+    BeamModelConfig nt;
+    beam_model_config_default_for(BEAM_ALPHABET_NT, &nt);
+    nt.order = 6u;
+    nt.max_length = 300u;
+    ASSERT_MSG(beam_config_invalid_reason(&nt, why, sizeof why) == NULL,
+               "300 bases at order 6 is the configuration this widening "
+               "exists for");
+
+    const BeamAlphabetInfo *a = beam_alphabet_info(BEAM_ALPHABET_AA);
+    for (uint32_t order = 2; order <= a->max_order; ++order) {
+        BeamModelConfig aa;
+        beam_model_config_default_for(BEAM_ALPHABET_AA, &aa);
+        aa.order = (uint8_t)order;
+        aa.max_length = 300u;
+        ASSERT_MSG(beam_config_invalid_reason(&aa, why, sizeof why) != NULL,
+                   "300 amino acids is refused at every legal order");
+    }
+    PASS();
+}
+
+/* ── The file format word ──────────────────────────────────── */
+
+/* Builds a small model, saves it, and returns the format word read back from
+ * bytes 4..8 of the file; -1 when the model or file could not be made. */
+static long saved_format_word(BeamAlphabet alpha, uint32_t order,
+                              uint32_t max_length, const char *path) {
+    BeamModelConfig c;
+    beam_model_config_default_for(alpha, &c);
+    c.order = (uint8_t)order;
+    c.max_length = max_length;
+    BeamModel *m = beam_model_new(&c);
+    if (!m) return -1;
+    const char *s[] = {alpha == BEAM_ALPHABET_NT ? "ACGTACGTAC" : "CASSLGQYF"};
+    double w[] = {1.0};
+    long word = -1;
+    if (beam_model_observe(m, s, w, 1u) == BEAM_OK
+        && beam_model_finalize(m) == BEAM_OK
+        && beam_model_save(m, path) == BEAM_OK) {
+        FILE *f = fopen(path, "rb");
+        unsigned char b[8];
+        if (f && fread(b, 1, 8, f) == 8)
+            word = (long)b[4] | ((long)b[5] << 8) | ((long)b[6] << 16)
+                 | ((long)b[7] << 24);
+        if (f) fclose(f);
+    }
+    beam_model_destroy(m);
+    return word;
+}
+
+static void test_a_short_model_is_still_written_as_format_9(void) {
+    /* A 0.9.0 build must still open it, and the bytes must not move. */
+    const char *path = "/tmp/beam_fmt_short.beam";
+    long word = saved_format_word(BEAM_ALPHABET_AA, 2u, 27u, path);
+    remove(path);
+    ASSERT_MSG(word == 9, "a model of at most 255 residues is stamped format 9");
+    PASS();
+}
+
+static void test_a_long_model_is_written_as_format_10(void) {
+    const char *path = "/tmp/beam_fmt_long.beam";
+    long word = saved_format_word(BEAM_ALPHABET_NT, 2u, 400u, path);
+    remove(path);
+    ASSERT_MSG(word == 10, "a model longer than 255 residues is stamped 10");
+    PASS();
+}
+
+static void test_both_formats_load(void) {
+    const char *ps = "/tmp/beam_fmt_both_short.beam";
+    const char *pl = "/tmp/beam_fmt_both_long.beam";
+    const long ws = saved_format_word(BEAM_ALPHABET_AA, 2u, 27u, ps);
+    const long wl = saved_format_word(BEAM_ALPHABET_NT, 2u, 400u, pl);
+    BeamModel *a = beam_model_load(ps);
+    BeamModel *b = beam_model_load(pl);
+    remove(ps);
+    remove(pl);
+    const int ok = a != NULL && b != NULL;
+    const uint32_t la = a ? beam_model_config(a)->max_length : 0u;
+    const uint32_t lb = b ? beam_model_config(b)->max_length : 0u;
+    beam_model_destroy(a);
+    beam_model_destroy(b);
+    ASSERT_MSG(ws == 9, "short");
+    ASSERT_MSG(wl == 10, "long");
+    ASSERT_MSG(ok, "both a format 9 and a format 10 file load");
+    ASSERT_MSG(la == 27u, "the short model reports its own max_length");
+    ASSERT_MSG(lb == 400u, "the long model reports its own max_length");
+    PASS();
+}
+
+static void test_a_format_11_file_says_upgrade_beam(void) {
+    /* The format word is read before the checksum, so patching it alone is
+     * enough: a newer file must say "upgrade", not "header corrupt". For a
+     * library whose claim is reproducibility, a false data-loss diagnosis is
+     * the worst available failure. */
+    const char *path = "/tmp/beam_fmt_11.beam";
+    const long word = saved_format_word(BEAM_ALPHABET_AA, 2u, 27u, path);
+    int patched = 0;
+    FILE *f = fopen(path, "r+b");
+    if (f) {
+        const unsigned char eleven[4] = {11, 0, 0, 0};
+        patched = fseek(f, 4, SEEK_SET) == 0 && fwrite(eleven, 1, 4, f) == 4;
+        fclose(f);
+    }
+    BeamModel *m = beam_model_load(path);
+    remove(path);
+    const int loaded = m != NULL;
+    const BeamError code = beam_last_error();
+    const char *msg = beam_error_message();
+    const int upgrade = msg && strstr(msg, "Upgrade BEAM") != NULL;
+    const int corrupt = msg && strstr(msg, "corrupt") != NULL;
+    beam_model_destroy(m);
+    ASSERT_MSG(word == 9 && patched, "save, then patch the format word");
+    ASSERT_MSG(!loaded, "a format 11 file must not load");
+    ASSERT_MSG(code == BEAM_ERR_IO_VERSION,
+               "it is a version error, not a corruption error");
+    ASSERT_MSG(upgrade, "and it says to upgrade");
+    ASSERT_MSG(!corrupt, "and does not say corrupt");
     PASS();
 }
 
@@ -1172,7 +1334,7 @@ static void test_results_do_not_depend_on_the_thread_count(void) {
     ASSERT_MSG(m != NULL, "build");
 
     double h1 = 0.0, h4 = 0.0, d1 = 0.0, d4 = 0.0, s1 = 0.0, s4 = 0.0;
-    double dep1[BEAM_MAX_LENGTH_CEILING] = {0}, dep4[BEAM_MAX_LENGTH_CEILING] = {0};
+    double dep1[BEAM_LENGTH_BUFFER] = {0}, dep4[BEAM_LENGTH_BUFFER] = {0};
 
     beam_model_set_threads(1);
     ASSERT_MSG(beam_model_entropy(m, &h1) == BEAM_OK, "entropy at 1 thread");
@@ -1600,7 +1762,7 @@ static void test_layer_weights_reproduce_the_scorer(void) {
     ASSERT_MSG(m != NULL, "build");
 
     const char *seq = "CASSLGEQYF";
-    uint8_t buf[BEAM_MAX_LENGTH_CEILING];
+    uint8_t buf[BEAM_LENGTH_BUFFER];
     uint32_t len = 0;
     ASSERT_MSG(beam_encode(m, seq, buf, &len), "encode");
 
@@ -1665,8 +1827,8 @@ static void test_c_anchor_penalises_a_bad_terminus(void) {
     /* And the C-anchored term at the last position carries that cost by
      * itself, which is the claim above. The total alone would also pass if
      * only the depth-indexed forward chain objected. */
-    double fg[BEAM_MAX_LENGTH_CEILING], bg[BEAM_MAX_LENGTH_CEILING];
-    double fb[BEAM_MAX_LENGTH_CEILING], bb[BEAM_MAX_LENGTH_CEILING];
+    double fg[BEAM_LENGTH_BUFFER], bg[BEAM_LENGTH_BUFFER];
+    double fb[BEAM_LENGTH_BUFFER], bb[BEAM_LENGTH_BUFFER];
     uint32_t len = 0;
     ASSERT_MSG(beam_model_explain(m, "CASSLGEQYF", fg, bg, &len) == BEAM_OK
                && beam_model_explain(m, "CASSLGEQYW", fb, bb, &len) == BEAM_OK,
@@ -1765,7 +1927,7 @@ static void test_explain_reconstructs_the_score(void) {
     BeamModel *m = build(3, 12);
     ASSERT_MSG(m != NULL, "build");
     const char *seq = "CASSLGEQYF";
-    double fwd[BEAM_MAX_LENGTH_CEILING], bwd[BEAM_MAX_LENGTH_CEILING];
+    double fwd[BEAM_LENGTH_BUFFER], bwd[BEAM_LENGTH_BUFFER];
     uint32_t len = 0;
     ASSERT_MSG(beam_model_explain(m, seq, fwd, bwd, &len) == BEAM_OK, "explain");
     ASSERT_MSG(len == strlen(seq), "length");
@@ -2617,7 +2779,7 @@ static bool rewrite_format_word(const char *path, uint32_t format) {
 /**
  * A file from an earlier development build is refused as a VERSION, by name.
  *
- * This build reads only its own format. A file of an older one is not
+ * This build reads formats 9 and 10. A file of an older one is not
  * damaged, so it must not be reported as corrupt -- that would send the
  * caller hunting for a disk fault -- and the message has to say which format
  * the file is and what to do about it, because nothing converts it.
@@ -2689,6 +2851,169 @@ static void test_corrupt_file_is_rejected(void) {
     fclose(f);
     ASSERT_MSG(beam_model_load(path) == NULL, "a bad CRC must be refused");
     remove(path);
+    PASS();
+}
+
+/*
+ * Overwrite the `max_length` word of a saved model and re-seal it.
+ *
+ * `expect_was` is checked before the word is overwritten, exactly as the
+ * alphabet rewrite in test_alphabet.c does: had the header layout moved, this
+ * would otherwise corrupt some other field and the loader's refusal would
+ * prove nothing about the length. The checksum is recomputed over everything
+ * before it, so the file differs from a valid one in that word alone and the
+ * refusal cannot be a checksum failure standing in for the range check.
+ */
+static bool rewrite_max_length_word(const char *path, uint32_t expect_was,
+                                    uint32_t max_length) {
+    FILE *f = fopen(path, "rb");
+    if (!f) return false;
+    if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return false; }
+    const long end = ftell(f);
+    rewind(f);
+    unsigned char *b = (unsigned char *)malloc((size_t)end);
+    if (!b || fread(b, 1, (size_t)end, f) != (size_t)end) {
+        free(b); fclose(f); return false;
+    }
+    fclose(f);
+
+    /* The fifth word: magic, format, alphabet, order, max_length. */
+    const size_t at = 4u * sizeof(uint32_t);
+    uint32_t was = 0;
+    if ((size_t)end < at + sizeof was + sizeof(uint32_t)) { free(b); return false; }
+    memcpy(&was, b + at, sizeof was);
+    if (was != expect_was) { free(b); return false; }
+    memcpy(b + at, &max_length, sizeof max_length);
+
+    const size_t body = (size_t)end - sizeof(uint32_t);
+    const uint32_t crc = beam_crc32c_update(0u, b, body);
+    memcpy(b + body, &crc, sizeof crc);
+
+    f = fopen(path, "wb");
+    if (!f) { free(b); return false; }
+    const bool ok = fwrite(b, 1, (size_t)end, f) == (size_t)end;
+    fclose(f);
+    free(b);
+    return ok;
+}
+
+/**
+ * A header length past the fixed arrays is corruption, not a longer model.
+ *
+ * This is the hole the widening would otherwise open. While `max_length` was
+ * a uint8_t the loader's `> 255` check could not fire and the type was the
+ * bound; widened, a `.beam` file declaring 1000 would be accepted, finalized,
+ * and then every scoring path would encode into its `uint8_t
+ * buf[BEAM_LENGTH_BUFFER]` -- a 512-byte stack array -- at a length the model
+ * believes is legal. Reachable from pure Python through `BeamModel.load`, on
+ * a file the caller need not have written.
+ *
+ * So the loader bounds the header by the arrays, and the refusal is IO
+ * corruption: the file says whether its bytes are plausible. A length that is
+ * merely illegal at this order is a different question, answered later by the
+ * config validator with a sentence of its own.
+ *
+ * The rewrite with the model's own length is the control: it must load, which
+ * proves the patch leaves an otherwise valid file behind.
+ */
+static void test_a_header_length_past_the_arrays_is_corrupt(void) {
+    BeamModel *m = build(2, 12);
+    ASSERT_MSG(m != NULL, "build");
+    const char *path = "build/test_header_length.tmp";
+
+    ASSERT_MSG(beam_model_save(m, path) == BEAM_OK, "save");
+    ASSERT_MSG(rewrite_max_length_word(path, 12u, 12u), "rewrite with 12");
+    BeamModel *same = beam_model_load(path);
+    ASSERT_MSG(same != NULL, "the control rewrite must still load");
+    ASSERT_MSG(beam_model_config(same)->max_length == 12u, "at its own length");
+    beam_model_destroy(same);
+
+    ASSERT_MSG(beam_model_save(m, path) == BEAM_OK, "save again");
+    ASSERT_MSG(rewrite_max_length_word(path, 12u, 1000u),
+               "declare 1000 and repair the checksum");
+
+    beam_clear_error();
+    BeamModel *back = beam_model_load(path);
+    const BeamError code = beam_last_error();
+    const bool blamed_header = strstr(beam_error_message(), "header") != NULL;
+    if (back) beam_model_destroy(back);
+    remove(path);
+
+    ASSERT_MSG(back == NULL,
+               "a header beyond the fixed arrays must not load, whatever its "
+               "checksum says");
+    ASSERT_MSG(code == BEAM_ERR_IO_CORRUPT,
+               "and must be refused as corruption, since the bytes cannot be "
+               "what any writer wrote");
+    ASSERT_MSG(blamed_header, "the refusal must say the header is at fault");
+
+    /* The bound is the arrays, not the field width: everything the arrays
+     * hold stays plausible to the loader even when no alphabet permits it,
+     * because whether a model is LEGAL is the config validator's question. */
+    ASSERT_MSG(beam_model_save(m, path) == BEAM_OK, "save once more");
+    ASSERT_MSG(rewrite_max_length_word(path, 12u, BEAM_LENGTH_BUFFER),
+               "declare exactly what the arrays hold");
+    beam_clear_error();
+    BeamModel *wide = beam_model_load(path);
+    const bool corrupt = beam_last_error() == BEAM_ERR_IO_CORRUPT;
+    if (wide) beam_model_destroy(wide);
+    remove(path);
+    ASSERT_MSG(!corrupt,
+               "a length the arrays hold is not a corrupt header; it is "
+               "refused, if at all, as an illegal configuration");
+
+    beam_model_destroy(m);
+    PASS();
+}
+
+/**
+ * A sequence past `max_length` scores -INFINITY, and nothing says why.
+ *
+ * Characterization, not endorsement. `beam_model_log_pseq` returns a bare
+ * `double` and has no error channel, so an over-length sequence is
+ * indistinguishable from one the model merely finds very improbable: both are
+ * -INFINITY, both leave the error state clean. `beam_model_explain` takes the
+ * same sequence and returns BEAM_ERR_INVALID_SEQUENCE with a sentence, which
+ * is what shows the inconsistency is in the return contract rather than in
+ * the encoder.
+ *
+ * Repairing it means changing what the library's most-called function
+ * returns, which is separate work. This is here so the choice is recorded and
+ * a change to it is deliberate.
+ *
+ * Overlaps test_alphabet.c's `test_only_an_unreadable_sequence_scores_minus_infinity`,
+ * which enumerates WHICH sequences score -INFINITY. What is only here is the
+ * error-state assertion -- that nothing is set -- which is the half that makes
+ * this a statement about the return contract. If one of the two changes, change
+ * the other.
+ */
+static void test_an_over_length_sequence_scores_minus_infinity(void) {
+    BeamModel *m = build(2, 10);
+    ASSERT_MSG(m != NULL, "build");
+
+    /* Readable, within the length, and never observed: the model's own "very
+     * improbable" answer, which has to stay finite for the comparison below
+     * to mean anything. */
+    const double unlikely = beam_model_log_pseq(m, "WWKWWKWWKW");
+    ASSERT_MSG(isfinite(unlikely) && unlikely < 0.0,
+               "an unseen but readable sequence is improbable, not impossible");
+
+    beam_clear_error();
+    const double over = beam_model_log_pseq(m, "WWKWWKWWKWW");
+    ASSERT_MSG(over == -INFINITY, "one residue past max_length scores -inf");
+    ASSERT_MSG(beam_last_error() == BEAM_OK,
+               "and sets no error, so the caller cannot tell a length "
+               "mistake from a genuinely improbable sequence");
+
+    double fwd[BEAM_LENGTH_BUFFER], bwd[BEAM_LENGTH_BUFFER];
+    uint32_t len = 0;
+    ASSERT_MSG(beam_model_explain(m, "WWKWWKWWKWW", fwd, bwd, &len)
+                   == BEAM_ERR_INVALID_SEQUENCE,
+               "the same sequence through a function that CAN refuse is "
+               "refused, which is what makes the silence above a contract "
+               "choice rather than an encoder bug");
+
+    beam_model_destroy(m);
     PASS();
 }
 
@@ -3251,6 +3576,60 @@ static void test_a_zero_forward_weight_leaves_no_nan_edge_weights(void) {
     PASS();
 }
 
+static void test_an_illegal_row_count_is_not_blamed_on_the_budget(void) {
+    /*
+     * nt, order 9, max_length 500: 5.04e9 rows against BEAM_MAX_ROWS, which
+     * no budget can fix. beam_model_new validates before it sizes anything,
+     * so this is the config validator's sentence, and the lifecycle row guard
+     * behind it is unreachable from here by construction. If a later ceiling
+     * raise makes the guard reachable again, its place ahead of the budget
+     * guard is what keeps its message honest.
+     */
+    const uint64_t before = beam_model_memory_budget();
+    beam_model_set_memory_budget(1ull << 62);
+    BeamModelConfig cfg;
+    beam_model_config_default_for(BEAM_ALPHABET_NT, &cfg);
+    cfg.order = 9;
+    cfg.max_length = 500;
+    BeamModel *m = beam_model_new(&cfg);
+    const BeamError err = beam_last_error();
+    const char *msg = beam_error_message();
+    const int has_rows = strstr(msg, "table rows") != NULL;
+    const int has_budget = strstr(msg, "budget") != NULL;
+    beam_model_set_memory_budget(before);
+    if (m) beam_model_destroy(m);
+    ASSERT_MSG(m == NULL, "the configuration is refused");
+    ASSERT_MSG(err == BEAM_ERR_PARAM_OUT_OF_RANGE, "refused as out of range");
+    ASSERT_MSG(has_rows, "the caller is told what overflowed");
+    ASSERT_MSG(!has_budget, "raising the budget cannot fix a row count");
+    PASS();
+}
+
+static void test_legal_rows_with_real_memory_demand_get_the_budget_answer(void) {
+    /*
+     * nt, order 8, max_length 512: 859,963,392 rows per direction, legal
+     * against BEAM_MAX_ROWS, and 1.72e9 across both directions, so its sparse
+     * demand exceeds the 4 GiB default. The budget's answer must survive the
+     * guard reorder.
+     */
+    const uint64_t before = beam_model_memory_budget();
+    beam_model_set_memory_budget(4ull << 30);
+    BeamModelConfig cfg;
+    beam_model_config_default_for(BEAM_ALPHABET_NT, &cfg);
+    cfg.order = 8;
+    cfg.max_length = 512;
+    cfg.sparse = true;
+    BeamModel *m = beam_model_new(&cfg);
+    const BeamError err = beam_last_error();
+    const int has_budget = strstr(beam_error_message(), "budget") != NULL;
+    beam_model_set_memory_budget(before);
+    if (m) beam_model_destroy(m);
+    ASSERT_MSG(m == NULL, "the configuration is refused");
+    ASSERT_MSG(err == BEAM_ERR_BUDGET, "refused as over budget");
+    ASSERT_MSG(has_budget, "a budget refusal names the budget");
+    PASS();
+}
+
 int main(void) {
     printf("\n=== BEAM (Ensemble of Dual Graph Experts) ===\n");
 
@@ -3261,6 +3640,12 @@ int main(void) {
     RUN_TEST(test_a_compacted_model_cannot_report_depth_occupancy);
     RUN_TEST(test_single_anchor_weights_are_accepted);
     RUN_TEST(test_either_storage_layout_is_a_valid_configuration);
+    RUN_TEST(test_a_config_past_its_alphabets_ceiling_is_refused_by_name);
+    RUN_TEST(test_an_amino_acid_ceiling_is_not_the_nucleotide_one);
+    RUN_TEST(test_a_short_model_is_still_written_as_format_9);
+    RUN_TEST(test_a_long_model_is_written_as_format_10);
+    RUN_TEST(test_both_formats_load);
+    RUN_TEST(test_a_format_11_file_says_upgrade_beam);
     RUN_TEST(test_sparse_rows_boundaries_and_erase);
     RUN_TEST(test_sparse_growth_failure_is_atomic);
     RUN_TEST(test_sparse_matches_dense_bit_for_bit);
@@ -3310,6 +3695,8 @@ int main(void) {
     RUN_TEST(test_save_load_round_trip);
     RUN_TEST(test_legacy_format_files_are_refused_by_name);
     RUN_TEST(test_corrupt_file_is_rejected);
+    RUN_TEST(test_a_header_length_past_the_arrays_is_corrupt);
+    RUN_TEST(test_an_over_length_sequence_scores_minus_infinity);
     RUN_TEST(test_compact_keeps_scores);
 
     RUN_TEST(test_log_mellin_endpoints);
@@ -3332,6 +3719,8 @@ int main(void) {
     RUN_TEST(test_clamped_marginals_survive_a_wide_dynamic_range);
     RUN_TEST(test_a_negative_tilt_does_not_overflow_the_sweeps);
     RUN_TEST(test_a_zero_forward_weight_leaves_no_nan_edge_weights);
+    RUN_TEST(test_an_illegal_row_count_is_not_blamed_on_the_budget);
+    RUN_TEST(test_legal_rows_with_real_memory_demand_get_the_budget_answer);
 
     printf("\n  %d passed, %d failed\n\n", pass_count, fail_count);
     return fail_count == 0 ? 0 : 1;

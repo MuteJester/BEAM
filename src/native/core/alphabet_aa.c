@@ -69,6 +69,11 @@ const BeamAlphabetInfo beam_alphabet_aa = {
     .default_order      = 4,
     .max_order          = 4,
     .default_max_length = 27,
+    /* Held at 255, the limit from when the field was a uint8_t. Nothing asks
+     * for a longer amino-acid model -- a CDR3 is a few dozen residues -- and
+     * holding it here is what makes the widening invisible to every existing
+     * amino-acid call rather than something to qualify. */
+    .max_max_length     = BEAM_AA_LENGTH_CAP,
     .char_to_idx        = beam_aa_char_to_idx,
     .idx_to_char        = aa_idx_to_char,
 };

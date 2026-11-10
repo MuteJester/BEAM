@@ -365,10 +365,36 @@ static void test_the_state_ceiling_admits_what_it_says_it_does(void) {
     PASS();
 }
 
+static void test_a_query_length_past_the_old_ceiling_meets_the_budget(void) {
+    /* automaton.c follows the validation cap, so it admits lengths a short
+     * model cannot represent. The allocation must be refused by the budget,
+     * with the budget's message, not by a range check or a failed malloc. */
+    const uint64_t saved = beam_model_memory_budget();
+    const uint32_t len = 400u, nr = 5u;   /* nucleotide residues */
+    /* layered: 400 * 2 * 5 * 4 + 2 = 16002 bytes */
+    beam_model_set_memory_budget(1024u);
+
+    BeamConstraint *c = beam_query_constraint_new(len, nr);
+    ASSERT_MSG(c != NULL, "a length-400 constraint is within the cap");
+    BeamAutomaton *built = beam_query_automaton_from_masks(c);
+    ASSERT_MSG(built == NULL, "refused");
+    ASSERT_MSG(beam_last_error() == BEAM_ERR_BUDGET,
+               "refused by the budget, not by a range check");
+    ASSERT_MSG(strstr(beam_error_message(), "budget") != NULL,
+               "the caller is told what to raise");
+
+    beam_model_set_memory_budget(saved);
+    BeamAutomaton *ok = beam_query_automaton_from_masks(c);
+    ASSERT_MSG(ok != NULL, "and it builds once the budget allows");
+    beam_query_automaton_free(ok);
+    beam_query_constraint_free(c);
+    PASS();
+}
+
 static void test_the_automaton_allocation_respects_the_memory_budget(void) {
     /*
      * The guard exists because a maximal layer-indexed transition table is
-     * 21 MB and a subsystem that refuses a sweep over budget should not
+     * about 42 MB and a subsystem that refuses a sweep over budget should not
      * allocate around it. Nothing exercised it -- review found it had shipped
      * without a test, so deleting it would have gone unnoticed.
      *
@@ -490,6 +516,7 @@ int main(void) {
     RUN_TEST(test_a_product_past_the_state_ceiling_is_refused);
     RUN_TEST(test_the_state_ceiling_admits_what_it_says_it_does);
     RUN_TEST(test_the_automaton_allocation_respects_the_memory_budget);
+    RUN_TEST(test_a_query_length_past_the_old_ceiling_meets_the_budget);
 
     printf("\n[attaching to a constraint]\n");
     RUN_TEST(test_attaching_an_automaton_intersects);

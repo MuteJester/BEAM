@@ -561,29 +561,63 @@ static void test_neighbourhoods_at_the_short_extreme(void) {
 
 static void test_a_source_at_the_length_ceiling_is_handled(void) {
     /*
-     * The source is decoded into a stack array sized BEAM_MAX_LENGTH_CEILING,
+     * The source is decoded into a stack array sized BEAM_LENGTH_BUFFER,
      * and `source_shape` bounds it by exactly that. Nothing tested the
      * boundary, so loosening the bound by one would have been an unguarded
      * stack overflow rather than a failing test.
      */
     BeamModel *m = build(TRAIN, WEIGHT, N_TRAIN, 3u, 8u);
     ASSERT_MSG(m != NULL, "model built");
-    char *at = (char *)malloc(BEAM_MAX_LENGTH_CEILING + 2u);
+    char *at = (char *)malloc(BEAM_LENGTH_BUFFER + 2u);
     ASSERT_MSG(at != NULL, "alloc");
-    memset(at, 'C', BEAM_MAX_LENGTH_CEILING + 1u);
-    at[BEAM_MAX_LENGTH_CEILING + 1u] = '\0';
+    memset(at, 'C', BEAM_LENGTH_BUFFER + 1u);
+    at[BEAM_LENGTH_BUFFER + 1u] = '\0';
 
     BeamNeighbourhood nb = {0};
-    /* One past the ceiling: refused on shape, before anything is decoded. */
+    /* One past the buffer: refused on shape, before anything is decoded. */
     ASSERT_MSG(beam_query_insertions(m, at, &nb)
-               == BEAM_ERR_PARAM_OUT_OF_RANGE, "one past the ceiling");
+               == BEAM_ERR_PARAM_OUT_OF_RANGE, "one past the buffer");
     ASSERT_MSG(nb.n == 0u && nb.sequences == NULL, "and nothing was written");
-    /* Exactly at the ceiling: accepted by shape, then refused by the model,
+    /* Exactly at the buffer: accepted by shape, then refused by the model,
      * which is a different refusal and the one that proves it got that far. */
-    at[BEAM_MAX_LENGTH_CEILING] = '\0';
+    at[BEAM_LENGTH_BUFFER] = '\0';
     ASSERT_MSG(beam_query_insertions(m, at, &nb) == BEAM_ERR_NO_LIVE_PATHS,
-               "at the ceiling, refused by the model rather than the shape");
+               "at the buffer, refused by the model rather than the shape");
     free(at);
+    beam_model_destroy(m);
+    PASS();
+}
+
+static void test_an_over_length_source_is_probability_zero_up_to_the_buffer(void) {
+    /* A source longer than the model but no longer than the arrays is a
+     * source of probability zero, which is the contract of
+     * test_a_source_the_model_cannot_score_is_refused. Raising the buffer
+     * widens that window; it does not create it. */
+    BeamModelConfig cfg;
+    beam_model_config_default(&cfg);
+    cfg.alphabet = BEAM_ALPHABET_NT;
+    cfg.order = 2; cfg.max_length = 81;
+    BeamModel *m = beam_model_new(&cfg);
+    ASSERT_MSG(m != NULL, "nucleotide model built");
+    const char *seqs[2] = {"ACGTACGT", "AACCGGTT"};
+    const double w[2] = {3.0, 2.0};
+    ASSERT_MSG(beam_model_observe(m, seqs, w, 2u) == BEAM_OK, "observed");
+    ASSERT_MSG(beam_model_finalize(m) == BEAM_OK, "finalized");
+
+    char *src = (char *)malloc(BEAM_LENGTH_BUFFER + 2u);
+    ASSERT_MSG(src != NULL, "alloc");
+    BeamNeighbourhood nb = {0};
+    memset(src, 'A', 400u);
+    src[400] = '\0';
+    ASSERT_MSG(beam_query_insertions(m, src, &nb) == BEAM_ERR_NO_LIVE_PATHS,
+               "400 bases against an 81-length model is probability zero, "
+               "not a malformed request");
+    ASSERT_MSG(nb.n == 0u && nb.sequences == NULL, "and nothing was written");
+    memset(src, 'A', BEAM_LENGTH_BUFFER + 1u);
+    src[BEAM_LENGTH_BUFFER + 1u] = '\0';
+    ASSERT_MSG(beam_query_insertions(m, src, &nb) == BEAM_ERR_PARAM_OUT_OF_RANGE,
+               "past the arrays it is a range error again");
+    free(src);
     beam_model_destroy(m);
     PASS();
 }
@@ -662,6 +696,7 @@ int main(void) {
     RUN_TEST(test_a_source_at_the_length_ceiling_is_handled);
     RUN_TEST(test_a_character_outside_the_alphabet_is_malformed_input);
     RUN_TEST(test_a_source_the_model_cannot_score_is_refused);
+    RUN_TEST(test_an_over_length_source_is_probability_zero_up_to_the_buffer);
 
     printf("\n==============================================================\n");
     printf("Results: %d passed, %d failed\n", pass_count, fail_count);

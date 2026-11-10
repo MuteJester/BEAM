@@ -1,4 +1,4 @@
-__all__: ['AbundanceSpectrum', 'AlphaFit', 'Atoms', 'Attribution', 'BeamError', 'BeamModel', 'BeamQuery', 'BeamTypeError', 'BeamValueError', 'BetaDiversity', 'BudgetExceeded', 'Builder', 'Calibration', 'Condition', 'DepthMatchedProfiles', 'EntropyBounds', 'EntropyEstimate', 'Histogram', 'ImpossibleCondition', 'IncompatibleMembers', 'InternalError', 'InvalidSequence', 'LikelihoodPieceError', 'Mixture', 'MixtureError', 'MixtureTooLarge', 'ModelFileError', 'ModelMismatch', 'NoLivePaths', 'NotFinalized', 'OutOfMemory', 'PairLikelihood', 'Piece', 'PretrainedModel', 'PseqAnalysis', 'PublicnessModel', 'QueryError', 'QueryTooLarge', 'RepertoireLikelihood', 'ResamplingBand', 'SaddlepointDidNotConverge', 'ScaleIndex', 'SupportSize', 'UnsupportedOrder', 'UnsupportedQuery', 'abundance_spectrum', 'attribute', 'auto_profile_edges', 'depth_matched_hill_profiles', 'effective_threads', 'file_provenance_span', 'fit_alpha', 'load_pretrained', 'memory_budget', 'pair_likelihood', 'pretrained_models', 'pretrained_path', 'repertoire_likelihood', 'set_memory_budget', 'set_threads', 'threads']
+__all__: ['AbundanceSpectrum', 'AlphaFit', 'Atoms', 'Attribution', 'BeamError', 'BeamModel', 'BeamPerformanceWarning', 'BeamQuery', 'BeamTypeError', 'BeamValueError', 'BetaDiversity', 'BudgetExceeded', 'Builder', 'Calibration', 'Condition', 'DepthMatchedProfiles', 'EntropyBounds', 'EntropyEstimate', 'Histogram', 'ImpossibleCondition', 'IncompatibleMembers', 'InternalError', 'InvalidSequence', 'LikelihoodPieceError', 'Mixture', 'MixtureError', 'MixtureTooLarge', 'ModelFileError', 'ModelMismatch', 'NoLivePaths', 'NotFinalized', 'OutOfMemory', 'PairLikelihood', 'Piece', 'PretrainedModel', 'PseqAnalysis', 'PublicnessModel', 'QueryError', 'QueryTooLarge', 'RepertoireLikelihood', 'ResamplingBand', 'SaddlepointDidNotConverge', 'ScaleIndex', 'SupportSize', 'UnsupportedOrder', 'UnsupportedQuery', 'abundance_spectrum', 'attribute', 'auto_profile_edges', 'depth_matched_hill_profiles', 'effective_threads', 'file_provenance_span', 'fit_alpha', 'load_pretrained', 'memory_budget', 'pair_likelihood', 'pretrained_models', 'pretrained_path', 'repertoire_likelihood', 'set_memory_budget', 'set_threads', 'threads']
 __version__: 1.0.0.dev0
 class AbundanceSpectrum:
   def __delattr__(self, name, /)
@@ -241,6 +241,32 @@ class BeamModel:
   property variant
   def with_prior(self, prior: 'BeamModel', kappa: 'float' = 100.0) -> 'BeamModel'
   def without(self, other: 'Any', *, abundances: 'Iterable[float] | None' = None) -> 'BeamModel'
+class BeamPerformanceWarning:
+  def __delattr__(self, name, /)
+  def __dir__(self, /)
+  def __eq__(self, value, /)
+  def __format__(self, format_spec, /)
+  def __ge__(self, value, /)
+  def __getattribute__(self, name, /)
+  def __getstate__(self, /)
+  def __gt__(self, value, /)
+  def __hash__(self, /)
+  def __init__(self, /, *args, **kwargs)
+  def __init_subclass__(?)
+  def __le__(self, value, /)
+  def __lt__(self, value, /)
+  def __ne__(self, value, /)
+  def __new__(*args, **kwargs)
+  def __reduce__(?)
+  def __reduce_ex__(self, protocol, /)
+  def __repr__(self, /)
+  def __setattr__(self, name, value, /)
+  def __setstate__(?)
+  def __sizeof__(self, /)
+  def __str__(self, /)
+  def __subclasshook__(?)
+  def add_note(?)
+  def with_traceback(?)
 class BeamQuery:
   def __delattr__(self, name, /)
   def __dir__(self, /)

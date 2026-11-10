@@ -131,10 +131,10 @@ static BeamError source_shape(const BeamModel *m, const char *sequence,
     if (!m->finalized) return BEAM_ENOTBUILT();
 
     const size_t n = strlen(sequence);
-    if (n == 0u || n > BEAM_MAX_LENGTH_CEILING)
+    if (n == 0u || n > BEAM_LENGTH_BUFFER)
         return BEAM_ERANGE("beam_query: a source sequence of %zu residues is "
                           "outside 1..%u", n,
-                          (unsigned)BEAM_MAX_LENGTH_CEILING);
+                          (unsigned)BEAM_LENGTH_BUFFER);
 
     /*
      * Decoded once, and every byte checked. Two things depend on this.
@@ -189,7 +189,7 @@ BeamError beam_query_insertions(const BeamModel *m, const char *sequence,
     memset(out, 0, sizeof(*out));
     uint32_t L = 0u;
     double log_source = 0.0;
-    uint8_t idx[BEAM_MAX_LENGTH_CEILING];
+    uint8_t idx[BEAM_LENGTH_BUFFER];
     BeamError err = source_shape(m, sequence, &L, idx);
     if (err != BEAM_OK) return err;
     err = source_score(m, sequence, &log_source);
@@ -258,7 +258,7 @@ BeamError beam_query_deletions(const BeamModel *m, const char *sequence,
     memset(out, 0, sizeof(*out));
     uint32_t L = 0u;
     double log_source = 0.0;
-    uint8_t idx[BEAM_MAX_LENGTH_CEILING];
+    uint8_t idx[BEAM_LENGTH_BUFFER];
     BeamError err = source_shape(m, sequence, &L, idx);
     if (err != BEAM_OK) return err;
     /* Before scoring: this is true of every model, and the zero-probability

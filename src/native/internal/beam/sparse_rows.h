@@ -45,6 +45,13 @@ typedef struct {
 
 #define BEAM_RANK_BLOCK_ROWS 256u
 
+/* BEAM_MAX_ROWS is public and cannot name this, so it carries the number and
+ * this ties the two together: the row bound exists to absorb the rounding-up
+ * additions performed on a row count here, and the slot sentinel above. */
+_Static_assert(BEAM_MAX_ROWS == UINT32_MAX - BEAM_RANK_BLOCK_ROWS,
+               "the row bound must stay one directory block below the top of "
+               "a uint32, which is what makes (n + K - 1) / K safe");
+
 /**
  * Seal a finalized table when at most one row in this many is occupied.
  *

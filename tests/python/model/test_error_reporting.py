@@ -213,9 +213,25 @@ def test_a_build_parameter_too_large_is_refused_not_wrapped(model):
 
     assert _c.config(build())["order"] == 2               # the sane case still works
 
-    for kw in (dict(order=258), dict(maxlen=300), dict(order=-1)):
-        with pytest.raises(ValueError, match="0..255"):
+    # `order` is still cast to a uint8_t, so the wrap is still its story.
+    for kw in (dict(order=258), dict(order=-1)):
+        with pytest.raises(ValueError,
+                           match="wrap to an unrelated but legal setting"):
             build(**kw)
+
+    # `max_length` is a uint32_t now, so 300 no longer wraps and the boundary
+    # no longer refuses it -- nucleotides are built at lengths like that. Its
+    # bound is a different fact, and keyed to its own clause: past what the
+    # fixed length-indexed arrays hold, no alphabet could serve the request.
+    with pytest.raises(ValueError, match=r"max_length must be in 0\.\.512"):
+        build(maxlen=100_000)
+
+    # 300 now reaches the config validator, and is refused there BY ALPHABET
+    # rather than at the parse boundary: the cap is per-alphabet, 255 for
+    # amino acids and 512 for nucleotides, so the sentence has to say which
+    # one applied.
+    with pytest.raises(ValueError, match=r"aa alphabet.*1\.\.255"):
+        build(maxlen=300)
 
 
 def test_an_out_of_range_length_is_refused_before_anything_is_sized(model):

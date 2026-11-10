@@ -95,11 +95,11 @@ def test_one_length_carries_a_single_sequence():
     assert lm["counting"][4] == pytest.approx(20.0 ** 4)
 
 
-def test_max_length_two_is_the_smallest_model():
-    """Two is the floor `max_length` accepts. It has to work, not merely be
-    accepted: the depth axis is one slot per position, so a two-residue model
-    exercises both an anchored and a settled position with nothing in
-    between."""
+def test_a_two_residue_model_exercises_both_position_kinds():
+    """It has to work, not merely be accepted: the depth axis is one slot per
+    position, so a two-residue model exercises both an anchored and a settled
+    position with nothing in between. Two is not the floor `max_length`
+    accepts -- that is 1, covered in test_configuration.py."""
     m = BeamModel(["CA", "CF", "SA"], order=2, max_length=2)
     assert m.config["max_length"] == 2
     assert _sum_conditional(m, 2) == pytest.approx(1.0, abs=1e-12)

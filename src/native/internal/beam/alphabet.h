@@ -43,9 +43,23 @@ typedef struct {
     uint8_t default_order;
     uint8_t max_order;
 
-    /** Default longest sequence accepted. Nucleotides need three times the
-     *  amino-acid length to say the same thing. */
-    uint8_t default_max_length;
+    /**
+     * Longest sequence accepted: the default when the caller gives none, and
+     * the largest this alphabet accepts.
+     *
+     * The pair mirrors `default_order`/`max_order` above it, and for a
+     * related reason -- the real constraint is on `max_length * A^order`, and
+     * the two radices are far apart. Nucleotides need three times the
+     * amino-acid length to say the same thing, and a full V(D)J read is
+     * longer again, so one number cannot serve both.
+     *
+     * The ceiling here is a plain per-alphabet cap. It is not the whole rule:
+     * what a given config may ask for also depends on its order, which
+     * `beam_config_invalid_reason` checks as a product against
+     * BEAM_MAX_ROWS.
+     */
+    uint32_t default_max_length;
+    uint32_t max_max_length;
 
 
     /**
@@ -96,6 +110,20 @@ _Static_assert(BEAM_MAX_RADIX >= BEAM_AA_RADIX
                "BEAM_MAX_RADIX must cover every alphabet it sizes for");
 _Static_assert(BEAM_RESIDUE_INVALID > BEAM_MAX_RADIX,
                "the invalid marker must not collide with a residue index");
+/*
+ * The descriptors are initialised from these, and a per-alphabet cap is a
+ * statement about what a CONFIG MAY ASK FOR -- so it is tied to that axis's
+ * cross-alphabet name, BEAM_MAX_LENGTH_CEILING, and not to the array size.
+ * That is strictly the stronger claim, since model.h already asserts
+ * `CEILING <= BUFFER`, and it keeps each of the two names on its own axis:
+ * the ceiling bounds requests, the buffer sizes arrays, and conflating them
+ * is how a later raise of the cap becomes a stack overflow instead of a
+ * refusal.
+ */
+_Static_assert(BEAM_AA_LENGTH_CAP <= BEAM_MAX_LENGTH_CEILING,
+               "an alphabet may not permit more length than a config may ask "
+               "for");
+_Static_assert(BEAM_NT_LENGTH_CAP <= BEAM_MAX_LENGTH_CEILING, "likewise");
 
 /* ── Encoding ────────────────────────────────────────────────── */
 

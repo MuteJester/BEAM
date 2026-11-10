@@ -78,6 +78,12 @@ class Builder:
             alphabet=alphabet, order=order, max_length=max_length,
             weights=weights, alpha=alpha, alpha_length=alpha_length,
             sparse=sparse)
+        # Local, for the same cycle the class's own TYPE_CHECKING import
+        # avoids: facade constructs Builder.
+        from .facade import _warn_if_expensive
+        # The clamp half cannot apply: max_length='data' needs every
+        # sequence up front and is refused on a streaming build.
+        _warn_if_expensive(self._cargs[1], alphabet, 0, 0)
         self._g = _c.new(*self._cargs)
         self._spent = False
 

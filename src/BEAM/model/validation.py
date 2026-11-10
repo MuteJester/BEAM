@@ -10,14 +10,17 @@ from .._simulation_result import SimulationResult
 from ..errors import BeamTypeError, BeamValueError
 
 
-def _check_int(name: str, value: Any, lo: int, hi: int) -> int:
-    """Range-check a configuration integer before it reaches the C layer.
+def _check_int(name: str, value: Any, lo: int, hi: int, *,
+               context: str = "") -> int:
+    """Convert a configuration integer and check it lies in ``lo..hi``.
 
-    The C entry point takes these as ``uint8_t``, so an out-of-range value is
-    silently truncated rather than rejected: ``max_length=283`` becomes 27 and
-    ``order=260`` becomes 4, both of which then build a perfectly healthy
-    model that is not the one that was asked for. Checking here is the only
-    place that difference can still be seen.
+    This is the early, friendly gate; the C layer validates again. Raises
+    :class:`BeamTypeError` for something that is not an integer and
+    :class:`BeamValueError` for an out-of-range one. ``context`` is appended
+    to the range in the message, for a bound that depends on another argument.
+    Both configuration bounds are per-alphabet -- 2..4 orders and 1..255
+    residues for amino acids against 2..9 and 1..512 for nucleotides -- so
+    without it a refusal quotes a number without the argument that chose it.
     """
     try:
         v = int(value)
@@ -30,7 +33,8 @@ def _check_int(name: str, value: Any, lo: int, hi: int) -> int:
         raise BeamTypeError(
             f"{name} must be an integer, got {value!r}") from None
     if not lo <= v <= hi:
-        raise BeamValueError(f"{name} must be between {lo} and {hi}, got {v}")
+        raise BeamValueError(f"{name} must be between {lo} and {hi}"
+                             f"{f' {context}' if context else ''}, got {v}")
     return v
 
 
