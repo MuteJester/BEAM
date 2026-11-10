@@ -37,3 +37,17 @@ def collect_ids(text: str) -> list[str]:
     made a file move invisible too.
     """
     return [l.strip() for l in text.splitlines() if "::" in l]
+
+
+def python_inventory(want_text: str, collected_text: str) -> tuple[list[str], list[str]]:
+    """The two id lists the gate compares: whole ids, duplicates kept.
+
+    WHOLE, path included, so a test moving between files is a difference. The
+    gate split on `::` and compared bare names, which made a file move
+    invisible -- and a reorganisation that moves every test is exactly when
+    the gate most needs to see one.
+
+    One function rather than two comprehensions at the call site, because the
+    property worth testing is that both sides are built the same way.
+    """
+    return collect_ids(want_text), collect_ids(collected_text)
