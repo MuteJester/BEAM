@@ -68,13 +68,13 @@ It is emitted for a build above 255 residues, because finalizing runs one
 partition-function computation for every length from 1 to `max_length` — not
 only the lengths your sequences have, since every length up to `max_length` has
 some probability. The cost therefore grows with the square of `max_length`:
-about 24 times the nucleotide default at 400 residues, and about 39 times at
+about 24 times the nucleotide default at 400 bases, and about 40 times at
 512, counted in those computations rather than in seconds. It is also emitted
-when `max_length="data"` stops at an alphabet's limit, naming how many
-sequences are longer and will be skipped.
+when `max_length="data"` stops at an alphabet's limit *and* some sequence is
+longer than it, naming how many will be skipped.
 
-Every route to such a model warns, including `BeamModel.builder`,
-`from_sequence_file`, `from_parquet` and `from_file` — a saved model stores
+Every route to such a model warns: the constructor, `from_dataframe`,
+`BeamModel.builder`, `from_sequence_file`, `from_parquet` and `from_file` — a saved model stores
 counts rather than tables, so loading one re-finalizes and pays the same cost.
 Rebuilds from a model you already have, such as `without`, do not warn again.
 

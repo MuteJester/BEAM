@@ -13,13 +13,9 @@ still load, and every default call returns identical numbers; the exceptions
 are listed under Changed.
 
 ### Added
-- Nucleotide models of up to 512 residues, enough for reads of about 400
-  bases. Amino-acid models keep their limit of 255.
-- `max_max_length` in the alphabet descriptor, so the Python layer reads each
-  alphabet's limit from C instead of restating it. This is not a public path:
-  `BEAM.model.alphabets` is not exported and the recorded API surface does not
-  cover it. The limits themselves are documented, and a refusal now names the
-  alphabet and the range it is quoting.
+- Nucleotide models of up to 512 bases, which covers the ~400-base reads
+  this was built for with room to spare. Amino-acid models keep their
+  limit of 255 residues.
 - `BEAM.BeamPerformanceWarning`, raised before a build that costs far more
   than it looks. Finalizing runs one partition-function computation for every
   length from 1 to `max_length`, not only the observed ones, so the cost grows
@@ -33,7 +29,8 @@ are listed under Changed.
   255.** A build that used to skip sequences longer than 255 silently now keeps
   them, sizes the model larger and emits a `BeamPerformanceWarning`, so the
   same call on a corpus with 400-base reads returns a different model.
-  Amino-acid corpora are unaffected.
+  An amino-acid corpus returns the same model it did, though a corpus with
+  sequences over 255 now warns as well.
 - **C API break.** `BeamModelConfig.max_length` is now `uint32_t`. The size of
   the struct and the offset of every field after it moved: `sizeof` went from
   128 to 136 bytes, `max_length` from offset 5 to 8, and `alpha` from offset 24
