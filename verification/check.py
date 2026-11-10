@@ -18,6 +18,9 @@ from pathlib import Path
 import numpy as np
 import BEAM
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from check_lib import collect_ids, compare
+
 B = Path(__file__).resolve().parent / "baseline"
 fail = []
 
@@ -36,13 +39,17 @@ def public_text_names(header_text, syms):
 
 
 def check(name, got, want):
-    # Compare name lists as SETS. GNU sort and Python order underscores
-    # differently depending on locale, so a sorted-sequence comparison reports
-    # a difference between two identical symbol tables. Membership is the
-    # contract; ordering is not.
+    # Compare name lists as MULTISETS. A name that appears in two files must
+    # not collapse into one entry, or deleting either copy is invisible --
+    # four ids are in that position. Ordering still does not matter: GNU sort
+    # and Python order underscores differently depending on locale, so
+    # comparing sequences would report a difference between two identical
+    # inventories.
+    same = compare(got, want) if isinstance(got, list) and isinstance(want, list) \
+        else got == want
     if isinstance(got, list) and isinstance(want, list):
-        got, want = sorted(set(got)), sorted(set(want))
-    if got == want:
+        got, want = sorted(got), sorted(want)
+    if same:
         print(f"  OK    {name}")
     else:
         fail.append(name)
@@ -236,13 +243,13 @@ else:
 root = ROOT
 # splitlines, not split(): a parametrised id can contain spaces, and
 # whitespace-splitting silently truncates it to the first word.
-py_want_lines = [l.strip() for l in (B / "pytest_cases.txt").read_text().splitlines()
-                 if "::" in l]
-py_want = {l.split("::", 1)[1] for l in py_want_lines}
+_py_want_text = (B / "pytest_cases.txt").read_text(encoding="utf-8")
+py_want_lines = collect_ids(_py_want_text)
+py_want = [i.split("::", 1)[1] for i in collect_ids(_py_want_text)]
 out = subprocess.run([sys.executable, "-m", "pytest", str(root / "tests"), "-q",
                       "--collect-only"], capture_output=True, text=True, cwd=root).stdout
-py_got_lines = [l.strip() for l in out.splitlines() if "::" in l]
-py_got = {l.split("::", 1)[1] for l in py_got_lines}
+py_got_lines = collect_ids(out)
+py_got = [i.split("::", 1)[1] for i in collect_ids(out)]
 
 # ── Is this interpreter able to see the whole suite? ───────────────────────
 # The inventory compares what THIS environment collects against a list
