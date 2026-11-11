@@ -31,6 +31,7 @@ from .config import _config_args, _config_args_from_dict
 from ..io.readers import _column, _iter_delimited, _iter_parquet, _iter_parquet_column
 from ..math.saddlepoint import _normal_pdf, _normal_cdf
 from ..math import mellin as _mellin
+from ..math import saddlepoint as _saddlepoint
 # `hill_profile` still validates its orders here; it moves in the diversity
 # step, which takes this import with it.
 from ..math.mellin import _orders_vector
@@ -1890,36 +1891,8 @@ class BeamModel:
         tilt that does not solve the equation, because Lugannani-Rice built on
         a wrong saddlepoint produces a confident and meaningless number.
         """
-        def jet_at(t):
-            key = round(t, 12)
-            if key not in cache:
-                cache[key] = self.cgf_jet(key)
-            return cache[key]
-
-        lo_t, hi_t = -self.MAX_TILT, self.MAX_TILT
-        j_lo, j_hi = jet_at(lo_t), jet_at(hi_t)
-        if x <= j_lo["K1"]:
-            return lo_t, j_lo, False
-        if x >= j_hi["K1"]:
-            return hi_t, j_hi, False
-
-        t = 0.0
-        jet = jet_at(t)
-        for _ in range(max_iter):
-            f = jet["K1"] - x
-            if abs(f) < tol:
-                return t, jet, True
-            if f > 0.0:
-                hi_t = t
-            else:
-                lo_t = t
-            step = f / max(jet["K2"], 1e-300)
-            nt = t - step
-            if not (lo_t < nt < hi_t):
-                nt = 0.5 * (lo_t + hi_t)
-            t = nt
-            jet = jet_at(t)
-        return t, jet, abs(jet["K1"] - x) < 1e-6
+        return _saddlepoint.solve_tilt(self, x, cache, tol=tol,
+                                       max_iter=max_iter)
 
     def saddlepoint(self, x, *, tol: float = 1e-9, max_iter: int = 80) -> dict:
         """Lugannani-Rice saddlepoint approximation to the surprisal density.
@@ -1940,65 +1913,7 @@ class BeamModel:
         is seconds per point on a large model. Ask for the points you need, and
         use :meth:`surprisal_cdf` when a cheap answer will do.
         """
-        xs = np.atleast_1d(np.asarray(x, dtype=np.float64))
-        lo, hi = self.surprisal_range()
-        cache: dict[float, dict[str, float]] = {}
-
-        pdf = np.zeros_like(xs)
-        cdf = np.zeros_like(xs)
-        tt = np.full_like(xs, np.nan)
-        ok = np.zeros(xs.shape, dtype=bool)
-
-        for i, xv in enumerate(xs):
-            if xv <= lo:
-                continue
-            if xv >= hi:
-                cdf[i] = 1.0
-                continue
-            t, jet, converged = self._solve_tilt(xv, cache, tol=tol,
-                                                 max_iter=max_iter)
-            tt[i] = t
-            ok[i] = converged
-            if not converged:
-                # Beyond the reachable tilt range: the point is deep in a tail,
-                # and the honest answer is the boundary it is closest to.
-                cdf[i] = 0.0 if t < 0 else 1.0
-                continue
-
-            k2 = max(jet["K2"], 1e-300)
-            pdf[i] = math.exp(jet["K"] - t * xv) / math.sqrt(2.0 * math.pi * k2)
-            w = math.copysign(math.sqrt(max(2.0 * (t * xv - jet["K"]), 0.0)), t)
-            u = t * math.sqrt(k2)
-            if abs(t) < 1e-7:
-                # Lugannani-Rice has a removable singularity at the mean; use
-                # the standard limiting form rather than dividing by zero.
-                k3 = float(self.surprisal_cumulants(q=1.0, order=3)[2])
-                cdf[i] = 0.5 - k3 / (6.0 * math.sqrt(2.0 * math.pi) * k2 ** 1.5)
-            elif abs(w) < 1e-10 or abs(u) < 1e-10:
-                # Degenerate away from the mean, which the limiting form above
-                # does NOT cover: it is the expansion around t = 0 and would
-                # answer ~0.5 for a point deep in a tail. `w` vanishes only at
-                # the mean, so reaching here with a non-small `t` means the
-                # tilted sweep has collapsed onto a single path and the
-                # inversion has nothing left to invert. Report that rather
-                # than a confident number.
-                ok[i] = False
-                cdf[i] = 0.0 if t < 0 else 1.0
-                pdf[i] = 0.0
-            else:
-                cdf[i] = _normal_cdf(w) + _normal_pdf(w) * (1.0 / w - 1.0 / u)
-            cdf[i] = min(max(cdf[i], 0.0), 1.0)
-
-        out = {"x": xs, "pdf": pdf, "cdf": cdf, "sf": 1.0 - cdf, "t": tt,
-               "converged": ok, "range": (lo, hi)}
-        if _is_scalar_arg(x):
-            out = {k: (v[0] if isinstance(v, np.ndarray) and v.size == 1 else v)
-                   for k, v in out.items()}
-            out["x"] = float(out["x"])
-            for key in ("cdf", "pdf", "sf", "t"):
-                out[key] = float(out[key])
-            out["converged"] = bool(out["converged"])
-        return out
+        return _saddlepoint.saddlepoint(self, x, tol=tol, max_iter=max_iter)
 
     def surprisal_distribution(self) -> dict[str, np.ndarray]:
         """The surprisal as a mixture over lengths, with exact components.
