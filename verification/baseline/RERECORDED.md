@@ -2693,3 +2693,37 @@ Nothing else was recorded. The numeric baselines, `c_cases.txt` and the
 saved-model bytes are byte-identical, and `python_api.txt` must not be
 recorded on this machine -- see the note two sections above, which still
 applies.
+
+## 2026-11-11: the suites moved to tests/suites/
+
+`pytest_cases.txt`: 1,216 ids changed path, 0 added, 0 removed (1,224 lines
+before and after). `tests/python/` is now `tests/suites/`, so that the
+directory says what it holds and stands beside the other layers -- `harness`,
+`_engineering`, `oracles`, `fixtures`. Not one test name changed, and no test
+body changed with the move.
+
+This is the re-record this whole branch was built to make safe, and it is the
+one that would have been impossible to audit before it. The gate compared test
+inventories as a SET of BARE NAMES: a reorganisation that moves every id at
+once produced no difference at all there, so re-recording it was
+indistinguishable from re-recording a suite with a test deleted. Phase 0 of
+this branch changed the comparison to whole ids, path included, as a multiset.
+The run that recorded this file therefore reported 1,216 `missing` and 1,216
+`added` -- the move, stated in full, before anything was written.
+
+`MOVES.txt` is the mapping, one `old_id -> new_id` per line, with the old side
+preserved as `pytest_cases.presuites.txt`. It is checked rather than trusted:
+`verification/tests/test_moves_are_a_bijection.py` holds it to being total on
+the recorded old inventory, injective, and onto ids the suite actually
+collects today. An id with no line maps to itself; eight ids are in that
+position, all in `_engineering/` and `oracles/`, which were already where they
+belong.
+
+Injectivity is the assertion that matters most here. Two tests collapsing into
+one is a drop that a COUNT cannot see -- the count after would be right -- and
+a set of bare names could not see it either. That is the shape of the failure
+this work exists to prevent, and it is now a test that runs on every gate.
+
+Nothing else was recorded. `c_cases.txt` is unchanged at 390, the numeric
+baselines and the saved-model bytes are byte-identical, and `python_api.txt`
+must not be recorded on this machine.

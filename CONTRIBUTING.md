@@ -75,7 +75,7 @@ independent check against brute-force enumeration fails.
 | `src/BEAM/` | The Python package |
 | `src/BEAM/pretrained/` | The published-model registry and loader |
 | `build_support/` | Source manifests read by both `Makefile` and `setup.py` |
-| `tests/python/`, `tests/native/` | Python and C test suites |
+| `tests/suites/`, `tests/native/` | Python and C test suites |
 | `tests/harness/` | The C harness: outcomes, counters, per-test timing, JSON |
 | `tests/_engineering/` | Shared engineering: the corpora and the built fixtures |
 | `tests/oracles/` | The independent references the implementation is checked against |

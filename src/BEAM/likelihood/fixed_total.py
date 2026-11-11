@@ -54,7 +54,7 @@ def _ztp_reduce(lam, t_bins, edges, allowed, tau):
     with `np.add.at`; on a 100,000-sequence repertoire that was 11 of the 12
     seconds a donor cost, to produce the eight numbers per sequence that are
     all the caller sums anyway. `_Units` is kept as the reference the C
-    kernel is held to (tests/python/likelihood/test_ztp_moments.py).
+    kernel is held to (tests/suites/likelihood/test_ztp_moments.py).
     """
     B = len(edges)
     raw = _c.ztp_bin_reduce(np.ascontiguousarray(lam, dtype=float),

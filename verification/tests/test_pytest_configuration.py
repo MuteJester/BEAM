@@ -36,11 +36,11 @@ ENV = {**os.environ, "OMP_NUM_THREADS": "2"}
 # One file is enough to ask which configuration pytest found, and asking with
 # the whole suite would print 1,216 collected items to read three lines of
 # header out of.
-ONE_FILE = "tests/python/model/test_warnings.py"
+ONE_FILE = "tests/suites/model/test_warnings.py"
 
 # One test, chosen because it asserts a subclass relation and so costs
 # nothing but the import: these two tests need a RUN, not a collection.
-FAST_TEST = "tests/python/model/test_warnings.py::test_the_warning_is_a_user_warning"
+FAST_TEST = "tests/suites/model/test_warnings.py::test_the_warning_is_a_user_warning"
 
 PROBE = '''import warnings
 
@@ -86,7 +86,7 @@ def test_the_configuration_is_found_from_a_copy_of_the_suite_alone(tmp_path):
 def test_the_performance_warning_is_an_error_by_configuration(tmp_path):
     """Without a `-W` flag on the command line, which CI does not pass."""
     root = _copy_of_the_suite(tmp_path)
-    probe = root / "tests" / "python" / "test_probe_performance_warning.py"
+    probe = root / "tests" / "suites" / "test_probe_performance_warning.py"
     probe.write_text(PROBE, encoding="utf-8")
     run = _pytest([str(probe.relative_to(root)), "-q"], cwd=root)
     assert run.returncode != 0, run.stdout[-1500:]
@@ -179,7 +179,7 @@ def test_a_marker_the_configuration_does_not_declare_refuses_the_run(tmp_path):
     warnings summary of a 1,216-test run -- which is where warnings go to be
     unread. Declaring markers is only worth anything if a typo is refused."""
     root = _copy_of_the_suite(tmp_path)
-    probe = root / "tests" / "python" / "test_marker_probe.py"
+    probe = root / "tests" / "suites" / "test_marker_probe.py"
     probe.write_text(MARKER_PROBE, encoding="utf-8")
     run = _pytest([str(probe.relative_to(root)), "-q"], cwd=root)
     assert run.returncode != 0, run.stdout[-1500:]
@@ -203,7 +203,7 @@ def test_a_setting_this_pytest_does_not_have_refuses_the_run(tmp_path):
 
 def test_a_bare_sibling_import_fails_loudly_rather_than_resolving(tmp_path):
     """The suite's helper modules used to resolve by accident: with no
-    `__init__.py` under `tests/python`, pytest's `prepend` import mode put
+    `__init__.py` under the suites, pytest's `prepend` import mode put
     each test file's OWN directory on `sys.path` as it collected it, so a
     module sitting beside a test was importable by its bare name and nothing
     said so. `--import-mode=importlib` inserts nothing, which is what makes a
@@ -212,7 +212,7 @@ def test_a_bare_sibling_import_fails_loudly_rather_than_resolving(tmp_path):
     The probe imports a module that EXISTS, beside the test that imports it.
     Under the old mode that is a pass."""
     root = _copy_of_the_suite(tmp_path)
-    here = root / "tests" / "python"
+    here = root / "tests" / "suites"
     (here / "_probe_sibling.py").write_text("VALUE = 1\n", encoding="utf-8")
     probe = here / "test_probe_sibling_import.py"
     probe.write_text("from _probe_sibling import VALUE\n\n\n"

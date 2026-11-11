@@ -11,7 +11,7 @@ baseline the same way.
 
 Not a style preference. The test inventory compares what the running
 interpreter collects against a list recorded from another, and
-`tests/python/io/test_parquet_streaming.py` opens with
+`tests/suites/io/test_parquet_streaming.py` opens with
 `pytest.importorskip("pyarrow")` at module level. An interpreter without
 pyarrow collects nothing from that file, `--collect-only` reports "636 tests
 collected" instead of 642 with no error and no skip count, and the six cases

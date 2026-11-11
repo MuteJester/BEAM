@@ -106,7 +106,7 @@ def python_collect_argv(root: Path) -> list[str]:
     configuration in `tests/pytest.ini`, where it travels with the suite,
     `pytest tests` reports `python/model/test_x.py::test_y`, and run from the
     repository root with the table in `pyproject.toml` it reported
-    `tests/python/model/test_x.py::test_y`. The baseline records WHOLE ids,
+    `tests/suites/model/test_x.py::test_y`. The baseline records WHOLE ids,
     so without this flag moving the configuration would have renamed all
     1,216 of them at once -- a diff indistinguishable from a reorganisation,
     arriving for no reason a reader could see.

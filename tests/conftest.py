@@ -1,7 +1,7 @@
 """What every test in this suite gets: the paths, and the run's conditions.
 
-The suite is split into tests/python/<domain>/, with shared fixtures in
-tests/python/conftest.py, the shared engineering in tests/_engineering/ and
+The suites are split into tests/suites/<domain>/, with shared fixtures in
+tests/suites/conftest.py, the shared engineering in tests/_engineering/ and
 the independent references in tests/oracles/ -- the reference model among
 them. The two layers are packages
 imported by name, so what goes on the path is this directory -- once, from
@@ -17,7 +17,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 # One entry: `tests/` itself, so that `_engineering` and `oracles` are
-# importable as the packages they are. Neither `tests/python` nor
+# importable as the packages they are. Neither `tests/suites` nor
 # `tests/reference` is on the path any more -- the first because nothing is
 # imported from it, the second because it no longer exists -- and with
 # --import-mode=importlib pytest adds nothing of its own, which is what makes

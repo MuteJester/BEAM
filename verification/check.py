@@ -266,7 +266,7 @@ py_want_lines, py_got_lines = py_want, py_got
 # ── Is this interpreter able to see the whole suite? ───────────────────────
 # The inventory compares what THIS environment collects against a list
 # recorded from another, so an environment that cannot import a test module
-# reports its cases as deleted. `tests/python/io/test_parquet_streaming.py`
+# reports its cases as deleted. `tests/suites/io/test_parquet_streaming.py`
 # opens with `pytest.importorskip("pyarrow")` at MODULE level: without pyarrow
 # the file yields nothing, `--collect-only` says "636 tests collected" instead
 # of 642 with no error, no skip count and no mention of the file, and the
