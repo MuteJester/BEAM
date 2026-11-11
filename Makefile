@@ -84,13 +84,29 @@ build/tests/native/test_expected_counts_accounting: \
     LDEXTRA = -Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=realloc \
               -Wl,--wrap=free
 
-build/tests/native/%: tests/native/%.c build/libbeam.a
+# Every suite links the harness (tests/harness), which owns the counters, the
+# outcomes, the per-test clock and the JSON. It is a source rather than an
+# archive member so that a change to it rebuilds every suite through the same
+# -MMD dependency tracking as everything else.
+HARNESS_SRC := tests/harness/beam_test.c
+HARNESS_HDR := tests/harness/beam_test.h
+
+build/tests/native/%: tests/native/%.c $(HARNESS_SRC) $(HARNESS_HDR) build/libbeam.a
 	@mkdir -p $(@D)
-	$(CC) $(CFLAGS) -Itests/native $< build/libbeam.a $(LDLIBS) \
-	    $(LDEXTRA) -o $@
+	$(CC) $(CFLAGS) -Itests/native -Itests/harness $< $(HARNESS_SRC) \
+	    build/libbeam.a $(LDLIBS) $(LDEXTRA) -o $@
+
+# The harness's own self-test. It fails on purpose, so it is deliberately not
+# a dependency of `test`, and it lives outside tests/native so that neither
+# TEST_SRCS nor the gate's inventory can see it.
+build/tests/harness/%: tests/harness/%.c $(HARNESS_SRC) $(HARNESS_HDR)
+	@mkdir -p $(@D)
+	$(CC) $(CFLAGS) -Itests/harness $< $(HARNESS_SRC) $(LDLIBS) -o $@
+
+selftest: build/tests/harness/selftest_outcomes
 
 clean:
 	rm -rf build
 
-.PHONY: all clean test list-tests
+.PHONY: all clean test list-tests selftest
 -include $(DEPS)

@@ -35,7 +35,6 @@
 
 #include "../../src/native/internal/beam/internal.h"
 
-static int pass_count = 0, fail_count = 0;
 
 #include "test_utils.h"
 
@@ -582,6 +581,5 @@ int main(int argc, char **argv) {
     RUN_TEST(test_every_lifecycle_operation_survives_frozen_counts);
     RUN_TEST(test_saving_a_frozen_model_writes_the_same_bytes);
 
-    printf("\n  %d passed, %d failed\n\n", pass_count, fail_count);
-    return fail_count == 0 ? 0 : 1;
+    return beam_test_finish();
 }

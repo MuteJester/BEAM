@@ -31,7 +31,6 @@
 
 #include "../../src/native/internal/beam/internal.h"
 
-static int pass_count = 0, fail_count = 0;
 
 #include "test_utils.h"
 
@@ -326,6 +325,5 @@ int main(int argc, char **argv) {
     RUN_TEST(test_the_selfcheck_passes_on_an_aliased_cache);
     RUN_TEST(test_dropping_an_aliased_cache_frees_each_list_once);
 
-    printf("\n  %d passed, %d failed\n\n", pass_count, fail_count);
-    return fail_count == 0 ? 0 : 1;
+    return beam_test_finish();
 }

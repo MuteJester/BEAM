@@ -39,7 +39,6 @@
 
 #include "../../src/native/internal/beam/internal.h"
 
-static int pass_count = 0, fail_count = 0;
 
 #include "test_utils.h"
 
@@ -1088,6 +1087,5 @@ int main(int argc, char **argv) {
     RUN_TEST(test_a_finite_top_edge_still_measures_the_whole_grid);
     RUN_TEST(test_a_grid_too_coarse_is_refused_on_request);
     RUN_TEST(test_the_cost_estimate_precedes_the_sweep);
-    printf("  %d passed, %d failed\n", pass_count, fail_count);
-    return fail_count ? 1 : 0;
+    return beam_test_finish();
 }

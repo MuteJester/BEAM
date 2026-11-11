@@ -34,7 +34,6 @@
 
 #include "../../src/native/internal/beam/internal.h"
 
-static int pass_count = 0, fail_count = 0;
 
 #include "test_utils.h"
 
@@ -82,10 +81,10 @@ static BeamModel *build(uint32_t n_seqs) {
 static void test_the_allocator_policy_is_applied(void) {
     const int applied = beam_applied_mmap_threshold();
 #if defined(__GLIBC__)
-    if (getenv("MALLOC_MMAP_THRESHOLD_") || getenv("BEAM_MMAP_THRESHOLD")) {
-        printf("SKIP (overridden by the environment) ");
-        PASS(); return;
-    }
+    /* Not verifiable here, and PASS() used to say it was: with the
+     * threshold overridden there is nothing to read back. */
+    if (getenv("MALLOC_MMAP_THRESHOLD_") || getenv("BEAM_MMAP_THRESHOLD"))
+        BEAM_SKIP("the mmap threshold is overridden by the environment");
     ASSERT_MSG(applied > 0, "no mmap threshold was applied on glibc");
     ASSERT_MSG(applied == 128 * 1024,
                "the applied threshold is not glibc's static default");
@@ -135,6 +134,5 @@ int main(int argc, char **argv) {
     RUN_TEST(test_the_allocator_policy_is_applied);
     RUN_TEST(test_resident_memory_stays_near_the_model_size);
 
-    printf("\n  %d passed, %d failed\n\n", pass_count, fail_count);
-    return fail_count == 0 ? 0 : 1;
+    return beam_test_finish();
 }

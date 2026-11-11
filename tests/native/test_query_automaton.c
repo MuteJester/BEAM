@@ -24,7 +24,6 @@
 
 #include "../../src/native/internal/beam/query_internal.h"
 
-static int pass_count = 0, fail_count = 0;
 
 #include "test_utils.h"
 
@@ -525,6 +524,5 @@ int main(int argc, char **argv) {
     RUN_TEST(test_an_automaton_makes_a_constraint_not_free);
 
     printf("\n==============================================================\n");
-    printf("Results: %d passed, %d failed\n", pass_count, fail_count);
-    return fail_count ? 1 : 0;
+    return beam_test_finish();
 }

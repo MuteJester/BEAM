@@ -24,7 +24,6 @@
 
 #include "../../src/native/internal/beam/internal.h"
 
-static int pass_count = 0, fail_count = 0;
 
 #include "test_utils.h"
 
@@ -171,6 +170,5 @@ int main(int argc, char **argv) {
     RUN_TEST(test_growth_overshoots_and_reallocates);
     RUN_TEST(test_what_reserve_refuses_and_ignores);
 
-    printf("\n  %d passed, %d failed\n\n", pass_count, fail_count);
-    return fail_count == 0 ? 0 : 1;
+    return beam_test_finish();
 }

@@ -33,7 +33,6 @@
 
 #include "../../src/native/internal/beam/internal.h"
 
-static int pass_count = 0, fail_count = 0;
 
 #include "test_utils.h"
 
@@ -470,6 +469,5 @@ int main(int argc, char **argv) {
     RUN_TEST(test_what_cannot_be_sealed_is_left_alone);
     RUN_TEST(test_a_table_numbered_out_of_order_is_refused);
 
-    printf("\n  %d passed, %d failed\n\n", pass_count, fail_count);
-    return fail_count == 0 ? 0 : 1;
+    return beam_test_finish();
 }

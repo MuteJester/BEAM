@@ -37,7 +37,6 @@
 
 #include "../../src/native/internal/beam/internal.h"
 
-static int pass_count = 0, fail_count = 0;
 
 #include "test_utils.h"
 
@@ -343,6 +342,5 @@ int main(int argc, char **argv) {
     RUN_TEST(test_large_orders_stay_finite_and_in_bounds);
     RUN_TEST(test_the_calling_contract);
     printf("  %lu (model, order) values compared with memcmp\n", cases_compared);
-    printf("  %d passed, %d failed\n", pass_count, fail_count);
-    return fail_count ? 1 : 0;
+    return beam_test_finish();
 }

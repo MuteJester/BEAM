@@ -37,7 +37,6 @@
 
 #include "../../src/native/internal/beam/internal.h"
 
-static int pass_count = 0, fail_count = 0;
 
 #include "test_utils.h"
 
@@ -198,6 +197,5 @@ int main(int argc, char **argv) {
     RUN_TEST(test_a_budget_too_small_refuses_and_says_why);
     RUN_TEST(test_the_driver_and_the_sweep_agree_on_the_size);
 
-    printf("\n  %d passed, %d failed\n\n", pass_count, fail_count);
-    return fail_count == 0 ? 0 : 1;
+    return beam_test_finish();
 }

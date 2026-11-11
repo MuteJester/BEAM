@@ -33,7 +33,6 @@
 
 #include "../../src/native/internal/beam/alphabet.h"
 
-static int pass_count = 0, fail_count = 0;
 
 #include "test_utils.h"
 
@@ -700,6 +699,5 @@ int main(int argc, char **argv) {
     RUN_TEST(test_an_over_length_source_is_probability_zero_up_to_the_buffer);
 
     printf("\n==============================================================\n");
-    printf("Results: %d passed, %d failed\n", pass_count, fail_count);
-    return fail_count ? 1 : 0;
+    return beam_test_finish();
 }

@@ -23,7 +23,6 @@
 #include "../../src/native/internal/beam/internal.h"
 #include "../../src/native/internal/beam/grid.h"
 
-static int pass_count = 0, fail_count = 0;
 
 #include "test_utils.h"
 
@@ -275,6 +274,5 @@ int main(int argc, char **argv) {
     printf("spectrum transport\n");
     RUN_TEST(test_every_route_matches_the_reference_bit_for_bit);
     RUN_TEST(test_the_fine_grid_loses_mass_off_its_top);
-    printf("  %d passed, %d failed\n", pass_count, fail_count);
-    return fail_count ? 1 : 0;
+    return beam_test_finish();
 }

@@ -6,7 +6,6 @@
 #include "beam/model.h"
 #include "beam/distance.h"
 #include "beam/internal.h"
-static int pass_count=0, fail_count=0;
 #include "test_utils.h"
 
 static unsigned ipow(unsigned b,unsigned e) { unsigned n=1; while(e--) n*=b; return n; }
@@ -190,6 +189,5 @@ int main(int argc, char **argv) {
     RUN_TEST(test_local_distance_disjoint_length_support);
     RUN_TEST(test_local_distance_tie_order);
     RUN_TEST(test_local_distance_refusals);
-    printf("%d passed, %d failed\n",pass_count,fail_count);
-    return fail_count ? 1 : 0;
+    return beam_test_finish();
 }

@@ -41,7 +41,6 @@
 
 #include "../../src/native/internal/beam/internal.h"
 
-static int pass_count = 0, fail_count = 0;
 
 #include "test_utils.h"
 
@@ -1330,6 +1329,5 @@ int main(int argc, char **argv) {
     RUN_TEST(test_a_bin_aligned_band_is_the_spectrum_over_those_bins);
     RUN_TEST(test_what_a_malformed_band_gets);
     RUN_TEST(test_a_grid_over_budget_is_refused);
-    printf("  %d passed, %d failed\n", pass_count, fail_count);
-    return fail_count ? 1 : 0;
+    return beam_test_finish();
 }

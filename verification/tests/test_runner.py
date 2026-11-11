@@ -132,3 +132,31 @@ def test_a_wrapper_that_cannot_set_the_ceiling_is_reported_once(tmp_path):
     assert r.returncode != 0, both
     assert "ceiling" in both.lower(), both
     assert both.count("test_aaa") <= 1, f"reported per suite, not once:\n{both}"
+
+
+def test_the_runner_reports_test_level_totals_from_the_harness():
+    """Exit codes alone cannot say how many tests ran, so the old loop could
+    not tell 390 passes from 300. The harness JSON can, and the runner reads
+    it. No count is written down here: the totals are the suite's business,
+    and a literal would have to be edited by anyone adding a test."""
+    import re
+    r = subprocess.run([sys.executable, str(RUNNER), "c", "--quiet",
+                        "--suite", "test_alphabet"],
+                       capture_output=True, text=True, encoding="utf-8",
+                       cwd=ROOT)
+    assert r.returncode == 0, r.stdout + r.stderr
+    m = re.search(r"(\d+) tests: (\d+) passed, (\d+) failed, (\d+) skipped",
+                  r.stdout)
+    assert m, r.stdout
+    total, passed, failed, skipped = (int(g) for g in m.groups())
+    assert total > 0 and total == passed + failed + skipped
+    assert failed == 0
+
+
+def test_a_suite_that_writes_no_results_is_said_so(tmp_path):
+    """Stand-ins do not carry the harness. The runner must report what it
+    could not count rather than silently reporting a smaller total."""
+    d = _bins(tmp_path, {"test_aaa": (0, 0)})
+    r = _run(d, "--jobs", "1")
+    assert r.returncode == 0, r.stdout
+    assert "no results" in r.stdout.lower(), r.stdout

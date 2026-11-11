@@ -50,7 +50,6 @@
 
 #include "../../src/native/internal/beam/internal.h"
 
-static int pass_count = 0, fail_count = 0;
 
 #include "test_utils.h"
 
@@ -307,6 +306,5 @@ int main(int argc, char **argv) {
     RUN_TEST(test_dense_best_completion_never_exceeds_the_total);
     RUN_TEST(test_sparse_sweeps_each_compute_their_own_semiring);
     RUN_TEST(test_dense_sweeps_each_compute_their_own_semiring);
-    printf("  %d passed, %d failed\n", pass_count, fail_count);
-    return fail_count ? 1 : 0;
+    return beam_test_finish();
 }

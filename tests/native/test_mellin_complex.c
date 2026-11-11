@@ -24,7 +24,6 @@
 
 #include "../../src/native/internal/beam/internal.h"
 
-static int pass_count = 0, fail_count = 0;
 
 #include "test_utils.h"
 
@@ -407,6 +406,5 @@ int main(int argc, char **argv) {
     RUN_TEST(test_the_calling_contract);
     RUN_TEST(test_a_line_is_one_stretch_wherever_it_fits);
     RUN_TEST(test_line_plans_cover_the_line_within_the_budget);
-    printf("  %d passed, %d failed\n", pass_count, fail_count);
-    return fail_count ? 1 : 0;
+    return beam_test_finish();
 }

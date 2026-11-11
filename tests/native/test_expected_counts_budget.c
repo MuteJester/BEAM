@@ -51,7 +51,6 @@
 
 #include "../../src/native/internal/beam/internal.h"
 
-static int pass_count = 0, fail_count = 0;
 
 #include "test_utils.h"
 
@@ -372,6 +371,5 @@ int main(int argc, char **argv) {
     RUN_TEST(test_the_sweep_and_the_accumulators_share_one_budget);
     RUN_TEST(test_the_doubling_paths_refuse_too);
     RUN_TEST(test_one_block_can_be_released_before_the_rest);
-    printf("  %d passed, %d failed\n", pass_count, fail_count);
-    return fail_count ? 1 : 0;
+    return beam_test_finish();
 }

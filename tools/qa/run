@@ -27,6 +27,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -69,15 +70,29 @@ def classify(code: int) -> str:
 def run_one(binary: Path, *, threads: int, timeout: int, mem_gb: int) -> dict:
     env = dict(os.environ)
     env["OMP_NUM_THREADS"] = str(threads)
-    started = time.monotonic()
-    proc = subprocess.run(
-        [str(BOUNDED), "-m", str(mem_gb), "-t", str(timeout), "--", str(binary)],
-        capture_output=True, text=True, encoding="utf-8", errors="replace",
-        env=env)
-    seconds = time.monotonic() - started
+    # An exit code cannot say how many tests ran, so the loop this replaces
+    # could not tell 390 passes from 300. The harness writes its outcomes,
+    # their durations and its own conditions; a binary built before the
+    # harness, or one that died early, writes nothing, and that is reported
+    # rather than quietly lowering the total.
+    with tempfile.TemporaryDirectory(prefix="beam-qa-") as scratch:
+        results = Path(scratch) / f"{binary.name}.json"
+        started = time.monotonic()
+        proc = subprocess.run(
+            [str(BOUNDED), "-m", str(mem_gb), "-t", str(timeout), "--",
+             str(binary), "--json", str(results)],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            env=env)
+        seconds = time.monotonic() - started
+        tests = None
+        if results.exists():
+            try:
+                tests = json.loads(results.read_text(encoding="utf-8"))
+            except json.JSONDecodeError as exc:
+                tests = {"error": f"unreadable results: {exc}"}
     return {"name": binary.name, "exit": proc.returncode,
             "status": classify(proc.returncode), "seconds": round(seconds, 2),
-            "output": proc.stdout + proc.stderr}
+            "output": proc.stdout + proc.stderr, "tests": tests}
 
 
 def conditions(*, threads: int, jobs: int, timeout: int, mem_gb: int) -> dict:
@@ -205,6 +220,24 @@ def main(argv: list[str] | None = None) -> int:
 
     counts = {k: sum(1 for s in results if s["status"] == k)
               for k in ("pass", "fail", "timeout", "error")}
+
+    reported = [s["tests"] for s in results
+                if isinstance(s.get("tests"), dict) and "total" in s["tests"]]
+    silent = sorted(s["name"] for s in results
+                    if not (isinstance(s.get("tests"), dict)
+                            and "total" in s["tests"]))
+    if reported:
+        tally = {k: sum(r.get(k, 0) for r in reported)
+                 for k in ("total", "passed", "failed", "skipped",
+                           "no_verdict")}
+        line = (f"{tally['total']} tests: {tally['passed']} passed, "
+                f"{tally['failed']} failed, {tally['skipped']} skipped")
+        if tally["no_verdict"]:
+            line += f", {tally['no_verdict']} WITH NO VERDICT"
+        print(line)
+    if silent:
+        print(f"{len(silent)} suite(s) wrote no results, so their tests are "
+              f"not counted above: {', '.join(silent)}")
     print(f"\n{len(results)} suites, {counts['fail']} failed, "
           f"{counts['timeout']} timed out, {counts['error']} not run, "
           f"in {elapsed:.1f} s "

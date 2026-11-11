@@ -28,7 +28,6 @@
 
 #include "../../src/native/internal/beam/internal.h"
 
-static int pass_count = 0, fail_count = 0;
 
 #define BEAM_TEST_PRIOR_REFERENCE
 #include "test_utils.h"
@@ -351,6 +350,5 @@ int main(int argc, char **argv) {
     RUN_TEST(test_scores_are_those_of_the_dense_model);
     RUN_TEST(test_what_cannot_be_packed_is_left_alone);
 
-    printf("\n  %d passed, %d failed\n\n", pass_count, fail_count);
-    return fail_count == 0 ? 0 : 1;
+    return beam_test_finish();
 }
