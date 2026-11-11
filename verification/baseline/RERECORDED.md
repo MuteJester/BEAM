@@ -2670,3 +2670,26 @@ baselines, the C inventory and the saved-model bytes were unchanged by this
 work and are byte-identical, and `python_api.txt` must not be recorded on
 this machine at all -- see the note at the end of the previous section, which
 still applies.
+
+## 2026-11-11: five tests added by the oracle layer
+
+`pytest_cases.txt`: 5 cases added, 0 removed (1219 -> 1224 lines). The previous
+file is kept as `pytest_cases.oracles.txt`, and the diff between them is
+exactly the five added lines, all in
+`tests/oracles/test_oracles_are_independent.py`: no oracle imports the shared
+engineering, no oracle imports another oracle, the reference model imports
+only the standard library and numpy, the C prior reference calls one library
+function and derives the rest itself, and the C harness header no longer
+carries an oracle inside it.
+
+The same commit moved `tests/reference/beam_model.py` to `tests/oracles/` and
+extracted 129 lines of independent arithmetic -- the hierarchical prior
+restated from its rule -- out of `tests/native/test_utils.h`, which every one
+of the 35 C suites includes, into `tests/harness/oracles/prior_reference.h`.
+No test id moved: the comparison above is additions only, with nothing
+missing, and the C inventory is unchanged at 390.
+
+Nothing else was recorded. The numeric baselines, `c_cases.txt` and the
+saved-model bytes are byte-identical, and `python_api.txt` must not be
+recorded on this machine -- see the note two sections above, which still
+applies.

@@ -100,11 +100,24 @@ def test_every_binary_contributes_to_the_inventory():
 # them used to be impossible (the regex could not fail) and must now be
 # reported by name rather than subtracted from the inventory.
 
-def _tree(tmp_path, *, listing="test_one\n", rc=0, stale=False, built=True):
-    """A two-file stand-in for the repo: one source, one executable."""
+def _tree(tmp_path, *, listing="test_one\n", rc=0, stale=False, built=True,
+          touched_header=None):
+    """A stand-in for the repo: one source, one executable, three headers.
+
+    `touched_header` is a path relative to `tests/`, given a modification
+    time in the future so that the binary is older than it.
+    """
     src = tmp_path / "tests" / "native"
     src.mkdir(parents=True)
     (src / "test_fake.c").write_text("int main(void) { }\n", encoding="utf-8")
+    for header in ("native/test_utils.h", "harness/beam_test.h",
+                   "harness/oracles/prior_reference.h"):
+        path = tmp_path / "tests" / header
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("/* a header every suite is compiled against */\n",
+                        encoding="utf-8")
+        if header == touched_header:
+            os.utime(path, (2 ** 31, 2 ** 31))
     binaries = tmp_path / "build" / "tests" / "native"
     binaries.mkdir(parents=True)
     if built:
@@ -159,3 +172,22 @@ def test_recording_is_refused_while_a_binary_cannot_be_asked():
 
 def test_recording_proceeds_when_every_binary_answered():
     assert check_lib.refuse_short_c_inventory([]) is None
+
+
+# ── Which headers count as a source of every binary ────────────────────────
+#
+# A binary older than a header it was compiled against answers for a
+# mechanism it does not have. The check globbed `tests/native/*.h`, which was
+# the whole story while the harness lived in `test_utils.h`; the harness is
+# now `tests/harness/beam_test.{h,c}` and the C oracle
+# `tests/harness/oracles/prior_reference.h`, and neither was looked at.
+
+@pytest.mark.parametrize("header", ["native/test_utils.h",
+                                    "harness/beam_test.h",
+                                    "harness/oracles/prior_reference.h"])
+def test_a_binary_older_than_any_test_header_is_named(tmp_path, header):
+    names, problems = check_lib.c_inventory(
+        _tree(tmp_path, touched_header=header))
+    assert names == []
+    assert problems == [
+        "test_fake: binary is older than its source; run make test"], header

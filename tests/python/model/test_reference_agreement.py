@@ -1,6 +1,6 @@
 """Agreement with the independent reference implementation.
 
-`tests/reference/beam_model.py` is written from the specification with no code
+`tests/oracles/beam_model.py` is written from the specification with no code
 shared with src/native/: counting, the hierarchical prior, both anchors, the
 length prior and the partition function. Scores, Z(L) and path counts are
 compared against it over seen sequences, junk, and lengths the corpus never
@@ -11,9 +11,9 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-import beam_model as R
+from oracles import beam_model as R
 from BEAM import BeamModel
-from beam_model import reference_build, reference_scores
+from oracles.beam_model import reference_build, reference_scores
 
 from _engineering.corpora import make_corpus, make_nt_corpus
 

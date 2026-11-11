@@ -14,12 +14,17 @@ only files under `tests/` and CI runs the suite from a copy of this directory:
 an import that resolves here and not there is exactly the failure they are
 for.
 """
+import ast
 import re
 from pathlib import Path
 
 TESTS = Path(__file__).resolve().parents[1]
 
 BARE = re.compile(r"^\s*(?:from|import)\s+(_helpers|_tiny|_brute)\b")
+
+#: The layers. A module INSIDE one of them is reachable only through it, so
+#: the import line names the layer and nothing resolves by accident.
+LAYERS = ("_engineering", "oracles")
 
 #: A fixtures directory reached by counting `parents[N]` from the file doing
 #: the reaching means "N directories up from wherever this file happens to
@@ -30,6 +35,29 @@ DEPTH = re.compile(r"""parents\[\d+\]\s*/\s*["']fixtures["']""")
 #: The one module allowed to match it: it counts from ITSELF, and it is the
 #: layer root, so the count cannot change without this file moving too.
 PATH_OWNER = "_engineering/fixtures.py"
+
+
+def _modules_of_the_layers():
+    """Every module name that belongs to a layer: `corpora`, `fixtures`,
+    `mixture`, `likelihood`, `beam_model`. Read from the tree rather than
+    listed, so a module added to a layer is covered the day it arrives --
+    the previous version of this test named three modules by hand and missed
+    a second import of a fourth on the line below the one it checked."""
+    return {path.stem
+            for layer in LAYERS
+            for path in (TESTS / layer).rglob("*.py")} - {"__init__"}
+
+
+def _import_roots(path):
+    """The top-level name of every import in `path`, including the ones
+    inside functions: one of the three bare imports was in a function body."""
+    roots = set()
+    for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+        if isinstance(node, ast.Import):
+            roots |= {alias.name.split(".")[0] for alias in node.names}
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            roots.add(node.module.split(".")[0])
+    return roots
 
 
 def _offenders(pattern):
@@ -43,6 +71,12 @@ def _offenders(pattern):
 
 
 def test_no_test_imports_a_bare_helper_module():
+    inside = _modules_of_the_layers()
+    bare = sorted(f"{path.relative_to(TESTS)}: {sorted(found)}"
+                  for path in sorted(TESTS.rglob("*.py"))
+                  if path.parent.name not in LAYERS
+                  for found in [_import_roots(path) & inside] if found)
+    assert bare == []
     assert _offenders(BARE) == []
 
 

@@ -34,9 +34,14 @@ def c_inventory(root: Path) -> tuple[list[str], list[str]]:
     sources = sorted(src_dir.glob("test_*.c"))
     if not sources:
         return [], [f"no C test sources under {src_dir}"]
-    # The harness header is a source of every binary: editing it without
-    # rebuilding leaves 35 binaries answering for a mechanism they lack.
-    header_mtime = max((h.stat().st_mtime for h in src_dir.glob("*.h")), default=0.0)
+    # Every test header is a source of every binary: editing one without
+    # rebuilding leaves 35 binaries answering for a mechanism they lack. All
+    # three locations, not just tests/native/*.h -- the harness moved to
+    # tests/harness/ and the C oracle to tests/harness/oracles/, and a header
+    # this check cannot see is a stale binary it cannot report.
+    headers = list(src_dir.glob("*.h"))
+    headers += list((root / "tests" / "harness").rglob("*.h"))
+    header_mtime = max((h.stat().st_mtime for h in headers), default=0.0)
 
     names: list[str] = []
     problems: list[str] = []

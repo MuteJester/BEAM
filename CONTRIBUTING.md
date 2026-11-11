@@ -76,7 +76,10 @@ independent check against brute-force enumeration fails.
 | `src/BEAM/pretrained/` | The published-model registry and loader |
 | `build_support/` | Source manifests read by both `Makefile` and `setup.py` |
 | `tests/python/`, `tests/native/` | Python and C test suites |
-| `tests/reference/` | An independent reimplementation the model is checked against |
+| `tests/harness/` | The C harness: outcomes, counters, per-test timing, JSON |
+| `tests/_engineering/` | Shared engineering: the corpora and the built fixtures |
+| `tests/oracles/` | The independent references the implementation is checked against |
+| `tools/qa/run` | The runner: every suite, every failure, a thread cap |
 | `verification/` | The verification gate and its baselines |
 | `tools/release/` | Release tooling: smoke test, README check, changelog, model publishing |
 | `docs/` | The documentation website (Astro Starlight); `docs/examples/` are its recorded examples |

@@ -26,8 +26,8 @@
 #include "../../src/native/internal/beam/internal.h"
 
 
-#define BEAM_TEST_PRIOR_REFERENCE
 #include "test_utils.h"
+#include "oracles/prior_reference.h"
 
 static const char AA[] = "ACDEFGHIKLMNPQRSTVWY";
 static uint64_t rs;

@@ -2,7 +2,8 @@
 
 The suite is split into tests/python/<domain>/, with shared fixtures in
 tests/python/conftest.py, the shared engineering in tests/_engineering/ and
-the independent references in tests/oracles/. The two layers are packages
+the independent references in tests/oracles/ -- the reference model among
+them. The two layers are packages
 imported by name, so what goes on the path is this directory -- once, from
 __file__, so that it does not depend on where pytest was started or on which
 configuration file it found.
@@ -15,15 +16,14 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
-# `tests/` itself, so `_engineering` and `oracles` are importable as the
-# packages they are; and `tests/reference`, while the reference model is still
-# imported by its bare module name. `tests/python` is no longer on the path:
-# nothing is imported from it any more, and with --import-mode=importlib
-# pytest adds nothing of its own, which is what makes a stale bare import an
-# error instead of a quiet success.
-for d in (ROOT, ROOT / "reference"):
-    if str(d) not in sys.path:
-        sys.path.insert(0, str(d))
+# One entry: `tests/` itself, so that `_engineering` and `oracles` are
+# importable as the packages they are. Neither `tests/python` nor
+# `tests/reference` is on the path any more -- the first because nothing is
+# imported from it, the second because it no longer exists -- and with
+# --import-mode=importlib pytest adds nothing of its own, which is what makes
+# a stale bare import an error instead of a quiet success.
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 
 def pytest_report_header(config):
