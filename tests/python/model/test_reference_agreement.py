@@ -15,7 +15,7 @@ import beam_model as R
 from BEAM import BeamModel
 from beam_model import reference_build, reference_scores
 
-from _helpers import make_corpus, make_nt_corpus
+from _engineering.corpora import make_corpus, make_nt_corpus
 
 # ── Agreement with the independent reference ─────────────────────
 

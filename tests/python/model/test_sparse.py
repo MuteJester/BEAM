@@ -15,7 +15,7 @@ import pytest
 
 from BEAM import BeamModel
 
-from _helpers import make_corpus
+from _engineering.corpora import make_corpus
 
 #: Three short sequences: almost every row any analytic reads is unobserved,
 #: which is exactly where the two storages take different code paths.

@@ -2631,3 +2631,42 @@ interpreter that made the recording (`(?)`). It is unrelated to this work and
 is a known gate defect. Do not re-record it from 3.14: that would turn a visible
 environment difference into a silent break on 3.11 and 3.12. Compare by member
 name, or re-record under `/usr/bin/python3.12`.
+
+## 2026-11-11: three tests added by the shared engineering package
+
+`pytest_cases.txt`: 3 cases added, 0 removed (1216 -> 1219 lines). The
+previous file is kept as `pytest_cases.engineering.txt`, and
+`diff pytest_cases.engineering.txt pytest_cases.txt` is exactly the three
+added lines:
+
+    tests/_engineering/test_imports_are_explicit.py::test_no_fixture_path_depends_on_nesting_depth
+    tests/_engineering/test_imports_are_explicit.py::test_no_test_imports_a_bare_helper_module
+    tests/_engineering/test_imports_are_explicit.py::test_the_fixture_directory_is_the_one_holding_the_irreplaceable_files
+
+They are the suite's own import-hygiene tests: no test imports a bare helper
+module, no fixture path is reached by counting directories up from the file
+doing the counting, and the fixture directory is the one holding the two
+irreplaceable `.beam` files.
+
+**What this re-record does NOT absorb, and the reason it can say so.** The
+same commit moved three helper modules out of the suite -- `_helpers.py` to
+`tests/_engineering/corpora.py`, `_tiny.py` to `tests/oracles/mixture.py`,
+`_brute.py` to `tests/oracles/likelihood.py` -- rewrote 43 import statements
+across 42 files, and put pytest under `--import-mode=importlib`, where a
+helper module's directory is no longer added to `sys.path` behind the
+caller's back. Not one of the 1,216 recorded ids moved: the comparison above
+is additions only, with nothing missing. That is the first restructure this
+gate could have reported honestly either way -- the inventory has compared
+WHOLE ids, path included, as a multiset since this branch's Phase 0, where
+before it compared a set of bare names and a file move was invisible to it.
+
+The ids keep their `tests/` prefix although the configuration file moved to
+`tests/pytest.ini` in the previous commit, which makes pytest's rootdir
+`tests/` and would otherwise have renumbered every id at once. The gate pins
+its rootdir explicitly for that reason (`check_lib.python_collect_argv`).
+
+Nothing else was recorded: `--only pytest_cases` wrote one file. The numeric
+baselines, the C inventory and the saved-model bytes were unchanged by this
+work and are byte-identical, and `python_api.txt` must not be recorded on
+this machine at all -- see the note at the end of the previous section, which
+still applies.

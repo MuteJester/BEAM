@@ -23,7 +23,7 @@ from BEAM.errors import (BeamError, BeamTypeError, BeamValueError,
                          BudgetExceeded, ModelMismatch, NoLivePaths)
 from BEAM.mixture import (IncompatibleMembers, MixtureError, MixtureTooLarge,
                           UnsupportedOrder)
-from _tiny import tiny_model
+from oracles.mixture import tiny_model
 
 
 # ── Members that cannot share a trellis ─────────────────────────

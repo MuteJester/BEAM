@@ -19,7 +19,7 @@ import pytest
 from BEAM import BeamModel
 from BEAM.constants import BEAM_ALPHABET as AA
 
-from _helpers import make_corpus, make_nt_corpus
+from _engineering.corpora import make_corpus, make_nt_corpus
 
 
 #: Machine precision, near enough. Every quantity below is O(1), so an absolute

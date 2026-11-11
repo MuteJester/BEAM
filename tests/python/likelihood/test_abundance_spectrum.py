@@ -22,7 +22,7 @@ import numpy as np
 import pytest
 
 from BEAM.likelihood import abundance_spectrum
-from _brute import repertoire, support, tiny_weighted_model
+from oracles.likelihood import repertoire, support, tiny_weighted_model
 
 
 def _lam(model, seqs, counts):

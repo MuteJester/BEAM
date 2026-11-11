@@ -21,7 +21,7 @@ import numpy as np
 import pytest
 
 from BEAM import Mixture
-from _tiny import brute_entropy, brute_hill, mixture_pmf, whole_space
+from oracles.mixture import brute_entropy, brute_hill, mixture_pmf, whole_space
 
 
 # The enumeration underpins every assertion below, so it is checked first and

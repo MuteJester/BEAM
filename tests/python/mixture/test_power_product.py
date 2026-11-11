@@ -15,7 +15,8 @@ Two references, and they are independent of each other and of the sweep:
     FULL SCALE and at fractional q, which is where an exponent defect would
     actually live;
   * at two or more, a Python dict of probabilities over an enumerable support
-    and a plain sum over it, the way `_tiny` does for everything else.
+    and a plain sum over it, the way `oracles.mixture` does for everything
+    else.
 """
 from __future__ import annotations
 
@@ -26,7 +27,7 @@ import pytest
 
 from BEAM import Mixture
 from BEAM.errors import BeamValueError
-from _tiny import strings
+from oracles.mixture import strings
 
 
 # ── The brute-force reference ────────────────────────────────────

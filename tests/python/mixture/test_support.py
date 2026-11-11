@@ -23,7 +23,7 @@ import pytest
 
 from BEAM import Mixture
 from BEAM.mixture import MixtureTooLarge
-from _tiny import MAX_LENGTH, support, tiny_model, whole_space
+from oracles.mixture import MAX_LENGTH, support, tiny_model, whole_space
 
 
 def test_the_union_is_what_enumeration_says_it_is(tiny_a, tiny_b, sup_a, sup_b):

@@ -15,7 +15,7 @@ import pytest
 
 from BEAM import BeamModel, Mixture
 from BEAM.errors import BeamValueError
-from _tiny import brute_hill, mixture_pmf, tiny_model, whole_space
+from oracles.mixture import brute_hill, mixture_pmf, tiny_model, whole_space
 
 
 @pytest.fixture(scope="module")

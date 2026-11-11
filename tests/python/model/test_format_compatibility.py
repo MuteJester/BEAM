@@ -13,14 +13,15 @@ every 0.9.0 file still loads.
 from __future__ import annotations
 
 import struct
-from pathlib import Path
 
 import numpy as np
 import pytest
 
 from BEAM import BeamModel, ModelFileError
 
-FIXTURES = Path(__file__).resolve().parents[2] / "fixtures"
+from _engineering.fixtures import fixtures_dir
+
+FIXTURES = fixtures_dir()
 SEQS = ["CASSLGQGAEQYF", "CASSPGTGELFF", "CASRDRGNTIYF", "CASSQETQYF"] * 3
 
 

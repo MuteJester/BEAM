@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import pytest
 
-from _tiny import FAR_ALPHA, POOL_A, POOL_B, support, tiny_model
+from oracles.mixture import FAR_ALPHA, POOL_A, POOL_B, support, tiny_model
 
 
 @pytest.fixture(scope="module")

@@ -23,7 +23,7 @@ from BEAM.analytics.scale import (Attribution, ScaleIndex, anchor_profile,
                                   attribute, crossing_amplitude,
                                   neighbourhood_ratio, residue_profile)
 
-from _helpers import AA, make_corpus
+from _engineering.corpora import AA, make_corpus
 
 
 @pytest.fixture(scope="module")

@@ -12,7 +12,7 @@ import pytest
 import BEAM
 from BEAM import BeamModel, Builder
 
-from _helpers import make_corpus
+from _engineering.corpora import make_corpus
 
 
 SEQS = ["CASSLGEQYF", "CASSQDTQYF", "CASSLGTEAFF", "CASSPGTGFF"]

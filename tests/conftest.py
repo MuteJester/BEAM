@@ -1,9 +1,11 @@
 """What every test in this suite gets: the paths, and the run's conditions.
 
 The suite is split into tests/python/<domain>/, with shared fixtures in
-tests/python/conftest.py, constants in tests/python/_helpers.py, and the
-independent reference in tests/reference/. Those last two are plain modules
-rather than fixtures, so their directories go on the path here.
+tests/python/conftest.py, the shared engineering in tests/_engineering/ and
+the independent references in tests/oracles/. The two layers are packages
+imported by name, so what goes on the path is this directory -- once, from
+__file__, so that it does not depend on where pytest was started or on which
+configuration file it found.
 
 The settings are in pytest.ini beside this file, where they travel with the
 suite; this file holds only what a setting cannot express.
@@ -13,7 +15,13 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
-for d in (ROOT / "python", ROOT / "reference"):
+# `tests/` itself, so `_engineering` and `oracles` are importable as the
+# packages they are; and `tests/reference`, while the reference model is still
+# imported by its bare module name. `tests/python` is no longer on the path:
+# nothing is imported from it any more, and with --import-mode=importlib
+# pytest adds nothing of its own, which is what makes a stale bare import an
+# error instead of a quiet success.
+for d in (ROOT, ROOT / "reference"):
     if str(d) not in sys.path:
         sys.path.insert(0, str(d))
 

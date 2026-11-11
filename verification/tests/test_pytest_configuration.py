@@ -199,3 +199,26 @@ def test_a_setting_this_pytest_does_not_have_refuses_the_run(tmp_path):
     assert run.returncode != 0, run.stdout[-1500:]
     assert "Unknown config option: no_such_option" in run.stdout + run.stderr, \
         (run.stdout + run.stderr)[-1500:]
+
+
+def test_a_bare_sibling_import_fails_loudly_rather_than_resolving(tmp_path):
+    """The suite's helper modules used to resolve by accident: with no
+    `__init__.py` under `tests/python`, pytest's `prepend` import mode put
+    each test file's OWN directory on `sys.path` as it collected it, so a
+    module sitting beside a test was importable by its bare name and nothing
+    said so. `--import-mode=importlib` inserts nothing, which is what makes a
+    stale import an error instead of a quiet success.
+
+    The probe imports a module that EXISTS, beside the test that imports it.
+    Under the old mode that is a pass."""
+    root = _copy_of_the_suite(tmp_path)
+    here = root / "tests" / "python"
+    (here / "_probe_sibling.py").write_text("VALUE = 1\n", encoding="utf-8")
+    probe = here / "test_probe_sibling_import.py"
+    probe.write_text("from _probe_sibling import VALUE\n\n\n"
+                     "def test_the_sibling_was_importable():\n"
+                     "    assert VALUE == 1\n", encoding="utf-8")
+    run = _pytest([str(probe.relative_to(root)), "-q"], cwd=root)
+    assert run.returncode != 0, run.stdout[-1500:]
+    assert "ModuleNotFoundError" in run.stdout + run.stderr, \
+        (run.stdout + run.stderr)[-1500:]

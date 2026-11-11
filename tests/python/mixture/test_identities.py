@@ -28,8 +28,8 @@ import numpy as np
 import pytest
 
 from BEAM import Mixture
-from _tiny import (FAR_ALPHA, brute_entropy, mixture_pmf, support, tiny_model,
-                   whole_space)
+from oracles.mixture import (FAR_ALPHA, brute_entropy, mixture_pmf, support,
+                             tiny_model, whole_space)
 
 
 # ── A model mixed with itself ───────────────────────────────────

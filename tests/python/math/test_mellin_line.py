@@ -14,43 +14,14 @@ or the memory budget.
 """
 from __future__ import annotations
 
-import itertools
 import math
-import random
 
 import numpy as np
 import pytest
 
 import BEAM
-from BEAM import BeamModel
 
-
-def _nt_model():
-    rng = random.Random(5)
-    seqs = ["TG" + "".join(rng.choice("ACGT") for _ in range(rng.randint(0, 3)))
-            + "C" for _ in range(400)]
-    abund = [rng.randint(1, 40) for _ in seqs]
-    m = BeamModel(seqs, abundances=abund, alphabet="nt", order=3, max_length=6)
-    every = ["".join(t) for L in range(1, 7)
-             for t in itertools.product("ACGTN", repeat=L)]
-    return m, np.asarray(m.log_pseq_batch(every), dtype=np.float64)
-
-
-def _aa_model():
-    rng = random.Random(11)
-    aa = "ACDEFGHIKLMNPQRSTVWY"
-    seqs = ["C" + "".join(rng.choice("ASGLT") for _ in range(rng.randint(0, 1)))
-            + "F" for _ in range(300)]
-    abund = [rng.randint(1, 9) for _ in seqs]
-    m = BeamModel(seqs, abundances=abund, order=2, max_length=3)
-    every = ["".join(t) for L in range(1, 4)
-             for t in itertools.product(aa, repeat=L)]
-    return m, np.asarray(m.log_pseq_batch(every), dtype=np.float64)
-
-
-@pytest.fixture(scope="module", params=["nt", "aa"])
-def enumerated(request):
-    return _nt_model() if request.param == "nt" else _aa_model()
+from _engineering.fixtures import enumerated_nt_model
 
 
 #: Lines on both sides of Re q = 0, stepping up and down, long enough to cross
@@ -133,7 +104,7 @@ def test_calling_contract(enumerated):
 def test_mellin_barnes_richness_on_the_line():
     """Expected richness from one line of M, against the enumerated sum."""
     from scipy.special import loggamma
-    m, lp = _nt_model()
+    m, lp = enumerated_nt_model()
     c, h, T = -0.5, 0.1, 40.0
     n_nodes = int(round(2 * T / h)) + 1
     t = -T + h * np.arange(n_nodes)

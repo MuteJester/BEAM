@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from _brute import repertoire, support, tiny_weighted_model
+from oracles.likelihood import repertoire, support, tiny_weighted_model
 
 
 @pytest.fixture(scope="module")

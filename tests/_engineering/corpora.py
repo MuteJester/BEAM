@@ -1,4 +1,12 @@
-"""Constants and the corpus generator, shared across the groups."""
+"""The corpora every suite draws on, and the constants that go with them.
+
+Was `tests/python/_helpers.py`, imported as a bare `_helpers` because
+`tests/conftest.py` put `tests/python` on `sys.path`. Nothing about the name
+said which layer it belonged to or who was allowed to use it; both are now in
+the import line.
+
+Nothing here computes an expected value. These are inputs.
+"""
 from __future__ import annotations
 
 import random
@@ -67,3 +75,18 @@ ANALYSIS_BINS = 384
 
 #: reconstructed null is still a few hundredths of an IQR out. Still ~2s.
 CALIBRATION_BINS = 1024
+
+
+def reads_400(seed=400, n=40, length=400):
+    """`n` nucleotide reads of exactly `length` bases, seeded.
+
+    Defined once. `test_persistence.py` and `test_configuration.py` each held
+    the same four lines with the same seed -- 40 reads of 400 bases from
+    `random.Random(400)` -- one to check a save/load round trip at length 400
+    and one to check the threaded path there. Two copies of a corpus is two
+    places to change when the long-model path needs different data, and no
+    way to tell from either that the other exists.
+    """
+    rng = random.Random(seed)
+    return ["".join(rng.choice("ACGT") for _ in range(length))
+            for _ in range(n)]

@@ -23,7 +23,7 @@ import pytest
 
 from BEAM import BeamModel, Mixture
 from BEAM import _cbeam as _c
-from _tiny import MAX_LENGTH, POOL_A, POOL_B, strings, tiny_model
+from oracles.mixture import MAX_LENGTH, POOL_A, POOL_B, strings, tiny_model
 
 FOUNDATION = Path(".dev/runtime_profile/cache/foundation.beam")
 

@@ -11,7 +11,8 @@ import pytest
 
 from BEAM import BeamModel
 
-from _helpers import (AA, J_MOTIFS, make_corpus, ANALYSIS_BINS, CALIBRATION_BINS)
+from _engineering.corpora import (AA, J_MOTIFS, make_corpus, ANALYSIS_BINS,
+                                  CALIBRATION_BINS)
 
 
 def _lengths_with_data(m):

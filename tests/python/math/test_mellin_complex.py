@@ -13,49 +13,20 @@ Every test here holds the DP against a direct sum over an enumerated support.
 from __future__ import annotations
 
 import cmath
-import itertools
 import math
-import random
 
 import numpy as np
 import pytest
 
 import BEAM
-from BEAM import BeamModel
+
+from _engineering.fixtures import enumerated_nt_model
 
 #: Complex orders spanning both half-planes of Re q, the real axis, the
 #: imaginary axis, and imaginary parts large enough for the phases of
 #: different sequences to cancel.
 ORDERS = [0.5 + 0.0j, 1.0 + 0.0j, 0.5 + 3.0j, 0.5 - 3.0j, 0.3 + 11.0j,
           1.0 + 0.7j, 2.0 - 1.5j, -0.4 + 2.0j, 0.0 + 1.0j, 0.0 + 25.0j]
-
-
-def _nt_model():
-    rng = random.Random(5)
-    seqs = ["TG" + "".join(rng.choice("ACGT") for _ in range(rng.randint(0, 3)))
-            + "C" for _ in range(400)]
-    abund = [rng.randint(1, 40) for _ in seqs]
-    m = BeamModel(seqs, abundances=abund, alphabet="nt", order=3, max_length=6)
-    every = ["".join(t) for L in range(1, 7)
-             for t in itertools.product("ACGTN", repeat=L)]
-    return m, np.asarray(m.log_pseq_batch(every), dtype=np.float64)
-
-
-def _aa_model():
-    rng = random.Random(11)
-    aa = "ACDEFGHIKLMNPQRSTVWY"
-    seqs = ["C" + "".join(rng.choice("ASGLT") for _ in range(rng.randint(0, 1)))
-            + "F" for _ in range(300)]
-    abund = [rng.randint(1, 9) for _ in seqs]
-    m = BeamModel(seqs, abundances=abund, order=2, max_length=3)
-    every = ["".join(t) for L in range(1, 4)
-             for t in itertools.product(aa, repeat=L)]
-    return m, np.asarray(m.log_pseq_batch(every), dtype=np.float64)
-
-
-@pytest.fixture(scope="module", params=["nt", "aa"])
-def enumerated(request):
-    return _nt_model() if request.param == "nt" else _aa_model()
 
 
 def _brute(lp, q):
@@ -155,7 +126,7 @@ def test_mellin_barnes_richness_from_complex_orders():
     M(-(c+it)) dt for -1 < c < 0. Trapezoid on c = -1/2, against the direct
     sum over the enumerated support."""
     from scipy.special import loggamma
-    m, lp = _nt_model()
+    m, lp = enumerated_nt_model()
     c, h, T = -0.5, 0.1, 40.0
     t = np.arange(-T, T + h / 2, h)
     z = c + 1j * t

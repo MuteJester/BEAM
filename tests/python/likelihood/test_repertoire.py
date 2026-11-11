@@ -17,9 +17,10 @@ from BEAM import BeamValueError
 from BEAM.likelihood import (DEFAULT_PROFILE_EDGES, pair_likelihood,
                              repertoire_likelihood)
 from BEAM.likelihood.fixed_total import counts_given_set_log_pmf
-from _brute import (SLACK, expected_richness_at_reads, expected_shared,
-                    exact_profile_and_reads, log_multinomial, log_poisson_field,
-                    log_presence)
+from oracles.likelihood import (SLACK, expected_richness_at_reads,
+                                expected_shared, exact_profile_and_reads,
+                                log_multinomial, log_poisson_field,
+                                log_presence)
 
 BINS = 2048
 

@@ -13,15 +13,13 @@ import pytest
 import BEAM
 from BEAM import BeamModel
 
-from _helpers import AA, J_MOTIFS, make_corpus
+from _engineering.corpora import AA, J_MOTIFS, make_corpus, reads_400
 
 # ── Persistence ──────────────────────────────────────────────────
 
 # Forty nucleotide reads of exactly 400 bases, seeded so the corpus (and so a
 # failure of the round trip below) is reproducible.
-_RNG_400 = random.Random(400)
-READS_400 = ["".join(_RNG_400.choice("ACGT") for _ in range(400))
-             for _ in range(40)]
+READS_400 = reads_400()
 
 
 def test_a_long_model_round_trips_with_identical_scores(tmp_path):

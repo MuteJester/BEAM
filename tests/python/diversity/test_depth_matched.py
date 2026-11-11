@@ -21,7 +21,7 @@ from BEAM.diversity import DEFAULT_ORDERS
 from BEAM.diversity import depth_matched as dm
 from BEAM.errors import BeamTypeError, BeamValueError
 
-from _helpers import make_corpus, make_nt_corpus
+from _engineering.corpora import make_corpus, make_nt_corpus
 
 CFG = dict(order=2, max_length=12)
 B = 3

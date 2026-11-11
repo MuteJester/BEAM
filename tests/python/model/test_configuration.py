@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import importlib.util
 import math
-import random
 
 import numpy as np
 import pytest
@@ -14,7 +13,7 @@ from BEAM import BeamModel
 from BEAM import _cbeam as _c
 from BEAM._model import _config_args_from_dict
 
-from _helpers import AA, J_MOTIFS, make_corpus
+from _engineering.corpora import AA, J_MOTIFS, make_corpus, reads_400
 
 # ── Configuration guards ─────────────────────────────────────────
 
@@ -440,9 +439,7 @@ def test_an_amino_acid_model_is_still_capped_at_255():
     assert "255" in str(e.value)
 
 
-_RNG_LONG = random.Random(400)
-_READS_400 = ["".join(_RNG_LONG.choice("ACGT") for _ in range(400))
-              for _ in range(40)]
+_READS_400 = reads_400()
 
 
 @pytest.fixture(scope="module")

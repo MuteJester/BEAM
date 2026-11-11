@@ -18,7 +18,7 @@ import pytest
 from BEAM import BeamModel, memory_budget, set_memory_budget, set_threads
 from BEAM.errors import BeamTypeError, BeamValueError
 
-from _helpers import make_corpus, make_nt_corpus
+from _engineering.corpora import make_corpus, make_nt_corpus
 
 ORDERS = np.round(np.arange(0.0, 3.0001, 0.1), 4)
 STRESS = np.array([1e-3, 0.5, 0.99, 0.999, 1.001, 1.01, 1.5, 5.0, -0.5, -2.0])

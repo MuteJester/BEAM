@@ -11,7 +11,7 @@ import pytest
 
 from BEAM import BeamModel
 
-from _helpers import AA, J_MOTIFS, make_corpus
+from _engineering.corpora import AA, J_MOTIFS, make_corpus
 
 # Length mixture and saddlepoint
 # ═══════════════════════════════════════════════════════════════
@@ -102,7 +102,7 @@ def test_saddlepoint_agrees_with_sampling():
     distribution is then lumpy enough that a smooth inversion is off by 0.10
     at the upper quartile; at strength 10 it is within 0.03.
     """
-    from _helpers import make_corpus
+    from _engineering.corpora import make_corpus
     seqs, abund = make_corpus(n=600, seed=31, lo=6, hi=9)
     m = BeamModel(seqs, abundances=abund, order=2, max_length=10,
                   alpha=10.0, alpha_length=10.0)

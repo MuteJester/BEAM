@@ -15,8 +15,8 @@ import math
 import numpy as np
 import pytest
 
-from _brute import (SLACK, exact_present_and_reads, exact_profile_and_reads,
-                    log_multinomial)
+from oracles.likelihood import (SLACK, exact_present_and_reads,
+                                exact_profile_and_reads, log_multinomial)
 from BEAM import repertoire_likelihood
 from BEAM.likelihood.fixed_total import (counts_given_set_log_pmf,
                                          present_and_reads_log_pmf)

@@ -15,7 +15,7 @@ import numpy as np
 import pytest
 
 from BEAM.likelihood.lattice import categorical_sum_log_pmf
-from _brute import SLACK, exact_categorical_sum
+from oracles.likelihood import SLACK, exact_categorical_sum
 
 
 def _call(unit_probs, counts):

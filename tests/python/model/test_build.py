@@ -12,7 +12,7 @@ import pytest
 from BEAM import BeamModel
 from beam_model import reference_build, reference_scores
 
-from _helpers import AA, J_MOTIFS, make_corpus
+from _engineering.corpora import AA, J_MOTIFS, make_corpus
 
 # Degenerate corpora
 #
