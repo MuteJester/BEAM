@@ -19,7 +19,8 @@ import numpy as np
 import BEAM
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from check_lib import (c_inventory, collect_ids, compare, python_inventory,
+from check_lib import (c_inventory, collect_ids, compare,
+                       python_collect_argv, python_inventory,
                        record_targets, refuse_short_c_inventory)
 
 # Argument faults are settled BEFORE the checks run: this script does its
@@ -252,8 +253,10 @@ root = ROOT
 # splitlines, not split(): a parametrised id can contain spaces, and
 # whitespace-splitting silently truncates it to the first word.
 _py_want_text = (B / "pytest_cases.txt").read_text(encoding="utf-8")
-out = subprocess.run([sys.executable, "-m", "pytest", str(root / "tests"), "-q",
-                      "--collect-only"], capture_output=True, text=True, cwd=root).stdout
+# The rootdir is pinned by python_collect_argv, because ids are numbered
+# from it and the configuration that sets it now lives inside tests/.
+out = subprocess.run(python_collect_argv(root), capture_output=True, text=True,
+                     encoding="utf-8", cwd=root).stdout
 py_want, py_got = python_inventory(_py_want_text, out)
 # The same whole ids under the names the environment guard below and the
 # record writer already use: both want the path, which is now compared too.

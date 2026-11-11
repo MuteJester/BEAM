@@ -7,6 +7,7 @@ here.
 from __future__ import annotations
 
 import subprocess
+import sys
 from pathlib import Path
 
 
@@ -90,6 +91,27 @@ def collect_ids(text: str) -> list[str]:
     made a file move invisible too.
     """
     return [l.strip() for l in text.splitlines() if "::" in l]
+
+
+def python_collect_argv(root: Path) -> list[str]:
+    """The command the gate collects the Python inventory with.
+
+    `--rootdir` is explicit, and load-bearing. pytest numbers its ids from
+    the rootdir, and the rootdir follows the configuration file: with the
+    configuration in `tests/pytest.ini`, where it travels with the suite,
+    `pytest tests` reports `python/model/test_x.py::test_y`, and run from the
+    repository root with the table in `pyproject.toml` it reported
+    `tests/python/model/test_x.py::test_y`. The baseline records WHOLE ids,
+    so without this flag moving the configuration would have renamed all
+    1,216 of them at once -- a diff indistinguishable from a reorganisation,
+    arriving for no reason a reader could see.
+
+    Pinning the rootdir does not suppress the travelling configuration: the
+    inifile is still found by searching upward from the arguments, so this
+    run reads `tests/pytest.ini` and merely numbers its ids from `root`.
+    """
+    return [sys.executable, "-m", "pytest", str(root / "tests"), "-q",
+            "--collect-only", "--rootdir", str(root)]
 
 
 def python_inventory(want_text: str, collected_text: str) -> tuple[list[str], list[str]]:

@@ -75,6 +75,14 @@ BEAM = ["pretrained/registry.json"]
 version = { attr = "BEAM.__version__" }
 
 [tool.pytest.ini_options]
+# Where the suite is, and nothing else. Every setting that changes how a test
+# runs lives in tests/pytest.ini, which travels with the suite: CI copies
+# tests/ elsewhere and runs pytest from there, so anything kept here is read
+# on no CI leg at all. This line stays because a bare `pytest` at the
+# repository root would otherwise sweep .venv/, docs/ and verification/ too.
+# Two configuration files cannot diverge while only one of them decides
+# anything, and verification/tests/test_pytest_configuration.py holds that
+# table to this single key.
 testpaths = ["tests"]
 
 # Wheels are built by cibuildwheel in CI (.github/workflows/release.yml), and
