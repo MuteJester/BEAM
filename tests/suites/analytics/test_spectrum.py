@@ -152,3 +152,22 @@ def test_histogram_pair_populates_the_single_measure_cache(small):
 
 
 # ════════════════════════════════════════════════════════════════════════
+
+
+def test_spectrum_rejects_bins_below_two(model):
+    """One bin is not a histogram, and the C side will not be asked for one."""
+    with pytest.raises(ValueError, match="bins must be at least 2"):
+        model.spectrum(bins=1)
+
+
+def test_spectrum_rejects_a_length_above_max_length(model):
+    """The length check names the bound, so the caller can see what it broke."""
+    with pytest.raises(ValueError, match="length must be between 0 and"):
+        model.spectrum(length=99)
+
+
+def test_spectrum_rejects_an_unknown_measure(model):
+    """Only the counting and generated measures exist."""
+    with pytest.raises(ValueError,
+                       match="measure must be 'counting' or 'generated'"):
+        model.spectrum(measure="neither")

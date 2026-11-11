@@ -32,6 +32,7 @@ from ..io.readers import _column, _iter_delimited, _iter_parquet, _iter_parquet_
 from ..math.saddlepoint import _normal_pdf, _normal_cdf
 from ..math import mellin as _mellin
 from ..math import saddlepoint as _saddlepoint
+from ..math import spectrum as _spectrum
 # `hill_profile` still validates its orders here; it moves in the diversity
 # step, which takes this import with it.
 from ..math.mellin import _orders_vector
@@ -1441,26 +1442,8 @@ class BeamModel:
            full-range order-4 model needs several GB and minutes. Ask for one
            length at a time, or build at a lower ``order``, when that matters.
         """
-        if measure not in ("counting", "generated"):
-            raise ValueError(
-                f"measure must be 'counting' or 'generated', got {measure!r}")
-        bins = self._check_bins(bins, spacing)
-        if spacing is not None and not (float(spacing) > 0.0):
-            raise ValueError(
-                f"spacing must be positive, got {spacing!r}; pass None to have "
-                f"it chosen from accumulator_max()")
-        w, ds = _c.spectrum(
-            self._g, measure == "counting",
-            self._check_length(length, allow_none=True),
-            bins, 0.0 if spacing is None else float(spacing))
-        w = np.asarray(w, dtype=np.float64)
-        return {
-            "surprisal": np.arange(bins) * ds,
-            "weights": w,
-            "spacing": ds,
-            "total": float(w.sum()),
-            "measure": measure,
-        }
+        return _spectrum.spectrum(self, measure=measure, length=length,
+                                  bins=bins, spacing=spacing)
 
     def spectrum_pair(
         self,
@@ -1488,20 +1471,8 @@ class BeamModel:
         grid spacing once and splits every edge of both passes by fractions
         taken from the same weight, which makes it structural.
         """
-        bins = self._check_bins(bins, spacing)
-        if spacing is not None and not (float(spacing) > 0.0):
-            raise ValueError(
-                f"spacing must be positive, got {spacing!r}; pass None to have "
-                f"it chosen from accumulator_max()")
-        cb, gb, ds = _c.spectrum_pair(
-            self._g, self._check_length(length, allow_none=True), bins,
-            0.0 if spacing is None else float(spacing))
-        return {
-            "surprisal": np.arange(bins) * ds,
-            "counting": np.frombuffer(cb, dtype=np.float64).copy(),
-            "generated": np.frombuffer(gb, dtype=np.float64).copy(),
-            "spacing": ds,
-        }
+        return _spectrum.spectrum_pair(self, length=length, bins=bins,
+                                       spacing=spacing)
 
     def spectra_by_length(
         self,
@@ -1535,33 +1506,9 @@ class BeamModel:
         4. The budget never caps what a single length may allocate and the
         result does not depend on it.
         """
-        if measure not in ("counting", "generated"):
-            raise ValueError(
-                f"measure must be 'counting' or 'generated', got {measure!r}")
-        bins = self._check_bins(bins, spacing)
-        if spacing is not None and not (float(spacing) > 0.0):
-            raise ValueError(
-                f"spacing must be positive, got {spacing!r}; pass None to have "
-                f"it chosen from accumulator_max()")
-        hi = int(self.config["max_length"])
-        if max_length is None:
-            want = 0                      # 0 means "the model's own maximum"
-        else:
-            max_length = int(max_length)
-            if not 0 <= max_length <= hi:
-                raise ValueError(
-                    f"max_length must be between 0 and {hi}, got {max_length}")
-            want = max_length
-        b, rows, cols, ds = _c.spectra_by_length(
-            self._g, measure == "counting", want, bins,
-            0.0 if spacing is None else float(spacing))
-        return {
-            "surprisal": np.arange(cols) * ds,
-            "weights": np.frombuffer(b, dtype=np.float64).reshape(rows,
-                                                                  cols).copy(),
-            "spacing": ds,
-            "measure": measure,
-        }
+        return _spectrum.spectra_by_length(self, measure=measure,
+                                           max_length=max_length, bins=bins,
+                                           spacing=spacing)
 
     def length_moments(self, *, q: float = 1.0, order: int = 4) -> dict[str, Any]:
         """The ``q``-tilted surprisal moments of every length, unmixed.
