@@ -30,6 +30,10 @@ from .validation import _check_int, _is_scalar_arg
 from .config import _config_args, _config_args_from_dict
 from ..io.readers import _column, _iter_delimited, _iter_parquet, _iter_parquet_column
 from ..math.saddlepoint import _normal_pdf, _normal_cdf
+from ..math import mellin as _mellin
+# `hill_profile` still validates its orders here; it moves in the diversity
+# step, which takes this import with it.
+from ..math.mellin import _orders_vector
 from ..runtime import effective_threads, memory_budget, set_threads, threads
 
 from .. import _cbeam as _c
@@ -143,32 +147,6 @@ def _warn_if_expensive(max_length: int, alphabet: str, clamped_from: int,
             f"{multiple:.1f}x the finalize work of the default (a count of "
             f"DP runs, not a timing), most of it on lengths no read has.",
             BeamPerformanceWarning, stacklevel=level)
-
-
-def _orders_vector(orders: Iterable[float]) -> np.ndarray:
-    """``orders`` as a fresh one-dimensional float64 array of finite values.
-
-    Fresh on purpose, not merely contiguous: the C side reads it with the GIL
-    released, and an array the caller still holds could be written by another
-    thread while it does.
-    """
-    if isinstance(orders, (str, bytes)):
-        raise BeamTypeError("orders must be a sequence of numbers, not a string")
-    try:
-        seq = orders if isinstance(orders, np.ndarray) else list(orders)
-        q = np.array(seq, dtype=np.float64)
-    except (TypeError, ValueError):
-        raise BeamTypeError(
-            f"orders must be a sequence of numbers, got "
-            f"{type(orders).__name__}") from None
-    if q.ndim != 1:
-        raise BeamValueError(
-            f"orders must be one-dimensional, got shape {q.shape}")
-    bad = q[~np.isfinite(q)]
-    if bad.size:
-        raise BeamValueError(
-            f"orders must be finite, got {bad[:3].tolist()}")
-    return np.ascontiguousarray(q)
 
 
 def _hill_from_mellin(q: float, log_mellin: float) -> float:
@@ -1622,7 +1600,7 @@ class BeamModel:
         gives the log support size, ``q=1`` gives 0, and the derivatives with
         respect to ``q`` are the cumulants of ``ln P``.
         """
-        return float(_c.log_mellin(self._g, float(q)))
+        return _mellin.log_mellin(self, q)
 
     def log_mellin_many(self, orders: Iterable[float]) -> np.ndarray:
         """:meth:`log_mellin` at every order in ``orders``, in one pass.
@@ -1637,11 +1615,7 @@ class BeamModel:
         Orders must be finite. Returns a float64 array the length of
         ``orders``; an empty sequence returns an empty array.
         """
-        q = _orders_vector(orders)
-        if q.size == 0:
-            return np.empty(0, dtype=np.float64)
-        return np.frombuffer(_c.log_mellin_many(self._g, q),
-                             dtype=np.float64).copy()
+        return _mellin.log_mellin_many(self, orders)
 
     def log_mellin_complex(self, orders: Iterable[complex]) -> np.ndarray:
         """``ln sum_s P(s)**q`` at COMPLEX orders, exactly.
@@ -1673,29 +1647,7 @@ class BeamModel:
         Orders must be finite. Real input is accepted as orders with zero
         imaginary part; an empty sequence returns an empty array.
         """
-        if isinstance(orders, (str, bytes)):
-            raise BeamTypeError("orders must be a sequence of numbers, not a string")
-        try:
-            seq = orders if isinstance(orders, np.ndarray) else list(orders)
-            q = np.array(seq, dtype=np.complex128)
-        except (TypeError, ValueError):
-            raise BeamTypeError(
-                f"orders must be a sequence of numbers, got "
-                f"{type(orders).__name__}") from None
-        if q.ndim != 1:
-            raise BeamValueError(
-                f"orders must be one-dimensional, got shape {q.shape}")
-        bad = q[~np.isfinite(q)]
-        if bad.size:
-            raise BeamValueError(
-                f"orders must be finite, got {bad[:3].tolist()}")
-        if q.size == 0:
-            return np.empty(0, dtype=np.complex128)
-        # Fresh arrays: the C side reads them with the GIL released.
-        re = np.array(q.real, dtype=np.float64)
-        im = np.array(q.imag, dtype=np.float64)
-        return np.frombuffer(_c.log_mellin_complex(self._g, re, im),
-                             dtype=np.complex128).copy()
+        return _mellin.log_mellin_complex(self, orders)
 
     def log_mellin_line(self, re: float, im_start: float, im_step: float,
                         n: int) -> np.ndarray:
@@ -1717,18 +1669,7 @@ class BeamModel:
         Order ``k``'s bits depend on the line and on ``k`` alone -- not on
         ``n``, the thread count or the memory budget.
         """
-        for name, v in (("re", re), ("im_start", im_start), ("im_step", im_step)):
-            if not math.isfinite(float(v)):
-                raise BeamValueError(f"{name} must be finite, got {v!r}")
-        n = operator.index(n)
-        if n < 0:
-            raise BeamValueError(f"n must be non-negative, got {n}")
-        if n == 0:
-            return np.empty(0, dtype=np.complex128)
-        return np.frombuffer(
-            _c.log_mellin_line(self._g, float(re), float(im_start),
-                               float(im_step), n),
-            dtype=np.complex128).copy()
+        return _mellin.log_mellin_line(self, re, im_start, im_step, n)
 
     def power_sum(self, q: float) -> float:
         """``sum_s P(s)**q`` on the linear scale.
