@@ -29,7 +29,6 @@
 
 #include "../../src/native/internal/beam/internal.h"
 
-static int pass_count = 0, fail_count = 0;
 
 #include "test_utils.h"
 
@@ -268,7 +267,8 @@ static void test_sparse_combined_max_is_over_the_marked_rows(void) {
     PASS();
 }
 
-int main(void) {
+int main(int argc, char **argv) {
+    beam_test_init(argc, argv);
     printf("\nbeam_layer_max\n");
     RUN_TEST(test_sparse_order_4_matches_the_definition);
     RUN_TEST(test_sparse_order_2_matches_the_definition);
@@ -276,6 +276,5 @@ int main(void) {
     RUN_TEST(test_a_depth_bucket_with_no_rows_matches_the_definition);
     RUN_TEST(test_sparse_combined_max_is_over_the_marked_rows);
 
-    printf("\n  %d passed, %d failed\n\n", pass_count, fail_count);
-    return fail_count == 0 ? 0 : 1;
+    return beam_test_finish();
 }

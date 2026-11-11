@@ -44,11 +44,24 @@ changed.
 ## Tests
 
 ```bash
-python -m pytest tests          # Python suite (about 1,100 tests)
-make test                       # C unit tests
+python -m pytest tests            # Python suite (1,224 tests)
+make test                         # C suites, every one of them (390 tests)
+python -m pytest verification/tests   # the tooling: the gate, the runner, the harness
 python tools/release/check_readme.py README.md   # the README's examples
-python verification/check.py    # the verification gate
+python verification/check.py      # the verification gate
 ```
+
+`make test` runs `tools/qa/run c`, which reports every suite instead of
+stopping at the first failure, caps the threads each one may claim, and writes
+a JSON record per test. `tools/qa/run c --suite NAME` runs one of them and
+`make list-tests` names every C test without running it.
+
+`verification/tests` is the second kind of test in this repository: it does
+not test BEAM, it tests the things that test BEAM -- that the gate can still
+see a deleted test, that the recorder refuses to write a short inventory, that
+the C harness reports the outcome a body actually reached. It is deliberately
+outside `testpaths`, because everything under `tests/` must be able to run
+from a copy of that directory alone, so it needs naming here to be run at all.
 
 The verification gate compares the public API, the C symbols, both test
 inventories, and every recorded number (as exact hex floats) against
@@ -75,8 +88,11 @@ independent check against brute-force enumeration fails.
 | `src/BEAM/` | The Python package |
 | `src/BEAM/pretrained/` | The published-model registry and loader |
 | `build_support/` | Source manifests read by both `Makefile` and `setup.py` |
-| `tests/python/`, `tests/native/` | Python and C test suites |
-| `tests/reference/` | An independent reimplementation the model is checked against |
+| `tests/suites/`, `tests/native/` | Python and C test suites |
+| `tests/harness/` | The C harness: outcomes, counters, per-test timing, JSON |
+| `tests/_engineering/` | Shared engineering: the corpora and the built fixtures |
+| `tests/oracles/` | The independent references the implementation is checked against |
+| `tools/qa/run` | The runner: every suite, every failure, a thread cap |
 | `verification/` | The verification gate and its baselines |
 | `tools/release/` | Release tooling: smoke test, README check, changelog, model publishing |
 | `docs/` | The documentation website (Astro Starlight); `docs/examples/` are its recorded examples |

@@ -42,7 +42,6 @@
 
 #include "../../src/native/internal/beam/internal.h"
 
-static int pass_count = 0, fail_count = 0;
 
 /** The model, built once for the binary. See `build`. */
 static BeamModel *g_model = NULL;
@@ -324,7 +323,8 @@ static void test_the_reported_figure_tracks_the_work(void) {
     PASS();
 }
 
-int main(void) {
+int main(int argc, char **argv) {
+    beam_test_init(argc, argv);
     printf("expected-count accounting\n");
     /*
      * ONE THREAD, and not for speed: the allocation tracker above is a plain
@@ -343,6 +343,5 @@ int main(void) {
     RUN_TEST(test_the_reported_figure_tracks_the_work);
     if (g_model) beam_model_destroy(g_model);
     beam_model_set_threads(threads_before);
-    printf("  %d passed, %d failed\n", pass_count, fail_count);
-    return fail_count ? 1 : 0;
+    return beam_test_finish();
 }

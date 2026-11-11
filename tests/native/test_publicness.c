@@ -10,7 +10,6 @@
 #include "beam/common.h"
 #include "beam/publicness.h"
 
-static int pass_count = 0, fail_count = 0;
 
 #include "test_utils.h"
 
@@ -298,7 +297,8 @@ static void test_rejects_bad_arguments(void) {
 
 /* ═══════════════════════════════════════════════════════════════ */
 
-int main(void) {
+int main(int argc, char **argv) {
+    beam_test_init(argc, argv);
     printf("BEAM Unit Tests - Publicness (Poisson-Binomial Occupancy)\n");
     printf("==============================================================\n\n");
 
@@ -312,6 +312,5 @@ int main(void) {
     RUN_TEST(test_rejects_bad_arguments);
 
     printf("\n==============================================================\n");
-    printf("Results: %d passed, %d failed\n", pass_count, fail_count);
-    return fail_count > 0 ? 1 : 0;
+    return beam_test_finish();
 }

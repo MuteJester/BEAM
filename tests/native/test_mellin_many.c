@@ -37,7 +37,6 @@
 
 #include "../../src/native/internal/beam/internal.h"
 
-static int pass_count = 0, fail_count = 0;
 
 #include "test_utils.h"
 
@@ -333,7 +332,8 @@ static void test_the_calling_contract(void) {
 }
 
 
-int main(void) {
+int main(int argc, char **argv) {
+    beam_test_init(argc, argv);
     printf("Mellin transform at many orders in one pass\n");
     RUN_TEST(test_every_order_is_its_single_order_value_bitwise);
     RUN_TEST(test_the_company_an_order_keeps_does_not_change_it);
@@ -342,6 +342,5 @@ int main(void) {
     RUN_TEST(test_large_orders_stay_finite_and_in_bounds);
     RUN_TEST(test_the_calling_contract);
     printf("  %lu (model, order) values compared with memcmp\n", cases_compared);
-    printf("  %d passed, %d failed\n", pass_count, fail_count);
-    return fail_count ? 1 : 0;
+    return beam_test_finish();
 }

@@ -23,7 +23,6 @@
 
 #include "../../src/native/internal/beam/internal.h"
 
-static int pass_count = 0, fail_count = 0;
 
 #include "test_utils.h"
 
@@ -100,8 +99,7 @@ static void run_shape(int (*keep)(uint32_t), const char *what, bool seal) {
             /* Sealing declines above its occupancy threshold; force the point
              * of the test rather than silently checking the other path. */
             beam_sparse_destroy(&t);
-            printf("SKIP (too dense to seal) ");
-            return;
+            BEAM_SKIP("one shape was too dense to seal");
         }
     }
     const int ok = sweep_ranges(&t, what);
@@ -170,13 +168,13 @@ static void test_slot0_counts_the_rows_before_it(void) {
     PASS();
 }
 
-int main(void) {
+int main(int argc, char **argv) {
+    beam_test_init(argc, argv);
     printf("\nthe occupied-row cursor\n");
     RUN_TEST(test_the_cursor_matches_the_predicate_when_sealed);
     RUN_TEST(test_the_cursor_matches_the_predicate_when_direct);
     RUN_TEST(test_a_degenerate_range_yields_nothing);
     RUN_TEST(test_slot0_counts_the_rows_before_it);
 
-    printf("\n  %d passed, %d failed\n\n", pass_count, fail_count);
-    return fail_count == 0 ? 0 : 1;
+    return beam_test_finish();
 }

@@ -6,7 +6,6 @@
 #include "beam/model.h"
 #include "beam/distance.h"
 #include "beam/internal.h"
-static int pass_count=0, fail_count=0;
 #include "test_utils.h"
 
 static unsigned ipow(unsigned b,unsigned e) { unsigned n=1; while(e--) n*=b; return n; }
@@ -181,7 +180,8 @@ static void test_local_distance_refusals(void) {
     beam_model_destroy(unbuilt);beam_model_destroy(p);beam_model_destroy(q);beam_local_distance_free(NULL);PASS();
 }
 
-int main(void) {
+int main(int argc, char **argv) {
+    beam_test_init(argc, argv);
     beam_model_set_threads(2);
     RUN_TEST(test_local_distance_matches_enumeration_all_widths);
     RUN_TEST(test_local_distance_topk_symmetry_identity_and_threads);
@@ -189,6 +189,5 @@ int main(void) {
     RUN_TEST(test_local_distance_disjoint_length_support);
     RUN_TEST(test_local_distance_tie_order);
     RUN_TEST(test_local_distance_refusals);
-    printf("%d passed, %d failed\n",pass_count,fail_count);
-    return fail_count ? 1 : 0;
+    return beam_test_finish();
 }

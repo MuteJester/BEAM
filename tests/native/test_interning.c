@@ -28,10 +28,9 @@
 
 #include "../../src/native/internal/beam/internal.h"
 
-static int pass_count = 0, fail_count = 0;
 
-#define BEAM_TEST_PRIOR_REFERENCE
 #include "test_utils.h"
+#include "oracles/prior_reference.h"
 
 static const char AA[] = "ACDEFGHIKLMNPQRSTVWY";
 static uint64_t rng_state;
@@ -428,7 +427,8 @@ static void test_what_cannot_be_interned_is_left_alone(void) {
     PASS();
 }
 
-int main(void) {
+int main(int argc, char **argv) {
+    beam_test_init(argc, argv);
     printf("\nfinalized row interning\n");
     RUN_TEST(test_interning_changes_no_row);
     RUN_TEST(test_a_pooled_row_is_still_the_prior_of_its_counts);
@@ -436,6 +436,5 @@ int main(void) {
     RUN_TEST(test_rows_that_differ_are_kept_apart);
     RUN_TEST(test_what_cannot_be_interned_is_left_alone);
 
-    printf("\n  %d passed, %d failed\n\n", pass_count, fail_count);
-    return fail_count == 0 ? 0 : 1;
+    return beam_test_finish();
 }

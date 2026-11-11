@@ -23,7 +23,6 @@
 
 #include "../../src/native/internal/beam/internal.h"
 
-static int pass_count = 0, fail_count = 0;
 static char msg[256];
 
 #include "test_utils.h"
@@ -161,7 +160,8 @@ static void test_exp_bits_do_not_depend_on_the_call_size(void) {
     PASS();
 }
 
-int main(void) {
+int main(int argc, char **argv) {
+    beam_test_init(argc, argv);
     printf("Vector sine and cosine for the line sweep\n");
     RUN_TEST(test_random_angles_within_two_ulp);
     RUN_TEST(test_near_multiples_of_half_pi);
@@ -171,6 +171,5 @@ int main(void) {
     RUN_TEST(test_exp_within_two_ulp);
     RUN_TEST(test_exp_is_exact_at_zero_and_flushes_below_the_normals);
     RUN_TEST(test_exp_bits_do_not_depend_on_the_call_size);
-    printf("  %d passed, %d failed\n", pass_count, fail_count);
-    return fail_count ? 1 : 0;
+    return beam_test_finish();
 }

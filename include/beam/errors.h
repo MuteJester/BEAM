@@ -37,7 +37,7 @@
  * sequence of probability zero, which `beam_model_explain` reports as
  * BEAM_ERR_INVALID_SEQUENCE from the identical guard. Reconciling the two is a
  * contract change on the hottest function in the library and is pinned by
- * `tests/python/model/test_scoring.py`, so it is a decision rather than a
+ * `tests/suites/model/test_scoring.py`, so it is a decision rather than a
  * cleanup.
  *
  * ── Adding a code ──────────────────────────────────────────────────────────

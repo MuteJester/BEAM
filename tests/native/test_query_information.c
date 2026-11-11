@@ -44,7 +44,6 @@
 #include "../../src/native/internal/beam/alphabet.h"
 #include "../../src/native/internal/beam/query_internal.h"
 
-static int pass_count = 0, fail_count = 0;
 
 #include "test_utils.h"
 
@@ -647,7 +646,8 @@ static void test_information_refuses_what_it_cannot_answer(void) {
     PASS();
 }
 
-int main(void) {
+int main(int argc, char **argv) {
+    beam_test_init(argc, argv);
     printf("\n[answers known before the model is built]\n");
     RUN_TEST(test_a_deterministic_dependency_carries_one_bit_as_the_prior_vanishes);
     RUN_TEST(test_independent_positions_share_no_information_as_the_prior_vanishes);
@@ -672,6 +672,5 @@ int main(void) {
     RUN_TEST(test_every_entry_point_refuses_the_impossible);
 
     printf("\n==============================================================\n");
-    printf("Results: %d passed, %d failed\n", pass_count, fail_count);
-    return fail_count ? 1 : 0;
+    return beam_test_finish();
 }

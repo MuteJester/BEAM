@@ -3,7 +3,7 @@
 Requires local manuscript fixtures, which are deliberately not package data.
 Run under verification/bounded. This reads existing models/tables and writes
 only the requested JSON report; it never refits models or changes figures.
-Independent sequence-enumeration tests live in tests/python/analytics.
+Independent sequence-enumeration tests live in tests/suites/analytics.
 """
 from __future__ import annotations
 

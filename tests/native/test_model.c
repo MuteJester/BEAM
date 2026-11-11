@@ -41,7 +41,6 @@
 /* The config validator and its sentence, which internal.h does not pull in. */
 #include "beam/model_build.h"
 
-static int pass_count = 0, fail_count = 0;
 
 #include "test_utils.h"
 
@@ -3630,7 +3629,8 @@ static void test_legal_rows_with_real_memory_demand_get_the_budget_answer(void) 
     PASS();
 }
 
-int main(void) {
+int main(int argc, char **argv) {
+    beam_test_init(argc, argv);
     printf("\n=== BEAM (Ensemble of Dual Graph Experts) ===\n");
 
     RUN_TEST(test_defaults_are_the_measured_ones);
@@ -3722,6 +3722,5 @@ int main(void) {
     RUN_TEST(test_an_illegal_row_count_is_not_blamed_on_the_budget);
     RUN_TEST(test_legal_rows_with_real_memory_demand_get_the_budget_answer);
 
-    printf("\n  %d passed, %d failed\n\n", pass_count, fail_count);
-    return fail_count == 0 ? 0 : 1;
+    return beam_test_finish();
 }

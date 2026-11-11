@@ -41,7 +41,6 @@
 
 #include "../../src/native/internal/beam/internal.h"
 
-static int pass_count = 0, fail_count = 0;
 
 #include "test_utils.h"
 
@@ -1316,7 +1315,8 @@ static void test_a_grid_over_budget_is_refused(void) {
 }
 
 
-int main(void) {
+int main(int argc, char **argv) {
+    beam_test_init(argc, argv);
     printf("banded positional marginals\n");
     RUN_TEST(test_one_band_over_everything_is_the_exact_marginal);
     RUN_TEST(test_the_band_masses_account_for_the_whole_spectrum);
@@ -1329,6 +1329,5 @@ int main(void) {
     RUN_TEST(test_a_bin_aligned_band_is_the_spectrum_over_those_bins);
     RUN_TEST(test_what_a_malformed_band_gets);
     RUN_TEST(test_a_grid_over_budget_is_refused);
-    printf("  %d passed, %d failed\n", pass_count, fail_count);
-    return fail_count ? 1 : 0;
+    return beam_test_finish();
 }

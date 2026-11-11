@@ -33,7 +33,6 @@
 
 #include "../../src/native/internal/beam/alphabet.h"
 
-static int pass_count = 0, fail_count = 0;
 
 #include "test_utils.h"
 
@@ -675,7 +674,8 @@ static void test_a_source_the_model_cannot_score_is_refused(void) {
     PASS();
 }
 
-int main(void) {
+int main(int argc, char **argv) {
+    beam_test_init(argc, argv);
     printf("\n[neighbourhood construction]\n");
     RUN_TEST(test_insertion_neighbours_are_the_distinct_strings);
     RUN_TEST(test_each_neighbour_is_attributed_to_its_leftmost_gap);
@@ -699,6 +699,5 @@ int main(void) {
     RUN_TEST(test_an_over_length_source_is_probability_zero_up_to_the_buffer);
 
     printf("\n==============================================================\n");
-    printf("Results: %d passed, %d failed\n", pass_count, fail_count);
-    return fail_count ? 1 : 0;
+    return beam_test_finish();
 }

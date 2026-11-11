@@ -52,8 +52,22 @@ build/%.o: %.c
 TEST_SRCS := $(wildcard tests/native/test_*.c)
 TEST_BINS := $(TEST_SRCS:tests/native/%.c=build/tests/native/%)
 
+# tools/qa/run reports every suite and continues past a failure. The loop
+# this replaces was `for t in $(TEST_BINS); do ./$$t || exit 1; done`, which
+# stopped at the first failing suite and hid up to 34 others, and let every
+# binary claim all 16 cores -- at any real load that is thrashing, not
+# parallelism. The runner caps threads per suite and runs several suites at
+# once instead.
 test: $(TEST_BINS)
-	@for t in $(TEST_BINS); do ./$$t || exit 1; done
+	@tools/qa/run c
+
+# verification/check.py reads the C test inventory by asking each binary what
+# it runs, rather than by grepping RUN_TEST out of these sources -- see
+# check_lib.c_inventory for why. This target asks the same question by hand,
+# so the gate's input is reproducible without reading the gate, and so a
+# named suite's contents can be seen without running it.
+list-tests: $(TEST_BINS)
+	@for t in $(TEST_BINS); do echo "== $$t"; ./$$t --list; done
 
 # --wrap=malloc lets test_model make one allocation fail on demand, so the
 # out-of-memory rollback paths are exercised rather than assumed. It is
@@ -70,13 +84,43 @@ build/tests/native/test_expected_counts_accounting: \
     LDEXTRA = -Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=realloc \
               -Wl,--wrap=free
 
-build/tests/native/%: tests/native/%.c build/libbeam.a
+# Every suite links the harness (tests/harness), which owns the counters, the
+# outcomes, the per-test clock and the JSON. It is a source rather than an
+# archive member so that a change to it rebuilds every suite through the same
+# -MMD dependency tracking as everything else.
+HARNESS_SRC := tests/harness/beam_test.c
+
+# Every header a suite is compiled against, as a prerequisite of every suite.
+# This file's opening paragraph says why that matters; the test binaries were
+# the one place it did not hold. They are compiled and linked in ONE command,
+# so there is no object file to hang -MMD on -- with several inputs gcc writes
+# a dependency file per input, named after the input and dropped in the
+# working directory. Listing the headers is coarser (any header rebuilds all
+# 35) and exact, and there are three of them.
+#
+# The wildcard is deliberate: a header added to the harness or to the oracle
+# layer is covered the day it arrives. The C ORACLE is why this changed --
+# tests/harness/oracles/prior_reference.h had no witness at all, neither here
+# nor in the gate's staleness check, which globbed tests/native/*.h.
+TEST_HDRS := $(wildcard tests/native/*.h tests/harness/*.h \
+                        tests/harness/oracles/*.h)
+
+build/tests/native/%: tests/native/%.c $(HARNESS_SRC) $(TEST_HDRS) build/libbeam.a
 	@mkdir -p $(@D)
-	$(CC) $(CFLAGS) -Itests/native $< build/libbeam.a $(LDLIBS) \
-	    $(LDEXTRA) -o $@
+	$(CC) $(CFLAGS) -Itests/native -Itests/harness $< $(HARNESS_SRC) \
+	    build/libbeam.a $(LDLIBS) $(LDEXTRA) -o $@
+
+# The harness's own self-test. It fails on purpose, so it is deliberately not
+# a dependency of `test`, and it lives outside tests/native so that neither
+# TEST_SRCS nor the gate's inventory can see it.
+build/tests/harness/%: tests/harness/%.c $(HARNESS_SRC) $(TEST_HDRS)
+	@mkdir -p $(@D)
+	$(CC) $(CFLAGS) -Itests/harness $< $(HARNESS_SRC) $(LDLIBS) -o $@
+
+selftest: build/tests/harness/selftest_outcomes
 
 clean:
 	rm -rf build
 
-.PHONY: all clean test
+.PHONY: all clean test list-tests selftest
 -include $(DEPS)

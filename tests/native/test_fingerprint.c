@@ -3,7 +3,6 @@
 #include <string.h>
 #include "beam/model.h"
 #include "beam/fingerprint.h"
-static int pass_count = 0, fail_count = 0;
 #include "test_utils.h"
 
 static BeamModel *make_model(bool reverse) {
@@ -74,10 +73,10 @@ static void test_fingerprint_refusals_and_root_only(void) {
     PASS();
 }
 
-int main(void) {
+int main(int argc, char **argv) {
+    beam_test_init(argc, argv);
     beam_model_set_threads(2);
     RUN_TEST(test_fingerprint_partition_matches_sequence_enumeration);
     RUN_TEST(test_fingerprint_refusals_and_root_only);
-    printf("%d passed, %d failed\n",pass_count,fail_count);
-    return fail_count ? 1 : 0;
+    return beam_test_finish();
 }

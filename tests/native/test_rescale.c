@@ -38,7 +38,6 @@
 
 #include "../../src/native/internal/beam/internal.h"
 
-static int pass_count = 0, fail_count = 0;
 
 #include "test_utils.h"
 
@@ -226,7 +225,8 @@ static void test_the_mixture_sweep_loses_nothing_either(void) {
 }
 
 
-int main(void) {
+int main(int argc, char **argv) {
+    beam_test_init(argc, argv);
     printf("\n==============================================================\n");
     printf("  The per-layer rescale invariant\n");
     printf("==============================================================\n");
@@ -241,6 +241,5 @@ int main(void) {
     RUN_TEST(test_the_mixture_sweep_loses_nothing_either);
 
     printf("\n==============================================================\n");
-    printf("Results: %d passed, %d failed\n", pass_count, fail_count);
-    return fail_count ? 1 : 0;
+    return beam_test_finish();
 }

@@ -25,6 +25,12 @@ are listed under Changed.
   build reads.
 
 ### Changed
+- **Development only:** the `dev` extra now requires `pytest>=9`. The test
+  suite's configuration lives in `tests/pytest.ini` and relies on
+  `strict_markers` and `strict_config` being ini options, which earlier
+  versions accept only as command-line flags; the suite refuses to run rather
+  than run with those guards silently absent. Nothing about installing or
+  using BEAM itself changed.
 - **`max_length='data'` on a nucleotide corpus now stops at 512 instead of
   255.** A build that used to skip sequences longer than 255 silently now keeps
   them, sizes the model larger and emits a `BeamPerformanceWarning`, so the

@@ -18,6 +18,19 @@ from pathlib import Path
 import numpy as np
 import BEAM
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from check_lib import (c_inventory, collect_ids, compare,
+                       inventory_difference,
+                       python_collect_argv, python_inventory,
+                       record_targets, refuse_short_c_inventory)
+
+# Argument faults are settled BEFORE the checks run: this script does its
+# work at module level, so a refusal placed after it costs a full gate run
+# first -- which is how this one was first written. `--only` without
+# `--record` selects nothing, so it is a typo rather than a no-op.
+if "--only" in sys.argv and "--record" not in sys.argv:
+    record_targets(sys.argv)
+
 B = Path(__file__).resolve().parent / "baseline"
 fail = []
 
@@ -36,20 +49,27 @@ def public_text_names(header_text, syms):
 
 
 def check(name, got, want):
-    # Compare name lists as SETS. GNU sort and Python order underscores
-    # differently depending on locale, so a sorted-sequence comparison reports
-    # a difference between two identical symbol tables. Membership is the
-    # contract; ordering is not.
+    # Compare name lists as MULTISETS. A name that appears in two files must
+    # not collapse into one entry, or deleting either copy is invisible --
+    # four ids are in that position. Ordering still does not matter: GNU sort
+    # and Python order underscores differently depending on locale, so
+    # comparing sequences would report a difference between two identical
+    # inventories.
+    same = compare(got, want) if isinstance(got, list) and isinstance(want, list) \
+        else got == want
     if isinstance(got, list) and isinstance(want, list):
-        got, want = sorted(set(got)), sorted(set(want))
-    if got == want:
+        got, want = sorted(got), sorted(want)
+    if same:
         print(f"  OK    {name}")
     else:
         fail.append(name)
         print(f"  FAIL  {name}")
         if isinstance(want, list) and isinstance(got, list):
-            miss = [x for x in want if x not in got]
-            extra = [x for x in got if x not in want]
+            # Counted, not membership-tested: a name that survives in one
+            # file and is deleted from another is still "in" got, and the
+            # old form printed nothing for exactly the case the multiset
+            # comparison exists to catch.
+            miss, extra = inventory_difference(got, want)
             if miss:  print(f"          missing : {miss[:6]}")
             if extra: print(f"          added   : {extra[:6]}")
 
@@ -236,18 +256,21 @@ else:
 root = ROOT
 # splitlines, not split(): a parametrised id can contain spaces, and
 # whitespace-splitting silently truncates it to the first word.
-py_want_lines = [l.strip() for l in (B / "pytest_cases.txt").read_text().splitlines()
-                 if "::" in l]
-py_want = {l.split("::", 1)[1] for l in py_want_lines}
-out = subprocess.run([sys.executable, "-m", "pytest", str(root / "tests"), "-q",
-                      "--collect-only"], capture_output=True, text=True, cwd=root).stdout
-py_got_lines = [l.strip() for l in out.splitlines() if "::" in l]
-py_got = {l.split("::", 1)[1] for l in py_got_lines}
+_py_want_text = (B / "pytest_cases.txt").read_text(encoding="utf-8")
+# The rootdir is pinned by python_collect_argv, because ids are numbered
+# from it and the configuration that sets it now lives inside tests/.
+out = subprocess.run(python_collect_argv(root), capture_output=True, text=True,
+                     encoding="utf-8", cwd=root).stdout
+py_want, py_got = python_inventory(_py_want_text, out)
+# The same whole ids under the names the environment guard below and the
+# record writer already use: both want the path, which is now compared too.
+py_want_lines, py_got_lines = py_want, py_got
+
 
 # ── Is this interpreter able to see the whole suite? ───────────────────────
 # The inventory compares what THIS environment collects against a list
 # recorded from another, so an environment that cannot import a test module
-# reports its cases as deleted. `tests/python/io/test_parquet_streaming.py`
+# reports its cases as deleted. `tests/suites/io/test_parquet_streaming.py`
 # opens with `pytest.importorskip("pyarrow")` at MODULE level: without pyarrow
 # the file yields nothing, `--collect-only` says "636 tests collected" instead
 # of 642 with no error, no skip count and no mention of the file, and the
@@ -281,9 +304,21 @@ else:
     check("pytest inventory", sorted(py_got), sorted(py_want))
 
 c_want = (B / "c_cases.txt").read_text().split()   # C names have no spaces
-c_got = re.findall(r"RUN_TEST\((\w+)\)",
-                   "\n".join(f.read_text() for f in (root / "tests/native").glob("*.c")))
-check("C test inventory", sorted(c_got), sorted(c_want))
+# Asked of the binaries, not grepped out of their source: see
+# check_lib.c_inventory. A binary that cannot be asked is reported by name
+# and the comparison is NOT attempted, because a partial inventory measured
+# against the whole baseline buries the one line that says why in 300 lines
+# of "missing".
+c_got, c_problems = c_inventory(root)
+if c_problems:
+    fail.append("C test inventory (build)")
+    print("  FAIL  C test inventory: the binaries could not all be asked")
+    for problem in c_problems:
+        print(f"          {problem}")
+    print("          Not compared against the baseline: an inventory short "
+          "by a whole file would report every one of its tests as missing.")
+else:
+    check("C test inventory", c_got, c_want)
 
 # ── Numerical contract ─────────────────────────────────────────────────────
 c = json.loads((B / "corpus.json").read_text())
@@ -447,6 +482,17 @@ if "--record" in sys.argv:
               "see.")
         sys.exit(2)
 
+    # The fourth refusal, settled here with the others rather than between
+    # two writes. It used to sit beside the c_cases write, by which point
+    # python_api.txt and pytest_cases.txt had been overwritten and their
+    # preserved copies consumed -- so a tree whose binaries were not built
+    # lost two baselines before being told no, and could not re-run the same
+    # tag afterwards. It is conditional because a short C inventory says
+    # nothing about the Python one: `--only pytest_cases` is still recordable.
+    _targets = record_targets(sys.argv)
+    if "c_cases" in _targets:
+        refuse_short_c_inventory(c_problems)
+
     def _write(name, text):
         path = B / name
         stem, _, ext = name.rpartition(".")
@@ -459,15 +505,20 @@ if "--record" in sys.argv:
         path.write_text(text)
         print(f"  recorded {name}  (previous kept as {prev.name})")
 
-    print("\nRECORDING")
-    _write("python_api.txt", "\n".join(current) + "\n")
-    _write("pytest_cases.txt", "\n".join(sorted(py_got_lines)) + "\n")
-    _write("c_cases.txt", "\n".join(sorted(c_got)) + "\n")
-    _num = dict(got)
-    _num["fixture_sha256"] = digest
-    _num["fixture_bytes"] = fixture_size
-    _write("numeric.json", json.dumps(_num, indent=1, sort_keys=True) + "\n")
-    _write("threads.json", json.dumps(tg, indent=1, sort_keys=True) + "\n")
+    print(f"\nRECORDING {', '.join(sorted(_targets))}")
+    if "python_api" in _targets:
+        _write("python_api.txt", "\n".join(current) + "\n")
+    if "pytest_cases" in _targets:
+        _write("pytest_cases.txt", "\n".join(sorted(py_got_lines)) + "\n")
+    if "c_cases" in _targets:
+        _write("c_cases.txt", "\n".join(sorted(c_got)) + "\n")
+    if "numeric" in _targets:
+        _num = dict(got)
+        _num["fixture_sha256"] = digest
+        _num["fixture_bytes"] = fixture_size
+        _write("numeric.json", json.dumps(_num, indent=1, sort_keys=True) + "\n")
+    if "threads" in _targets:
+        _write("threads.json", json.dumps(tg, indent=1, sort_keys=True) + "\n")
     print("\nRECORDED. Write the RERECORDED.md section naming every line "
           "that moved before committing this.")
     sys.exit(0)

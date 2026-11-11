@@ -25,10 +25,9 @@
 
 #include "../../src/native/internal/beam/internal.h"
 
-static int pass_count = 0, fail_count = 0;
 
-#define BEAM_TEST_PRIOR_REFERENCE
 #include "test_utils.h"
+#include "oracles/prior_reference.h"
 
 static const char AA[] = "ACDEFGHIKLMNPQRSTVWY";
 static uint64_t rs;
@@ -529,7 +528,8 @@ static void test_a_plane_major_table_refuses_the_row_pointer(void) {
     PASS();
 }
 
-int main(void) {
+int main(int argc, char **argv) {
+    beam_test_init(argc, argv);
     printf("\nplane-major backward tables\n");
     RUN_TEST(test_a_transposed_table_reads_back_identically);
     RUN_TEST(test_the_transpose_actually_moves_the_cells);
@@ -541,6 +541,5 @@ int main(void) {
     RUN_TEST(test_what_cannot_be_transposed_is_left_alone);
     RUN_TEST(test_a_plane_major_table_refuses_the_row_pointer);
 
-    printf("\n  %d passed, %d failed\n\n", pass_count, fail_count);
-    return fail_count == 0 ? 0 : 1;
+    return beam_test_finish();
 }

@@ -21,7 +21,7 @@ amortises across some thirty quantities.
 
 Nothing here reads a baseline file. The right-hand side of every comparison is
 arithmetic over `log_pseq`, which is itself checked by normalisation and by the
-independent reference implementation in `tests/reference/`.
+independent reference implementation in `tests/oracles/`.
 """
 from __future__ import annotations
 

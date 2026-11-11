@@ -2631,3 +2631,99 @@ interpreter that made the recording (`(?)`). It is unrelated to this work and
 is a known gate defect. Do not re-record it from 3.14: that would turn a visible
 environment difference into a silent break on 3.11 and 3.12. Compare by member
 name, or re-record under `/usr/bin/python3.12`.
+
+## 2026-11-11: three tests added by the shared engineering package
+
+`pytest_cases.txt`: 3 cases added, 0 removed (1216 -> 1219 lines). The
+previous file is kept as `pytest_cases.engineering.txt`, and
+`diff pytest_cases.engineering.txt pytest_cases.txt` is exactly the three
+added lines:
+
+    tests/_engineering/test_imports_are_explicit.py::test_no_fixture_path_depends_on_nesting_depth
+    tests/_engineering/test_imports_are_explicit.py::test_no_test_imports_a_bare_helper_module
+    tests/_engineering/test_imports_are_explicit.py::test_the_fixture_directory_is_the_one_holding_the_irreplaceable_files
+
+They are the suite's own import-hygiene tests: no test imports a bare helper
+module, no fixture path is reached by counting directories up from the file
+doing the counting, and the fixture directory is the one holding the two
+irreplaceable `.beam` files.
+
+**What this re-record does NOT absorb, and the reason it can say so.** The
+same commit moved three helper modules out of the suite -- `_helpers.py` to
+`tests/_engineering/corpora.py`, `_tiny.py` to `tests/oracles/mixture.py`,
+`_brute.py` to `tests/oracles/likelihood.py` -- rewrote 43 import statements
+across 42 files, and put pytest under `--import-mode=importlib`, where a
+helper module's directory is no longer added to `sys.path` behind the
+caller's back. Not one of the 1,216 recorded ids moved: the comparison above
+is additions only, with nothing missing. That is the first restructure this
+gate could have reported honestly either way -- the inventory has compared
+WHOLE ids, path included, as a multiset since this branch's Phase 0, where
+before it compared a set of bare names and a file move was invisible to it.
+
+The ids keep their `tests/` prefix although the configuration file moved to
+`tests/pytest.ini` in the previous commit, which makes pytest's rootdir
+`tests/` and would otherwise have renumbered every id at once. The gate pins
+its rootdir explicitly for that reason (`check_lib.python_collect_argv`).
+
+Nothing else was recorded: `--only pytest_cases` wrote one file. The numeric
+baselines, the C inventory and the saved-model bytes were unchanged by this
+work and are byte-identical, and `python_api.txt` must not be recorded on
+this machine at all -- see the note at the end of the previous section, which
+still applies.
+
+## 2026-11-11: five tests added by the oracle layer
+
+`pytest_cases.txt`: 5 cases added, 0 removed (1219 -> 1224 lines). The previous
+file is kept as `pytest_cases.oracles.txt`, and the diff between them is
+exactly the five added lines, all in
+`tests/oracles/test_oracles_are_independent.py`: no oracle imports the shared
+engineering, no oracle imports another oracle, the reference model imports
+only the standard library and numpy, the C prior reference calls one library
+function and derives the rest itself, and the C harness header no longer
+carries an oracle inside it.
+
+The same commit moved `tests/reference/beam_model.py` to `tests/oracles/` and
+extracted 129 lines of independent arithmetic -- the hierarchical prior
+restated from its rule -- out of `tests/native/test_utils.h`, which every one
+of the 35 C suites includes, into `tests/harness/oracles/prior_reference.h`.
+No test id moved: the comparison above is additions only, with nothing
+missing, and the C inventory is unchanged at 390.
+
+Nothing else was recorded. The numeric baselines, `c_cases.txt` and the
+saved-model bytes are byte-identical, and `python_api.txt` must not be
+recorded on this machine -- see the note two sections above, which still
+applies.
+
+## 2026-11-11: the suites moved to tests/suites/
+
+`pytest_cases.txt`: 1,216 ids changed path, 0 added, 0 removed (1,224 lines
+before and after). `tests/python/` is now `tests/suites/`, so that the
+directory says what it holds and stands beside the other layers -- `harness`,
+`_engineering`, `oracles`, `fixtures`. Not one test name changed, and no test
+body changed with the move.
+
+This is the re-record this whole branch was built to make safe, and it is the
+one that would have been impossible to audit before it. The gate compared test
+inventories as a SET of BARE NAMES: a reorganisation that moves every id at
+once produced no difference at all there, so re-recording it was
+indistinguishable from re-recording a suite with a test deleted. Phase 0 of
+this branch changed the comparison to whole ids, path included, as a multiset.
+The run that recorded this file therefore reported 1,216 `missing` and 1,216
+`added` -- the move, stated in full, before anything was written.
+
+`MOVES.txt` is the mapping, one `old_id -> new_id` per line, with the old side
+preserved as `pytest_cases.presuites.txt`. It is checked rather than trusted:
+`verification/tests/test_moves_are_a_bijection.py` holds it to being total on
+the recorded old inventory, injective, and onto ids the suite actually
+collects today. An id with no line maps to itself; eight ids are in that
+position, all in `_engineering/` and `oracles/`, which were already where they
+belong.
+
+Injectivity is the assertion that matters most here. Two tests collapsing into
+one is a drop that a COUNT cannot see -- the count after would be right -- and
+a set of bare names could not see it either. That is the shape of the failure
+this work exists to prevent, and it is now a test that runs on every gate.
+
+Nothing else was recorded. `c_cases.txt` is unchanged at 390, the numeric
+baselines and the saved-model bytes are byte-identical, and `python_api.txt`
+must not be recorded on this machine.

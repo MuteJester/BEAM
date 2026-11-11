@@ -21,7 +21,7 @@ argument's *type* is wrong rather than its value. The built-in each class
 carries is the one that entry point produces today, established by running
 every reachable failure rather than by reading the C switch -- the switch and
 the observed behaviour disagree in several places, and
-``tests/python/test_error_contract.py`` pins the observed side.
+``tests/suites/test_error_contract.py`` pins the observed side.
 
 Why there is no class per error code
 ------------------------------------

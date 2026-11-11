@@ -35,7 +35,6 @@
 #include "beam/model.h"
 #include "beam/mixture.h"
 
-static int pass_count = 0, fail_count = 0;
 
 #include "test_utils.h"
 
@@ -992,7 +991,8 @@ static void test_the_power_gram_matches_the_pairs_one_at_a_time(void) {
 }
 
 
-int main(void) {
+int main(int argc, char **argv) {
+    beam_test_init(argc, argv);
     printf("\n==============================================================\n");
     printf("  Mixture kernels\n");
     printf("==============================================================\n");
@@ -1036,6 +1036,5 @@ int main(void) {
     RUN_TEST(test_the_dissimilarity_profile_sums_to_a_nonnegative_distance);
 
     printf("\n==============================================================\n");
-    printf("Results: %d passed, %d failed\n", pass_count, fail_count);
-    return fail_count ? 1 : 0;
+    return beam_test_finish();
 }

@@ -37,7 +37,6 @@
 #include "../../src/native/internal/beam/alphabet.h"
 #include "../../src/native/internal/beam/query_internal.h"
 
-static int pass_count = 0, fail_count = 0;
 
 #include "test_utils.h"
 
@@ -1624,7 +1623,8 @@ static void test_a_pinned_layer_is_estimated_cheaper_than_a_free_one(void) {
 
 /* ── Main ────────────────────────────────────────────────────── */
 
-int main(void) {
+int main(int argc, char **argv) {
+    beam_test_init(argc, argv);
     printf("\n[constraints]\n");
     RUN_TEST(test_a_new_constraint_admits_every_residue);
     RUN_TEST(test_builders_intersect_rather_than_replace);
@@ -1677,6 +1677,5 @@ int main(void) {
     RUN_TEST(test_a_pinned_layer_is_estimated_cheaper_than_a_free_one);
 
     printf("\n==============================================================\n");
-    printf("Results: %d passed, %d failed\n", pass_count, fail_count);
-    return fail_count ? 1 : 0;
+    return beam_test_finish();
 }

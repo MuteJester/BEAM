@@ -31,7 +31,6 @@
 
 #include "../../src/native/internal/beam/internal.h"
 
-static int pass_count = 0, fail_count = 0;
 
 #include "test_utils.h"
 
@@ -317,7 +316,8 @@ static void test_dropping_an_aliased_cache_frees_each_list_once(void) {
     PASS();
 }
 
-int main(void) {
+int main(int argc, char **argv) {
+    beam_test_init(argc, argv);
     printf("\nlive/reached aliasing\n");
     RUN_TEST(test_every_layer_of_a_real_model_aliases);
     RUN_TEST(test_the_alias_is_taken_exactly_when_the_lists_agree);
@@ -325,6 +325,5 @@ int main(void) {
     RUN_TEST(test_the_selfcheck_passes_on_an_aliased_cache);
     RUN_TEST(test_dropping_an_aliased_cache_frees_each_list_once);
 
-    printf("\n  %d passed, %d failed\n\n", pass_count, fail_count);
-    return fail_count == 0 ? 0 : 1;
+    return beam_test_finish();
 }

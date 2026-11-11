@@ -18,7 +18,6 @@
 #include "beam/common.h"
 #include "beam/model.h"
 
-static int pass_count = 0, fail_count = 0;
 #include "test_utils.h"
 
 #define R BEAM_NT_RESIDUES
@@ -240,12 +239,12 @@ static void test_budget_refusal_does_not_poison_the_model(void) {
     PASS();
 }
 
-int main(void) {
+int main(int argc, char **argv) {
+    beam_test_init(argc, argv);
     printf("Normalized transition rows\n");
     RUN_TEST(test_matches_exhaustive_sequence_law);
     RUN_TEST(test_order_four_rows_are_normalized_and_log_consistent);
     RUN_TEST(test_invalid_inputs_are_reported);
     RUN_TEST(test_budget_refusal_does_not_poison_the_model);
-    printf("\n%d passed, %d failed\n", pass_count, fail_count);
-    return fail_count ? 1 : 0;
+    return beam_test_finish();
 }
