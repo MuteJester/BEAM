@@ -60,19 +60,36 @@ def _import_roots(path):
     return roots
 
 
+def _is_the_path_owner(hit):
+    """True for a hit in the one module allowed to compute the fixture path.
+
+    Matched as a POSIX path. `Path.relative_to` renders with the platform's
+    separator, so on Windows the owner's own hit came back as
+    `_engineering\\fixtures.py` and did not match its forward-slash
+    exemption -- the module was reported as an offender against itself, and
+    both Windows legs of CI failed on it while all six other legs passed.
+    """
+    return hit.replace("\\", "/").startswith(PATH_OWNER)
+
+
 def _offenders(pattern):
     hits = []
     for path in sorted(TESTS.rglob("*.py")):
         for number, line in enumerate(
                 path.read_text(encoding="utf-8").splitlines(), 1):
             if pattern.search(line):
-                hits.append(f"{path.relative_to(TESTS)}:{number}")
+                # as_posix: these strings are COMPARED against
+                # PATH_OWNER below, and Windows renders a relative
+                # path with backslashes, so the one module allowed to
+                # compute the fixture path stopped matching its own
+                # exemption and the suite failed on both Windows legs.
+                hits.append(f"{path.relative_to(TESTS).as_posix()}:{number}")
     return hits
 
 
 def test_no_test_imports_a_bare_helper_module():
     inside = _modules_of_the_layers()
-    bare = sorted(f"{path.relative_to(TESTS)}: {sorted(found)}"
+    bare = sorted(f"{path.relative_to(TESTS).as_posix()}: {sorted(found)}"
                   for path in sorted(TESTS.rglob("*.py"))
                   if path.parent.name not in LAYERS
                   for found in [_import_roots(path) & inside] if found)
@@ -81,8 +98,12 @@ def test_no_test_imports_a_bare_helper_module():
 
 
 def test_no_fixture_path_depends_on_nesting_depth():
-    outside = [hit for hit in _offenders(DEPTH)
-               if not hit.startswith(PATH_OWNER)]
+    # Both spellings of the owner's own path, because this ran green on
+    # Linux and failed on Windows for the separator alone.
+    assert _is_the_path_owner("_engineering/fixtures.py:41")
+    assert _is_the_path_owner("_engineering\\fixtures.py:41")
+
+    outside = [hit for hit in _offenders(DEPTH) if not _is_the_path_owner(hit)]
     assert outside == []
 
 

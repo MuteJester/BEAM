@@ -82,7 +82,7 @@ def _stale_bytecode():
                 continue
             source = cache.parent / (compiled.name.split(".")[0] + ".py")
             if Path(code.co_filename) != source:
-                stale.append(f"{compiled.relative_to(ROOT)} was compiled from "
+                stale.append(f"{compiled.relative_to(ROOT).as_posix()} was compiled from "
                              f"{code.co_filename}")
     return stale
 

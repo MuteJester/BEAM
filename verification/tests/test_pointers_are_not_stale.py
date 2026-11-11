@@ -46,7 +46,7 @@ def _files():
         if not base.exists():
             continue
         for path in base.rglob("*"):
-            rel = str(path.relative_to(ROOT))
+            rel = path.relative_to(ROOT).as_posix()   # SKIPPED uses /
             if (path.is_file() and path.suffix in SUFFIXES
                     and not any(skip in rel for skip in SKIPPED)):
                 yield path
@@ -63,5 +63,6 @@ def test_every_path_under_tests_that_a_source_names_exists():
                     continue
                 pointer = hit.rstrip(".,;:)`'\"")
                 if not (ROOT / pointer).exists():
-                    stale.append(f"{path.relative_to(ROOT)}:{number}: {pointer}")
+                    stale.append(
+                        f"{path.relative_to(ROOT).as_posix()}:{number}: {pointer}")
     assert stale == [], "\n".join(stale)
