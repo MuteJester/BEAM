@@ -156,13 +156,13 @@ def python_inventory(want_text: str, collected_text: str) -> tuple[list[str], li
 
 #: Every baseline `--record` can write, by the name `--only` accepts.
 RECORDABLE = frozenset({"python_api", "pytest_cases", "c_cases",
-                        "numeric", "threads"})
+                        "numeric", "threads", "math_values"})
 
 
 def record_targets(argv: list[str]) -> set[str]:
     """Which baselines this invocation may write.
 
-    `--record TAG` writes all five, which is what it has always done and
+    `--record TAG` writes all of them, which is what it has always done and
     stays the default. `--only NAME[,NAME...]` narrows it.
 
     The reason it must be narrowable: `python_api.txt` can only be recorded

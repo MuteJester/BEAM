@@ -23,6 +23,7 @@ from check_lib import (c_inventory, collect_ids, compare,
                        inventory_difference,
                        python_collect_argv, python_inventory,
                        record_targets, refuse_short_c_inventory)
+from math_values import capture as math_capture, differences as math_differences
 
 # Argument faults are settled BEFORE the checks run: this script does its
 # work at module level, so a refusal placed after it costs a full gate run
@@ -398,6 +399,26 @@ else:
     print(f"  OK    numeric ({len(got)} keys, order 2/3/4 x default/uneven prior; "
           f"publicness within {FFT_TOL:g} relative, being numpy's FFT)")
 
+# ── Every public math method, exactly ──────────────────────────────────────
+#
+# `numeric` above pins four of the math quantities. These are the other
+# twenty-two, and they exist because a refactor that moves math between
+# modules can move a number without touching a test that asserts a property.
+_math_got = math_capture()
+_math_path = B / "math_values.json"
+if not _math_path.exists():
+    # The one run that is allowed to find no baseline is the one recording it.
+    print("  note  math values: no baseline yet (record with --only math_values)")
+elif (_math_bad := math_differences(
+        _math_got, json.loads(_math_path.read_text(encoding="utf-8")))):
+    fail.append("math values")
+    print(f"  FAIL  math values ({len(_math_bad)}/{len(_math_got)} keys differ)")
+    for k in _math_bad[:8]:
+        print(f"          {k}")
+else:
+    print(f"  OK    math values ({len(_math_got)} quantities over "
+          f"{len({k.split('/')[0] for k in _math_got})} models, bit-identical)")
+
 # ── Persistence: the saved bytes themselves ────────────────────────────────
 m = BEAM.BeamModel(seqs, abundances=ab, order=4, max_length=15)
 tmp = B / "_check_fixture.beam"
@@ -519,6 +540,9 @@ if "--record" in sys.argv:
         _write("numeric.json", json.dumps(_num, indent=1, sort_keys=True) + "\n")
     if "threads" in _targets:
         _write("threads.json", json.dumps(tg, indent=1, sort_keys=True) + "\n")
+    if "math_values" in _targets:
+        _write("math_values.json",
+               json.dumps(_math_got, indent=1, sort_keys=True) + "\n")
     print("\nRECORDED. Write the RERECORDED.md section naming every line "
           "that moved before committing this.")
     sys.exit(0)

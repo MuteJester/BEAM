@@ -2727,3 +2727,38 @@ this work exists to prevent, and it is now a test that runs on every gate.
 Nothing else was recorded. `c_cases.txt` is unchanged at 390, the numeric
 baselines and the saved-model bytes are byte-identical, and `python_api.txt`
 must not be recorded on this machine.
+
+## math_values.json — a new baseline, nothing re-recorded
+
+`--only math_values` wrote `math_values.json` for the first time. No existing
+baseline was touched: `python_api.txt` is byte-identical, `c_cases.txt` is
+unchanged at 390, and the numeric baselines and saved-model bytes compare
+equal on the same run that recorded this one.
+
+58 quantities, every public math method of `BeamModel` against two models
+built from the corpus already in `corpus.json`, at orders 2 and 3. Floats are
+`float.hex()`, the spelling the numeric block uses; arrays are a SHA-256 over
+their raw bytes, because a 1,024-bin spectrum listed in full would be most of
+the file. Nothing raised.
+
+Why it exists: `numeric.json` pins four math quantities -- entropy, Hill,
+moments, range. The other twenty-two were covered only by tests asserting a
+property, and a property holds either side of a change that moves the number.
+Moving code between modules can move a number.
+
+Why orders 2 and 3 rather than 2 and 4: order 4 over the 20-residue alphabet
+is 160,000 contexts and costs 212 s to capture, against 0.9 s for order 2 and
+11.3 s for order 3. The third order already reaches the backoff path the
+second never does, so the fourth pins nothing extra for 20x the gate time.
+
+The capture pins the thread count at 4 and restores the previous setting
+afterwards. That is a measurement decision, not a preference: on a machine
+whose load exceeds its core count, one `spectrum_pair` took 1.5 s at 16
+threads and 0.00 s at 8, five times each. Values do not depend on it --
+`set_threads` documents bit-for-bit agreement across thread counts, and
+`test_capture_is_thread_invariant` checks that rather than trusting it.
+
+The baseline was watched failing before it was trusted: nudging `entropy` by
+one `nextafter` moved 8 of the 58 keys -- `entropy`, `entropy:base2`, and the
+downstream `diversity_profile` and `hill_profile`, in both models -- and the
+gate reported `FAIL math values (8/58 keys differ)`.
