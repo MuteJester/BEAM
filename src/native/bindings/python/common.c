@@ -36,7 +36,7 @@
  * its own classes -- because one code does not imply one class. Assuming it
  * did is how BEAM_ERR_IO_CORRUPT silently converted three `beam_model_load`
  * failures from OSError to ValueError: its arm had never run, so nobody had
- * ever seen what it said. `tests/python/test_error_contract.py` pins the
+ * ever seen what it said. `tests/suites/test_error_contract.py` pins the
  * observed class per entry point, which is the thing that must not move.
  *
  * The import is LAZY and cached, not done at module init: `BEAM/__init__.py`

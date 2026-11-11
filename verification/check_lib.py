@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from collections import Counter
 from pathlib import Path
 
 
@@ -83,6 +84,23 @@ def compare(got: list[str], want: list[str]) -> bool:
     return sorted(got) == sorted(want)
 
 
+def inventory_difference(got: list[str], want: list[str]) -> tuple[list[str], list[str]]:
+    """What is missing and what is extra, counting DUPLICATES.
+
+    `compare` is a multiset test, so deleting one of two same-named tests is
+    a difference. The report under the FAIL was a membership test -- `[x for
+    x in want if x not in got]` -- which for that one case printed nothing:
+    the name is still in `got`, once. A FAIL with no `missing` and no `added`
+    line beneath it is the thing most likely to end in a re-record, which is
+    the failure the whole gate exists to prevent.
+
+    Both lists are sorted, and an id lost twice appears twice.
+    """
+    missing = Counter(want) - Counter(got)
+    extra = Counter(got) - Counter(want)
+    return sorted(missing.elements()), sorted(extra.elements())
+
+
 def collect_ids(text: str) -> list[str]:
     """Every pytest id in `text`, whole, in order, duplicates kept.
 
@@ -102,14 +120,17 @@ def python_collect_argv(root: Path) -> list[str]:
     """The command the gate collects the Python inventory with.
 
     `--rootdir` is explicit, and load-bearing. pytest numbers its ids from
-    the rootdir, and the rootdir follows the configuration file: with the
-    configuration in `tests/pytest.ini`, where it travels with the suite,
-    `pytest tests` reports `python/model/test_x.py::test_y`, and run from the
-    repository root with the table in `pyproject.toml` it reported
-    `tests/suites/model/test_x.py::test_y`. The baseline records WHOLE ids,
-    so without this flag moving the configuration would have renamed all
-    1,216 of them at once -- a diff indistinguishable from a reorganisation,
-    arriving for no reason a reader could see.
+    the rootdir, and the rootdir follows the configuration file. The
+    configuration travels inside the suite now, so without this flag
+    `pytest tests` reports every id relative to the suite directory and the
+    `tests/` prefix disappears from all 1,216 of them at once -- a
+    whole-baseline rename, arriving for no reason a reader could see, on a
+    branch whose point is that the gate can see a move. The baseline records
+    WHOLE ids anchored at the repository root; this keeps them there.
+
+    (This paragraph was itself a casualty of the move: the rename swept the
+    example it used, so the "before" and the "after" ended up spelled the
+    same way. It now describes the mechanism instead of two sample ids.)
 
     Pinning the rootdir does not suppress the travelling configuration: the
     inifile is still found by searching upward from the arguments, so this

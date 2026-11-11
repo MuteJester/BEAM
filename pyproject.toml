@@ -58,7 +58,10 @@ Citation = "https://github.com/MuteJester/BEAM/blob/main/CITATION.cff"
 # only loses the saving.
 [project.optional-dependencies]
 parquet = ["pyarrow>=4.0"]
-dev = ["pyarrow>=4.0", "pytest>=7", "mpmath", "pandas"]
+# pytest 9 for `strict_markers` and `strict_config` as INI OPTIONS, which
+# is the only form that works from a configuration file; tests/conftest.py
+# refuses to run the suite unguarded if they are missing.
+dev = ["pyarrow>=4.0", "pytest>=9", "mpmath", "pandas"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

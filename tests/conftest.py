@@ -17,13 +17,45 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 # One entry: `tests/` itself, so that `_engineering` and `oracles` are
-# importable as the packages they are. Neither `tests/suites` nor
-# `tests/reference` is on the path any more -- the first because nothing is
-# imported from it, the second because it no longer exists -- and with
+# importable as the packages they are. Neither the suites' own directory nor
+# the old `reference` one is on the path any more -- the first because nothing
+# is imported from it, the second because it no longer exists -- and with
 # --import-mode=importlib pytest adds nothing of its own, which is what makes
 # a stale bare import an error instead of a quiet success.
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+
+#: The ini options the suite's own configuration relies on. They are OPTIONS
+#: and not flags here, which is the only form that works: from `addopts`,
+#: `--strict-markers` and `--strict-config` do nothing at all. A pytest that
+#: does not have them makes both guards vanish in silence -- and
+#: `strict_config`, which exists to refuse a setting this pytest does not
+#: know, is the one setting it cannot refuse on its own behalf.
+STRICTNESS = ("strict_markers", "strict_config")
+
+
+def pytest_configure(config):
+    """Refuse to run unguarded under the suite's own configuration.
+
+    Only when pytest.ini beside this file is what pytest read: a bare
+    `pytest` at the repository root reads pyproject.toml, which declares none
+    of this and already says so in the header below.
+    """
+    if Path(str(getattr(config, "inipath", None) or "")) != ROOT / "pytest.ini":
+        return
+    for key in STRICTNESS:
+        try:
+            value = config.getini(key)
+        except ValueError:
+            raise RuntimeError(
+                f"this pytest has no `{key}` ini option, so the suite would "
+                f"run with that guard silently absent. pyproject.toml's dev "
+                f"extra names the version these were verified on.") from None
+        if not value:
+            raise RuntimeError(
+                f"`{key}` is off: pytest.ini sets it, so something overrode "
+                f"it, and the suite would run with that guard absent.")
 
 
 def pytest_report_header(config):
@@ -50,7 +82,10 @@ def pytest_report_header(config):
     """
     try:
         load = f"{os.getloadavg()[0]:.2f}"
-    except OSError:                      # not available on every platform
+    except (OSError, AttributeError):
+        # AttributeError, not only OSError: on Windows `os.getloadavg` does
+        # not exist at all, and an unhandled one here ends the run in an
+        # internal error rather than a missing figure.
         load = "unavailable"
     cap = os.environ.get("OMP_NUM_THREADS")
     cap = f"OMP_NUM_THREADS={cap}" if cap else \

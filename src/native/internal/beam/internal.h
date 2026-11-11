@@ -42,7 +42,7 @@
  * asymmetry lives; getting it backwards is the single most likely way to
  * produce a model that looks plausible and is wrong, so it is isolated and
  * unit-tested directly by `test_backward_context_from_state_matches_the_sequence`
- * in tests/c_unit/test_model.c — against hand-computed indices, against
+ * in tests/native/test_model.c — against hand-computed indices, against
  * the sequence form of the same context, and against the forward reading of
  * the same state, which it must NOT equal. Reading the state forwards leaves
  * the partition function normalising perfectly, so nothing else catches it.

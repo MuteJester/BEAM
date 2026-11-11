@@ -44,11 +44,24 @@ changed.
 ## Tests
 
 ```bash
-python -m pytest tests          # Python suite (about 1,100 tests)
-make test                       # C unit tests
+python -m pytest tests            # Python suite (1,224 tests)
+make test                         # C suites, every one of them (390 tests)
+python -m pytest verification/tests   # the tooling: the gate, the runner, the harness
 python tools/release/check_readme.py README.md   # the README's examples
-python verification/check.py    # the verification gate
+python verification/check.py      # the verification gate
 ```
+
+`make test` runs `tools/qa/run c`, which reports every suite instead of
+stopping at the first failure, caps the threads each one may claim, and writes
+a JSON record per test. `tools/qa/run c --suite NAME` runs one of them and
+`make list-tests` names every C test without running it.
+
+`verification/tests` is the second kind of test in this repository: it does
+not test BEAM, it tests the things that test BEAM -- that the gate can still
+see a deleted test, that the recorder refuses to write a short inventory, that
+the C harness reports the outcome a body actually reached. It is deliberately
+outside `testpaths`, because everything under `tests/` must be able to run
+from a copy of that directory alone, so it needs naming here to be run at all.
 
 The verification gate compares the public API, the C symbols, both test
 inventories, and every recorded number (as exact hex floats) against

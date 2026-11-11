@@ -24,6 +24,8 @@ import sys
 import tomllib
 from pathlib import Path
 
+import pytest
+
 import check_lib
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -222,3 +224,76 @@ def test_a_bare_sibling_import_fails_loudly_rather_than_resolving(tmp_path):
     assert run.returncode != 0, run.stdout[-1500:]
     assert "ModuleNotFoundError" in run.stdout + run.stderr, \
         (run.stdout + run.stderr)[-1500:]
+
+
+def _suite_conftest():
+    """tests/conftest.py as a module, so its hook can be called directly."""
+    import importlib.util
+
+    path = SUITE / "conftest.py"
+    spec = importlib.util.spec_from_file_location("suite_conftest", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class _Config:
+    """Enough of pytest's config for the header hook: the file it read."""
+    def __init__(self, inipath):
+        self.inipath = inipath
+
+
+def test_the_run_header_survives_a_platform_without_a_load_average(monkeypatch):
+    """`os.getloadavg` does not EXIST on Windows -- the failure is
+    AttributeError, not OSError, so `except OSError` lets it escape and
+    pytest ends in an internal error instead of running the suite. CI does
+    not see it because `-q` suppresses the header and the hook is never
+    called; a contributor running `pytest tests` without `-q` does.
+
+    tools/qa/run catches both, which is how the right spelling was known."""
+    conftest = _suite_conftest()
+    monkeypatch.delattr(os, "getloadavg", raising=True)
+    header = conftest.pytest_report_header(_Config(SUITE / "pytest.ini"))
+    text = header if isinstance(header, str) else "\n".join(header)
+    assert "conditions:" in text
+    assert "OMP_NUM_THREADS" in text
+
+
+class _OldPytestConfig(_Config):
+    """A pytest that does not have the strictness ini options.
+
+    pytest raises ValueError from `getini` for a key it does not know, which
+    is how an older pytest reports exactly this.
+    """
+    def getini(self, name):
+        if name in ("strict_markers", "strict_config"):
+            raise ValueError(f"unknown configuration value: {name!r}")
+        return None
+
+
+class _LaxPytestConfig(_Config):
+    """A pytest that has the options and was told not to use them."""
+    def getini(self, name):
+        return False
+
+
+def test_a_pytest_without_the_strictness_options_refuses_to_run_the_suite():
+    """`strict_markers` and `strict_config` are INI OPTIONS here, not flags.
+    On a pytest that lacks them both guards vanish silently -- and
+    `strict_config`, which is what would otherwise refuse an unknown key,
+    cannot report its own absence. The declared floor in pyproject.toml
+    allows such a pytest, so the suite checks rather than assumes."""
+    conftest = _suite_conftest()
+    for config in (_OldPytestConfig(SUITE / "pytest.ini"),
+                   _LaxPytestConfig(SUITE / "pytest.ini")):
+        with pytest.raises(Exception) as raised:
+            conftest.pytest_configure(config)
+        assert "strict" in str(raised.value), raised.value
+
+
+def test_a_run_that_did_not_read_the_suite_configuration_is_left_alone():
+    """The bare `pytest` at the repository root reads pyproject.toml, which
+    declares none of this; it already says so in the header, and refusing it
+    outright would make the suite unrunnable from there."""
+    conftest = _suite_conftest()
+    conftest.pytest_configure(_OldPytestConfig(ROOT / "pyproject.toml"))

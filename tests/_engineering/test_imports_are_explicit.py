@@ -2,8 +2,8 @@
 
 Three bare module names used to resolve here, for two different invisible
 reasons. `from _helpers import ...` worked because `tests/conftest.py` put
-`tests/python` on `sys.path`. `from _tiny import ...` and `from _brute
-import ...` worked because there is no `__init__.py` under `tests/python`, so
+the suite directory on `sys.path`. `from _tiny import ...` and `from _brute
+import ...` worked because there is no `__init__.py` under the suites, so
 pytest's `prepend` import mode inserted each test file's OWN directory as it
 collected it -- those two were on no path entry any conftest had ever heard
 of. Neither reason is legible at the import site, and neither survives

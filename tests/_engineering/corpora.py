@@ -1,7 +1,7 @@
 """The corpora every suite draws on, and the constants that go with them.
 
-Was `tests/python/_helpers.py`, imported as a bare `_helpers` because
-`tests/conftest.py` put `tests/python` on `sys.path`. Nothing about the name
+Was `_helpers.py` inside the suites, imported as a bare `_helpers` because
+`tests/conftest.py` put that directory on `sys.path`. Nothing about the name
 said which layer it belonged to or who was allowed to use it; both are now in
 the import line.
 

@@ -7,8 +7,15 @@
  * handed out during one analytic, to check the figure that analytic reports
  * against it. A harness that allocated would be counted into that sum, and
  * the one test whose whole purpose is exact accounting would be the one test
- * this file broke. So the records are a fixed array and every string stored
- * here is a pointer to a literal the caller already owns.
+ * this file broke. So the records are a fixed array and a message is COPIED
+ * into a fixed field of one.
+ *
+ * Copied, and not kept as the caller's pointer, because fifteen suites build
+ * their failure text with snprintf into one static buffer: storing the
+ * pointer made every record show whatever was written there last, since the
+ * JSON is emitted after the run. The printed line was right and the
+ * machine-readable record was wrong, which is the half a reader is least
+ * able to check and the half tools/qa/run reports from.
  */
 #define _DEFAULT_SOURCE          /* getloadavg, sysconf */
 
@@ -31,9 +38,12 @@
 
 typedef enum { OUT_NONE = 0, OUT_PASSED, OUT_FAILED, OUT_SKIPPED } Outcome;
 
+#define MAX_MESSAGE 200          /* longer messages are cut, never allocated */
+
 typedef struct {
-    const char *name;
-    const char *message;     /* first failure message, else the skip reason */
+    const char *name;        /* the RUN_TEST literal: the caller owns it */
+    char message[MAX_MESSAGE];
+    int has_message;
     double seconds;
     int pass_before;
     int fail_before;
@@ -112,7 +122,8 @@ void beam_test_begin(const char *name) {
     }
     current = record_count++;
     records[current].name = name;
-    records[current].message = NULL;
+    records[current].message[0] = '\0';
+    records[current].has_message = 0;
     records[current].seconds = 0.0;
     records[current].outcome = OUT_NONE;
     records[current].pass_before = pass_count;
@@ -128,12 +139,29 @@ void beam_test_pass(void) {
     pass_count++;
 }
 
+/* Copy, truncating rather than allocating. Never overwrites a message the
+ * record already holds: the FIRST failure is the one that explains a test. */
+static void keep_message(Record *r, const char *message) {
+    if (r->has_message || !message) return;
+    size_t n = strlen(message);
+    if (n >= sizeof r->message) n = sizeof r->message - 1;
+    memcpy(r->message, message, n);
+    r->message[n] = '\0';
+    r->has_message = 1;
+}
+
 void beam_test_fail(const char *message) {
     out("FAIL: %s ", message);
     wrote_verdict = 1;
     fail_count++;
-    if (current >= 0 && !records[current].message)
-        records[current].message = message;
+    if (current >= 0) {
+        /* A skip earlier in the same body explains the sub-case it declined,
+         * not the failure that came after it: test_row_cursor is that shape.
+         * The failure replaces it. */
+        if (records[current].outcome == OUT_SKIPPED)
+            records[current].has_message = 0;
+        keep_message(&records[current], message);
+    }
 }
 
 void beam_test_skip_here(const char *reason) {
@@ -141,7 +169,7 @@ void beam_test_skip_here(const char *reason) {
     wrote_verdict = 1;
     if (current >= 0) {
         records[current].outcome = OUT_SKIPPED;
-        if (!records[current].message) records[current].message = reason;
+        keep_message(&records[current], reason);
     }
 }
 
@@ -288,7 +316,7 @@ void beam_test_report_json(const char *path) {
         fputs(", \"outcome\": ", f);
         write_escaped(f, outcome_name(records[i].outcome));
         fprintf(f, ", \"seconds\": %.6f, \"message\": ", records[i].seconds);
-        if (records[i].message) write_escaped(f, records[i].message);
+        if (records[i].has_message) write_escaped(f, records[i].message);
         else fputs("null", f);
         fputs(i + 1 < record_count ? "},\n" : "}\n", f);
     }

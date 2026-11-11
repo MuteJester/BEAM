@@ -23,7 +23,7 @@
  * ACCURACY. A few rounding units, ABSOLUTE, of the ratio's natural size
  * |z| ln(w + |z|) -- which is what the engine's bounds assume of a kernel --
  * and the imaginary part modulo 2 pi, since only its exponential is used.
- * Held to 30 digits by tests/python/analytics/test_log_gamma_ratio.py.
+ * Held to 30 digits by tests/suites/analytics/test_log_gamma_ratio.py.
  *
  * Real and imaginary parts are written out: C's complex multiply calls a
  * runtime routine to handle infinities, which cannot arise here.
@@ -192,7 +192,7 @@ void beam_beta_contour_tail(size_t nt, const double *zr, const double *zi,
  *
  * with r^m - 1 = (r - 1)(1 + r + ... + r^(m-1)) and r - 1 = -r z/x, so each
  * term keeps its relative digits. The error is a few rounding units of
- * |D| + d |z| / v (tests/python/analytics/test_log_gamma_ratio.py, against
+ * |D| + d |z| / v (tests/suites/analytics/test_log_gamma_ratio.py, against
  * mpmath). Needs v >= 15, where the series holds unshifted; below that the
  * result is NaN.
  */

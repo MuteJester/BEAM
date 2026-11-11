@@ -20,6 +20,7 @@ import BEAM
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from check_lib import (c_inventory, collect_ids, compare,
+                       inventory_difference,
                        python_collect_argv, python_inventory,
                        record_targets, refuse_short_c_inventory)
 
@@ -64,8 +65,11 @@ def check(name, got, want):
         fail.append(name)
         print(f"  FAIL  {name}")
         if isinstance(want, list) and isinstance(got, list):
-            miss = [x for x in want if x not in got]
-            extra = [x for x in got if x not in want]
+            # Counted, not membership-tested: a name that survives in one
+            # file and is deleted from another is still "in" got, and the
+            # old form printed nothing for exactly the case the multiset
+            # comparison exists to catch.
+            miss, extra = inventory_difference(got, want)
             if miss:  print(f"          missing : {miss[:6]}")
             if extra: print(f"          added   : {extra[:6]}")
 
@@ -478,6 +482,17 @@ if "--record" in sys.argv:
               "see.")
         sys.exit(2)
 
+    # The fourth refusal, settled here with the others rather than between
+    # two writes. It used to sit beside the c_cases write, by which point
+    # python_api.txt and pytest_cases.txt had been overwritten and their
+    # preserved copies consumed -- so a tree whose binaries were not built
+    # lost two baselines before being told no, and could not re-run the same
+    # tag afterwards. It is conditional because a short C inventory says
+    # nothing about the Python one: `--only pytest_cases` is still recordable.
+    _targets = record_targets(sys.argv)
+    if "c_cases" in _targets:
+        refuse_short_c_inventory(c_problems)
+
     def _write(name, text):
         path = B / name
         stem, _, ext = name.rpartition(".")
@@ -490,14 +505,12 @@ if "--record" in sys.argv:
         path.write_text(text)
         print(f"  recorded {name}  (previous kept as {prev.name})")
 
-    _targets = record_targets(sys.argv)
     print(f"\nRECORDING {', '.join(sorted(_targets))}")
     if "python_api" in _targets:
         _write("python_api.txt", "\n".join(current) + "\n")
     if "pytest_cases" in _targets:
         _write("pytest_cases.txt", "\n".join(sorted(py_got_lines)) + "\n")
     if "c_cases" in _targets:
-        refuse_short_c_inventory(c_problems)
         _write("c_cases.txt", "\n".join(sorted(c_got)) + "\n")
     if "numeric" in _targets:
         _num = dict(got)

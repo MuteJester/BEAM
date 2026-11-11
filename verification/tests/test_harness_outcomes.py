@@ -124,6 +124,10 @@ def test_the_harness_decides_each_outcome_from_what_the_body_did():
         # 74 sites across 11 files do this instead of using ASSERT_MSG.
         "selftest_a_direct_failure_count_is_a_failure": "failed",
         "selftest_a_body_that_returns_silently_has_no_verdict": "no verdict",
+        # 15 suites write their message into one shared static buffer.
+        "selftest_a_failure_message_is_the_text_that_was_there": "failed",
+        "selftest_a_later_failure_does_not_rewrite_an_earlier_one": "failed",
+        "selftest_a_failure_after_a_skip_says_why_it_failed": "failed",
     }
     assert r.returncode != 0, "deliberate failures did not fail the run"
 
@@ -149,3 +153,25 @@ def test_every_test_gets_exactly_one_line():
     assert len(lines) == len(names), r.stdout
     for line in lines:
         assert len(line.split()) >= 2, f"no verdict on the line: {line!r}"
+
+
+def test_each_failure_keeps_the_message_its_own_test_wrote():
+    """The records hold TEXT, not a pointer to the caller's buffer. Fifteen
+    suites format their message into one shared static buffer, so a harness
+    that stored the pointer reported the last text written for every record
+    -- in the JSON only, which is the half nobody reads by eye and the half
+    `tools/qa/run` reports from."""
+    results, _ = _selftest()
+    said = {t["name"]: t["message"] for t in results["tests"]}
+    assert said["selftest_a_failure_message_is_the_text_that_was_there"] == \
+        "the first message"
+    assert said["selftest_a_later_failure_does_not_rewrite_an_earlier_one"] == \
+        "the second message"
+
+
+def test_a_failure_after_a_skip_is_explained_by_the_failure():
+    """A skip reason is not an explanation of a failure that followed it."""
+    results, _ = _selftest()
+    said = {t["name"]: t["message"] for t in results["tests"]}
+    assert said["selftest_a_failure_after_a_skip_says_why_it_failed"] == \
+        "the real failure"
