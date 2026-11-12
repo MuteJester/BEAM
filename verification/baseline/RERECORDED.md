@@ -2796,3 +2796,64 @@ see two tests collapsing into one, and bare names cannot see a test moving
 between files. `removed: 0` is the line that matters here — re-recording an
 inventory is the one operation in this repository that can silently absorb a
 dropped test, which is why it is never recorded together with anything else.
+
+# Why the C test inventory was re-recorded for the thread-count policy
+
+Re-recorded 2026-11-12, for the policy's own test suite. The previous file is
+kept beside it as `c_cases.preplan.txt`.
+
+    c_cases   390 -> 403   (+13, nothing removed)
+
+Thirteen tests added, none replacing anything, all in one new suite
+(`tests/native/test_plan.c`) for one new function, `beam_plan_threads`:
+
+  - test_auto_plans_half_the_available_cores
+  - test_a_saturated_machine_plans_one_thread
+  - test_the_plan_never_drops_below_one
+  - test_more_free_cores_never_plans_fewer_threads
+  - test_an_explicit_cap_is_honoured_exactly
+  - test_an_omp_env_setting_is_not_overridden
+  - test_the_memory_cap_is_never_exceeded
+  - test_an_explicit_cap_does_not_override_the_memory_cap
+  - test_no_more_threads_than_work_items
+  - test_the_same_input_always_plans_the_same_count
+  - test_degenerate_input_is_defined
+  - test_availability_above_the_core_count_is_clamped
+  - test_a_null_input_plans_one_thread
+
+The change was not taken on trust. The two files were compared as MULTISETS
+rather than diffed, because a plain diff cannot see two tests collapsing into
+one name and `comm` refuses these files as unsorted:
+
+    old 390, new 403, added 13, removed 0
+
+`removed 0` is the line that matters. A wholesale re-record is how a dropped
+test disappears quietly, so the additions are enumerated above and the count
+of removals is asserted, not assumed.
+
+**No recorded NUMBER moved.** On a freshly built extension -- the first run
+of the gate reported `FAIL extension freshness` and so had tested the
+previous binary, which is why it was rebuilt and the gate re-run -- `numeric`
+(78 keys), `math values` (58, bit-identical), `saved-model bytes`,
+`thread independence` and `exact against enumeration` (416 quantities) all
+report OK. Nothing calls `beam_plan_threads` yet: the function is compiled
+and tested but consulted by nothing, so it cannot move a number, and the
+gate confirms it did not.
+
+Two notes the gate prints that are NOT from this change, recorded here so the
+next reader does not attribute them to it:
+
+  - `17 internal symbol(s) newly external`. Only `beam_plan_threads` is new
+    here. The other sixteen (`beam_line_plan`, `beam_log_gamma_ratio`,
+    `beam_ztp_count_spectrum` and so on) are absent from
+    `c_symbols.txt` as well, so they are pre-existing drift from earlier
+    merged work. Newly external internal symbols are noted and not failed,
+    by design, so none of them blocks.
+  - `1 internal symbol(s) no longer exported: beam_positional_banded_bytes`.
+    Also pre-existing.
+
+The `Python public API` FAIL is the known Python 3.14 rendering difference
+(`__init_subclass__`, `__subclasshook__`, `__replace__`) and is judged by
+diff against a same-interpreter capture, never by the gate's exit code.
+`python_api.txt` must never be recorded on this machine: 3.14 would write
+signatures that do not exist on the 3.11 that CI checks against.
