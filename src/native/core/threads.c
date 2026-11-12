@@ -11,6 +11,7 @@
 #include <stdio.h>
 
 #include "beam/internal.h"
+#include "beam/plan.h"
 
 #if defined(__GLIBC__)
 #include <malloc.h>
@@ -40,7 +41,26 @@ int beam_model_threads(void) {
     return g_beam_threads;
 }
 
-int beam_threads(void) {
+/*
+ * The plan in force on THIS thread, or 0 when none is. The policy never
+ * returns 0 -- it floors at one -- so 0 is an unambiguous "no plan active",
+ * which is what keeps every build before the entry points are wired inert.
+ *
+ * Thread-local, and plan.h says why at length: a process-global plan would be
+ * visible to OpenMP workers, but two BEAM calls on two threads would then
+ * overwrite each other's plan mid-call, which is the buffer-versus-team
+ * mismatch this mechanism exists to prevent.
+ */
+#ifdef _MSC_VER
+  #define TLS __declspec(thread)
+#else
+  #define TLS _Thread_local
+#endif
+
+static TLS int tl_plan = 0;
+
+/* What `beam_model_set_threads` configured, with no plan involved. */
+static int threads_cap(void) {
 #ifdef _OPENMP
     if (g_beam_threads > 0) return g_beam_threads;
     return omp_get_max_threads();
@@ -49,6 +69,32 @@ int beam_threads(void) {
 #endif
 }
 
+int beam_plan_enter(const BeamPlanIn *in) {
+    const int prev = tl_plan;
+    tl_plan = beam_plan_threads(in);
+    return prev;
+}
+
+void beam_plan_leave(int token) {
+    tl_plan = token;
+}
+
+int beam_threads(void) {
+#ifdef _OPENMP
+    if (tl_plan > 0) return tl_plan;
+    return threads_cap();
+#else
+    return 1;
+#endif
+}
+
+/*
+ * Public API, and deliberately NOT the plan. This answers "what is
+ * configured"; `beam_threads()` answers "what will run". They were the same
+ * function until the policy arrived, and conflating them again would break a
+ * caller's introspection and the recipe for reproducing a pinned benchmark --
+ * which is how the paper's performance table is reproducible at all.
+ */
 int beam_model_effective_threads(void) {
-    return beam_threads();
+    return threads_cap();
 }

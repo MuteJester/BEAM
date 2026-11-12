@@ -23,7 +23,14 @@
 #include <stdint.h>
 
 #include "beam/common.h"
+#include "beam/model.h"        /* beam_model_set_threads, _effective_threads */
+#include "beam/model_state.h"  /* beam_threads */
+#include "beam/budget.h"       /* beam_budget_concurrency */
 #include "beam/plan.h"
+
+#ifdef _OPENMP
+#include <omp.h>
+#endif
 
 #include "test_utils.h"
 
@@ -278,6 +285,178 @@ static void test_a_null_input_plans_one_thread(void) {
     PASS();
 }
 
+
+/* ── Resolving the plan once per call ────────────────────────── */
+
+/*
+ * These are the tests that matter most in this file, and the reason is not
+ * latency. A resolved thread count is read once and then used BOTH to size
+ * scratch and to set num_threads: math/spectrum.c caches it in wk->nth, sizes
+ * wk->scr by it at line 402, and names it in four clauses. If two reads inside
+ * one call could disagree, a team would run wider than the buffer allocated
+ * for it. So stability inside a scope is a memory-safety property.
+ */
+
+static void test_beam_threads_is_stable_inside_a_plan_scope(void) {
+    BeamPlanIn in = base();
+    in.available = 12;                      /* plans 6 */
+    const int token = beam_plan_enter(&in);
+    const int first = beam_threads();
+    int ok = (first == 6);
+    /* Change the inputs underneath the scope: the active plan must not move. */
+    in.available = 2;
+    in.user_cap = 1;
+    for (int i = 0; i < 100 && ok; ++i) ok = (beam_threads() == first);
+    beam_plan_leave(token);
+    ASSERT_MSG(ok, "beam_threads() must not change inside one plan scope");
+    PASS();
+}
+
+static void test_leaving_a_plan_scope_restores_the_previous_value(void) {
+    const int before = beam_threads();
+    BeamPlanIn in = base();
+    in.available = 4;                       /* plans 2 */
+    const int token = beam_plan_enter(&in);
+    const int inside = beam_threads();
+    beam_plan_leave(token);
+    const int after = beam_threads();
+    ASSERT_MSG(inside == 2, "a plan of 2 must be visible inside its scope");
+    ASSERT_MSG(after == before,
+               "leaving a scope must restore the previous thread count");
+    PASS();
+}
+
+static void test_plan_scopes_nest(void) {
+    /*
+     * An entry point may call another. Without save-and-restore the inner
+     * leave would clear the outer plan, and the rest of the outer call would
+     * silently run at a different width than the buffers it had sized.
+     */
+    const int before = beam_threads();
+    BeamPlanIn outer = base();
+    outer.available = 16;                   /* plans 8 */
+    const int t_outer = beam_plan_enter(&outer);
+    const int saw_outer = beam_threads();
+
+    BeamPlanIn inner = base();
+    inner.available = 4;                    /* plans 2 */
+    const int t_inner = beam_plan_enter(&inner);
+    const int saw_inner = beam_threads();
+    beam_plan_leave(t_inner);
+    const int saw_outer_again = beam_threads();
+    beam_plan_leave(t_outer);
+    const int after = beam_threads();
+
+    ASSERT_MSG(saw_outer == 8, "the outer plan must be 8");
+    ASSERT_MSG(saw_inner == 2, "the inner plan must be 2");
+    ASSERT_MSG(saw_outer_again == 8,
+               "leaving the inner scope must restore the outer plan");
+    ASSERT_MSG(after == before, "leaving both scopes must restore the original");
+    PASS();
+}
+
+static void test_with_no_plan_active_nothing_changes(void) {
+    /*
+     * Everything above this task is inert: with no scope entered,
+     * beam_threads() must still be the cap, or the runtime's maximum when no
+     * cap is set. This is what lets the policy land without moving a number.
+     */
+    beam_model_set_threads(5);
+    ASSERT_MSG(beam_threads() == 5, "with a cap of 5 and no plan, expect 5");
+    beam_model_set_threads(0);
+    ASSERT_MSG(beam_threads() == beam_model_effective_threads(),
+               "with no cap and no plan, expect the runtime's maximum");
+    PASS();
+}
+
+static void test_effective_threads_reports_the_cap_not_the_plan(void) {
+    /*
+     * beam_model_effective_threads() is public API. It answers "what is
+     * configured", and the plan answers "what will run"; conflating them would
+     * break a user's introspection and the recipe for reproducing the paper's
+     * pinned runs. The two questions get two functions.
+     */
+    beam_model_set_threads(8);
+    BeamPlanIn in = base();
+    in.available = 4;                       /* plans 2, well below the cap */
+    const int token = beam_plan_enter(&in);
+    const int eff = beam_model_effective_threads();
+    const int thr = beam_threads();
+    beam_plan_leave(token);
+    beam_model_set_threads(0);
+    ASSERT_MSG(eff == 8, "effective_threads() must still report the cap of 8");
+    ASSERT_MSG(thr == 2, "beam_threads() must report the active plan of 2");
+    PASS();
+}
+
+static void test_budget_concurrency_follows_the_active_plan(void) {
+    /*
+     * Seventeen num_threads clauses take their count from
+     * beam_budget_concurrency, which caps by the thread count internally. If
+     * it kept reading the cap rather than the plan, those regions would ignore
+     * the policy entirely and the work would be half done.
+     */
+    BeamPlanIn in = base();
+    in.available = 4;                       /* plans 2 */
+    const int token = beam_plan_enter(&in);
+    /* per_item of 1 byte, so the budget is not what binds here. */
+    const uint32_t conc = beam_budget_concurrency(1u, 8u);
+    beam_plan_leave(token);
+    char msg[128];
+    snprintf(msg, sizeof msg,
+             "with a plan of 2 over 8 items, concurrency should be 2, got %u",
+             conc);
+    ASSERT_MSG(conc == 2u, msg);
+    PASS();
+}
+
+static void test_a_plan_does_not_reach_another_thread(void) {
+    /*
+     * The plan is thread-local ON PURPOSE, and this test pins that choice
+     * rather than leaving it to be rediscovered.
+     *
+     * A process-global plan would be seen by OpenMP workers, which sounds
+     * useful, but two BEAM calls on two Python threads would then overwrite
+     * each other's plan mid-call -- exactly the buffer-versus-team mismatch
+     * this task exists to prevent. Thread-local cannot do that.
+     *
+     * Workers do not need it: num_threads is evaluated by the thread that
+     * ENCOUNTERS the pragma, and every non-pragma read in the library caches
+     * the value on the master before any region starts.
+     */
+#ifdef _OPENMP
+    if (omp_get_max_threads() < 2) BEAM_SKIP("needs at least two OpenMP threads");
+    /*
+     * A cap of 7 so that "the worker fell back" is distinguishable from "the
+     * worker inherited the plan". The first version of this test asserted only
+     * that the worker did not see 2, the plan's value, and passed by luck when
+     * run directly: under the suite runner, which caps each suite at two
+     * threads, the fallback was ALSO 2, the assertion compared 2 against 2 and
+     * the test failed for the right reason by accident. A test whose two
+     * outcomes can collide onto one number is not testing anything.
+     */
+    beam_model_set_threads(7);
+    BeamPlanIn in = base();
+    in.available = 4;                       /* plans 2, which is never 7 */
+    const int token = beam_plan_enter(&in);
+    const int master_saw = beam_threads();
+    int worker_saw = -1;
+    #pragma omp parallel num_threads(2)
+    {
+        if (omp_get_thread_num() == 1) worker_saw = beam_threads();
+    }
+    beam_plan_leave(token);
+    beam_model_set_threads(0);              /* restored before any assert */
+    ASSERT_MSG(master_saw == 2,
+               "the thread that entered the scope must see the plan, 2");
+    ASSERT_MSG(worker_saw == 7,
+               "a worker must fall back to the cap, 7, not inherit the plan");
+    PASS();
+#else
+    BEAM_SKIP("no OpenMP in this build");
+#endif
+}
+
 /* ── Main ────────────────────────────────────────────────────── */
 
 int main(int argc, char **argv) {
@@ -298,6 +477,14 @@ int main(int argc, char **argv) {
     RUN_TEST(test_degenerate_input_is_defined);
     RUN_TEST(test_availability_above_the_core_count_is_clamped);
     RUN_TEST(test_a_null_input_plans_one_thread);
+
+    RUN_TEST(test_beam_threads_is_stable_inside_a_plan_scope);
+    RUN_TEST(test_leaving_a_plan_scope_restores_the_previous_value);
+    RUN_TEST(test_plan_scopes_nest);
+    RUN_TEST(test_with_no_plan_active_nothing_changes);
+    RUN_TEST(test_effective_threads_reports_the_cap_not_the_plan);
+    RUN_TEST(test_budget_concurrency_follows_the_active_plan);
+    RUN_TEST(test_a_plan_does_not_reach_another_thread);
 
     printf("\n==============================================================\n");
     return beam_test_finish();

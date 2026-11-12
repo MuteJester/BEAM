@@ -14,18 +14,16 @@
 #include "beam/alphabet.h"
 #include "beam/sparse_rows.h"
 #include "beam/frozen_counts.h"
+#include "beam/plan.h"
 
 
 /* ── Parallelism ─────────────────────────────────────────────── */
 
-/**
- * Threads the next parallel region should use.
- *
- * Every `omp parallel` in the implementation carries `num_threads(...)` with
- * this, so `beam_model_set_threads` is a hard cap rather than a hint and
- * one stray region cannot go wide behind the caller's back.
+/*
+ * `beam_threads()` now lives in beam/plan.h, which owns the thread-count
+ * decision and the plan in force. It is still reachable from here, because
+ * this header's existing includers ask for it by name.
  */
-int beam_threads(void);
 
 /**
  * The mmap threshold BEAM applied at start-up, or 0 if it applied none --

@@ -2857,3 +2857,39 @@ The `Python public API` FAIL is the known Python 3.14 rendering difference
 diff against a same-interpreter capture, never by the gate's exit code.
 `python_api.txt` must never be recorded on this machine: 3.14 would write
 signatures that do not exist on the 3.11 that CI checks against.
+
+# Why the C test inventory was re-recorded for the plan scope
+
+Re-recorded 2026-11-12, for the tests covering the plan in force. The previous
+file is kept beside it as `c_cases.preplanscope.txt`.
+
+    c_cases   403 -> 410   (+7, nothing removed)
+
+Seven tests added to the existing `tests/native/test_plan.c`, none replacing
+anything:
+
+  - test_beam_threads_is_stable_inside_a_plan_scope
+  - test_leaving_a_plan_scope_restores_the_previous_value
+  - test_plan_scopes_nest
+  - test_with_no_plan_active_nothing_changes
+  - test_effective_threads_reports_the_cap_not_the_plan
+  - test_budget_concurrency_follows_the_active_plan
+  - test_a_plan_does_not_reach_another_thread
+
+Compared as multisets, as before: old 403, new 410, added 7, **removed 0**.
+
+**No recorded NUMBER moved**, on a freshly built extension: `numeric` (78
+keys), `math values` (58, bit-identical), `saved-model bytes`,
+`thread independence` and `exact against enumeration` (416 quantities) all
+report OK. That is the point of the change and not a happy accident. Nothing
+calls `beam_plan_enter` yet, so no plan is ever in force during the gate, and
+`beam_threads()` falls through to exactly the value it returned before.
+
+Three of the newly external internal symbols are from this work --
+`beam_plan_enter`, `beam_plan_leave`, `beam_plan_threads`. The other sixteen
+in that note, and the one no longer exported, are pre-existing drift from
+earlier merged work; see the previous section.
+
+The `Python public API` FAIL remains the known Python 3.14 rendering
+difference, judged by diff rather than by exit code. `python_api.txt` must
+never be recorded on this machine.

@@ -802,11 +802,14 @@ class BeamModel:
 
     @property
     def effective_threads(self) -> int:
-        """Threads a parallel region would actually start right now.
+        """The thread cap in force. The value a run can be REPRODUCED with.
 
         The cap if one is set, otherwise the OpenMP runtime's maximum, and
         always 1 in a build without OpenMP. Unlike :attr:`threads`, which
-        reports what was ASKED for, this reports what would happen.
+        reports 0 when nothing was ASKED for, this resolves that to a number.
+
+        It is not a prediction of the team size: BEAM decides thread counts
+        per call, so a planned region may run narrower on a busy machine.
         """
         return effective_threads()
 

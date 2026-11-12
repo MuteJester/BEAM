@@ -54,6 +54,7 @@
 
 #include "beam/model.h"
 #include "beam/error_macros.h"
+#include "beam/plan.h"
 
 /** True when a working set of `need` bytes fits the budget in force. */
 static inline bool beam_budget_fits(uint64_t need) {
@@ -140,7 +141,12 @@ static inline uint32_t beam_budget_concurrency(uint64_t per_item,
     const uint64_t conc = beam_model_memory_budget() / per_item;
     if (conc == 0u) return 0u;                    /* one does not even fit */
     uint32_t c = conc > n_items ? n_items : (uint32_t)conc;
-    const int th = beam_model_effective_threads();
+    /*
+     * The PLAN, not the configured cap. Seventeen num_threads clauses take
+     * their count from this function, so reading the cap here would leave
+     * those regions ignoring the policy entirely.
+     */
+    const int th = beam_threads();
     if (th > 0 && c > (uint32_t)th) c = (uint32_t)th;
     return c < 1u ? 1u : c;
 }

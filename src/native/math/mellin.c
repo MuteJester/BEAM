@@ -75,7 +75,13 @@ static BeamError real_terms(const BeamModel *m, const double *qs, uint32_t nq,
     }
     for (size_t k = 0; k < (size_t)nq * n; ++k) lzs[k] = -INFINITY;
     const uint32_t nw = beam_live_lengths_desc(m, work);
-    const int th = beam_model_effective_threads();
+    /*
+     * The PLAN, not the configured cap. This count is not only fed to a
+     * num_threads clause: it goes into the line plan below, which derives a
+     * memory LAYOUT from it. Reading the configured cap here while a region
+     * ran at the planned width would size the stretches for the wrong team.
+     */
+    const int th = beam_threads();
     const uint32_t nth = th > 0 ? (uint32_t)th : 1u;
     const BeamLinePlan plan = beam_real_plan(m->n_states, m->n_residues,
                                              m->n_alphabet, nq, nth,
@@ -255,7 +261,14 @@ BeamError beam_model_log_mellin_complex(const BeamModel *m, const double *q_re,
     const uint32_t S = m->n_states, R = m->n_residues;
     const uint64_t base = beam_jet_cfan_bytes(S, R, 0u);
     const uint64_t per_tilt = beam_jet_cfan_bytes(S, R, 1u) - base;
-    const int th = beam_model_effective_threads();
+    /*
+     * The PLAN, not the configured cap. This count is not only fed to a
+     * num_threads clause: the budget is divided by it just below, and the
+     * stretch width and count derived from the result. Reading the configured
+     * cap here while a region ran at the planned width would size the
+     * stretches for the wrong team.
+     */
+    const int th = beam_threads();
     uint32_t want = th > 0 ? (uint32_t)th : 1u;
     if (nw && want > nw) want = nw;
     const uint64_t room = beam_model_memory_budget() / want;
@@ -408,7 +421,13 @@ BeamError beam_model_log_mellin_line(const BeamModel *m, double re, double im0,
     }
     for (size_t k = 0; k < (size_t)N * n; ++k) { lmod[k] = -INFINITY; lph[k] = 0.0; }
     const uint32_t nw = beam_live_lengths_desc(m, work);
-    const int th = beam_model_effective_threads();
+    /*
+     * The PLAN, not the configured cap. This count is not only fed to a
+     * num_threads clause: it goes into the line plan below, which derives a
+     * memory LAYOUT from it. Reading the configured cap here while a region
+     * ran at the planned width would size the stretches for the wrong team.
+     */
+    const int th = beam_threads();
     const uint32_t nth = th > 0 ? (uint32_t)th : 1u;
     const BeamLinePlan plan = beam_line_plan(m->n_states, m->n_residues,
                                              m->n_alphabet, N, nth,

@@ -37,10 +37,16 @@ def threads() -> int:
 
 
 def effective_threads() -> int:
-    """Threads a parallel region would actually start right now.
+    """The thread cap in force. The value a run can be REPRODUCED with.
 
     The cap if one is set, otherwise the OpenMP runtime's own maximum, and
     always 1 in a build without OpenMP.
+
+    This used to be called "threads a parallel region would actually start",
+    and it is deliberately not that: a planned region may run narrower than
+    this on a busy machine, because BEAM decides thread counts per call. What
+    this reports does not move with the machine, which is why it is the figure
+    to pass to :func:`set_threads` to reproduce a timing.
     """
     return int(_c.effective_threads())
 

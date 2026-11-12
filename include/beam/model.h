@@ -1427,9 +1427,15 @@ void beam_model_set_threads(int n);
 int beam_model_threads(void);
 
 /**
- * Threads a parallel region would actually start right now: the cap if one is
- * set, otherwise the OpenMP runtime's own maximum, and always 1 in a build
- * without OpenMP.
+ * The thread cap in force: the cap if one is set, otherwise the OpenMP
+ * runtime's own maximum, and always 1 in a build without OpenMP.
+ *
+ * This is what is CONFIGURED, and it is deliberately not a promise about the
+ * team size a region will start. The two were one function until BEAM began
+ * deciding thread counts per call; a planned region may run narrower than
+ * this when the machine is busy. What this returns does not move with the
+ * machine, which is what makes it the figure to pass back to
+ * `beam_model_set_threads` to reproduce a run.
  */
 int beam_model_effective_threads(void);
 
