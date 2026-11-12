@@ -120,7 +120,10 @@ def test_a_model_cannot_be_pickled():
     `save`/`from_file` is the supported round-trip, and the two tests above
     check that it preserves every math value.
     """
-    with pytest.raises(TypeError, match="cannot pickle"):
+    # Matched on `PyCapsule` rather than on CPython's phrasing of "cannot
+    # pickle": the capsule is the fact about BEAM, the wording around it is
+    # the interpreter's and has changed before.
+    with pytest.raises(TypeError, match="PyCapsule"):
         pickle.dumps(MODEL)
 
 

@@ -24,9 +24,8 @@ from typing import Any
 import numpy as np
 
 from ..constants import (BEAM_ALPHABET, BEAM_MAX_LENGTH,
-                         BEAM_MAX_MOMENT, BEAM_MAX_ORDER, BEAM_RESIDUES)
+                         BEAM_MAX_ORDER, BEAM_RESIDUES)
 from . import alphabets
-from .validation import _check_int, _is_scalar_arg
 from .config import _config_args, _config_args_from_dict
 from ..io.readers import _column, _iter_delimited, _iter_parquet, _iter_parquet_column
 from ..math import diversity as _diversity
@@ -1767,8 +1766,8 @@ class BeamModel:
         tilt that does not solve the equation, because Lugannani-Rice built on
         a wrong saddlepoint produces a confident and meaningless number.
         """
-        return _saddlepoint.solve_tilt(self, x, cache, tol=tol,
-                                       max_iter=max_iter)
+        return _saddlepoint._solve_tilt(self, x, cache, tol=tol,
+                                        max_iter=max_iter)
 
     def saddlepoint(self, x, *, tol: float = 1e-9, max_iter: int = 80) -> dict:
         """Lugannani-Rice saddlepoint approximation to the surprisal density.

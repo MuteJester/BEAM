@@ -155,7 +155,10 @@ def test_entropy_base_is_keyword_only(model):
     it. The recorded signature list would catch that too; this says it in
     the suite, where it is read.
     """
-    with pytest.raises(TypeError):
+    # Matched, not bare: a bare TypeError here also passes for every
+    # unrelated reason a call can raise one, which would make this test
+    # claim more than it checks.
+    with pytest.raises(TypeError, match="positional"):
         model.entropy(2.0)
 
 

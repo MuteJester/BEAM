@@ -159,6 +159,25 @@ RECORDABLE = frozenset({"python_api", "pytest_cases", "c_cases",
                         "numeric", "threads", "math_values"})
 
 
+def missing_baseline_is_fatal(name: str, argv: list[str]) -> bool:
+    """Whether a baseline file that is not on disk fails this run.
+
+    It does, for every run but the one writing it. The gate's other checks
+    get this for free by reading their baseline unconditionally and dying on
+    a missing file, which is correct: a check that cannot find what it
+    compares against has not passed, it has not run.
+
+    A check that prints a note instead -- so the first recording of a new
+    baseline is not blocked by its own absence -- needs that exemption
+    bounded, or a tree where the file was never checked out reports a clean
+    gate with the whole comparison silently gone. That is the one failure
+    mode a recorded baseline exists to prevent.
+    """
+    if "--record" not in argv:
+        return True
+    return name not in record_targets(argv)
+
+
 def record_targets(argv: list[str]) -> set[str]:
     """Which baselines this invocation may write.
 

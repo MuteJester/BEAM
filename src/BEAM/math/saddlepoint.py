@@ -7,6 +7,14 @@ These are the implementations behind `BeamModel.saddlepoint` and its private
 tilt solver. They take the model as their first argument rather than `self`;
 the methods remain on `BeamModel`, carry the public documentation, and
 delegate here. Nothing in this module imports `BeamModel` at runtime.
+
+`saddlepoint` reaches its own neighbour `_solve_tilt` through the model --
+`model._solve_tilt(...)`, out to the facade and back -- rather than calling
+it directly. That is deliberate, and it is not an oversight to tidy up: the
+round trip is what keeps dispatch going through the class, so a subclass or
+a test that overrides the method still sees every call. Calling the sibling
+directly here would silently cut those out. The cost is one attribute lookup
+per iteration of a Newton solve, which is not measurable.
 """
 from __future__ import annotations
 
@@ -30,7 +38,7 @@ def _normal_cdf(z: float) -> float:
     return 0.5 * (1.0 + math.erf(z / math.sqrt(2.0)))
 
 
-def solve_tilt(model: BeamModel, x, cache, *, tol=1e-9, max_iter=80):
+def _solve_tilt(model: BeamModel, x, cache, *, tol=1e-9, max_iter=80):
     """Behind :meth:`BeamModel._solve_tilt`."""
     def jet_at(t):
         key = round(t, 12)

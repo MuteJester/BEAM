@@ -20,7 +20,7 @@ import BEAM
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from check_lib import (c_inventory, collect_ids, compare,
-                       inventory_difference,
+                       inventory_difference, missing_baseline_is_fatal,
                        python_collect_argv, python_inventory,
                        record_targets, refuse_short_c_inventory)
 from math_values import capture as math_capture, differences as math_differences
@@ -407,8 +407,15 @@ else:
 _math_got = math_capture()
 _math_path = B / "math_values.json"
 if not _math_path.exists():
-    # The one run that is allowed to find no baseline is the one recording it.
-    print("  note  math values: no baseline yet (record with --only math_values)")
+    # The one run allowed to find no baseline is the one recording it. Any
+    # other run has lost the comparison, which is a failure and not a note:
+    # a clean gate over an absent net is worse than no net at all.
+    if missing_baseline_is_fatal("math_values", sys.argv):
+        fail.append("math values")
+        print("  FAIL  math values: no baseline at "
+              f"{_math_path.name} (record it with --only math_values)")
+    else:
+        print("  note  math values: no baseline yet, recording it now")
 elif (_math_bad := math_differences(
         _math_got, json.loads(_math_path.read_text(encoding="utf-8")))):
     fail.append("math values")

@@ -17,6 +17,21 @@ spectrum at 1,024 bins would otherwise be most of the baseline.
 The arguments below are part of the recorded contract. Changing one changes
 every value it produces, which is a re-record, not a bug fix.
 
+**What this is not.** It is a VALUE net, not a branch net, and 58/58 unchanged
+does not mean "fully covered". The fixed argument table reaches one path per
+call, so these are deliberately NOT pinned here and are left to the suite:
+`measure="counting"`, a per-length `spectrum(length=...)`, any explicit
+`spacing`, `hill_curve()`'s default grid, `log_mellin_line(n=0)`, scalar
+rather than sequence input to the pdf/cdf, and `_hill_from_mellin`'s
+`-inf` case. The single `saddlepoint` sample sits far enough into the right
+tail that its `sf` records as exactly zero, so it pins the main
+Lugannani-Rice branch and none of the degenerate ones.
+
+Both captured models are amino-acid, same corpus, same `max_length`, default
+prior: exact in value, narrow in model shape. The encoding also normalises
+dict key ORDER away (`sorted(value.items())`), so a change to a returned
+dict's insertion order -- observable in Python -- would not be caught here.
+
 Run directly:
     verification/math_values.py --check            compare against the baseline
     verification/math_values.py --record TAG       write it, keeping the old copy

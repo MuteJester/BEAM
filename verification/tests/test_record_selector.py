@@ -68,3 +68,38 @@ def test_every_refusal_is_settled_before_the_first_baseline_is_written():
         f"refuse_short_c_inventory is at line {refusal}, after _write is "
         f"defined at {definition}: a baseline can be written before the "
         f"refusal is reached")
+
+
+# ── A baseline that is absent ────────────────────────────────────────────────
+#
+# Every check in the gate reads its baseline unconditionally and dies if the
+# file is not there, which is the right behaviour: a gate that cannot find
+# what it compares against has not passed, it has not run. The math-values
+# check was written to print a note instead, so that the run which records
+# the baseline for the first time is not blocked by its absence -- but the
+# exemption has to be limited to that run, or a tree with the file missing
+# reports a clean gate with the whole net silently gone.
+
+def test_a_missing_baseline_fails_an_ordinary_run():
+    from check_lib import missing_baseline_is_fatal
+    assert missing_baseline_is_fatal("math_values", ["check.py"]) is True
+
+
+def test_a_missing_baseline_is_allowed_only_for_the_run_recording_it():
+    from check_lib import missing_baseline_is_fatal
+    argv = ["check.py", "--record", "tag", "--only", "math_values"]
+    assert missing_baseline_is_fatal("math_values", argv) is False
+
+
+def test_a_missing_baseline_still_fails_when_another_target_is_recorded():
+    """`--record --only pytest_cases` is not licence to lose math_values."""
+    from check_lib import missing_baseline_is_fatal
+    argv = ["check.py", "--record", "tag", "--only", "pytest_cases"]
+    assert missing_baseline_is_fatal("math_values", argv) is True
+
+
+def test_an_unqualified_record_run_may_find_any_baseline_absent():
+    """`--record tag` writes every baseline, so any of them may be missing."""
+    from check_lib import missing_baseline_is_fatal
+    for name in sorted(ALL):
+        assert missing_baseline_is_fatal(name, ["check.py", "--record", "t"]) is False
