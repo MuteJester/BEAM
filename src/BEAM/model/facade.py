@@ -31,6 +31,7 @@ from .config import _config_args, _config_args_from_dict
 from ..io.readers import _column, _iter_delimited, _iter_parquet, _iter_parquet_column
 from ..math import diversity as _diversity
 from ..math import mellin as _mellin
+from ..math import moments as _moments
 from ..math import saddlepoint as _saddlepoint
 from ..math import spectrum as _spectrum
 from ..math import surprisal as _surprisal
@@ -1506,16 +1507,7 @@ class BeamModel:
         :meth:`PseqAnalysis.length_derivatives` it does not overflow below
         ``q = 1``.
         """
-        order = _check_int("order", order, 0, BEAM_MAX_MOMENT)
-        b, rows, cols = _c.length_derivatives(self._g, float(q), order)
-        raw = np.frombuffer(b, dtype=np.float64).reshape(rows, cols).copy()
-        moments = raw.copy()
-        share = raw[:, 0].copy()
-        # Slot 0 carries the share instead of the constant 1 a raw jet would
-        # put there, precisely so the mixture identity above is checkable from
-        # the output alone. Restore the 1 in the moment view.
-        moments[:, 0] = 1.0
-        return {"length": np.arange(rows), "share": share, "moments": moments}
+        return _moments.length_moments(self, q=q, order=order)
 
     # ── Mellin transform and diversity ──────────────────────────
 
@@ -1693,7 +1685,7 @@ class BeamModel:
         Equal to ``log_mellin(1 + t)``, since tilting by ``t`` and evaluating
         the Mellin transform at ``1 + t`` are the same operation.
         """
-        return self.log_mellin(1.0 + float(t))
+        return _moments.cgf(self, t)
 
     # ── Extremes ────────────────────────────────────────────────
 
@@ -1753,8 +1745,7 @@ class BeamModel:
         three come from a single pass over the trellis, which is what makes a
         Newton solve for the saddlepoint affordable.
         """
-        lm, mean, var = _c.surprisal_tilt(self._g, 1.0 - float(t))
-        return {"K": lm, "K1": mean, "K2": var}
+        return _moments.cgf_jet(self, t)
 
     #: Largest tilt the Newton solve will travel to. Beyond this the tilted
     #: sweep is dominated by a single path and the reconstruction stops being
