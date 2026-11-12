@@ -56,7 +56,8 @@ typedef struct {
  *  2. Otherwise, `OMP_NUM_THREADS` set by the caller stands. It is the same
  *     intent expressed through OpenMP, and BEAM should not be the one library
  *     on the machine that disregards it.
- *  3. Otherwise, half the available cores. Measured, not chosen.
+ *  3. Otherwise, the available cores, capped by where this workload stops
+ *     scaling. Both limits measured, neither chosen.
  *  4. `mem_cap` then binds and is never widened. Exceeding it is a memory
  *     fault rather than a slowdown, and widening a cap of zero would turn a
  *     clean refusal into an allocation failure.

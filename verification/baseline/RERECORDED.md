@@ -2893,3 +2893,57 @@ earlier merged work; see the previous section.
 The `Python public API` FAIL remains the known Python 3.14 rendering
 difference, judged by diff rather than by exit code. `python_api.txt` must
 never be recorded on this machine.
+
+# Why the C test inventory was re-recorded for the free-core estimate
+
+Re-recorded 2026-11-12, for the availability signal and a corrected policy
+rule. The previous file is kept beside it as `c_cases.preavail.txt`.
+
+    c_cases   410 -> 422   (+13, -1)
+
+**This is the first of these sections with a REMOVAL, so it is the one to read
+carefully.** The removed line is a rename, not a dropped test:
+
+    - test_auto_plans_half_the_available_cores
+    + test_auto_plans_the_free_cores_up_to_the_scaling_ceiling
+
+The policy's rule changed from `available / 2` to `min(available, 8)`, so the
+test's name no longer described what it asserts. The assertions were rewritten
+with it; this is not the same test under a new name, and it is not a test that
+stopped running. The count of cases in `test_plan` went from 20 to 22: the
+rename is net zero, plus `test_beyond_the_ceiling_more_free_cores_buy_nothing`
+and the rule test itself.
+
+Why the rule changed, since a baseline move should name its cause: the first
+rule halved availability, having been fitted against free cores counted as
+`cores - competitors`. That ignores the two or three other runnable entities
+any real machine has, so it halved a number already contention-aware --
+conservative twice, and 33% and 69% off the measured optimum at the two
+busiest points. `min(available, 8)` is exact at two of four points and worst
+by 8%.
+
+The other eleven additions are one new suite, `tests/native/test_avail.c`, for
+the free-core estimate:
+
+  - test_the_runnable_count_is_read_from_the_fourth_field
+  - test_an_unreadable_loadavg_is_reported_as_unknown
+  - test_the_cgroup_quota_is_read_as_whole_cores
+  - test_no_cgroup_limit_is_reported_as_unknown
+  - test_an_unreadable_cpu_max_is_reported_as_unknown
+  - test_free_cores_is_what_is_allowed_minus_what_is_running
+  - test_unknown_contention_falls_back_to_the_headroom_rule
+  - test_free_cores_is_never_below_one_or_above_what_is_allowed
+  - test_more_competitors_never_frees_more_cores
+  - test_the_machine_reports_a_usable_estimate
+  - test_the_estimate_does_not_exceed_the_cores_present
+
+Compared as multisets: old 410, new 422, added 13, removed 1, and the one
+removal is accounted for above. Nothing else left the inventory.
+
+**No recorded NUMBER moved**, on a freshly built extension: `numeric` (78
+keys), `math values` (58, bit-identical), `saved-model bytes`,
+`thread independence` and `exact against enumeration` (416 quantities) all
+report OK. Still nothing calls `beam_plan_enter`, so no plan is ever in force
+during the gate and the estimate is never consulted.
+
+The `Python public API` FAIL remains the known 3.14 rendering difference.

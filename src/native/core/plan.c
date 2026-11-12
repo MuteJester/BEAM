@@ -9,23 +9,38 @@
 #include "beam/plan.h"
 
 /*
- * Half the free cores.
+ * The free cores, capped by how wide this workload actually scales.
  *
- * Measured rather than chosen. On sixteen cores, with a known number of
- * CPU-bound competitors inducing a known number of busy cores, the optimum
- * thread count against free cores came out:
+ * Two different limits, and both are needed. Availability bounds the plan from
+ * below -- a team wider than the free cores thrashes, which is the 3814x
+ * finding. BEAM's own parallel efficiency bounds it from above: measured on an
+ * idle box across four calls and two model sizes, eight threads captures
+ * 93-100% of each call's own best speedup, and more than that buys nothing
+ * because the regions stop scaling, not because the machine runs out.
  *
- *     free 16 -> 8    free 12 -> 6    free 8 -> 6    free 4 -> 2
+ * Fitted against the measured optima, with availability from the live signal:
  *
- * which is a ratio of 0.50 at three of the four points, and 0.75 at the
- * fourth. Planning free/2 there costs 12% (4.623 ms against 4.122 ms); that
- * is the error one constant makes across the range, and it is small against
- * the 25x to 461x that asking for every core costs at the same load levels.
+ *     available   optimum   min(available, 8)   available / 2
+ *            14         8                   8               7
+ *            10         6                   8               6
+ *             6         6                   6               3
+ *             1         2                   1               1
  *
- * The divisor is named rather than inlined so that the one number this policy
- * contains is greppable, and so the test that pins it reads the same way.
+ * An earlier version of this file halved availability instead. That was
+ * calibrated against free cores counted as (cores - competitors), which
+ * ignores the two or three other runnable entities any real machine has, so
+ * it halved a number that was already contention-aware -- conservative twice,
+ * and 33% and 69% off the optimum at the two busiest points. The ceiling form
+ * is worst by 8%.
+ *
+ * Note that `min(cores, 8)` WITHOUT the availability term was measured at 186x
+ * worse than serial on a saturated node. The two terms are not alternatives.
+ *
+ * The ceiling is the one number here that other core counts could move: eight
+ * is where scaling flattened on sixteen cores, and a machine with far more
+ * cores might flatten later. Confirming it elsewhere is the open measurement.
  */
-#define BEAM_PLAN_HEADROOM_DIVISOR 2
+#define BEAM_PLAN_MAX_WIDTH 8
 
 int beam_plan_threads(const BeamPlanIn *in) {
     /* Serial is the only safe answer when there is nothing to decide from. */
@@ -42,7 +57,7 @@ int beam_plan_threads(const BeamPlanIn *in) {
          * so standing aside means using that. */
         n = in->cores > 0 ? in->cores : 1;
     } else {
-        /* Clause 3: half the free cores.
+        /* Clause 3: the free cores, capped by where scaling flattens.
          *
          * `available` is clamped to `cores` first, because a machine cannot
          * have more free cores than cores and a misparsed cgroup quota (a
@@ -51,7 +66,7 @@ int beam_plan_threads(const BeamPlanIn *in) {
         int avail = in->available;
         if (avail < 0) avail = 0;
         if (in->cores > 0 && avail > in->cores) avail = in->cores;
-        n = avail / BEAM_PLAN_HEADROOM_DIVISOR;
+        n = avail < BEAM_PLAN_MAX_WIDTH ? avail : BEAM_PLAN_MAX_WIDTH;
     }
 
     /* Clause 4: memory safety binds, and is never widened -- not even by an

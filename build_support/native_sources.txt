@@ -20,6 +20,7 @@ src/native/core/alphabet_aa.c
 src/native/core/alphabet_nt.c
 src/native/core/crc32c.c
 src/native/core/errors.c
+src/native/core/avail.c
 src/native/core/plan.c
 src/native/core/rng.c
 src/native/core/threads.c

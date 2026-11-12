@@ -55,10 +55,15 @@ static BeamPlanIn base(void) {
 
 /* ── The measured rule ───────────────────────────────────────── */
 
-static void test_auto_plans_half_the_available_cores(void) {
-    /* Hand-written, from the measured table: optimum/free == 0.50. */
-    const int avail[] = { 16, 12, 8, 4, 2 };
-    const int want[]  = {  8,  6, 4, 2, 1 };
+static void test_auto_plans_the_free_cores_up_to_the_scaling_ceiling(void) {
+    /*
+     * Hand-written from the measured optima, not computed with the policy's
+     * own expression. Below the ceiling the plan is the free cores; at or above
+     * it the plan stops at eight, because that is where this workload's
+     * speedup flattened across every call measured.
+     */
+    const int avail[] = { 32, 14, 8, 6, 4, 2, 1 };
+    const int want[]  = {  8,  8, 8, 6, 4, 2, 1 };
     for (size_t i = 0; i < sizeof avail / sizeof *avail; ++i) {
         BeamPlanIn in = base();
         in.available = avail[i];
@@ -75,11 +80,36 @@ static void test_auto_plans_half_the_available_cores(void) {
     PASS();
 }
 
+static void test_beyond_the_ceiling_more_free_cores_buy_nothing(void) {
+    /*
+     * The upper limit is BEAM's own scaling, not the machine's size, so a
+     * bigger idle machine must not produce a wider team. Without this, the
+     * rule would be availability alone and a 64-core node would plan 60-odd
+     * threads -- which is the shape of the original defect.
+     */
+    BeamPlanIn in = base();
+    in.cores = 256;
+    for (int a = 8; a <= 256; ++a) {
+        in.available = a;
+        const int got = beam_plan_threads(&in);
+        if (got != 8) {
+            char msg[128];
+            snprintf(msg, sizeof msg,
+                     "available=%d should still plan 8, planned %d", a, got);
+            beam_test_fail(msg);
+            return;
+        }
+    }
+    PASS();
+}
+
 static void test_a_saturated_machine_plans_one_thread(void) {
     /*
      * The case that refuted every constant rule: ig05, 48 cores, zero free,
-     * where one thread was 3814x faster than the core count. The floor is
-     * what produces it, so it is tested as behaviour and not as an edge case.
+     * where one thread was 3814x faster than the core count. Note that the
+     * ceiling alone cannot produce this -- min(cores, 8) was measured at 186x
+     * worse than serial on that node. It is the availability term that does,
+     * which is why the two are not alternatives.
      */
     BeamPlanIn in = base();
     in.cores = 48;
@@ -299,10 +329,11 @@ static void test_a_null_input_plans_one_thread(void) {
 
 static void test_beam_threads_is_stable_inside_a_plan_scope(void) {
     BeamPlanIn in = base();
-    in.available = 12;                      /* plans 6 */
+    in.available = 12;
+    const int want = beam_plan_threads(&in);   /* the rule's value, asked once */
     const int token = beam_plan_enter(&in);
     const int first = beam_threads();
-    int ok = (first == 6);
+    int ok = (first == want);
     /* Change the inputs underneath the scope: the active plan must not move. */
     in.available = 2;
     in.user_cap = 1;
@@ -315,12 +346,13 @@ static void test_beam_threads_is_stable_inside_a_plan_scope(void) {
 static void test_leaving_a_plan_scope_restores_the_previous_value(void) {
     const int before = beam_threads();
     BeamPlanIn in = base();
-    in.available = 4;                       /* plans 2 */
+    in.available = 4;
+    const int want = beam_plan_threads(&in);
     const int token = beam_plan_enter(&in);
     const int inside = beam_threads();
     beam_plan_leave(token);
     const int after = beam_threads();
-    ASSERT_MSG(inside == 2, "a plan of 2 must be visible inside its scope");
+    ASSERT_MSG(inside == want, "the plan must be visible inside its scope");
     ASSERT_MSG(after == before,
                "leaving a scope must restore the previous thread count");
     PASS();
@@ -334,12 +366,14 @@ static void test_plan_scopes_nest(void) {
      */
     const int before = beam_threads();
     BeamPlanIn outer = base();
-    outer.available = 16;                   /* plans 8 */
+    outer.available = 16;
+    const int want_outer = beam_plan_threads(&outer);
     const int t_outer = beam_plan_enter(&outer);
     const int saw_outer = beam_threads();
 
     BeamPlanIn inner = base();
-    inner.available = 4;                    /* plans 2 */
+    inner.available = 2;                    /* distinct from the outer plan */
+    const int want_inner = beam_plan_threads(&inner);
     const int t_inner = beam_plan_enter(&inner);
     const int saw_inner = beam_threads();
     beam_plan_leave(t_inner);
@@ -347,9 +381,11 @@ static void test_plan_scopes_nest(void) {
     beam_plan_leave(t_outer);
     const int after = beam_threads();
 
-    ASSERT_MSG(saw_outer == 8, "the outer plan must be 8");
-    ASSERT_MSG(saw_inner == 2, "the inner plan must be 2");
-    ASSERT_MSG(saw_outer_again == 8,
+    ASSERT_MSG(want_outer != want_inner,
+               "the two scopes must plan different widths for this to test");
+    ASSERT_MSG(saw_outer == want_outer, "the outer scope sees the outer plan");
+    ASSERT_MSG(saw_inner == want_inner, "the inner scope sees the inner plan");
+    ASSERT_MSG(saw_outer_again == want_outer,
                "leaving the inner scope must restore the outer plan");
     ASSERT_MSG(after == before, "leaving both scopes must restore the original");
     PASS();
@@ -376,16 +412,18 @@ static void test_effective_threads_reports_the_cap_not_the_plan(void) {
      * break a user's introspection and the recipe for reproducing the paper's
      * pinned runs. The two questions get two functions.
      */
-    beam_model_set_threads(8);
+    beam_model_set_threads(9);
     BeamPlanIn in = base();
-    in.available = 4;                       /* plans 2, well below the cap */
+    in.available = 4;                       /* a plan below the cap of 9 */
+    const int want = beam_plan_threads(&in);
     const int token = beam_plan_enter(&in);
     const int eff = beam_model_effective_threads();
     const int thr = beam_threads();
     beam_plan_leave(token);
     beam_model_set_threads(0);
-    ASSERT_MSG(eff == 8, "effective_threads() must still report the cap of 8");
-    ASSERT_MSG(thr == 2, "beam_threads() must report the active plan of 2");
+    ASSERT_MSG(want != 9, "the plan must differ from the cap for this to test");
+    ASSERT_MSG(eff == 9, "effective_threads() must still report the cap of 9");
+    ASSERT_MSG(thr == want, "beam_threads() must report the active plan");
     PASS();
 }
 
@@ -397,16 +435,18 @@ static void test_budget_concurrency_follows_the_active_plan(void) {
      * the policy entirely and the work would be half done.
      */
     BeamPlanIn in = base();
-    in.available = 4;                       /* plans 2 */
+    in.available = 3;                       /* a plan below the item count */
+    const uint32_t want = (uint32_t)beam_plan_threads(&in);
     const int token = beam_plan_enter(&in);
     /* per_item of 1 byte, so the budget is not what binds here. */
-    const uint32_t conc = beam_budget_concurrency(1u, 8u);
+    const uint32_t conc = beam_budget_concurrency(1u, 16u);
     beam_plan_leave(token);
-    char msg[128];
+    char msg[160];
     snprintf(msg, sizeof msg,
-             "with a plan of 2 over 8 items, concurrency should be 2, got %u",
-             conc);
-    ASSERT_MSG(conc == 2u, msg);
+             "with a plan of %u over 16 items, concurrency should be %u, got %u",
+             want, want, conc);
+    ASSERT_MSG(want < 16u, "the plan must bind, not the item count");
+    ASSERT_MSG(conc == want, msg);
     PASS();
 }
 
@@ -437,7 +477,8 @@ static void test_a_plan_does_not_reach_another_thread(void) {
      */
     beam_model_set_threads(7);
     BeamPlanIn in = base();
-    in.available = 4;                       /* plans 2, which is never 7 */
+    in.available = 4;                       /* a plan that is never 7 */
+    const int want = beam_plan_threads(&in);
     const int token = beam_plan_enter(&in);
     const int master_saw = beam_threads();
     int worker_saw = -1;
@@ -447,8 +488,9 @@ static void test_a_plan_does_not_reach_another_thread(void) {
     }
     beam_plan_leave(token);
     beam_model_set_threads(0);              /* restored before any assert */
-    ASSERT_MSG(master_saw == 2,
-               "the thread that entered the scope must see the plan, 2");
+    ASSERT_MSG(want != 7, "the plan must differ from the cap for this to test");
+    ASSERT_MSG(master_saw == want,
+               "the thread that entered the scope must see the plan");
     ASSERT_MSG(worker_saw == 7,
                "a worker must fall back to the cap, 7, not inherit the plan");
     PASS();
@@ -464,7 +506,8 @@ int main(int argc, char **argv) {
     printf("\nBEAM Unit Tests - Thread-count policy\n");
     printf("==============================================================\n\n");
 
-    RUN_TEST(test_auto_plans_half_the_available_cores);
+    RUN_TEST(test_auto_plans_the_free_cores_up_to_the_scaling_ceiling);
+    RUN_TEST(test_beyond_the_ceiling_more_free_cores_buy_nothing);
     RUN_TEST(test_a_saturated_machine_plans_one_thread);
     RUN_TEST(test_the_plan_never_drops_below_one);
     RUN_TEST(test_more_free_cores_never_plans_fewer_threads);
