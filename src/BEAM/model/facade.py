@@ -30,12 +30,10 @@ from .validation import _check_int, _is_scalar_arg
 from .config import _config_args, _config_args_from_dict
 from ..io.readers import _column, _iter_delimited, _iter_parquet, _iter_parquet_column
 from ..math.saddlepoint import _normal_pdf, _normal_cdf
+from ..math import diversity as _diversity
 from ..math import mellin as _mellin
 from ..math import saddlepoint as _saddlepoint
 from ..math import spectrum as _spectrum
-# `hill_profile` still validates its orders here; it moves in the diversity
-# step, which takes this import with it.
-from ..math.mellin import _orders_vector
 from ..runtime import effective_threads, memory_budget, set_threads, threads
 
 from .. import _cbeam as _c
@@ -149,23 +147,6 @@ def _warn_if_expensive(max_length: int, alphabet: str, clamped_from: int,
             f"{multiple:.1f}x the finalize work of the default (a count of "
             f"DP runs, not a timing), most of it on lengths no read has.",
             BeamPerformanceWarning, stacklevel=level)
-
-
-def _hill_from_mellin(q: float, log_mellin: float) -> float:
-    """``D_q`` from ``ln sum P**q``, by the expression ``hill_number`` ends in.
-
-    ``beam_model_hill_number`` returns 0.0 for a model with no live length,
-    where ``log_mellin`` is ``-inf``; above ``q = 1`` the division would turn
-    that into ``+inf`` instead, so it is special-cased the same way. C's
-    ``exp`` saturates to ``inf`` where Python's raises, and a support too
-    large for a double is an answer, not an error.
-    """
-    if log_mellin == -math.inf:
-        return 0.0
-    try:
-        return math.exp(log_mellin / (1.0 - q))
-    except OverflowError:
-        return math.inf
 
 
 class BeamModel:
@@ -1367,10 +1348,7 @@ class BeamModel:
 
     def entropy(self, *, base: float = math.e) -> float:
         """Shannon entropy of the sequence distribution. Exact."""
-        if not (base > 0.0) or base == 1.0:
-            raise ValueError(f"base must be positive and not 1, got {base!r}")
-        h = float(_c.entropy(self._g))
-        return h if base == math.e else h / math.log(base)
+        return _diversity.entropy(self, base=base)
 
     def hill_number(self, q: float) -> float:
         """Effective number of sequences at order ``q``.
@@ -1379,7 +1357,7 @@ class BeamModel:
         ``q=2`` the inverse collision probability. (The order is ``q``, as in
         :meth:`Mixture.hill_number`; ``alpha`` names the prior's strengths.)
         """
-        return float(_c.hill_number(self._g, float(q)))
+        return _diversity.hill_number(self, q)
 
     def accumulator_max(self) -> float:
         """Largest value the spectrum DP's accumulator reaches, in nats.
@@ -1635,7 +1613,7 @@ class BeamModel:
         per length and agrees with this to machine precision, not bit for bit;
         keep this where a number has to reproduce one already published.
         """
-        return np.array([self.hill_number(float(a)) for a in orders])
+        return _diversity.hill_numbers(self, orders)
 
     def hill_profile(self, orders: Iterable[float]) -> np.ndarray:
         """Hill numbers at every order in ``orders``, from one pass per length.
@@ -1667,29 +1645,11 @@ class BeamModel:
         default 31-order profile takes 0.42 s here against 4.25 s for
         :meth:`hill_numbers`.
         """
-        q = _orders_vector(orders)
-        out = np.empty(q.size, dtype=np.float64)
-        one = np.abs(q - 1.0) < 1e-12        # `fabs(alpha - 1.0) < 1e-12` in C
-        zero = q == 0.0
-        rest = ~(one | zero)
-        if rest.any():
-            qr = q[rest]
-            lm = self.log_mellin_many(qr)
-            out[rest] = [_hill_from_mellin(float(a), float(v))
-                         for a, v in zip(qr, lm)]
-        if zero.any():
-            out[zero] = self.path_count()
-        if one.any():
-            out[one] = math.exp(self.entropy())
-        return out
+        return _diversity.hill_profile(self, orders)
 
     def hill_curve(self, orders: Iterable[float] | None = None) -> dict[str, np.ndarray]:
         """The diversity profile as a curve, for plotting."""
-        if orders is None:
-            orders = np.concatenate([np.linspace(0.0, 1.0, 11)[:-1],
-                                     np.linspace(1.0, 4.0, 13)])
-        orders = np.asarray(list(orders), dtype=np.float64)
-        return {"orders": orders, "hill": self.hill_numbers(orders)}
+        return _diversity.hill_curve(self, orders)
 
     def diversity_profile(self) -> dict[str, float]:
         """The three Hill numbers usually quoted together.
@@ -1702,18 +1662,11 @@ class BeamModel:
            of all of sequence space, which describes the smoother rather than
            the grammar. ``D1`` is the number to quote if you are quoting one.
         """
-        return {
-            "D0": self.hill_number(0.0),
-            "D1": self.hill_number(1.0),
-            "D2": self.hill_number(2.0),
-            # Spelled as FlashBackGraph spells it. Cross-model summary code
-            # reads this key and would otherwise have to special-case BeamModel.
-            "entropy_nats": self.entropy(),
-        }
+        return _diversity.diversity_profile(self)
 
     def effective_diversity(self) -> float:
         """``D1``, the effective number of sequences. Alias for readability."""
-        return self.hill_number(1.0)
+        return _diversity.effective_diversity(self)
 
     # ── Surprisal moments ───────────────────────────────────────
 

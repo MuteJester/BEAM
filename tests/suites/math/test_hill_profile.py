@@ -145,3 +145,22 @@ def test_the_callers_array_is_not_what_the_c_reads(m):
     before = qs.copy()
     m.log_mellin_many(qs)
     assert qs.dtype == np.float32 and (qs == before).all()
+
+
+def test_entropy_base_is_keyword_only(model):
+    """`base` is keyword-only, and must stay so.
+
+    A delegating method written without the `*` would silently make
+    `entropy(2.0)` legal, which widens the public API rather than preserving
+    it. The recorded signature list would catch that too; this says it in
+    the suite, where it is read.
+    """
+    with pytest.raises(TypeError):
+        model.entropy(2.0)
+
+
+def test_entropy_rejects_a_degenerate_base(model):
+    """Base 1 would divide by log(1) = 0, and a non-positive base has no log."""
+    for bad in (1.0, 0.0, -2.0):
+        with pytest.raises(ValueError, match="base must be positive and not 1"):
+            model.entropy(base=bad)
