@@ -33,7 +33,8 @@ import numpy as np
 
 from ..errors import BeamTypeError, BeamValueError
 from ..model import alphabets
-from ..model.facade import BeamModel, _orders_vector
+from ..math.mellin import _orders_vector
+from ..model.facade import BeamModel
 from ..runtime import effective_threads, set_threads, threads
 from .results import DepthMatchedProfiles
 

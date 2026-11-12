@@ -31,6 +31,14 @@ are listed under Changed.
   versions accept only as command-line flags; the suite refuses to run rather
   than run with those guards silently absent. Nothing about installing or
   using BEAM itself changed.
+- **Development only:** the math domain moved out of the `BeamModel` class
+  body into `BEAM.math`, as six modules — `mellin`, `saddlepoint`,
+  `spectrum`, `diversity`, `surprisal` and `moments`. All twenty-seven
+  methods remain on `BeamModel` with their signatures and documentation
+  unchanged, and now delegate. **No public API change and no numeric
+  change:** the recorded signature list is identical line for line, and a
+  new gate baseline records every one of those methods' exact output so that
+  a one-ULP drift fails the build.
 - **`max_length='data'` on a nucleotide corpus now stops at 512 instead of
   255.** A build that used to skip sequences longer than 255 silently now keeps
   them, sizes the model larger and emits a `BeamPerformanceWarning`, so the

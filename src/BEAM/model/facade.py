@@ -24,12 +24,16 @@ from typing import Any
 import numpy as np
 
 from ..constants import (BEAM_ALPHABET, BEAM_MAX_LENGTH,
-                         BEAM_MAX_MOMENT, BEAM_MAX_ORDER, BEAM_RESIDUES)
+                         BEAM_MAX_ORDER, BEAM_RESIDUES)
 from . import alphabets
-from .validation import _check_int, _is_scalar_arg
 from .config import _config_args, _config_args_from_dict
 from ..io.readers import _column, _iter_delimited, _iter_parquet, _iter_parquet_column
-from ..math.saddlepoint import _normal_pdf, _normal_cdf
+from ..math import diversity as _diversity
+from ..math import mellin as _mellin
+from ..math import moments as _moments
+from ..math import saddlepoint as _saddlepoint
+from ..math import spectrum as _spectrum
+from ..math import surprisal as _surprisal
 from ..runtime import effective_threads, memory_budget, set_threads, threads
 
 from .. import _cbeam as _c
@@ -143,49 +147,6 @@ def _warn_if_expensive(max_length: int, alphabet: str, clamped_from: int,
             f"{multiple:.1f}x the finalize work of the default (a count of "
             f"DP runs, not a timing), most of it on lengths no read has.",
             BeamPerformanceWarning, stacklevel=level)
-
-
-def _orders_vector(orders: Iterable[float]) -> np.ndarray:
-    """``orders`` as a fresh one-dimensional float64 array of finite values.
-
-    Fresh on purpose, not merely contiguous: the C side reads it with the GIL
-    released, and an array the caller still holds could be written by another
-    thread while it does.
-    """
-    if isinstance(orders, (str, bytes)):
-        raise BeamTypeError("orders must be a sequence of numbers, not a string")
-    try:
-        seq = orders if isinstance(orders, np.ndarray) else list(orders)
-        q = np.array(seq, dtype=np.float64)
-    except (TypeError, ValueError):
-        raise BeamTypeError(
-            f"orders must be a sequence of numbers, got "
-            f"{type(orders).__name__}") from None
-    if q.ndim != 1:
-        raise BeamValueError(
-            f"orders must be one-dimensional, got shape {q.shape}")
-    bad = q[~np.isfinite(q)]
-    if bad.size:
-        raise BeamValueError(
-            f"orders must be finite, got {bad[:3].tolist()}")
-    return np.ascontiguousarray(q)
-
-
-def _hill_from_mellin(q: float, log_mellin: float) -> float:
-    """``D_q`` from ``ln sum P**q``, by the expression ``hill_number`` ends in.
-
-    ``beam_model_hill_number`` returns 0.0 for a model with no live length,
-    where ``log_mellin`` is ``-inf``; above ``q = 1`` the division would turn
-    that into ``+inf`` instead, so it is special-cased the same way. C's
-    ``exp`` saturates to ``inf`` where Python's raises, and a support too
-    large for a double is an answer, not an error.
-    """
-    if log_mellin == -math.inf:
-        return 0.0
-    try:
-        return math.exp(log_mellin / (1.0 - q))
-    except OverflowError:
-        return math.inf
 
 
 class BeamModel:
@@ -1387,10 +1348,7 @@ class BeamModel:
 
     def entropy(self, *, base: float = math.e) -> float:
         """Shannon entropy of the sequence distribution. Exact."""
-        if not (base > 0.0) or base == 1.0:
-            raise ValueError(f"base must be positive and not 1, got {base!r}")
-        h = float(_c.entropy(self._g))
-        return h if base == math.e else h / math.log(base)
+        return _diversity.entropy(self, base=base)
 
     def hill_number(self, q: float) -> float:
         """Effective number of sequences at order ``q``.
@@ -1399,7 +1357,7 @@ class BeamModel:
         ``q=2`` the inverse collision probability. (The order is ``q``, as in
         :meth:`Mixture.hill_number`; ``alpha`` names the prior's strengths.)
         """
-        return float(_c.hill_number(self._g, float(q)))
+        return _diversity.hill_number(self, q)
 
     def accumulator_max(self) -> float:
         """Largest value the spectrum DP's accumulator reaches, in nats.
@@ -1462,26 +1420,8 @@ class BeamModel:
            full-range order-4 model needs several GB and minutes. Ask for one
            length at a time, or build at a lower ``order``, when that matters.
         """
-        if measure not in ("counting", "generated"):
-            raise ValueError(
-                f"measure must be 'counting' or 'generated', got {measure!r}")
-        bins = self._check_bins(bins, spacing)
-        if spacing is not None and not (float(spacing) > 0.0):
-            raise ValueError(
-                f"spacing must be positive, got {spacing!r}; pass None to have "
-                f"it chosen from accumulator_max()")
-        w, ds = _c.spectrum(
-            self._g, measure == "counting",
-            self._check_length(length, allow_none=True),
-            bins, 0.0 if spacing is None else float(spacing))
-        w = np.asarray(w, dtype=np.float64)
-        return {
-            "surprisal": np.arange(bins) * ds,
-            "weights": w,
-            "spacing": ds,
-            "total": float(w.sum()),
-            "measure": measure,
-        }
+        return _spectrum.spectrum(self, measure=measure, length=length,
+                                  bins=bins, spacing=spacing)
 
     def spectrum_pair(
         self,
@@ -1509,20 +1449,8 @@ class BeamModel:
         grid spacing once and splits every edge of both passes by fractions
         taken from the same weight, which makes it structural.
         """
-        bins = self._check_bins(bins, spacing)
-        if spacing is not None and not (float(spacing) > 0.0):
-            raise ValueError(
-                f"spacing must be positive, got {spacing!r}; pass None to have "
-                f"it chosen from accumulator_max()")
-        cb, gb, ds = _c.spectrum_pair(
-            self._g, self._check_length(length, allow_none=True), bins,
-            0.0 if spacing is None else float(spacing))
-        return {
-            "surprisal": np.arange(bins) * ds,
-            "counting": np.frombuffer(cb, dtype=np.float64).copy(),
-            "generated": np.frombuffer(gb, dtype=np.float64).copy(),
-            "spacing": ds,
-        }
+        return _spectrum.spectrum_pair(self, length=length, bins=bins,
+                                       spacing=spacing)
 
     def spectra_by_length(
         self,
@@ -1556,33 +1484,9 @@ class BeamModel:
         4. The budget never caps what a single length may allocate and the
         result does not depend on it.
         """
-        if measure not in ("counting", "generated"):
-            raise ValueError(
-                f"measure must be 'counting' or 'generated', got {measure!r}")
-        bins = self._check_bins(bins, spacing)
-        if spacing is not None and not (float(spacing) > 0.0):
-            raise ValueError(
-                f"spacing must be positive, got {spacing!r}; pass None to have "
-                f"it chosen from accumulator_max()")
-        hi = int(self.config["max_length"])
-        if max_length is None:
-            want = 0                      # 0 means "the model's own maximum"
-        else:
-            max_length = int(max_length)
-            if not 0 <= max_length <= hi:
-                raise ValueError(
-                    f"max_length must be between 0 and {hi}, got {max_length}")
-            want = max_length
-        b, rows, cols, ds = _c.spectra_by_length(
-            self._g, measure == "counting", want, bins,
-            0.0 if spacing is None else float(spacing))
-        return {
-            "surprisal": np.arange(cols) * ds,
-            "weights": np.frombuffer(b, dtype=np.float64).reshape(rows,
-                                                                  cols).copy(),
-            "spacing": ds,
-            "measure": measure,
-        }
+        return _spectrum.spectra_by_length(self, measure=measure,
+                                           max_length=max_length, bins=bins,
+                                           spacing=spacing)
 
     def length_moments(self, *, q: float = 1.0, order: int = 4) -> dict[str, Any]:
         """The ``q``-tilted surprisal moments of every length, unmixed.
@@ -1602,16 +1506,7 @@ class BeamModel:
         :meth:`PseqAnalysis.length_derivatives` it does not overflow below
         ``q = 1``.
         """
-        order = _check_int("order", order, 0, BEAM_MAX_MOMENT)
-        b, rows, cols = _c.length_derivatives(self._g, float(q), order)
-        raw = np.frombuffer(b, dtype=np.float64).reshape(rows, cols).copy()
-        moments = raw.copy()
-        share = raw[:, 0].copy()
-        # Slot 0 carries the share instead of the constant 1 a raw jet would
-        # put there, precisely so the mixture identity above is checkable from
-        # the output alone. Restore the 1 in the moment view.
-        moments[:, 0] = 1.0
-        return {"length": np.arange(rows), "share": share, "moments": moments}
+        return _moments.length_moments(self, q=q, order=order)
 
     # ── Mellin transform and diversity ──────────────────────────
 
@@ -1622,7 +1517,7 @@ class BeamModel:
         gives the log support size, ``q=1`` gives 0, and the derivatives with
         respect to ``q`` are the cumulants of ``ln P``.
         """
-        return float(_c.log_mellin(self._g, float(q)))
+        return _mellin.log_mellin(self, q)
 
     def log_mellin_many(self, orders: Iterable[float]) -> np.ndarray:
         """:meth:`log_mellin` at every order in ``orders``, in one pass.
@@ -1637,11 +1532,7 @@ class BeamModel:
         Orders must be finite. Returns a float64 array the length of
         ``orders``; an empty sequence returns an empty array.
         """
-        q = _orders_vector(orders)
-        if q.size == 0:
-            return np.empty(0, dtype=np.float64)
-        return np.frombuffer(_c.log_mellin_many(self._g, q),
-                             dtype=np.float64).copy()
+        return _mellin.log_mellin_many(self, orders)
 
     def log_mellin_complex(self, orders: Iterable[complex]) -> np.ndarray:
         """``ln sum_s P(s)**q`` at COMPLEX orders, exactly.
@@ -1673,29 +1564,7 @@ class BeamModel:
         Orders must be finite. Real input is accepted as orders with zero
         imaginary part; an empty sequence returns an empty array.
         """
-        if isinstance(orders, (str, bytes)):
-            raise BeamTypeError("orders must be a sequence of numbers, not a string")
-        try:
-            seq = orders if isinstance(orders, np.ndarray) else list(orders)
-            q = np.array(seq, dtype=np.complex128)
-        except (TypeError, ValueError):
-            raise BeamTypeError(
-                f"orders must be a sequence of numbers, got "
-                f"{type(orders).__name__}") from None
-        if q.ndim != 1:
-            raise BeamValueError(
-                f"orders must be one-dimensional, got shape {q.shape}")
-        bad = q[~np.isfinite(q)]
-        if bad.size:
-            raise BeamValueError(
-                f"orders must be finite, got {bad[:3].tolist()}")
-        if q.size == 0:
-            return np.empty(0, dtype=np.complex128)
-        # Fresh arrays: the C side reads them with the GIL released.
-        re = np.array(q.real, dtype=np.float64)
-        im = np.array(q.imag, dtype=np.float64)
-        return np.frombuffer(_c.log_mellin_complex(self._g, re, im),
-                             dtype=np.complex128).copy()
+        return _mellin.log_mellin_complex(self, orders)
 
     def log_mellin_line(self, re: float, im_start: float, im_step: float,
                         n: int) -> np.ndarray:
@@ -1717,18 +1586,7 @@ class BeamModel:
         Order ``k``'s bits depend on the line and on ``k`` alone -- not on
         ``n``, the thread count or the memory budget.
         """
-        for name, v in (("re", re), ("im_start", im_start), ("im_step", im_step)):
-            if not math.isfinite(float(v)):
-                raise BeamValueError(f"{name} must be finite, got {v!r}")
-        n = operator.index(n)
-        if n < 0:
-            raise BeamValueError(f"n must be non-negative, got {n}")
-        if n == 0:
-            return np.empty(0, dtype=np.complex128)
-        return np.frombuffer(
-            _c.log_mellin_line(self._g, float(re), float(im_start),
-                               float(im_step), n),
-            dtype=np.complex128).copy()
+        return _mellin.log_mellin_line(self, re, im_start, im_step, n)
 
     def power_sum(self, q: float) -> float:
         """``sum_s P(s)**q`` on the linear scale.
@@ -1746,7 +1604,7 @@ class BeamModel:
         per length and agrees with this to machine precision, not bit for bit;
         keep this where a number has to reproduce one already published.
         """
-        return np.array([self.hill_number(float(a)) for a in orders])
+        return _diversity.hill_numbers(self, orders)
 
     def hill_profile(self, orders: Iterable[float]) -> np.ndarray:
         """Hill numbers at every order in ``orders``, from one pass per length.
@@ -1778,29 +1636,11 @@ class BeamModel:
         default 31-order profile takes 0.42 s here against 4.25 s for
         :meth:`hill_numbers`.
         """
-        q = _orders_vector(orders)
-        out = np.empty(q.size, dtype=np.float64)
-        one = np.abs(q - 1.0) < 1e-12        # `fabs(alpha - 1.0) < 1e-12` in C
-        zero = q == 0.0
-        rest = ~(one | zero)
-        if rest.any():
-            qr = q[rest]
-            lm = self.log_mellin_many(qr)
-            out[rest] = [_hill_from_mellin(float(a), float(v))
-                         for a, v in zip(qr, lm)]
-        if zero.any():
-            out[zero] = self.path_count()
-        if one.any():
-            out[one] = math.exp(self.entropy())
-        return out
+        return _diversity.hill_profile(self, orders)
 
     def hill_curve(self, orders: Iterable[float] | None = None) -> dict[str, np.ndarray]:
         """The diversity profile as a curve, for plotting."""
-        if orders is None:
-            orders = np.concatenate([np.linspace(0.0, 1.0, 11)[:-1],
-                                     np.linspace(1.0, 4.0, 13)])
-        orders = np.asarray(list(orders), dtype=np.float64)
-        return {"orders": orders, "hill": self.hill_numbers(orders)}
+        return _diversity.hill_curve(self, orders)
 
     def diversity_profile(self) -> dict[str, float]:
         """The three Hill numbers usually quoted together.
@@ -1813,18 +1653,11 @@ class BeamModel:
            of all of sequence space, which describes the smoother rather than
            the grammar. ``D1`` is the number to quote if you are quoting one.
         """
-        return {
-            "D0": self.hill_number(0.0),
-            "D1": self.hill_number(1.0),
-            "D2": self.hill_number(2.0),
-            # Spelled as FlashBackGraph spells it. Cross-model summary code
-            # reads this key and would otherwise have to special-case BeamModel.
-            "entropy_nats": self.entropy(),
-        }
+        return _diversity.diversity_profile(self)
 
     def effective_diversity(self) -> float:
         """``D1``, the effective number of sequences. Alias for readability."""
-        return self.hill_number(1.0)
+        return _diversity.effective_diversity(self)
 
     # ── Surprisal moments ───────────────────────────────────────
 
@@ -1834,31 +1667,16 @@ class BeamModel:
         Returns ``order + 1`` values, so ``[0]`` is 1 and ``[1]`` is the mean.
         At ``q=1`` the mean is the entropy.
         """
-        order = _check_int("order", order, 0, BEAM_MAX_MOMENT)
-        return np.asarray(
-            _c.surprisal_moments(self._g, float(q), order),
-            dtype=np.float64)
+        return _surprisal.surprisal_moments(self, q=q, order=order)
 
     def surprisal_cumulants(self, *, q: float = 1.0, order: int = 4) -> np.ndarray:
         """Cumulants 1..``order`` of the surprisal: mean, variance, and on up."""
-        order = _check_int("order", order, 1, BEAM_MAX_MOMENT)
-        return np.asarray(
-            _c.surprisal_cumulants(self._g, float(q), order),
-            dtype=np.float64)
+        return _surprisal.surprisal_cumulants(self, q=q, order=order)
 
     def surprisal_stats(self, *, q: float = 1.0) -> dict[str, float]:
         """Mean, variance, standard deviation, skewness and excess kurtosis
         of the surprisal, exactly."""
-        k = self.surprisal_cumulants(q=q, order=4)
-        var = float(k[1])
-        sd = math.sqrt(var) if var > 0 else 0.0
-        return {
-            "mean": float(k[0]),
-            "variance": var,
-            "std": sd,
-            "skewness": float(k[2]) / sd ** 3 if sd > 0 else 0.0,
-            "excess_kurtosis": float(k[3]) / var ** 2 if var > 0 else 0.0,
-        }
+        return _surprisal.surprisal_stats(self, q=q)
 
     def cgf(self, t: float) -> float:
         """Cumulant generating function of ``ln P``, ``ln E[exp(t ln P)]``.
@@ -1866,7 +1684,7 @@ class BeamModel:
         Equal to ``log_mellin(1 + t)``, since tilting by ``t`` and evaluating
         the Mellin transform at ``1 + t`` are the same operation.
         """
-        return self.log_mellin(1.0 + float(t))
+        return _moments.cgf(self, t)
 
     # ── Extremes ────────────────────────────────────────────────
 
@@ -1875,7 +1693,7 @@ class BeamModel:
 
         Exact, by min-plus and max-plus sweeps. Not an estimate from samples.
         """
-        return tuple(_c.surprisal_range(self._g))
+        return _surprisal.surprisal_range(self)
 
     def dynamic_range(self, *, base: float = 10.0) -> float:
         """Orders of magnitude of probability the grammar spans."""
@@ -1926,8 +1744,7 @@ class BeamModel:
         three come from a single pass over the trellis, which is what makes a
         Newton solve for the saddlepoint affordable.
         """
-        lm, mean, var = _c.surprisal_tilt(self._g, 1.0 - float(t))
-        return {"K": lm, "K1": mean, "K2": var}
+        return _moments.cgf_jet(self, t)
 
     #: Largest tilt the Newton solve will travel to. Beyond this the tilted
     #: sweep is dominated by a single path and the reconstruction stops being
@@ -1949,36 +1766,8 @@ class BeamModel:
         tilt that does not solve the equation, because Lugannani-Rice built on
         a wrong saddlepoint produces a confident and meaningless number.
         """
-        def jet_at(t):
-            key = round(t, 12)
-            if key not in cache:
-                cache[key] = self.cgf_jet(key)
-            return cache[key]
-
-        lo_t, hi_t = -self.MAX_TILT, self.MAX_TILT
-        j_lo, j_hi = jet_at(lo_t), jet_at(hi_t)
-        if x <= j_lo["K1"]:
-            return lo_t, j_lo, False
-        if x >= j_hi["K1"]:
-            return hi_t, j_hi, False
-
-        t = 0.0
-        jet = jet_at(t)
-        for _ in range(max_iter):
-            f = jet["K1"] - x
-            if abs(f) < tol:
-                return t, jet, True
-            if f > 0.0:
-                hi_t = t
-            else:
-                lo_t = t
-            step = f / max(jet["K2"], 1e-300)
-            nt = t - step
-            if not (lo_t < nt < hi_t):
-                nt = 0.5 * (lo_t + hi_t)
-            t = nt
-            jet = jet_at(t)
-        return t, jet, abs(jet["K1"] - x) < 1e-6
+        return _saddlepoint._solve_tilt(self, x, cache, tol=tol,
+                                        max_iter=max_iter)
 
     def saddlepoint(self, x, *, tol: float = 1e-9, max_iter: int = 80) -> dict:
         """Lugannani-Rice saddlepoint approximation to the surprisal density.
@@ -1999,65 +1788,7 @@ class BeamModel:
         is seconds per point on a large model. Ask for the points you need, and
         use :meth:`surprisal_cdf` when a cheap answer will do.
         """
-        xs = np.atleast_1d(np.asarray(x, dtype=np.float64))
-        lo, hi = self.surprisal_range()
-        cache: dict[float, dict[str, float]] = {}
-
-        pdf = np.zeros_like(xs)
-        cdf = np.zeros_like(xs)
-        tt = np.full_like(xs, np.nan)
-        ok = np.zeros(xs.shape, dtype=bool)
-
-        for i, xv in enumerate(xs):
-            if xv <= lo:
-                continue
-            if xv >= hi:
-                cdf[i] = 1.0
-                continue
-            t, jet, converged = self._solve_tilt(xv, cache, tol=tol,
-                                                 max_iter=max_iter)
-            tt[i] = t
-            ok[i] = converged
-            if not converged:
-                # Beyond the reachable tilt range: the point is deep in a tail,
-                # and the honest answer is the boundary it is closest to.
-                cdf[i] = 0.0 if t < 0 else 1.0
-                continue
-
-            k2 = max(jet["K2"], 1e-300)
-            pdf[i] = math.exp(jet["K"] - t * xv) / math.sqrt(2.0 * math.pi * k2)
-            w = math.copysign(math.sqrt(max(2.0 * (t * xv - jet["K"]), 0.0)), t)
-            u = t * math.sqrt(k2)
-            if abs(t) < 1e-7:
-                # Lugannani-Rice has a removable singularity at the mean; use
-                # the standard limiting form rather than dividing by zero.
-                k3 = float(self.surprisal_cumulants(q=1.0, order=3)[2])
-                cdf[i] = 0.5 - k3 / (6.0 * math.sqrt(2.0 * math.pi) * k2 ** 1.5)
-            elif abs(w) < 1e-10 or abs(u) < 1e-10:
-                # Degenerate away from the mean, which the limiting form above
-                # does NOT cover: it is the expansion around t = 0 and would
-                # answer ~0.5 for a point deep in a tail. `w` vanishes only at
-                # the mean, so reaching here with a non-small `t` means the
-                # tilted sweep has collapsed onto a single path and the
-                # inversion has nothing left to invert. Report that rather
-                # than a confident number.
-                ok[i] = False
-                cdf[i] = 0.0 if t < 0 else 1.0
-                pdf[i] = 0.0
-            else:
-                cdf[i] = _normal_cdf(w) + _normal_pdf(w) * (1.0 / w - 1.0 / u)
-            cdf[i] = min(max(cdf[i], 0.0), 1.0)
-
-        out = {"x": xs, "pdf": pdf, "cdf": cdf, "sf": 1.0 - cdf, "t": tt,
-               "converged": ok, "range": (lo, hi)}
-        if _is_scalar_arg(x):
-            out = {k: (v[0] if isinstance(v, np.ndarray) and v.size == 1 else v)
-                   for k, v in out.items()}
-            out["x"] = float(out["x"])
-            for key in ("cdf", "pdf", "sf", "t"):
-                out[key] = float(out[key])
-            out["converged"] = bool(out["converged"])
-        return out
+        return _saddlepoint.saddlepoint(self, x, tol=tol, max_iter=max_iter)
 
     def surprisal_distribution(self) -> dict[str, np.ndarray]:
         """The surprisal as a mixture over lengths, with exact components.
@@ -2070,15 +1801,7 @@ class BeamModel:
         The cheap, interpretable counterpart to :meth:`saddlepoint`: one pass
         per length rather than a Newton solve per evaluation point.
         """
-        lm = self.length_marginals()
-        keep = lm["generated"] > 0
-        return {
-            "length": lm["length"][keep],
-            "weight": lm["generated"][keep],
-            "mean": lm["mean_surprisal"][keep],
-            "variance": lm["variance"][keep],
-            "std": np.sqrt(lm["variance"][keep]),
-        }
+        return _surprisal.surprisal_distribution(self)
 
     def surprisal_pdf(self, x) -> np.ndarray:
         """Density of the surprisal from the length mixture.
@@ -2090,30 +1813,14 @@ class BeamModel:
         the convention :meth:`saddlepoint` and
         :meth:`Calibration.pvalue` follow too.
         """
-        d = self.surprisal_distribution()
-        xs = np.atleast_1d(np.asarray(x, dtype=np.float64))
-        out = np.zeros_like(xs)
-        for w, mu, sd in zip(d["weight"], d["mean"], d["std"]):
-            if sd <= 0:
-                continue
-            z = (xs - mu) / sd
-            out += w * np.exp(-0.5 * z * z) / (sd * math.sqrt(2.0 * math.pi))
-        return float(out[0]) if _is_scalar_arg(x) else out
+        return _surprisal.surprisal_pdf(self, x)
 
     def surprisal_cdf(self, x) -> np.ndarray:
         """Distribution function of the surprisal from the length mixture.
 
         Returns a ``float`` for a scalar ``x`` and an array otherwise.
         """
-        d = self.surprisal_distribution()
-        xs = np.atleast_1d(np.asarray(x, dtype=np.float64))
-        out = np.zeros_like(xs)
-        for w, mu, sd in zip(d["weight"], d["mean"], d["std"]):
-            if sd <= 0:
-                out += w * (xs >= mu)
-                continue
-            out += w * np.array([_normal_cdf((v - mu) / sd) for v in xs])
-        return float(out[0]) if _is_scalar_arg(x) else out
+        return _surprisal.surprisal_cdf(self, x)
 
     # ── Where the surprisal sits ────────────────────────────────
 
@@ -2131,14 +1838,7 @@ class BeamModel:
         instead of smeared across depths. ``total`` is their sum and equals the
         mean surprisal exactly, which is the identity worth checking.
         """
-        depths, konst = _c.surprisal_by_depth(self._g, float(q))
-        depths = np.asarray(depths, dtype=np.float64)
-        return {
-            "depth": np.arange(len(depths)),
-            "by_depth": depths,
-            "length_constant": float(konst),
-            "total": float(depths.sum() + konst),
-        }
+        return _surprisal.surprisal_by_depth(self, q=q)
 
     # ── Topology ────────────────────────────────────────────────
 

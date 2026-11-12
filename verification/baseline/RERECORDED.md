@@ -2727,3 +2727,72 @@ this work exists to prevent, and it is now a test that runs on every gate.
 Nothing else was recorded. `c_cases.txt` is unchanged at 390, the numeric
 baselines and the saved-model bytes are byte-identical, and `python_api.txt`
 must not be recorded on this machine.
+
+## math_values.json — a new baseline, nothing re-recorded
+
+`--only math_values` wrote `math_values.json` for the first time. No existing
+baseline was touched: `python_api.txt` is byte-identical, `c_cases.txt` is
+unchanged at 390, and the numeric baselines and saved-model bytes compare
+equal on the same run that recorded this one.
+
+58 quantities, every public math method of `BeamModel` against two models
+built from the corpus already in `corpus.json`, at orders 2 and 3. Floats are
+`float.hex()`, the spelling the numeric block uses; arrays are a SHA-256 over
+their raw bytes, because a 1,024-bin spectrum listed in full would be most of
+the file. Nothing raised.
+
+Why it exists: `numeric.json` pins four math quantities -- entropy, Hill,
+moments, range. The other twenty-two were covered only by tests asserting a
+property, and a property holds either side of a change that moves the number.
+Moving code between modules can move a number.
+
+Why orders 2 and 3 rather than 2 and 4: order 4 over the 20-residue alphabet
+is 160,000 contexts and costs 212 s to capture, against 0.9 s for order 2 and
+11.3 s for order 3. The third order already reaches the backoff path the
+second never does, so the fourth pins nothing extra for 20x the gate time.
+
+The capture pins the thread count at 4 and restores the previous setting
+afterwards. That is a measurement decision, not a preference: on a machine
+whose load exceeds its core count, one `spectrum_pair` took 1.5 s at 16
+threads and 0.00 s at 8, five times each. Values do not depend on it --
+`set_threads` documents bit-for-bit agreement across thread counts, and
+`test_capture_is_thread_invariant` checks that rather than trusting it.
+
+The baseline was watched failing before it was trusted: nudging `entropy` by
+one `nextafter` moved 8 of the 58 keys -- `entropy`, `entropy:base2`, and the
+downstream `diversity_profile` and `hill_profile`, in both models -- and the
+gate reported `FAIL math values (8/58 keys differ)`.
+
+## pytest_cases.json — eight ids added by the math extraction, none removed
+
+`--only pytest_cases` re-recorded the inventory at 1,232 ids, up from 1,224.
+No other baseline was written: `python_api.txt` must not be recorded on this
+machine, and every recorded NUMBER compared equal on the same run — `numeric`
+at 78 keys, `math values` at 58, the saved-model bytes, thread independence,
+and 416 quantities against enumeration.
+
+The eight, all added, none moved and none removed:
+
+```
+tests/suites/analytics/test_spectrum.py::test_spectrum_rejects_a_length_above_max_length
+tests/suites/analytics/test_spectrum.py::test_spectrum_rejects_an_unknown_measure
+tests/suites/analytics/test_spectrum.py::test_spectrum_rejects_bins_below_two
+tests/suites/math/test_hill_profile.py::test_entropy_base_is_keyword_only
+tests/suites/math/test_hill_profile.py::test_entropy_rejects_a_degenerate_base
+tests/suites/math/test_mellin.py::test_log_mellin_many_rejects_a_string
+tests/suites/math/test_mellin.py::test_log_mellin_many_rejects_a_two_dimensional_argument
+tests/suites/math/test_mellin.py::test_log_mellin_many_rejects_non_finite_orders
+```
+
+They are the Review Focus guards of the math extraction: the argument
+validation that moved out of the `BeamModel` class body with the functions
+that use it. Each one passes before the extraction as well as after, which is
+what they are for — they pin behaviour the move had to preserve rather than
+describe behaviour it introduced.
+
+The delta was checked as a MULTISET before recording, not as a count and not
+as a set of bare names: 8 added, 0 removed, no duplicate ids. A count cannot
+see two tests collapsing into one, and bare names cannot see a test moving
+between files. `removed: 0` is the line that matters here — re-recording an
+inventory is the one operation in this repository that can silently absorb a
+dropped test, which is why it is never recorded together with anything else.

@@ -10,6 +10,7 @@ import numpy as np
 import pytest
 
 from BEAM import BeamModel
+from BEAM.errors import BeamTypeError, BeamValueError
 
 from _engineering.corpora import AA, J_MOTIFS, make_corpus
 
@@ -162,3 +163,26 @@ def test_edge_thresholding_is_not_applicable(model):
 
 
 # ════════════════════════════════════════════════════════════════════════
+
+
+def test_log_mellin_many_rejects_a_string(model):
+    """A string is a sequence of characters, which is never a set of orders.
+
+    Without the explicit check `np.array("1.0", dtype=float)` raises
+    something about string conversion, which tells the caller nothing about
+    what this argument is for.
+    """
+    with pytest.raises(BeamTypeError,
+                       match="orders must be a sequence of numbers, not a string"):
+        model.log_mellin_many("1.0")
+
+
+def test_log_mellin_many_rejects_non_finite_orders(model):
+    """The C side reads these with the GIL released and cannot report back."""
+    with pytest.raises(BeamValueError, match="orders must be finite"):
+        model.log_mellin_many([0.5, math.inf])
+
+
+def test_log_mellin_many_rejects_a_two_dimensional_argument(model):
+    with pytest.raises(BeamValueError, match="orders must be one-dimensional"):
+        model.log_mellin_many(np.zeros((2, 2)))
