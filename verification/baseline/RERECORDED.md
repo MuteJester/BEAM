@@ -2762,3 +2762,37 @@ The baseline was watched failing before it was trusted: nudging `entropy` by
 one `nextafter` moved 8 of the 58 keys -- `entropy`, `entropy:base2`, and the
 downstream `diversity_profile` and `hill_profile`, in both models -- and the
 gate reported `FAIL math values (8/58 keys differ)`.
+
+## pytest_cases.json — eight ids added by the math extraction, none removed
+
+`--only pytest_cases` re-recorded the inventory at 1,232 ids, up from 1,224.
+No other baseline was written: `python_api.txt` must not be recorded on this
+machine, and every recorded NUMBER compared equal on the same run — `numeric`
+at 78 keys, `math values` at 58, the saved-model bytes, thread independence,
+and 416 quantities against enumeration.
+
+The eight, all added, none moved and none removed:
+
+```
+tests/suites/analytics/test_spectrum.py::test_spectrum_rejects_a_length_above_max_length
+tests/suites/analytics/test_spectrum.py::test_spectrum_rejects_an_unknown_measure
+tests/suites/analytics/test_spectrum.py::test_spectrum_rejects_bins_below_two
+tests/suites/math/test_hill_profile.py::test_entropy_base_is_keyword_only
+tests/suites/math/test_hill_profile.py::test_entropy_rejects_a_degenerate_base
+tests/suites/math/test_mellin.py::test_log_mellin_many_rejects_a_string
+tests/suites/math/test_mellin.py::test_log_mellin_many_rejects_a_two_dimensional_argument
+tests/suites/math/test_mellin.py::test_log_mellin_many_rejects_non_finite_orders
+```
+
+They are the Review Focus guards of the math extraction: the argument
+validation that moved out of the `BeamModel` class body with the functions
+that use it. Each one passes before the extraction as well as after, which is
+what they are for — they pin behaviour the move had to preserve rather than
+describe behaviour it introduced.
+
+The delta was checked as a MULTISET before recording, not as a count and not
+as a set of bare names: 8 added, 0 removed, no duplicate ids. A count cannot
+see two tests collapsing into one, and bare names cannot see a test moving
+between files. `removed: 0` is the line that matters here — re-recording an
+inventory is the one operation in this repository that can silently absorb a
+dropped test, which is why it is never recorded together with anything else.

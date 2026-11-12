@@ -346,6 +346,9 @@ tests/suites/analytics/test_spectrum.py::test_spectra_by_length_rows_are_bit_ide
 tests/suites/analytics/test_spectrum.py::test_spectrum_pair_at_one_length_is_bit_identical
 tests/suites/analytics/test_spectrum.py::test_spectrum_pair_auto_spacing_matches_the_single_call
 tests/suites/analytics/test_spectrum.py::test_spectrum_pair_is_bit_identical_to_two_calls
+tests/suites/analytics/test_spectrum.py::test_spectrum_rejects_a_length_above_max_length
+tests/suites/analytics/test_spectrum.py::test_spectrum_rejects_an_unknown_measure
+tests/suites/analytics/test_spectrum.py::test_spectrum_rejects_bins_below_two
 tests/suites/analytics/test_topology.py::test_topology_counts_live_structure
 tests/suites/analytics/test_topology.py::test_topology_edges_bound_the_paths
 tests/suites/analytics/test_topology.py::test_topology_is_the_complete_trellis
@@ -511,6 +514,8 @@ tests/suites/likelihood/test_ztp_moments.py::test_the_reductions_match_numpy_wit
 tests/suites/likelihood/test_ztp_moments.py::test_the_reductions_match_numpy_without_a_tilt_on_the_bins[0.7-edges1]
 tests/suites/likelihood/test_ztp_moments.py::test_the_reductions_match_numpy_without_a_tilt_on_the_bins[0.7-edges2]
 tests/suites/likelihood/test_ztp_moments.py::test_the_reductions_match_numpy_without_a_tilt_on_the_bins[0.7-edges3]
+tests/suites/math/test_hill_profile.py::test_entropy_base_is_keyword_only
+tests/suites/math/test_hill_profile.py::test_entropy_rejects_a_degenerate_base
 tests/suites/math/test_hill_profile.py::test_hill_profile_agrees_with_hill_numbers_to_machine_precision[aa]
 tests/suites/math/test_hill_profile.py::test_hill_profile_agrees_with_hill_numbers_to_machine_precision[nt]
 tests/suites/math/test_hill_profile.py::test_log_mellin_many_is_log_mellin_bit_for_bit[aa]
@@ -546,6 +551,9 @@ tests/suites/math/test_mellin.py::test_length_derivatives_sum_to_the_pooled_mell
 tests/suites/math/test_mellin.py::test_length_marginals_are_keyed_by_length
 tests/suites/math/test_mellin.py::test_log_mellin_at_one_is_zero
 tests/suites/math/test_mellin.py::test_log_mellin_at_zero_is_the_support
+tests/suites/math/test_mellin.py::test_log_mellin_many_rejects_a_string
+tests/suites/math/test_mellin.py::test_log_mellin_many_rejects_a_two_dimensional_argument
+tests/suites/math/test_mellin.py::test_log_mellin_many_rejects_non_finite_orders
 tests/suites/math/test_mellin.py::test_log_mellin_matches_brute_force
 tests/suites/math/test_mellin.py::test_mellin_matches_log_mellin
 tests/suites/math/test_mellin.py::test_moments_mean_is_the_entropy
