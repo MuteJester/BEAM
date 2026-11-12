@@ -79,6 +79,13 @@ typedef struct {
  */
 int beam_plan_threads(const BeamPlanIn *in);
 
+/**
+ * The widest team the policy will ever plan in auto mode: where this
+ * workload's speedup flattened. Reported by the probe so that a caller can
+ * see WHICH limit bound their call -- the machine or the library.
+ */
+int beam_plan_max_width(void);
+
 /* ── The plan in force, for one call on one thread ───────────── */
 
 /**
@@ -101,6 +108,13 @@ int beam_plan_threads(const BeamPlanIn *in);
  * region starts.
  */
 int  beam_plan_enter(const BeamPlanIn *in);
+
+/**
+ * Fill `in` from the machine, without making it current. The probe needs the
+ * same inputs the real path uses, and duplicating the gathering is how the
+ * two would drift apart.
+ */
+void beam_plan_inputs(BeamPlanIn *in);
 
 /**
  * `beam_plan_enter` with the inputs read from the machine: the configured cap,

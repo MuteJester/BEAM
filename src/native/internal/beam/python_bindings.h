@@ -49,6 +49,8 @@ PyObject *py_compact(PyObject *self, PyObject *arg);
 PyObject *py_temper(PyObject *self, PyObject *args);
 PyObject *py_config(PyObject *self, PyObject *arg);
 PyObject *py_effective_threads(PyObject *self, PyObject *arg);
+PyObject *py_parallel_plan(PyObject *self, PyObject *arg);
+PyObject *py_available_cores(PyObject *self, PyObject *arg);
 PyObject *py_entropy(PyObject *self, PyObject *arg);
 PyObject *py_expected_counts(PyObject *self, PyObject *args);
 PyObject *py_explain(PyObject *self, PyObject *args);

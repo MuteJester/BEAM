@@ -18,6 +18,8 @@
 /* Capsule tag. Carried over verbatim so a model pickled or passed between the
  * two packages during the transition is still recognised; it is renamed with
  * everything else in the rename step. */
+#include "beam/plan.h"
+#include "beam/avail.h"
 #include "beam/python_bindings.h"
 #include "guards.h"
 
@@ -339,6 +341,33 @@ PyObject *py_effective_threads(PyObject *self, PyObject *arg) {
     (void)self; (void)arg;
     return PyLong_FromLong(beam_model_effective_threads());
 }
+/*
+ * The plan and every input it used.
+ *
+ * The inputs are the point, not the answer: every surprise in this subsystem
+ * was about WHICH source decided the count, never about the number itself. It
+ * calls the same gathering function the real path calls, because a probe that
+ * recomputed the inputs would drift away from what actually happens.
+ */
+PyObject *py_parallel_plan(PyObject *self, PyObject *arg) {
+    (void)self; (void)arg;
+    BeamPlanIn in;
+    beam_plan_inputs(&in);
+    return Py_BuildValue(
+        "{s:i,s:i,s:O,s:i,s:i,s:i}",
+        "plan", beam_plan_threads(&in),
+        "user_cap", in.user_cap,
+        "omp_num_threads", in.omp_env ? Py_True : Py_False,
+        "cores", in.cores,
+        "available", in.available,
+        "max_width", beam_plan_max_width());
+}
+
+PyObject *py_available_cores(PyObject *self, PyObject *arg) {
+    (void)self; (void)arg;
+    return PyLong_FromLong(beam_available_cores());
+}
+
 PyObject *py_set_memory_budget(PyObject *self, PyObject *arg) {
     (void)self;
     unsigned long long n = PyLong_AsUnsignedLongLong(arg);

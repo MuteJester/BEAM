@@ -87,3 +87,79 @@ def test_atoms_feed_the_publicness_model(small):
 
 
 # ════════════════════════════════════════════════════════════════════════
+
+
+# ════════════════════════════════════════════════════════════════════════
+# The thread plan, and being able to ask why
+# ════════════════════════════════════════════════════════════════════════
+
+
+def test_the_plan_reports_every_input_it_used():
+    """A user who sees an unexpectedly slow call needs to be able to ask.
+
+    The plan's ANSWER on its own does not help: the surprises in this
+    subsystem were never the thread count, they were which of the three
+    sources produced it. So every input is reported beside it.
+    """
+    import BEAM
+
+    plan = BEAM.parallel_plan()
+    for key in ("plan", "user_cap", "omp_num_threads", "cores",
+                "available", "max_width"):
+        assert key in plan, f"{key} missing from {sorted(plan)}"
+    assert plan["plan"] >= 1
+    assert plan["cores"] >= 1
+    assert 1 <= plan["available"] <= plan["cores"]
+
+
+def test_an_explicit_cap_is_what_the_plan_reports():
+    """`set_threads(n)` means n, and the probe has to say so, because this is
+    the contract a pinned benchmark and the paper's reproduction rely on."""
+    import BEAM
+
+    before = BEAM.threads()
+    try:
+        BEAM.set_threads(3)
+        plan = BEAM.parallel_plan()
+        assert plan["user_cap"] == 3
+        assert plan["plan"] == 3
+    finally:
+        BEAM.set_threads(before)
+
+
+def test_the_plan_is_capped_by_the_scaling_ceiling():
+    """Auto mode never plans wider than where the work stops scaling, which
+    is the measured upper limit rather than the machine's size."""
+    import BEAM
+
+    before = BEAM.threads()
+    try:
+        BEAM.set_threads(0)
+        plan = BEAM.parallel_plan()
+        assert plan["plan"] <= plan["max_width"]
+        assert plan["plan"] <= max(plan["available"], 1)
+    finally:
+        BEAM.set_threads(before)
+
+
+def test_a_pinned_availability_is_visible_in_the_plan(monkeypatch):
+    """`BEAM_AVAILABLE_CORES` is how a benchmark or a CI run buys back the
+    reproducibility that a load-aware plan costs, so it must be observable."""
+    import BEAM
+
+    monkeypatch.setenv("BEAM_AVAILABLE_CORES", "2")
+    before = BEAM.threads()
+    try:
+        BEAM.set_threads(0)
+        plan = BEAM.parallel_plan()
+        assert plan["available"] == 2
+        assert plan["plan"] == 2
+    finally:
+        BEAM.set_threads(before)
+
+
+def test_available_cores_never_exceeds_the_cores_present():
+    """The estimate narrows what the machine has; it can never widen it."""
+    import BEAM
+
+    assert 1 <= BEAM.available_cores() <= BEAM.parallel_plan()["cores"]

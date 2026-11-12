@@ -12,7 +12,8 @@ from .constants import (
     BEAM_RESIDUES,
 )
 from .runtime import (
-    effective_threads, file_provenance_span, memory_budget, set_memory_budget,
+    available_cores, effective_threads, file_provenance_span, memory_budget,
+    parallel_plan, set_memory_budget,
     set_threads, threads,
 )
 from .io.readers import _column, _iter_delimited, _iter_parquet
@@ -34,7 +35,8 @@ __all__ = [
     "Calibration", "SimulationResult",
     "BEAM_ALPHABET", "BEAM_MAX_LENGTH", "BEAM_MAX_MOMENT", "BEAM_MAX_ORDER",
     "BEAM_RESIDUES",
-    "effective_threads", "file_provenance_span", "memory_budget",
+    "available_cores", "effective_threads", "file_provenance_span",
+    "memory_budget", "parallel_plan",
     "set_memory_budget", "set_threads",
     "threads",
 ]

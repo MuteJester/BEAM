@@ -2999,3 +2999,55 @@ for whoever records it on 3.11: nothing in this commit adds Python API. The
 `parallel_plan` probe, which does, is deliberately held back -- it would also
 need `cbeam_methods.txt` edited by hand, since that baseline has no `--record`
 path at all.
+
+# Why three baselines moved for the parallel-plan probe
+
+2026-11-12. `BEAM.parallel_plan()` and `BEAM.available_cores()` let a caller
+ask how many threads the next call will use and why. Three baselines move, and
+they move by three different mechanisms, which is the reason this section is
+longer than the addition deserves.
+
+## `pytest_cases` -- recorded normally
+
+    pytest_cases   +5, nothing removed
+
+Five tests in the existing `tests/suites/model/test_runtime.py`:
+
+  - test_the_plan_reports_every_input_it_used
+  - test_an_explicit_cap_is_what_the_plan_reports
+  - test_the_plan_is_capped_by_the_scaling_ceiling
+  - test_a_pinned_availability_is_visible_in_the_plan
+  - test_available_cores_never_exceeds_the_cores_present
+
+Previous file kept as `pytest_cases.preprobe.txt`; compared as multisets.
+
+## `cbeam_methods` -- edited BY HAND, because it has no recorder
+
+    cbeam_methods   99 -> 101   (+available_cores, +parallel_plan)
+
+`cbeam_methods.txt` is not in `check_lib.RECORDABLE`, so `--record` cannot
+write it and there is no mechanism to regenerate it. It was therefore edited
+by hand, and then checked two ways rather than trusted: the two names are the
+only difference from `cbeam_methods.preprobe.txt` as multisets, and the
+recorded list is identical to `dir(BEAM._cbeam)` as the module now exposes it.
+
+A hand-edited baseline is the weakest kind in this directory, so the check
+that it matches the live module is the one that makes it safe. If this file
+needs editing again, do that comparison.
+
+## `python_api` -- CANNOT be recorded on this machine
+
+Two lines are expected to appear, and they are the entire intended change:
+
+    __all__ gains 'available_cores' and 'parallel_plan'
+    runtime: def parallel_plan() and def available_cores()
+
+`python_api.txt` can only be recorded by the interpreter CI checks against,
+and the only interpreter here that can import BEAM is Python 3.14, which
+renders inherited dunders differently from 3.11 and would write signatures
+that do not exist there. So it stays stale until someone records it on 3.11.
+
+**Whoever does that: the diff should contain the two additions above and
+nothing else beyond the known 3.14 rendering noise** (`__init_subclass__`,
+`__subclasshook__`, `__replace__`). Anything else in it is a real change that
+nobody intended.

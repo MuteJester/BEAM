@@ -42,6 +42,8 @@
  */
 #define BEAM_PLAN_MAX_WIDTH 8
 
+int beam_plan_max_width(void) { return BEAM_PLAN_MAX_WIDTH; }
+
 int beam_plan_threads(const BeamPlanIn *in) {
     /* Serial is the only safe answer when there is nothing to decide from. */
     if (!in) return 1;

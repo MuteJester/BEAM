@@ -81,24 +81,29 @@ void beam_plan_leave(int token) {
     tl_plan = token;
 }
 
-int beam_plan_enter_default(void) {
-    BeamPlanIn in;
-    in.user_cap = g_beam_threads;
+void beam_plan_inputs(BeamPlanIn *in) {
+    if (!in) return;
+    in->user_cap = g_beam_threads;
     /*
      * OMP_NUM_THREADS set by the caller is the same intent as an explicit cap,
      * expressed through OpenMP, and the policy stands aside for it. Read here
      * rather than inside the policy, which reads nothing.
      */
-    in.omp_env = getenv("OMP_NUM_THREADS") != NULL;
-    in.mem_cap = 0u;                 /* applied deeper, on top of the plan */
-    in.items = 0u;                   /* not known at an entry point */
-    in.cores = beam_cores_present();
+    in->omp_env = getenv("OMP_NUM_THREADS") != NULL;
+    in->mem_cap = 0u;                /* applied deeper, on top of the plan */
+    in->items = 0u;                  /* not known at an entry point */
+    in->cores = beam_cores_present();
 #ifdef _OPENMP
-    in.omp_max = omp_get_max_threads();     /* respects OMP_NUM_THREADS */
+    in->omp_max = omp_get_max_threads();    /* respects OMP_NUM_THREADS */
 #else
-    in.omp_max = 1;
+    in->omp_max = 1;
 #endif
-    in.available = beam_available_cores();
+    in->available = beam_available_cores();
+}
+
+int beam_plan_enter_default(void) {
+    BeamPlanIn in;
+    beam_plan_inputs(&in);
     return beam_plan_enter(&in);
 }
 
