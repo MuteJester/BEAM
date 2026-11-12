@@ -9,8 +9,10 @@
  * naming it in every `num_threads` clause.
  */
 #include <stdio.h>
+#include <stdlib.h>      /* getenv */
 
 #include "beam/internal.h"
+#include "beam/avail.h"
 #include "beam/plan.h"
 
 #if defined(__GLIBC__)
@@ -77,6 +79,27 @@ int beam_plan_enter(const BeamPlanIn *in) {
 
 void beam_plan_leave(int token) {
     tl_plan = token;
+}
+
+int beam_plan_enter_default(void) {
+    BeamPlanIn in;
+    in.user_cap = g_beam_threads;
+    /*
+     * OMP_NUM_THREADS set by the caller is the same intent as an explicit cap,
+     * expressed through OpenMP, and the policy stands aside for it. Read here
+     * rather than inside the policy, which reads nothing.
+     */
+    in.omp_env = getenv("OMP_NUM_THREADS") != NULL;
+    in.mem_cap = 0u;                 /* applied deeper, on top of the plan */
+    in.items = 0u;                   /* not known at an entry point */
+    in.cores = beam_cores_present();
+#ifdef _OPENMP
+    in.omp_max = omp_get_max_threads();     /* respects OMP_NUM_THREADS */
+#else
+    in.omp_max = 1;
+#endif
+    in.available = beam_available_cores();
+    return beam_plan_enter(&in);
 }
 
 int beam_threads(void) {

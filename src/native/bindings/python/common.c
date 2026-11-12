@@ -357,10 +357,10 @@ PyObject *edge_moment_list(const BeamModel *m, double q,
     if (!buf) return beam_py_nomem("the moment buffer",
                                    (uint64_t)n * sizeof(double));
     BeamError err;
-    Py_BEGIN_ALLOW_THREADS
+    BEAM_PY_PLANNED_BEGIN
     err = cumulants ? beam_model_surprisal_cumulants(m, q, order, buf)
                     : beam_model_surprisal_moments(m, q, order, buf);
-    Py_END_ALLOW_THREADS
+    BEAM_PY_PLANNED_END
     if (err != BEAM_OK) { PyMem_Free(buf); return set_beam_error(err); }
     PyObject *list = PyList_New(n);
     if (!list) { PyMem_Free(buf); return NULL; }

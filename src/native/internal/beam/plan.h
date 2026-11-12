@@ -42,6 +42,7 @@ typedef struct {
     uint32_t mem_cap;    /**< Budget concurrency; 0 means "not binding".     */
     uint64_t items;      /**< Work items available to split; 0 if unknown.   */
     int      cores;      /**< Cores present, from omp_get_num_procs().       */
+    int      omp_max;    /**< omp_get_max_threads(): respects OMP_NUM_THREADS.*/
     int      available;  /**< Estimated free cores.                          */
 } BeamPlanIn;
 
@@ -53,9 +54,17 @@ typedef struct {
  *  1. An explicit `user_cap` is honoured exactly. The caller has decided, and
  *     a library that quietly ignores a direct instruction cannot be reasoned
  *     about -- it is also what keeps a pinned benchmark reproducible.
- *  2. Otherwise, `OMP_NUM_THREADS` set by the caller stands. It is the same
- *     intent expressed through OpenMP, and BEAM should not be the one library
- *     on the machine that disregards it.
+ *  2. Otherwise, `OMP_NUM_THREADS` set by the caller stands, as `omp_max`. It
+ *     is the same intent expressed through OpenMP, and BEAM should not be the
+ *     one library on the machine that disregards it.
+ *
+ *     `omp_max` and `cores` are separate fields because they are different
+ *     numbers: `omp_get_num_procs()` ignores OMP_NUM_THREADS entirely. An
+ *     earlier version of this policy returned `cores` here, which meant that
+ *     OMP_NUM_THREADS=2 on a sixteen-core box planned SIXTEEN threads --
+ *     overriding the caller's explicit setting with the very core count this
+ *     work exists to stop asking for. The suite runner, which sets that
+ *     variable, is what caught it.
  *  3. Otherwise, the available cores, capped by where this workload stops
  *     scaling. Both limits measured, neither chosen.
  *  4. `mem_cap` then binds and is never widened. Exceeding it is a memory
@@ -92,6 +101,19 @@ int beam_plan_threads(const BeamPlanIn *in);
  * region starts.
  */
 int  beam_plan_enter(const BeamPlanIn *in);
+
+/**
+ * `beam_plan_enter` with the inputs read from the machine: the configured cap,
+ * whether the caller set OMP_NUM_THREADS, the cores present and the free-core
+ * estimate. This is what a public entry point calls, and the once-per-call
+ * read that plan.h's contract requires happens here.
+ *
+ * The memory cap and the item count are deliberately NOT gathered here. They
+ * are known only deeper in, where `beam_budget_concurrency` already applies
+ * them on top of the plan, so passing 0 for both means "not binding yet"
+ * rather than "unlimited".
+ */
+int beam_plan_enter_default(void);
 
 /** Restore the plan that `beam_plan_enter` replaced. */
 void beam_plan_leave(int token);

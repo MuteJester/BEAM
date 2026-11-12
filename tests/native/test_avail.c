@@ -12,10 +12,13 @@
  * the captures from a saturated 48-core cluster node, so a transposed field
  * index shows up as a wrong number rather than as agreement with the bug.
  */
+#define _GNU_SOURCE          /* setenv/unsetenv under -std=c11 */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <stdlib.h>
 
 #include "beam/common.h"
 #include "beam/avail.h"
@@ -219,6 +222,58 @@ static void test_the_estimate_does_not_exceed_the_cores_present(void) {
     PASS();
 }
 
+/* ── Pinning the estimate ────────────────────────────────────── */
+
+static void test_a_pinned_estimate_overrides_the_measurement(void) {
+    /*
+     * A load-aware plan is not reproducible between runs, which the design
+     * accepted as the cost of being right about a busy machine. The pin is how
+     * a benchmark, a CI run or a test gets determinism back: it is the same
+     * role set_threads() plays for the cap.
+     */
+    setenv("BEAM_AVAILABLE_CORES", "4", 1);
+    const int pinned = beam_available_cores();
+    unsetenv("BEAM_AVAILABLE_CORES");
+    ASSERT_MSG(pinned == 4, "a pin of 4 must be reported as 4 free cores");
+    PASS();
+}
+
+static void test_a_nonsense_pin_is_ignored_rather_than_obeyed(void) {
+    /*
+     * A typo in an environment variable must not be able to serialise a
+     * library or to claim a thousand free cores. Each of these falls back to
+     * measuring, which always yields at least one.
+     */
+    const char *bad[] = { "", "abc", "0", "-5", "4x", " " };
+    for (size_t i = 0; i < sizeof bad / sizeof *bad; ++i) {
+        setenv("BEAM_AVAILABLE_CORES", bad[i], 1);
+        const int got = beam_available_cores();
+        const int allowed = beam_allowed_cores();
+        unsetenv("BEAM_AVAILABLE_CORES");
+        if (got < 1 || got > allowed) {
+            char msg[160];
+            snprintf(msg, sizeof msg,
+                     "pin %s gave %d, outside the measured range [1, %d]",
+                     bad[i], got, allowed);
+            beam_test_fail(msg);
+            return;
+        }
+    }
+    PASS();
+}
+
+static void test_a_pin_above_the_cores_present_is_clamped(void) {
+    setenv("BEAM_AVAILABLE_CORES", "100000", 1);
+    const int got = beam_available_cores();
+    const int present = beam_cores_present();
+    unsetenv("BEAM_AVAILABLE_CORES");
+    char msg[160];
+    snprintf(msg, sizeof msg, "a pin of 100000 gave %d, above the %d present",
+             got, present);
+    ASSERT_MSG(got <= present, msg);
+    PASS();
+}
+
 /* ── Main ────────────────────────────────────────────────────── */
 
 int main(int argc, char **argv) {
@@ -237,6 +292,9 @@ int main(int argc, char **argv) {
     RUN_TEST(test_more_competitors_never_frees_more_cores);
     RUN_TEST(test_the_machine_reports_a_usable_estimate);
     RUN_TEST(test_the_estimate_does_not_exceed_the_cores_present);
+    RUN_TEST(test_a_pinned_estimate_overrides_the_measurement);
+    RUN_TEST(test_a_nonsense_pin_is_ignored_rather_than_obeyed);
+    RUN_TEST(test_a_pin_above_the_cores_present_is_clamped);
 
     printf("\n==============================================================\n");
     return beam_test_finish();

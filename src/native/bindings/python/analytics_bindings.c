@@ -43,9 +43,9 @@ PyObject *py_spectrum_pair(PyObject *self, PyObject *args) {
     if (!gw) { PyMem_Free(cw); return NULL; }
     double ds = 0.0;
     BeamError err;
-    Py_BEGIN_ALLOW_THREADS
+    BEAM_PY_PLANNED_BEGIN
     err = beam_model_spectrum_pair(m, length, bins, spacing, cw, gw, &ds);
-    Py_END_ALLOW_THREADS
+    BEAM_PY_PLANNED_END
     if (err != BEAM_OK) { PyMem_Free(cw); PyMem_Free(gw); return set_beam_error(err); }
 
     PyObject *cb = edge_doubles_to_bytes(cw, bins);
@@ -74,10 +74,10 @@ PyObject *py_spectra_by_length(PyObject *self, PyObject *args) {
                                  (uint64_t)n * sizeof(double));
     double ds = 0.0;
     BeamError err;
-    Py_BEGIN_ALLOW_THREADS
+    BEAM_PY_PLANNED_BEGIN
     err = beam_model_spectra_by_length(m, counting ? true : false,
                                            max_length, bins, spacing, w, &ds);
-    Py_END_ALLOW_THREADS
+    BEAM_PY_PLANNED_END
     if (err != BEAM_OK) { PyMem_Free(w); return set_beam_error(err); }
     PyObject *b = edge_doubles_to_bytes(w, n);
     PyMem_Free(w);
@@ -102,9 +102,9 @@ PyObject *py_length_derivatives(PyObject *self, PyObject *args) {
     if (!out) return beam_py_nomem("the derivative table",
                                    (uint64_t)n * sizeof(double));
     BeamError err;
-    Py_BEGIN_ALLOW_THREADS
+    BEAM_PY_PLANNED_BEGIN
     err = beam_model_length_derivatives(m, q, order, out);
-    Py_END_ALLOW_THREADS
+    BEAM_PY_PLANNED_END
     if (err != BEAM_OK) { PyMem_Free(out); return set_beam_error(err); }
     PyObject *b = edge_doubles_to_bytes(out, n);
     PyMem_Free(out);
@@ -118,9 +118,9 @@ PyObject *py_path_count(PyObject *self, PyObject *args) {
     BeamModel *m = edge_from_capsule(cap);
     if (!m) return NULL;
     double v;
-    Py_BEGIN_ALLOW_THREADS
+    BEAM_PY_PLANNED_BEGIN
     v = beam_model_path_count(m, L);
-    Py_END_ALLOW_THREADS
+    BEAM_PY_PLANNED_END
     /*
      * This entry point reports failure as 0.0 with the error set, and 0.0 is
      * also a legitimate answer, so the return value cannot distinguish them.
@@ -138,9 +138,9 @@ PyObject *py_entropy(PyObject *self, PyObject *arg) {
     if (!m) return NULL;
     double h = 0.0;
     BeamError err;
-    Py_BEGIN_ALLOW_THREADS
+    BEAM_PY_PLANNED_BEGIN
     err = beam_model_entropy(m, &h);
-    Py_END_ALLOW_THREADS
+    BEAM_PY_PLANNED_END
     if (err != BEAM_OK) return set_beam_error(err);
     return PyFloat_FromDouble(h);
 }
@@ -152,9 +152,9 @@ PyObject *py_hill_number(PyObject *self, PyObject *args) {
     if (!m) return NULL;
     double d = 0.0;
     BeamError err;
-    Py_BEGIN_ALLOW_THREADS
+    BEAM_PY_PLANNED_BEGIN
     err = beam_model_hill_number(m, alpha, &d);
-    Py_END_ALLOW_THREADS
+    BEAM_PY_PLANNED_END
     if (err != BEAM_OK) return set_beam_error(err);
     return PyFloat_FromDouble(d);
 }
@@ -174,10 +174,10 @@ PyObject *py_spectrum(PyObject *self, PyObject *args) {
     if (!w) return NULL;
     double ds = 0.0;
     BeamError err;
-    Py_BEGIN_ALLOW_THREADS
+    BEAM_PY_PLANNED_BEGIN
     err = beam_model_spectrum(m, counting ? true : false, length, bins,
                                   spacing, w, &ds);
-    Py_END_ALLOW_THREADS
+    BEAM_PY_PLANNED_END
     if (err != BEAM_OK) { PyMem_Free(w); return set_beam_error(err); }
 
     PyObject *list = PyList_New(bins);
@@ -195,9 +195,9 @@ PyObject *py_log_mellin(PyObject *self, PyObject *args) {
     if (!m) return NULL;
     double v = 0.0;
     BeamError err;
-    Py_BEGIN_ALLOW_THREADS
+    BEAM_PY_PLANNED_BEGIN
     err = beam_model_log_mellin(m, q, &v);
-    Py_END_ALLOW_THREADS
+    BEAM_PY_PLANNED_END
     if (err != BEAM_OK) return set_beam_error(err);
     return PyFloat_FromDouble(v);
 }
@@ -226,10 +226,10 @@ PyObject *py_log_mellin_many(PyObject *self, PyObject *args) {
                                           "orders");
     if (!out) { PyBuffer_Release(&qv); return NULL; }
     BeamError err;
-    Py_BEGIN_ALLOW_THREADS
+    BEAM_PY_PLANNED_BEGIN
     err = beam_model_log_mellin_many(m, (const double *)qv.buf, (size_t)nq,
                                      out);
-    Py_END_ALLOW_THREADS
+    BEAM_PY_PLANNED_END
     PyBuffer_Release(&qv);
     if (err != BEAM_OK) { PyMem_Free(out); return set_beam_error(err); }
     PyObject *res = edge_doubles_to_bytes(out, (size_t)nq);
@@ -265,12 +265,12 @@ PyObject *py_log_gamma_ratio(PyObject *self, PyObject *args) {
         return NULL;
     }
     double *ore = out, *oim = out + cells, *il = out + 2u * cells;
-    Py_BEGIN_ALLOW_THREADS
+    BEAM_PY_PLANNED_BEGIN
     beam_log_gamma_ratio((const double *)wv.buf, (size_t)nw,
                          (const double *)rv.buf, (const double *)iv.buf,
                          (size_t)nz, ore, oim);
     for (uint64_t x = 0; x < cells; ++x) { il[2 * x] = ore[x]; il[2 * x + 1] = oim[x]; }
-    Py_END_ALLOW_THREADS
+    BEAM_PY_PLANNED_END
     PyBuffer_Release(&wv); PyBuffer_Release(&rv); PyBuffer_Release(&iv);
     PyObject *res = edge_doubles_to_bytes(il, (size_t)cells * 2u);
     PyMem_Free(out);
@@ -319,7 +319,7 @@ PyObject *py_beta_contour_sums(PyObject *self, PyObject *args) {
     double *out = (double *)beam_py_alloc((uint64_t)nk * 3u * sizeof(double),
                                           "the contour sums", 0u, "parameters");
     if (!out) { release_f64s(b, 11); return NULL; }
-    Py_BEGIN_ALLOW_THREADS
+    BEAM_PY_PLANNED_BEGIN
     beam_beta_contour_sums((size_t)nt, (const double *)b[0].buf, (const double *)b[1].buf,
                            (const double *)b[2].buf, (const double *)b[3].buf,
                            (const double *)b[4].buf, (const double *)b[5].buf,
@@ -327,7 +327,7 @@ PyObject *py_beta_contour_sums(PyObject *self, PyObject *args) {
                            (const double *)b[8].buf, (size_t)nk,
                            (const double *)b[9].buf, (const double *)b[10].buf,
                            out, out + nk, out + 2 * nk);
-    Py_END_ALLOW_THREADS
+    BEAM_PY_PLANNED_END
     release_f64s(b, 11);
     PyObject *res = edge_doubles_to_bytes(out, (size_t)nk * 3u);
     PyMem_Free(out);
@@ -357,12 +357,12 @@ PyObject *py_log_gamma_ratio_shift(PyObject *self, PyObject *args) {
                                           "the log-gamma shifts", 0u, "cells");
     if (!out) { release_f64s(b, 3); return NULL; }
     double *ore = out, *oim = out + cells, *il = out + 2u * cells;
-    Py_BEGIN_ALLOW_THREADS
+    BEAM_PY_PLANNED_BEGIN
     beam_log_gamma_ratio_shift(w, (const double *)b[0].buf, (size_t)nd,
                                (const double *)b[1].buf, (const double *)b[2].buf,
                                (size_t)nz, ore, oim);
     for (uint64_t x = 0; x < cells; ++x) { il[2 * x] = ore[x]; il[2 * x + 1] = oim[x]; }
-    Py_END_ALLOW_THREADS
+    BEAM_PY_PLANNED_END
     release_f64s(b, 3);
     PyObject *res = edge_doubles_to_bytes(il, (size_t)cells * 2u);
     PyMem_Free(out);
@@ -398,7 +398,7 @@ PyObject *py_cohort_private_sums(PyObject *self, PyObject *args) {
     double *out = (double *)beam_py_alloc((uint64_t)(nk ? nk : 1) * 3u * sizeof(double),
                                           "the contour sums", 0u, "parameters");
     if (!out) { release_f64s(b, 11); return NULL; }
-    Py_BEGIN_ALLOW_THREADS
+    BEAM_PY_PLANNED_BEGIN
     beam_cohort_private_sums((size_t)nt, (const double *)b[0].buf, (const double *)b[1].buf,
                              (const double *)b[2].buf, (const double *)b[3].buf,
                              (const double *)b[4].buf, (const double *)b[5].buf,
@@ -406,7 +406,7 @@ PyObject *py_cohort_private_sums(PyObject *self, PyObject *args) {
                              (const double *)b[8].buf, w, (size_t)nk,
                              (const double *)b[9].buf, (const double *)b[10].buf,
                              out, out + nk, out + 2 * nk);
-    Py_END_ALLOW_THREADS
+    BEAM_PY_PLANNED_END
     release_f64s(b, 11);
     PyObject *res = edge_doubles_to_bytes(out, (size_t)nk * 3u);
     PyMem_Free(out);
@@ -442,11 +442,11 @@ PyObject *py_ztp_bin_reduce(PyObject *self, PyObject *args) {
     double *out = (double *)beam_py_alloc(width * sizeof(double),
                                           "the bin moments", 0u, "bins");
     if (!out) { release_f64s(b, 4); return NULL; }
-    Py_BEGIN_ALLOW_THREADS
+    BEAM_PY_PLANNED_BEGIN
     beam_ztp_bin_reduce((const double *)b[0].buf, (size_t)n,
                         (const double *)b[1].buf, (const double *)b[2].buf,
                         (const double *)b[3].buf, (size_t)nb, tau, out);
-    Py_END_ALLOW_THREADS
+    BEAM_PY_PLANNED_END
     release_f64s(b, 4);
     PyObject *res = edge_doubles_to_bytes(out, (size_t)width);
     PyMem_Free(out);
@@ -472,10 +472,10 @@ PyObject *py_ztp_bin_expect(PyObject *self, PyObject *args) {
     double *out = (double *)beam_py_alloc((uint64_t)nb * sizeof(double),
                                           "the expected bin counts", 0u, "bins");
     if (!out) { release_f64s(b, 2); return NULL; }
-    Py_BEGIN_ALLOW_THREADS
+    BEAM_PY_PLANNED_BEGIN
     beam_ztp_bin_expect((const double *)b[0].buf, (size_t)n,
                         (const double *)b[1].buf, (size_t)nb, total, out);
-    Py_END_ALLOW_THREADS
+    BEAM_PY_PLANNED_END
     release_f64s(b, 2);
     PyObject *res = edge_doubles_to_bytes(out, (size_t)nb);
     PyMem_Free(out);
@@ -495,10 +495,10 @@ PyObject *py_ztp_count_spectrum(PyObject *self, PyObject *args) {
     double *out = (double *)beam_py_alloc((uint64_t)(nk ? nk : 1) * 2u * sizeof(double),
                                           "the clone-size spectrum", 0u, "counts");
     if (!out) { release_f64s(b, 2); return NULL; }
-    Py_BEGIN_ALLOW_THREADS
+    BEAM_PY_PLANNED_BEGIN
     beam_ztp_count_spectrum((const double *)b[0].buf, (size_t)n,
                             (const double *)b[1].buf, (size_t)nk, out, out + nk);
-    Py_END_ALLOW_THREADS
+    BEAM_PY_PLANNED_END
     release_f64s(b, 2);
     PyObject *res = edge_doubles_to_bytes(out, (size_t)nk * 2u);
     PyMem_Free(out);
@@ -524,11 +524,11 @@ PyObject *py_beta_contour_tail(PyObject *self, PyObject *args) {
     double *out = (double *)beam_py_alloc((uint64_t)(nk ? nk : 1) * sizeof(double),
                                           "the contour tails", 0u, "parameters");
     if (!out) { release_f64s(b, 5); return NULL; }
-    Py_BEGIN_ALLOW_THREADS
+    BEAM_PY_PLANNED_BEGIN
     beam_beta_contour_tail((size_t)nt, (const double *)b[0].buf, (const double *)b[1].buf,
                            (const double *)b[2].buf, (const double *)b[3].buf,
                            (size_t)nk, (const double *)b[4].buf, out);
-    Py_END_ALLOW_THREADS
+    BEAM_PY_PLANNED_END
     release_f64s(b, 5);
     PyObject *res = edge_doubles_to_bytes(out, (size_t)nk);
     PyMem_Free(out);
@@ -570,11 +570,11 @@ PyObject *py_log_mellin_complex(PyObject *self, PyObject *args) {
     if (!out) { PyBuffer_Release(&rv); PyBuffer_Release(&iv); return NULL; }
     double *ore = out, *oim = out + nq;
     BeamError err;
-    Py_BEGIN_ALLOW_THREADS
+    BEAM_PY_PLANNED_BEGIN
     err = beam_model_log_mellin_complex(m, (const double *)rv.buf,
                                         (const double *)iv.buf, (size_t)nq,
                                         ore, oim);
-    Py_END_ALLOW_THREADS
+    BEAM_PY_PLANNED_END
     PyBuffer_Release(&rv); PyBuffer_Release(&iv);
     if (err != BEAM_OK) { PyMem_Free(out); return set_beam_error(err); }
     /* Interleave in a second buffer so the result is complex128 as-is. */
@@ -614,9 +614,9 @@ PyObject *py_log_mellin_line(PyObject *self, PyObject *args) {
     if (!out) return NULL;
     double *ore = out, *oim = out + n, *il = out + 2 * n;
     BeamError err;
-    Py_BEGIN_ALLOW_THREADS
+    BEAM_PY_PLANNED_BEGIN
     err = beam_model_log_mellin_line(m, re, im0, dim, (size_t)n, ore, oim);
-    Py_END_ALLOW_THREADS
+    BEAM_PY_PLANNED_END
     if (err != BEAM_OK) { PyMem_Free(out); return set_beam_error(err); }
     for (Py_ssize_t j = 0; j < n; ++j) { il[2 * j] = ore[j]; il[2 * j + 1] = oim[j]; }
     PyObject *res = edge_doubles_to_bytes(il, (size_t)n * 2u);
@@ -645,9 +645,9 @@ PyObject *py_surprisal_range(PyObject *self, PyObject *arg) {
     if (!m) return NULL;
     double lo = 0.0, hi = 0.0;
     BeamError err;
-    Py_BEGIN_ALLOW_THREADS
+    BEAM_PY_PLANNED_BEGIN
     err = beam_model_surprisal_range(m, &lo, &hi);
-    Py_END_ALLOW_THREADS
+    BEAM_PY_PLANNED_END
     if (err != BEAM_OK) return set_beam_error(err);
     return Py_BuildValue("(dd)", lo, hi);
 }
@@ -666,9 +666,9 @@ PyObject *py_length_marginals(PyObject *self, PyObject *arg) {
                              4ull * (uint64_t)n * sizeof(double));
     }
     BeamError err;
-    Py_BEGIN_ALLOW_THREADS
+    BEAM_PY_PLANNED_BEGIN
     err = beam_model_length_marginals(m, c, g, s, v);
-    Py_END_ALLOW_THREADS
+    BEAM_PY_PLANNED_END
     if (err != BEAM_OK) {
         PyMem_Free(c); PyMem_Free(g); PyMem_Free(s); PyMem_Free(v);
         return set_beam_error(err);
@@ -698,9 +698,9 @@ PyObject *py_surprisal_tilt(PyObject *self, PyObject *args) {
     if (!m) return NULL;
     double lm = 0.0, mean = 0.0, var = 0.0;
     BeamError err;
-    Py_BEGIN_ALLOW_THREADS
+    BEAM_PY_PLANNED_BEGIN
     err = beam_model_surprisal_tilt(m, q, &lm, &mean, &var);
-    Py_END_ALLOW_THREADS
+    BEAM_PY_PLANNED_END
     if (err != BEAM_OK) return set_beam_error(err);
     return Py_BuildValue("(ddd)", lm, mean, var);
 }
@@ -716,9 +716,9 @@ PyObject *py_surprisal_by_depth(PyObject *self, PyObject *args) {
                                    (uint64_t)n * sizeof(double));
     double konst = 0.0;
     BeamError err;
-    Py_BEGIN_ALLOW_THREADS
+    BEAM_PY_PLANNED_BEGIN
     err = beam_model_surprisal_by_depth(m, q, buf, &konst);
-    Py_END_ALLOW_THREADS
+    BEAM_PY_PLANNED_END
     if (err != BEAM_OK) { PyMem_Free(buf); return set_beam_error(err); }
     PyObject *list = PyList_New(n);
     if (!list) { PyMem_Free(buf); return NULL; }
@@ -755,9 +755,9 @@ PyObject *py_topology(PyObject *self, PyObject *args) {
                                       (uint64_t)(length + 1u) * sizeof(uint32_t));
     double nodes = 0.0, edges = 0.0;
     BeamError err;
-    Py_BEGIN_ALLOW_THREADS
+    BEAM_PY_PLANNED_BEGIN
     err = beam_model_topology(m, length, &nodes, &edges, layers);
-    Py_END_ALLOW_THREADS
+    BEAM_PY_PLANNED_END
     if (err != BEAM_OK) { PyMem_Free(layers); return set_beam_error(err); }
     PyObject *list = PyList_New(length + 1u);
     if (!list) { PyMem_Free(layers); return NULL; }
@@ -825,9 +825,9 @@ PyObject *py_positional_marginals(PyObject *self, PyObject *args) {
                                    (uint64_t)n * sizeof(double));
     double logz = 0.0;
     BeamError err;
-    Py_BEGIN_ALLOW_THREADS
+    BEAM_PY_PLANNED_BEGIN
     err = beam_model_positional_marginals(m, length, clamp, out, &logz);
-    Py_END_ALLOW_THREADS
+    BEAM_PY_PLANNED_END
     if (err != BEAM_OK) {
         PyMem_Free(out);
         /*
@@ -895,9 +895,9 @@ PyObject *py_transition_rows(PyObject *self, PyObject *args) {
                                 "transition rows");
     if (!out) return NULL;
     BeamError err;
-    Py_BEGIN_ALLOW_THREADS
+    BEAM_PY_PLANNED_BEGIN
     err = beam_model_transition_rows(m, length, position, log_space != 0, out);
-    Py_END_ALLOW_THREADS
+    BEAM_PY_PLANNED_END
     if (err != BEAM_OK) { PyMem_Free(out); return set_beam_error(err); }
     PyObject *b = edge_doubles_to_bytes(out, n);
     PyMem_Free(out);
@@ -989,12 +989,12 @@ PyObject *py_positional_banded(PyObject *self, PyObject *args) {
 
     double used = 0.0;
     BeamError err;
-    Py_BEGIN_ALLOW_THREADS
+    BEAM_PY_PLANNED_BEGIN
     err = beam_model_positional_banded(m, length, (bool)counting, bins,
                                        spacing, (const double *)ebuf,
                                        (uint32_t)n_edges, marg, bmas, pmas,
                                        &used);
-    Py_END_ALLOW_THREADS
+    BEAM_PY_PLANNED_END
     if (err != BEAM_OK) {
         PyMem_Free(marg); PyMem_Free(bmas); PyMem_Free(pmas);
         return set_beam_error(err);
@@ -1025,9 +1025,9 @@ PyObject *py_expected_counts(PyObject *self, PyObject *args) {
 
     BeamExpectedCounts ec;
     BeamError err;
-    Py_BEGIN_ALLOW_THREADS
+    BEAM_PY_PLANNED_BEGIN
     err = beam_model_expected_counts(m, length, &ec);
-    Py_END_ALLOW_THREADS
+    BEAM_PY_PLANNED_END
     if (err != BEAM_OK) return set_beam_error(err);
 
     PyObject *list = PyList_New(2);

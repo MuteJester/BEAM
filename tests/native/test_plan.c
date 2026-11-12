@@ -17,15 +17,19 @@
  * the floor of one is what makes a saturated machine correct. The numbers are
  * in .private/parallelism/phase0/induced_load.txt.
  */
+#define _GNU_SOURCE          /* setenv/unsetenv under -std=c11 */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <stdlib.h>
 
 #include "beam/common.h"
 #include "beam/model.h"        /* beam_model_set_threads, _effective_threads */
 #include "beam/model_state.h"  /* beam_threads */
 #include "beam/budget.h"       /* beam_budget_concurrency */
+#include "beam/avail.h"      /* beam_cores_present, for the env tests */
 #include "beam/plan.h"
 
 #ifdef _OPENMP
@@ -49,6 +53,7 @@ static BeamPlanIn base(void) {
     in.mem_cap = 0;         /* unmeasured, i.e. not binding */
     in.items = 0;           /* unknown, i.e. not binding */
     in.cores = 16;
+    in.omp_max = 16;        /* no OMP_NUM_THREADS: the runtime reports cores */
     in.available = 16;
     return in;
 }
@@ -189,9 +194,13 @@ static void test_an_omp_env_setting_is_not_overridden(void) {
     BeamPlanIn in = base();
     in.omp_env = 1;
     in.cores = 16;
+    in.omp_max = 2;         /* what OMP_NUM_THREADS=2 makes the runtime report */
     in.available = 2;
+    ASSERT_MSG(beam_plan_threads(&in) == 2,
+               "with OMP_NUM_THREADS=2 the plan must be 2, not the core count");
+    in.omp_max = 0;         /* a runtime that reports nothing useful */
     ASSERT_MSG(beam_plan_threads(&in) == 16,
-               "with OMP_NUM_THREADS set the runtime's count must stand");
+               "with no runtime answer, fall back to the cores present");
     PASS();
 }
 
@@ -499,6 +508,129 @@ static void test_a_plan_does_not_reach_another_thread(void) {
 #endif
 }
 
+/*
+ * The suite runner sets OMP_NUM_THREADS, and these tests exercise the
+ * availability clause, which only applies when the caller set no such thing.
+ * Note that unsetting it changes whether the POLICY stands aside; it cannot
+ * change omp_get_max_threads(), which libgomp fixed at init. That asymmetry is
+ * why a gathering test has to manage the variable explicitly.
+ */
+static char *saved_omp = NULL;
+
+static void omp_env_aside(void) {
+    const char *v = getenv("OMP_NUM_THREADS");
+    saved_omp = v ? strdup(v) : NULL;
+    unsetenv("OMP_NUM_THREADS");
+}
+
+static void omp_env_restore(void) {
+    if (saved_omp) { setenv("OMP_NUM_THREADS", saved_omp, 1); free(saved_omp); saved_omp = NULL; }
+    else unsetenv("OMP_NUM_THREADS");
+}
+
+/* ── Gathering the inputs for one real call ──────────────────── */
+
+/*
+ * beam_plan_enter_default() is what an entry point calls: it reads the machine
+ * once, asks the policy, and makes the answer current. These tests pin the
+ * availability it reads, so they assert the gathering and not the weather.
+ */
+
+static void test_the_default_scope_plans_from_the_pinned_availability(void) {
+    beam_model_set_threads(0);
+    omp_env_aside();
+    setenv("BEAM_AVAILABLE_CORES", "4", 1);
+    const int token = beam_plan_enter_default();
+    const int got = beam_threads();
+    beam_plan_leave(token);
+    unsetenv("BEAM_AVAILABLE_CORES");
+    omp_env_restore();
+    char msg[128];
+    snprintf(msg, sizeof msg, "four free cores should plan 4, planned %d", got);
+    ASSERT_MSG(got == 4, msg);
+    PASS();
+}
+
+static void test_the_default_scope_stops_at_the_ceiling(void) {
+    beam_model_set_threads(0);
+    omp_env_aside();
+    setenv("BEAM_AVAILABLE_CORES", "64", 1);
+    const int token = beam_plan_enter_default();
+    const int got = beam_threads();
+    beam_plan_leave(token);
+    unsetenv("BEAM_AVAILABLE_CORES");
+    omp_env_restore();
+    char msg[128];
+    snprintf(msg, sizeof msg, "an idle machine should plan 8, planned %d", got);
+    ASSERT_MSG(got == 8, msg);
+    PASS();
+}
+
+static void test_the_default_scope_honours_an_explicit_cap(void) {
+    /*
+     * The contract users are promised: set_threads(n) means n, whatever the
+     * machine looks like. It is also what keeps the paper's pinned runs
+     * reproducible, so it is tested through the real gathering path and not
+     * only against the policy in isolation.
+     */
+    beam_model_set_threads(3);
+    setenv("BEAM_AVAILABLE_CORES", "64", 1);
+    const int token = beam_plan_enter_default();
+    const int got = beam_threads();
+    beam_plan_leave(token);
+    unsetenv("BEAM_AVAILABLE_CORES");
+    beam_model_set_threads(0);
+    char msg[128];
+    snprintf(msg, sizeof msg, "an explicit cap of 3 must plan 3, planned %d", got);
+    ASSERT_MSG(got == 3, msg);
+    PASS();
+}
+
+static void test_the_default_scope_stands_aside_for_omp_num_threads(void) {
+    /*
+     * Asserted in whatever environment this binary was STARTED in, because
+     * that is the only way to assert it: libgomp fixes its answer at init, so
+     * setenv here would make the policy stand aside while the runtime still
+     * reported the core count -- which is exactly the bug this test found.
+     */
+#ifdef _OPENMP
+    if (!getenv("OMP_NUM_THREADS"))
+        BEAM_SKIP("needs OMP_NUM_THREADS set at process start");
+    beam_model_set_threads(0);
+    setenv("BEAM_AVAILABLE_CORES", "64", 1);
+    const int token = beam_plan_enter_default();
+    const int got = beam_threads();
+    beam_plan_leave(token);
+    unsetenv("BEAM_AVAILABLE_CORES");
+    const int want = omp_get_max_threads();
+    char msg[160];
+    snprintf(msg, sizeof msg,
+             "OMP_NUM_THREADS implies %d threads; the plan must be %d, got %d",
+             want, want, got);
+    ASSERT_MSG(got == want, msg);
+    PASS();
+#else
+    BEAM_SKIP("no OpenMP in this build");
+#endif
+}
+
+static void test_leaving_a_default_scope_restores_the_previous_count(void) {
+    beam_model_set_threads(0);
+    omp_env_aside();
+    const int before = beam_threads();
+    setenv("BEAM_AVAILABLE_CORES", "2", 1);
+    const int token = beam_plan_enter_default();
+    const int inside = beam_threads();
+    beam_plan_leave(token);
+    const int after = beam_threads();
+    unsetenv("BEAM_AVAILABLE_CORES");
+    omp_env_restore();
+    ASSERT_MSG(inside == 2, "two free cores plans two threads");
+    ASSERT_MSG(after == before,
+               "leaving the scope must restore what was there before it");
+    PASS();
+}
+
 /* ── Main ────────────────────────────────────────────────────── */
 
 int main(int argc, char **argv) {
@@ -528,6 +660,12 @@ int main(int argc, char **argv) {
     RUN_TEST(test_effective_threads_reports_the_cap_not_the_plan);
     RUN_TEST(test_budget_concurrency_follows_the_active_plan);
     RUN_TEST(test_a_plan_does_not_reach_another_thread);
+
+    RUN_TEST(test_the_default_scope_plans_from_the_pinned_availability);
+    RUN_TEST(test_the_default_scope_stops_at_the_ceiling);
+    RUN_TEST(test_the_default_scope_honours_an_explicit_cap);
+    RUN_TEST(test_the_default_scope_stands_aside_for_omp_num_threads);
+    RUN_TEST(test_leaving_a_default_scope_restores_the_previous_count);
 
     printf("\n==============================================================\n");
     return beam_test_finish();

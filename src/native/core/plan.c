@@ -52,10 +52,13 @@ int beam_plan_threads(const BeamPlanIn *in) {
         /* Clause 1: the caller has decided. Availability does not revise it. */
         n = in->user_cap;
     } else if (in->omp_env) {
-        /* Clause 2: OMP_NUM_THREADS is the same intent through OpenMP. The
-         * runtime has already folded it into the core count the caller sees,
-         * so standing aside means using that. */
-        n = in->cores > 0 ? in->cores : 1;
+        /* Clause 2: OMP_NUM_THREADS is the same intent through OpenMP, so the
+         * runtime's own answer stands.
+         *
+         * `omp_max`, NOT `cores`: omp_get_num_procs() ignores OMP_NUM_THREADS,
+         * so reading `cores` here would answer OMP_NUM_THREADS=2 with sixteen
+         * threads -- overriding the caller with the core count. */
+        n = in->omp_max > 0 ? in->omp_max : (in->cores > 0 ? in->cores : 1);
     } else {
         /* Clause 3: the free cores, capped by where scaling flattens.
          *

@@ -2947,3 +2947,55 @@ report OK. Still nothing calls `beam_plan_enter`, so no plan is ever in force
 during the gate and the estimate is never consulted.
 
 The `Python public API` FAIL remains the known 3.14 rendering difference.
+
+# Why the C test inventory was re-recorded for the plan wiring
+
+Re-recorded 2026-11-12, for the availability pin and the per-call gathering.
+The previous file is kept beside it as `c_cases.prewiring.txt`.
+
+    c_cases   422 -> 430   (+8, nothing removed)
+
+Three in `test_avail.c`, for pinning the estimate through
+`BEAM_AVAILABLE_CORES`:
+
+  - test_a_pinned_estimate_overrides_the_measurement
+  - test_a_nonsense_pin_is_ignored_rather_than_obeyed
+  - test_a_pin_above_the_cores_present_is_clamped
+
+Five in `test_plan.c`, for `beam_plan_enter_default` -- the once-per-call read:
+
+  - test_the_default_scope_plans_from_the_pinned_availability
+  - test_the_default_scope_stops_at_the_ceiling
+  - test_the_default_scope_honours_an_explicit_cap
+  - test_the_default_scope_stands_aside_for_omp_num_threads
+  - test_leaving_a_default_scope_restores_the_previous_count
+
+Compared as multisets: old 422, new 430, added 8, removed 0.
+
+**This is the commit where behaviour changes**, so the numbers matter more here
+than in the three before it. Twenty-nine analytics bindings now resolve a
+thread count per call, from the machine, and every recorded number is
+nonetheless byte-identical on a freshly built extension: `numeric` (78 keys),
+`math values` (58, bit-identical), `saved-model bytes`, `thread independence`
+and `exact against enumeration` (416 quantities). That is not luck. It is the
+thread-independence guarantee -- every reduction either order-independent or
+summed in a fixed index order -- doing the job it was built for, and this is
+the first change that actually leaned on it.
+
+The full Python suite was also run, not only the gate: **1230 passed, 2
+skipped**. The gate pins recorded quantities; the Python suite is what covers
+the analytics surface broadly, and a wiring change to 29 call sites deserves
+both.
+
+A new gate check arrives with this commit, `thread plan wiring`. It reads
+source rather than timing anything: no bare `Py_BEGIN_ALLOW_THREADS` may
+remain in the planned binding files, and no `return` or `goto` may appear
+inside a planned region, because the macro's exception-safety rests on there
+being no such path. A static answer cannot be passed by a lucky machine and it
+fails on the next region added without the macro.
+
+The `Python public API` FAIL remains the known 3.14 rendering difference. Note
+for whoever records it on 3.11: nothing in this commit adds Python API. The
+`parallel_plan` probe, which does, is deliberately held back -- it would also
+need `cbeam_methods.txt` edited by hand, since that baseline has no `--record`
+path at all.

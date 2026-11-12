@@ -146,7 +146,34 @@ int beam_allowed_cores(void) {
     return allowed;
 }
 
+/*
+ * An explicit pin, for reproducibility.
+ *
+ * A load-aware plan is not repeatable between runs, which is the accepted cost
+ * of being right about a busy machine. This is how determinism is bought back
+ * where it matters: a benchmark A/B leg, a CI run, a test. It is the same role
+ * `beam_model_set_threads` plays for the cap, and it is read from the
+ * environment so that it needs no code change to use.
+ *
+ * Nonsense is IGNORED rather than obeyed. A typo must not be able to serialise
+ * the library or to claim a thousand free cores, so anything that is not a
+ * positive integer falls through to measuring.
+ */
+static int available_pin(void) {
+    const char *v = getenv("BEAM_AVAILABLE_CORES");
+    if (!v || !*v) return -1;
+    char *end = NULL;
+    const long n = strtol(v, &end, 10);
+    if (!end || end == v || *end != '\0') return -1;   /* trailing junk */
+    if (n < 1 || n > (1L << 20)) return -1;
+    return (int)n;
+}
+
 int beam_available_cores(void) {
+    const int allowed = beam_allowed_cores();
+    const int pin = available_pin();
+    if (pin > 0) return pin < allowed ? pin : allowed;
+
     int nr = -1;
 #if defined(__linux__)
     char buf[128];
@@ -154,5 +181,5 @@ int beam_available_cores(void) {
         nr = beam_parse_nr_running(buf);
     }
 #endif
-    return beam_available_from(beam_allowed_cores(), nr);
+    return beam_available_from(allowed, nr);
 }

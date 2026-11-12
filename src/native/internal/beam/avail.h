@@ -89,7 +89,15 @@ int beam_allowed_cores(void);
  */
 int beam_available_from(int allowed, int nr_running);
 
-/** The estimate the policy is given: free cores right now, at least one. */
+/**
+ * The estimate the policy is given: free cores right now, at least one.
+ *
+ * `BEAM_AVAILABLE_CORES` pins it, for a benchmark leg, a CI run or a test that
+ * needs a repeatable plan -- the same role `beam_model_set_threads` plays for
+ * the cap. A pin that is not a positive integer is ignored rather than obeyed,
+ * and a pin above the cores present is clamped: a typo must not be able to
+ * serialise the library or to claim a thousand free cores.
+ */
 int beam_available_cores(void);
 
 #endif /* BEAM_INTERNAL_AVAIL_H */
