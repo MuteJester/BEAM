@@ -29,11 +29,11 @@ from . import alphabets
 from .validation import _check_int, _is_scalar_arg
 from .config import _config_args, _config_args_from_dict
 from ..io.readers import _column, _iter_delimited, _iter_parquet, _iter_parquet_column
-from ..math.saddlepoint import _normal_pdf, _normal_cdf
 from ..math import diversity as _diversity
 from ..math import mellin as _mellin
 from ..math import saddlepoint as _saddlepoint
 from ..math import spectrum as _spectrum
+from ..math import surprisal as _surprisal
 from ..runtime import effective_threads, memory_budget, set_threads, threads
 
 from .. import _cbeam as _c
@@ -1676,31 +1676,16 @@ class BeamModel:
         Returns ``order + 1`` values, so ``[0]`` is 1 and ``[1]`` is the mean.
         At ``q=1`` the mean is the entropy.
         """
-        order = _check_int("order", order, 0, BEAM_MAX_MOMENT)
-        return np.asarray(
-            _c.surprisal_moments(self._g, float(q), order),
-            dtype=np.float64)
+        return _surprisal.surprisal_moments(self, q=q, order=order)
 
     def surprisal_cumulants(self, *, q: float = 1.0, order: int = 4) -> np.ndarray:
         """Cumulants 1..``order`` of the surprisal: mean, variance, and on up."""
-        order = _check_int("order", order, 1, BEAM_MAX_MOMENT)
-        return np.asarray(
-            _c.surprisal_cumulants(self._g, float(q), order),
-            dtype=np.float64)
+        return _surprisal.surprisal_cumulants(self, q=q, order=order)
 
     def surprisal_stats(self, *, q: float = 1.0) -> dict[str, float]:
         """Mean, variance, standard deviation, skewness and excess kurtosis
         of the surprisal, exactly."""
-        k = self.surprisal_cumulants(q=q, order=4)
-        var = float(k[1])
-        sd = math.sqrt(var) if var > 0 else 0.0
-        return {
-            "mean": float(k[0]),
-            "variance": var,
-            "std": sd,
-            "skewness": float(k[2]) / sd ** 3 if sd > 0 else 0.0,
-            "excess_kurtosis": float(k[3]) / var ** 2 if var > 0 else 0.0,
-        }
+        return _surprisal.surprisal_stats(self, q=q)
 
     def cgf(self, t: float) -> float:
         """Cumulant generating function of ``ln P``, ``ln E[exp(t ln P)]``.
@@ -1717,7 +1702,7 @@ class BeamModel:
 
         Exact, by min-plus and max-plus sweeps. Not an estimate from samples.
         """
-        return tuple(_c.surprisal_range(self._g))
+        return _surprisal.surprisal_range(self)
 
     def dynamic_range(self, *, base: float = 10.0) -> float:
         """Orders of magnitude of probability the grammar spans."""
@@ -1826,15 +1811,7 @@ class BeamModel:
         The cheap, interpretable counterpart to :meth:`saddlepoint`: one pass
         per length rather than a Newton solve per evaluation point.
         """
-        lm = self.length_marginals()
-        keep = lm["generated"] > 0
-        return {
-            "length": lm["length"][keep],
-            "weight": lm["generated"][keep],
-            "mean": lm["mean_surprisal"][keep],
-            "variance": lm["variance"][keep],
-            "std": np.sqrt(lm["variance"][keep]),
-        }
+        return _surprisal.surprisal_distribution(self)
 
     def surprisal_pdf(self, x) -> np.ndarray:
         """Density of the surprisal from the length mixture.
@@ -1846,30 +1823,14 @@ class BeamModel:
         the convention :meth:`saddlepoint` and
         :meth:`Calibration.pvalue` follow too.
         """
-        d = self.surprisal_distribution()
-        xs = np.atleast_1d(np.asarray(x, dtype=np.float64))
-        out = np.zeros_like(xs)
-        for w, mu, sd in zip(d["weight"], d["mean"], d["std"]):
-            if sd <= 0:
-                continue
-            z = (xs - mu) / sd
-            out += w * np.exp(-0.5 * z * z) / (sd * math.sqrt(2.0 * math.pi))
-        return float(out[0]) if _is_scalar_arg(x) else out
+        return _surprisal.surprisal_pdf(self, x)
 
     def surprisal_cdf(self, x) -> np.ndarray:
         """Distribution function of the surprisal from the length mixture.
 
         Returns a ``float`` for a scalar ``x`` and an array otherwise.
         """
-        d = self.surprisal_distribution()
-        xs = np.atleast_1d(np.asarray(x, dtype=np.float64))
-        out = np.zeros_like(xs)
-        for w, mu, sd in zip(d["weight"], d["mean"], d["std"]):
-            if sd <= 0:
-                out += w * (xs >= mu)
-                continue
-            out += w * np.array([_normal_cdf((v - mu) / sd) for v in xs])
-        return float(out[0]) if _is_scalar_arg(x) else out
+        return _surprisal.surprisal_cdf(self, x)
 
     # ── Where the surprisal sits ────────────────────────────────
 
@@ -1887,14 +1848,7 @@ class BeamModel:
         instead of smeared across depths. ``total`` is their sum and equals the
         mean surprisal exactly, which is the identity worth checking.
         """
-        depths, konst = _c.surprisal_by_depth(self._g, float(q))
-        depths = np.asarray(depths, dtype=np.float64)
-        return {
-            "depth": np.arange(len(depths)),
-            "by_depth": depths,
-            "length_constant": float(konst),
-            "total": float(depths.sum() + konst),
-        }
+        return _surprisal.surprisal_by_depth(self, q=q)
 
     # ── Topology ────────────────────────────────────────────────
 
