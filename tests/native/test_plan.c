@@ -12,10 +12,13 @@
  * same expression the policy uses. Reusing the expression would make the
  * suite agree with a transposed clamp instead of catching it.
  *
- * The `available / 2` rule is measured, not chosen: on sixteen cores the
- * optimum/free ratio came out 0.50 at three of four induced-load points, and
- * the floor of one is what makes a saturated machine correct. The numbers are
- * in .private/parallelism/phase0/induced_load.txt.
+ * The `min(available, 8)` rule is measured, not chosen, and its two terms were
+ * measured separately. Availability bounds it from below -- `min(cores, 8)`
+ * alone ran 186x worse than serial on a saturated node -- and BEAM's own
+ * scaling bounds it from above, eight capturing 93-100% of each call's peak.
+ * An earlier draft of this file described an `available / 2` rule, which the
+ * cross-core-count sweep refuted at 301x and 2275x worse than serial. The
+ * numbers are in .private/parallelism/phase0/.
  */
 #define _GNU_SOURCE          /* setenv/unsetenv under -std=c11 */
 
@@ -552,6 +555,13 @@ static void test_the_default_scope_plans_from_the_pinned_availability(void) {
 }
 
 static void test_the_default_scope_stops_at_the_ceiling(void) {
+    /*
+     * Against the two published limits rather than against the literal 8,
+     * which is only the answer on a machine with at least eight cores. Written
+     * as `got == 8` this passed here and failed CI on a four-core runner --
+     * the test restating the rule instead of referencing it, which is the one
+     * thing the rest of this file is careful not to do.
+     */
     beam_model_set_threads(0);
     omp_env_aside();
     setenv("BEAM_AVAILABLE_CORES", "64", 1);
@@ -560,9 +570,14 @@ static void test_the_default_scope_stops_at_the_ceiling(void) {
     beam_plan_leave(token);
     unsetenv("BEAM_AVAILABLE_CORES");
     omp_env_restore();
-    char msg[128];
-    snprintf(msg, sizeof msg, "an idle machine should plan 8, planned %d", got);
-    ASSERT_MSG(got == 8, msg);
+    const int cores = beam_cores_present();
+    const int ceiling = beam_plan_max_width();
+    const int want = cores > 0 && cores < ceiling ? cores : ceiling;
+    char msg[160];
+    snprintf(msg, sizeof msg,
+             "an idle machine of %d cores should plan %d (the ceiling is %d), "
+             "planned %d", cores, want, ceiling, got);
+    ASSERT_MSG(got == want, msg);
     PASS();
 }
 
