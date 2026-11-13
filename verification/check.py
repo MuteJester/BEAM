@@ -167,6 +167,31 @@ else:
 # The recorded file is the signature of every public class member. Comparing
 # it catches a moved default, a renamed keyword, or a method that quietly
 # stopped being public -- none of which the test suite necessarily fails on.
+#
+# What it records is what BEAM's own source declares. `dir()` reports
+# everything CPython supplies as well -- 821 members inherited from `object`
+# and 151 more from `BaseException` -- and those render differently from one
+# interpreter to the next: 3.11 cannot introspect `__init_subclass__` and
+# writes `(?)` where 3.14 writes `(type, /)`. Recording them pinned the
+# baseline to whichever interpreter wrote it and buried BEAM's 379 real lines
+# under 997 that said nothing about BEAM. Run on any other Python the check
+# reported 372 differences, none of them a change to this library, which is
+# how a gate teaches the person reading it to skip the gate.
+def _beam_declares(cls, member):
+    """True when BEAM's own code, rather than CPython, defines `member`."""
+    owner = next((k for k in cls.__mro__ if member in vars(k)), None)
+    return owner is not None and owner.__module__.split(".")[0] == "BEAM"
+
+
+# Members CPython synthesises INTO a BEAM class, so that `_beam_declares`
+# reads them as ours, but whose existence tracks the interpreter and not this
+# source: `@dataclass` grows a `__replace__` on 3.13 and later, and the same
+# dataclass on 3.11 has none. A future version that synthesises another will
+# show up as the same line appearing on every dataclass at once; add it here
+# with the version that introduced it, rather than re-pinning the baseline.
+_SYNTHESISED = frozenset({"__replace__"})          # 3.13+
+
+
 def _api_snapshot():
     out = [f"__all__: {sorted(BEAM.__all__)}", f"__version__: {BEAM.__version__}"]
     for name in sorted(BEAM.__all__):
@@ -175,6 +200,8 @@ def _api_snapshot():
             out.append(f"\nclass {name}:")
             for m in sorted(dir(o)):
                 if m.startswith("_") and not m.startswith("__"):
+                    continue
+                if m in _SYNTHESISED or not _beam_declares(o, m):
                     continue
                 a = inspect.getattr_static(o, m, None)
                 if isinstance(a, property):
