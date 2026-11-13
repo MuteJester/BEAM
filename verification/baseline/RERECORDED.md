@@ -3146,3 +3146,122 @@ The whole gate was also run under 3.11, which nothing had done before. Every
 other check passes there unchanged, `math values` (58 quantities, bit-identical)
 and `exact against enumeration` (416 quantities) included. `python_api` was the
 only version-fragile baseline in this directory.
+## 2026-11-13: `c_symbols` 232 -> 261, closing the drift the last two sections declined
+
+Two baselines moved. Neither absorbs a change to any computed quantity.
+
+### `c_cases` 437 -> 439 (+2, nothing removed)
+
+Previous file kept as `c_cases.prerealplan.txt`. Both additions are in the
+existing `tests/native/test_mellin_many.c`, and nothing was renamed:
+
+  - test_real_plans_cover_the_orders_within_the_budget
+  - test_no_threads_plans_as_one_thread
+
+`beam_real_plan` had no test. Its complex sibling `beam_line_plan` has had one
+since the Mellin work -- the sweep in `test_mellin_complex.c` -- and the real
+planner, which is the path every Hill number and every spectrum takes, was
+covered only through the values the plans it returns happen to produce. That
+is not coverage of a planner: a plan wrong in the same direction at every
+length still yields self-consistent numbers, because each sweep is checked
+against itself. What a bad plan spends is the budget, and the overrun lands on
+a machine with less memory than the one that produced the numbers.
+
+The first test sweeps 11 order counts x 4 thread counts x 5 budgets and holds
+each plan to: no orders means no sweep; a budget under one vector refuses;
+the stretches cover the line; the last stretch is not empty; a split line is
+cut on whole vectors; and the padded width fits the budget it was given.
+
+The second exists because the first could not see the planner's thread
+normalisation. Written against a round budget it passed with
+`if (nth == 0u) nth = 1u;` deleted, because at any ordinary budget one
+thread's scratch is too small a share of the total to move the answer. It now
+derives its budget instead: one byte below what the whole line costs with a
+single thread, which is still above what it costs with none. A planner that
+took `0 threads` at its word prices the line with no scratch at all, reads
+that as "it fits", and returns the line in one stretch.
+
+Each assertion was made to fail before being kept. Three defects were
+introduced into `beam_real_plan` one at a time and the suite rebuilt against
+each: dropping the whole-vector rounding of the stretch width (caught, width
+5 at N=9), ignoring the budget (caught, width 9 where the budget allows 8),
+and deleting the thread normalisation (caught by the second test only --
+`0 threads planned 12000 x 1 and 1 thread planned 6000 x 2`). `mellin.c` was
+restored afterwards and the extension rebuilt: the `.so` is bit-identical to
+the one built before the mutations, sha256 `227a5fb3931208cfc4b6d9f91d43b2dd06dca6e915b171ecfa54f0c470d4f6b0`.
+
+### `c_symbols` 232 -> 261 (+30, -1)
+
+Edited BY HAND -- `--record` has no target for this file -- and regenerated
+from `nm -g --defined-only build/libbeam.a` so it is what the gate computes,
+not a second derivation of it. Previous file kept as `c_symbols.predrift.txt`.
+
+This is the drift the 2026-11-12 section named and left in place ("pre-existing
+drift from earlier merged work"). It is closed here rather than carried,
+because a note that never goes away is a note nobody reads -- the same failure
+the `python_api` section above describes, in the check immediately below it.
+
+**None of the 30 is a lost `static`.** Every one is declared in a header under
+`src/native/internal/beam/`, and every one is reached from outside the
+translation unit that defines it -- by another `.c`, by the Python bindings,
+or by a C unit test that links `libbeam.a`. The 30, by the merge that brought
+each to `main`:
+
+`feb4003` 2026-11-13, the parallel policy -- 14. `avail.c` and the plan, with
+`beam_plan_*` and `beam_cores_present` read by `core/threads.c`, `core/plan.c`
+and `bindings/python/model_bindings.c`, and the rest exercised by
+`tests/native/test_avail.c` and `tests/native/test_plan.c`:
+
+    beam_allowed_cores          beam_plan_enter
+    beam_available_cores        beam_plan_enter_default
+    beam_available_from         beam_plan_inputs
+    beam_cores_present          beam_plan_layout_threads
+    beam_layout_threads         beam_plan_leave
+    beam_parse_cpu_max          beam_plan_max_width
+    beam_parse_nr_running       beam_plan_threads
+
+`5fbab3e` 2026-10-01, the complex Mellin merge -- 12. The line and real sweeps
+shared between `math/mellin.c` and `dp/jet.c`, and the lgamma ratios called
+from `bindings/python/analytics_bindings.c`:
+
+    beam_beta_contour_sums      beam_line_work_new
+    beam_beta_contour_tail      beam_log_gamma_ratio
+    beam_cohort_private_sums    beam_log_gamma_ratio_shift
+    beam_line_plan              beam_real_plan
+    beam_line_work_free         beam_real_work_free
+    jet_sweep_real              beam_real_work_new
+
+`fc137a0` 2026-10-01 -- 2, and `80e986a` 2026-10-01 -- 1. The zero-truncated
+Poisson moments, all three called from `bindings/python/analytics_bindings.c`:
+
+    beam_ztp_bin_expect         beam_ztp_bin_reduce
+    beam_ztp_count_spectrum
+
+`d470328` 2026-10-07, the optimizations merge -- 1. Called from
+`insights/logo.c`:
+
+    beam_positional_banded_cost
+
+The one removal, also named by the 2026-11-12 section and also pre-existing:
+
+    beam_positional_banded_bytes
+
+It left the source in `d470328`, where the banded logo work replaced it with
+`beam_positional_banded_cost` above. It is internal -- absent from
+`c_public_symbols.txt`, which is unchanged at 135 and still fully contained in
+the new file. A public symbol disappearing still fails; that is the direction
+this check guards.
+
+`beam_real_plan` is the one of the 30 used in a single file (`math/mellin.c`,
+declared in `dp.h`), so it is the one that could be `static` today. It is kept
+external and given the test above instead: hiding an untested planner and
+testing it are both ways to close the note, and only one of them tells you
+whether the planner is right.
+
+### What did not move
+
+No recorded NUMBER. On the rebuilt extension the gate reports OK for `numeric`
+(78 keys), `math values` (58 quantities, bit-identical), `saved-model bytes`,
+`thread independence` and `exact against enumeration` (416 quantities), and
+`C public symbols` is unchanged. The two notes this section exists to silence
+are gone from the gate's output, which now has no `note` lines at all.

@@ -332,6 +332,99 @@ static void test_the_calling_contract(void) {
 }
 
 
+/* ── How many real orders one sweep takes at once ───────────── */
+
+/*
+ * `beam_real_plan` is the real-order sibling of `beam_line_plan`, and it was
+ * the only one of the pair with no test of its own: the complex planner is
+ * swept in test_mellin_complex.c, while the real one -- the path every Hill
+ * number and every spectrum takes -- was covered only through the values the
+ * plans it returns happen to produce.
+ *
+ * That is not coverage. A planner that is wrong in the same direction at
+ * every length still yields self-consistent numbers, because each sweep is
+ * checked against itself; what a bad plan costs is the budget, and a budget
+ * overrun surfaces as a refusal, or an OOM, on a machine with less memory
+ * than the one the numbers were produced on.
+ */
+static void test_real_plans_cover_the_orders_within_the_budget(void) {
+    const uint32_t Ns[] = {0u, 1u, 7u, 8u, 9u, 100u, 128u, 512u, 2048u,
+                           12000u, 100000u};
+    const uint32_t nths[] = {0u, 1u, 8u, 40u};
+    const uint64_t budgets[] = {1ull << 26, 1ull << 28, 1ull << 30,
+                                32ull << 30, 256ull << 30};
+    const uint32_t S = 194481u, R = 20u, A = 21u, V = BEAM_REAL_LANES;
+    for (size_t a = 0; a < sizeof Ns / sizeof *Ns; ++a)
+    for (size_t c = 0; c < sizeof nths / sizeof *nths; ++c)
+    for (size_t d = 0; d < sizeof budgets / sizeof *budgets; ++d) {
+        const uint32_t N = Ns[a], nth = nths[c];
+        const uint64_t budget = budgets[d];
+        const BeamLinePlan p = beam_real_plan(S, R, A, N, nth, budget);
+        /* No threads means one thread, so the budget arithmetic here has to
+         * read it the same way the planner does. */
+        const uint32_t eff = nth ? nth : 1u;
+        snprintf(msg, sizeof msg, "N=%u threads=%u budget=%llu: width %u, "
+                 "%u stretch(es)", N, nth, (unsigned long long)budget,
+                 p.width, p.n_stretches);
+        if (N == 0u) {                        /* no orders is no sweep */
+            ASSERT_MSG(p.width == 0u && p.n_stretches == 0u, msg);
+            continue;
+        }
+        if (budget < beam_jet_real_bytes(S, R, A, V, eff)) {
+            ASSERT_MSG(p.width == 0u, msg);   /* not one vector fits: refuse */
+            continue;
+        }
+        const uint32_t padded = (p.width + V - 1u) / V * V;
+        ASSERT_MSG(p.width >= 1u && p.n_stretches >= 1u, msg);
+        ASSERT_MSG((uint64_t)p.width * p.n_stretches >= N, msg);
+        ASSERT_MSG((uint64_t)p.width * (p.n_stretches - 1u) < N, msg);
+        ASSERT_MSG(p.n_stretches == 1u || p.width % V == 0u, msg);
+        ASSERT_MSG(beam_jet_real_bytes(S, R, A, padded, eff) <= budget, msg);
+        if (beam_jet_real_bytes(S, R, A, (N + V - 1u) / V * V, eff) <= budget)
+            ASSERT_MSG(p.n_stretches == 1u, msg);
+    }
+    PASS();
+}
+
+static void test_no_threads_plans_as_one_thread(void) {
+    /*
+     * `nth == 0` is normalised inside the planner rather than refused, and
+     * the sweep above cannot see that: it holds every plan against the budget
+     * it was given, and at an ordinary budget one thread's scratch is far too
+     * small a share of the total to move the answer. Written against a round
+     * budget, this test passed with the normalisation deleted.
+     *
+     * So the budget is derived instead of chosen: one byte below what the
+     * whole line costs with a single thread, which is still above what it
+     * costs with none. A planner that took `0 threads` at its word would
+     * price the line without any scratch, read that as "it fits", and hand
+     * back the whole line in one stretch -- a sweep that then runs one thread
+     * over a budget it was never checked against.
+     */
+    const uint32_t S = 194481u, R = 20u, A = 21u, N = 12000u;
+    const uint32_t V = BEAM_REAL_LANES;
+    const uint32_t whole = (N + V - 1u) / V * V;
+    const uint64_t with_one  = beam_jet_real_bytes(S, R, A, whole, 1u);
+    const uint64_t with_none = beam_jet_real_bytes(S, R, A, whole, 0u);
+    const uint64_t budget = with_one - 1u;
+    snprintf(msg, sizeof msg,
+             "one thread's scratch has to be the whole difference: the line "
+             "costs %llu bytes with one thread and %llu with none",
+             (unsigned long long)with_one, (unsigned long long)with_none);
+    ASSERT_MSG(with_none <= budget, msg);
+
+    const BeamLinePlan z = beam_real_plan(S, R, A, N, 0u, budget);
+    const BeamLinePlan o = beam_real_plan(S, R, A, N, 1u, budget);
+    snprintf(msg, sizeof msg,
+             "at a budget one byte under the single-threaded cost, 0 threads "
+             "planned %u x %u and 1 thread planned %u x %u",
+             z.width, z.n_stretches, o.width, o.n_stretches);
+    ASSERT_MSG(z.n_stretches > 1u, msg);   /* it did not take the free ride */
+    ASSERT_MSG(z.width == o.width && z.n_stretches == o.n_stretches, msg);
+    PASS();
+}
+
+
 int main(int argc, char **argv) {
     beam_test_init(argc, argv);
     printf("Mellin transform at many orders in one pass\n");
@@ -341,6 +434,8 @@ int main(int argc, char **argv) {
     RUN_TEST(test_it_refuses_only_where_one_order_would_not_fit);
     RUN_TEST(test_large_orders_stay_finite_and_in_bounds);
     RUN_TEST(test_the_calling_contract);
+    RUN_TEST(test_real_plans_cover_the_orders_within_the_budget);
+    RUN_TEST(test_no_threads_plans_as_one_thread);
     printf("  %lu (model, order) values compared with memcmp\n", cases_compared);
     return beam_test_finish();
 }
