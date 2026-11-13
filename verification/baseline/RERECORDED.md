@@ -3052,6 +3052,11 @@ nothing else beyond the known 3.14 rendering noise** (`__init_subclass__`,
 `__subclasshook__`, `__replace__`). Anything else in it is a real change that
 nobody intended.
 
+Done on 2026-11-13, and the constraint in this section's title is retired
+rather than satisfied: the rendering noise is gone from the file, so the
+baseline no longer depends on which interpreter writes it. See the last
+section of this document.
+
 ## The layout-count fix: `c_cases` 430 -> 437, `pytest_cases` 1237 -> 1238
 
 Inventory only. Not one recorded NUMBER moved, and the numeric baselines were
@@ -3086,3 +3091,58 @@ those two files if any line above looks wrong.
 does not appear above: it asserted the literal 8 and so passed here and failed
 on a four-core runner. It now asserts against `beam_cores_present()` and
 `beam_plan_max_width()`, the two limits the rule is made of.
+
+
+## 2026-11-13: `python_api` 1376 -> 381, and why it stopped depending on the interpreter
+
+Recorded on Python 3.11.17, as the section above asks. The previous file is
+`python_api.prefilter.txt`.
+
+Three lines were added, and they are the entire intended change:
+
+    __all__ gains 'available_cores' and 'parallel_plan'
+    def available_cores() -> 'int'
+    def parallel_plan() -> 'dict'
+
+998 lines were removed and not one of them was BEAM's. `_api_snapshot` fed
+`dir()` straight into the file, so every member CPython supplies was recorded
+as though this library had declared it: 821 inherited from `object`, 151 from
+`BaseException`, the rest `__new__` off the exception classes. 26 distinct
+member names, repeated across 46 public classes, 22 of them exceptions.
+
+Their RENDERING tracks the interpreter, not this source, which is what made
+the file unrecordable here. 3.11 cannot introspect `__init_subclass__` and
+writes `(?)` where 3.14 writes `(type, /)`; `@dataclass` grows a `__replace__`
+on 3.13 and later. So the baseline was only ever correct on the interpreter
+that wrote it, and on any other it reported 372 differences, none of them a
+change to BEAM -- which is how a gate teaches the person reading it to skip
+the gate.
+
+`check.py` now records what BEAM's own source declares. `_beam_declares` asks
+which class in the MRO actually defines a member and keeps it only if that
+class is BEAM's. `_SYNTHESISED` covers the one member `@dataclass` writes INTO
+a BEAM class, where the MRO test reads it as ours: `__replace__`, 3.13+.
+
+The fix was verified BEFORE the baseline was touched. The same snapshot run
+under 3.11.17 and under 3.14.4 -- two interpreters, the 3.11 one importing a
+separately installed copy rather than this tree -- produced byte-identical
+output:
+
+    sha256 f6ae0268e626f2c1c61d85f5be1d6218b7d1c38014e3e8cba9751ed5817cd8d7
+
+Before the change those two disagreed on 372 lines. The three real additions
+were also confirmed against the OLD baseline first, by applying the new filter
+to both: the pre-change file, written by an older interpreter, and a fresh
+3.14 snapshot differ by exactly those three lines and nothing else.
+
+What this costs, stated plainly: the gate no longer notices if a BEAM class
+stops inheriting from `BaseException`, or if `object`'s surface shifts beneath
+it. Neither was ever BEAM's decision to make, and the check could not report
+them without also reporting the noise that made it unreadable. Nothing
+non-dunder was removed -- checked line by line against the preserved file, not
+assumed.
+
+The whole gate was also run under 3.11, which nothing had done before. Every
+other check passes there unchanged, `math values` (58 quantities, bit-identical)
+and `exact against enumeration` (416 quantities) included. `python_api` was the
+only version-fragile baseline in this directory.
