@@ -46,6 +46,17 @@
  * check, and the difference shows up only on the machine that runs out of
  * memory. Each caller therefore computes `need` once, next to the allocation,
  * and passes that one value here.
+ *
+ * ONE exception, in mellin.c, and it is documented at all three sites. There
+ * the guard's figure is the same expression evaluated at a LARGER thread
+ * count than the allocation uses: `beam_layout_threads()` rather than the
+ * plan. The two differ only in the one term the formula scales by the thread
+ * count, the guard is therefore never the smaller of the two, and the reason
+ * is that the figure is quoted to the caller in a refusal. Evaluated at the
+ * plan it followed the machine's load -- two identical calls a second apart
+ * quoted 2.81 MB and 2.82 MB, and at a low enough budget the drift decided
+ * whether the call was refused at all. A guard that over-states by a bounded,
+ * stated amount is sound; a refusal that moves is not.
  */
 #ifndef BEAM_INTERNAL_BUDGET_H
 #define BEAM_INTERNAL_BUDGET_H

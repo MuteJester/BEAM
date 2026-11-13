@@ -126,3 +126,17 @@ int beam_threads(void) {
 int beam_model_effective_threads(void) {
     return threads_cap();
 }
+
+int beam_layout_threads(void) {
+    BeamPlanIn in;
+    beam_plan_inputs(&in);
+    const int widest = beam_plan_layout_threads(&in);
+    /*
+     * Never below the team that will actually run. With a plan in scope the
+     * plan is already the narrower of the two, so this changes nothing; with
+     * none -- the plain C library, which `make test` builds -- `beam_threads`
+     * reports the configured cap, and that can exceed the ceiling.
+     */
+    const int runs = beam_threads();
+    return widest > runs ? widest : runs;
+}

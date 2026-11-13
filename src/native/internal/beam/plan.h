@@ -86,6 +86,32 @@ int beam_plan_threads(const BeamPlanIn *in);
  */
 int beam_plan_max_width(void);
 
+/**
+ * The count to size a memory LAYOUT from: the widest team `beam_plan_threads`
+ * could return for this `in` if the machine were idle. It reads every field
+ * except `available`.
+ *
+ * A layout is the stretch width of a per-length sweep, the number of
+ * stretches, the per-thread workspace, and the figure quoted when one of them
+ * does not fit. Derive those from the plan and they move with the machine's
+ * load: two identical `log_mellin` calls a second apart quoted "about
+ * 2.81 MB of scratch" and "about 2.82 MB", and at a low enough budget the
+ * same drift decides whether the call is REFUSED. The plan is supposed to
+ * follow the weather; a figure the caller is shown, and a refusal they must
+ * act on, are not.
+ *
+ * Sizing for more threads than turn up is the safe direction and the reason
+ * this works at all: a wider team divides the same budget into NARROWER
+ * stretches, so a narrower team stays inside it with room to spare. Sizing
+ * for fewer is how a budget check passes and the allocation behind it does
+ * not -- which is why `test_the_layout_count_never_undercuts_the_plan` sweeps
+ * the property rather than spot-checking it.
+ *
+ * With `cores` unknown (0) this returns the ceiling rather than 0: the plan
+ * trusts `available` alone in that case, and no layout may undercut it.
+ */
+int beam_plan_layout_threads(const BeamPlanIn *in);
+
 /* ── The plan in force, for one call on one thread ───────────── */
 
 /**
@@ -147,5 +173,16 @@ void beam_plan_leave(int token);
  * pinned benchmark.
  */
 int beam_threads(void);
+
+/**
+ * `beam_plan_layout_threads` with the inputs read from the machine, and never
+ * below what `beam_threads()` is about to report.
+ *
+ * That floor is not decoration. `make test` builds the C library on its own,
+ * where nothing enters a plan and `beam_threads()` falls back to the
+ * configured cap -- which can be wider than the ceiling. A layout sized at
+ * the ceiling would then be short of the team that actually runs.
+ */
+int beam_layout_threads(void);
 
 #endif /* BEAM_INTERNAL_PLAN_H */

@@ -76,15 +76,33 @@ static BeamError real_terms(const BeamModel *m, const double *qs, uint32_t nq,
     for (size_t k = 0; k < (size_t)nq * n; ++k) lzs[k] = -INFINITY;
     const uint32_t nw = beam_live_lengths_desc(m, work);
     /*
-     * The PLAN, not the configured cap. This count is not only fed to a
-     * num_threads clause: it goes into the line plan below, which derives a
-     * memory LAYOUT from it. Reading the configured cap here while a region
-     * ran at the planned width would size the stretches for the wrong team.
+     * TWO counts, and the difference between them is the whole of this.
+     * `team` is the plan: how many threads the regions below actually run
+     * with, which falls as the machine fills. `widest` is the widest team
+     * this process could ever plan, and every GEOMETRY and every figure
+     * quoted to the caller comes from it.
+     *
+     * Deriving the geometry from the plan made it follow the weather. Two
+     * identical calls a second apart quoted "about 2.81 MB of scratch" and
+     * "about 2.82 MB", and at a low enough budget the same drift decided
+     * whether the call was REFUSED. A refusal the caller has to act on
+     * cannot depend on how busy the box happens to be.
+     *
+     * The workspace keeps the TEAM, because `jet_sweep_real` takes its own
+     * `num_threads` from `wk->nth`: built for `widest` it would run a wide
+     * team on a busy machine, which is the cost this policy exists to avoid.
+     * That leaves the guard's figure ABOVE what it guards, by the one term
+     * `beam_jet_real_bytes` scales by the thread count -- the safe direction,
+     * and the documented exception to budget.h's rule that a guard's figure
+     * comes from the same expression as its allocation. It is why the figure
+     * reads as a worst case and not as the exact allocation: the alternative
+     * is a refusal that moves.
      */
     const int th = beam_threads();
-    const uint32_t nth = th > 0 ? (uint32_t)th : 1u;
+    const uint32_t team = th > 0 ? (uint32_t)th : 1u;
+    const uint32_t widest = (uint32_t)beam_layout_threads();
     const BeamLinePlan plan = beam_real_plan(m->n_states, m->n_residues,
-                                             m->n_alphabet, nq, nth,
+                                             m->n_alphabet, nq, widest,
                                              beam_model_memory_budget());
     if (nw && plan.width == 0u) {
         const uint32_t at = work[0];
@@ -92,10 +110,10 @@ static BeamError real_terms(const BeamModel *m, const double *qs, uint32_t nq,
         return beam_budget_refuse("a tilted per-length sweep", at,
                                   beam_jet_real_bytes(m->n_states, m->n_residues,
                                                       m->n_alphabet,
-                                                      BEAM_REAL_LANES, nth));
+                                                      BEAM_REAL_LANES, widest));
     }
 #ifdef _OPENMP
-    #pragma omp parallel for schedule(dynamic, 1) num_threads((int)nth)
+    #pragma omp parallel for schedule(dynamic, 1) num_threads((int)team)
 #endif
     for (int64_t k = 0; k < (int64_t)nw; ++k) {
         LiveHandle h;
@@ -107,13 +125,13 @@ static BeamError real_terms(const BeamModel *m, const double *qs, uint32_t nq,
     BeamRealWork *wk = NULL;
     if (items) {
         const uint64_t need = beam_jet_real_bytes(m->n_states, m->n_residues,
-                                                  m->n_alphabet, width, nth);
+                                                  m->n_alphabet, width, widest);
         if (!beam_budget_fits(need)) {
             const uint32_t at = work[0];
             free(work); free(lzs);
             return beam_budget_refuse("a tilted per-length sweep", at, need);
         }
-        wk = beam_real_work_new(m, width, nth);
+        wk = beam_real_work_new(m, width, team);
         if (!wk) {
             free(work); free(lzs);
             return BEAM_EALLOC("the real-order sweep workspace");
@@ -262,14 +280,14 @@ BeamError beam_model_log_mellin_complex(const BeamModel *m, const double *q_re,
     const uint64_t base = beam_jet_cfan_bytes(S, R, 0u);
     const uint64_t per_tilt = beam_jet_cfan_bytes(S, R, 1u) - base;
     /*
-     * The PLAN, not the configured cap. This count is not only fed to a
-     * num_threads clause: the budget is divided by it just below, and the
-     * stretch width and count derived from the result. Reading the configured
-     * cap here while a region ran at the planned width would size the
-     * stretches for the wrong team.
+     * The widest team this process could ever plan, NOT the plan. The budget
+     * is divided by this count just below and the stretch width and count
+     * derived from the result, so a plan that moves with the machine's load
+     * would move the figure in the refusal below with it. The team that
+     * actually runs is `conc`, which `beam_budget_concurrency` caps by the
+     * plan -- so the geometry is fixed and the parallelism still adapts.
      */
-    const int th = beam_threads();
-    uint32_t want = th > 0 ? (uint32_t)th : 1u;
+    uint32_t want = (uint32_t)beam_layout_threads();
     if (nw && want > nw) want = nw;
     const uint64_t room = beam_model_memory_budget() / want;
     const uint64_t fit = room > base ? (room - base) / per_tilt : 0u;
@@ -422,15 +440,33 @@ BeamError beam_model_log_mellin_line(const BeamModel *m, double re, double im0,
     for (size_t k = 0; k < (size_t)N * n; ++k) { lmod[k] = -INFINITY; lph[k] = 0.0; }
     const uint32_t nw = beam_live_lengths_desc(m, work);
     /*
-     * The PLAN, not the configured cap. This count is not only fed to a
-     * num_threads clause: it goes into the line plan below, which derives a
-     * memory LAYOUT from it. Reading the configured cap here while a region
-     * ran at the planned width would size the stretches for the wrong team.
+     * TWO counts, and the difference between them is the whole of this.
+     * `team` is the plan: how many threads the regions below actually run
+     * with, which falls as the machine fills. `widest` is the widest team
+     * this process could ever plan, and every GEOMETRY and every figure
+     * quoted to the caller comes from it.
+     *
+     * Deriving the geometry from the plan made it follow the weather. Two
+     * identical calls a second apart quoted "about 2.81 MB of scratch" and
+     * "about 2.82 MB", and at a low enough budget the same drift decided
+     * whether the call was REFUSED. A refusal the caller has to act on
+     * cannot depend on how busy the box happens to be.
+     *
+     * The workspace keeps the TEAM, because `jet_sweep_line` takes its own
+     * `num_threads` from `wk->nth`: built for `widest` it would run a wide
+     * team on a busy machine, which is the cost this policy exists to avoid.
+     * That leaves the guard's figure ABOVE what it guards, by the one term
+     * `beam_jet_line_bytes` scales by the thread count -- the safe direction,
+     * and the documented exception to budget.h's rule that a guard's figure
+     * comes from the same expression as its allocation. It is why the figure
+     * reads as a worst case and not as the exact allocation: the alternative
+     * is a refusal that moves.
      */
     const int th = beam_threads();
-    const uint32_t nth = th > 0 ? (uint32_t)th : 1u;
+    const uint32_t team = th > 0 ? (uint32_t)th : 1u;
+    const uint32_t widest = (uint32_t)beam_layout_threads();
     const BeamLinePlan plan = beam_line_plan(m->n_states, m->n_residues,
-                                             m->n_alphabet, N, nth,
+                                             m->n_alphabet, N, widest,
                                              beam_model_memory_budget());
     const uint32_t width = plan.width, nb = plan.n_stretches;
     if (nw && width == 0u) {
@@ -439,7 +475,7 @@ BeamError beam_model_log_mellin_line(const BeamModel *m, double re, double im0,
         return beam_budget_refuse("a complex tilted line sweep", at,
                                   beam_jet_line_bytes(m->n_states, m->n_residues,
                                                       m->n_alphabet,
-                                                      BEAM_LINE_LANES, nth));
+                                                      BEAM_LINE_LANES, widest));
     }
 
     /* One (length, stretch) at a time; each uses every thread, and all of
@@ -453,7 +489,7 @@ BeamError beam_model_log_mellin_line(const BeamModel *m, double re, double im0,
      * 11.7 s of a 20.7 s first line on the foundation. Where the cache cannot
      * hold them this builds nothing lasting and the sweeps build their own. */
 #ifdef _OPENMP
-    #pragma omp parallel for schedule(dynamic, 1) num_threads((int)nth)
+    #pragma omp parallel for schedule(dynamic, 1) num_threads((int)team)
 #endif
     for (int64_t k = 0; k < (int64_t)nw; ++k) {
         LiveHandle h;
@@ -461,13 +497,13 @@ BeamError beam_model_log_mellin_line(const BeamModel *m, double re, double im0,
     }
     if (items) {
         const uint64_t need = beam_jet_line_bytes(m->n_states, m->n_residues,
-                                                  m->n_alphabet, width, nth);
+                                                  m->n_alphabet, width, widest);
         if (!beam_budget_fits(need)) {
             const uint32_t at = work[0];
             free(work); free(lmod); free(lph);
             return beam_budget_refuse("a complex tilted line sweep", at, need);
         }
-        wk = beam_line_work_new(m, width, nth);
+        wk = beam_line_work_new(m, width, team);
         if (!wk) {
             free(work); free(lmod); free(lph);
             return BEAM_EALLOC("the complex line-sweep workspace");

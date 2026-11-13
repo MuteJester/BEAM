@@ -328,6 +328,133 @@ static void test_a_null_input_plans_one_thread(void) {
 }
 
 
+/* ── Sizing memory for the widest team ──────────────────────── */
+
+/*
+ * The plan is allowed to follow the weather -- that is the whole point of it.
+ * A memory LAYOUT derived from the plan is not, and three of them were: the
+ * stretch width of a Mellin sweep, the per-thread workspace, and the figure
+ * quoted in a refusal. Two identical `log_mellin` calls a second apart said
+ * "about 2.81 MB of scratch" and "about 2.82 MB", because the second found a
+ * busier machine; at a low enough budget the same drift decides whether the
+ * call is refused at all. A caller cannot act on a refusal that moves.
+ *
+ * So memory is sized from the widest team the process could ever plan. That
+ * depends on the configured cap, on OMP_NUM_THREADS and on the core count,
+ * and on nothing that changes while the program runs. A layout sized for more
+ * threads than turn up gives each a NARROWER stretch, so the total stays
+ * inside the budget; the opposite error is how a budget check passes and the
+ * allocation behind it does not.
+ */
+
+static void test_the_layout_count_ignores_how_busy_the_machine_is(void) {
+    BeamPlanIn in = base();
+    in.available = 16;
+    const int idle = beam_plan_layout_threads(&in);
+    for (int a = 0; a <= 16; ++a) {
+        in.available = a;
+        const int got = beam_plan_layout_threads(&in);
+        if (got != idle) {
+            char msg[160];
+            snprintf(msg, sizeof msg,
+                     "available=%d moved the layout count from %d to %d",
+                     a, idle, got);
+            beam_test_fail(msg);
+            return;
+        }
+    }
+    PASS();
+}
+
+static void test_the_layout_count_never_undercuts_the_plan(void) {
+    /*
+     * Swept rather than spot-checked, because this is the property the
+     * allocations depend on and it has to hold at every combination the
+     * policy's five clauses can reach -- including the ones where the cap
+     * beats the ceiling and the ones where the machine would not say how
+     * many cores it has.
+     */
+    const int caps[]  = { 0, 1, 3, 8, 12, 64 };
+    const int cores[] = { 0, 1, 4, 16, 48, 256 };
+    for (size_t c = 0; c < sizeof caps / sizeof *caps; ++c) {
+        for (size_t k = 0; k < sizeof cores / sizeof *cores; ++k) {
+            BeamPlanIn in = base();
+            in.user_cap = caps[c];
+            in.cores    = cores[k];
+            in.omp_max  = cores[k] > 0 ? cores[k] : 1;
+            for (int a = 0; a <= 64; ++a) {
+                in.available = a;
+                const int plan = beam_plan_threads(&in);
+                const int lay  = beam_plan_layout_threads(&in);
+                if (lay < plan) {
+                    char msg[192];
+                    snprintf(msg, sizeof msg,
+                             "cap=%d cores=%d available=%d: memory sized for "
+                             "%d threads but %d will run",
+                             caps[c], cores[k], a, lay, plan);
+                    beam_test_fail(msg);
+                    return;
+                }
+            }
+        }
+    }
+    PASS();
+}
+
+static void test_an_explicit_cap_sizes_memory_for_itself(void) {
+    /*
+     * `set_threads(12)` means twelve threads run, so twelve is what the
+     * memory has to cover. The ceiling of eight is a statement about where
+     * BEAM stops getting faster, not permission to under-provision a team
+     * the caller asked for by name.
+     */
+    BeamPlanIn in = base();
+    in.user_cap = 12;
+    in.available = 1;
+    const int got = beam_plan_layout_threads(&in);
+    char msg[128];
+    snprintf(msg, sizeof msg,
+             "a cap of 12 must size memory for 12 threads, sized for %d", got);
+    ASSERT_MSG(got == 12, msg);
+    PASS();
+}
+
+static void test_an_omp_env_setting_sizes_memory_for_itself(void) {
+    BeamPlanIn in = base();
+    in.omp_env = 1;
+    in.omp_max = 12;
+    in.available = 1;
+    const int got = beam_plan_layout_threads(&in);
+    char msg[128];
+    snprintf(msg, sizeof msg,
+             "OMP_NUM_THREADS=12 must size memory for 12 threads, sized for %d",
+             got);
+    ASSERT_MSG(got == 12, msg);
+    PASS();
+}
+
+static void test_an_unknown_core_count_still_covers_the_plan(void) {
+    /*
+     * `cores` of 0 means the machine would not say, and the plan then trusts
+     * the availability estimate on its own. A layout that read the same 0 as
+     * "size for one thread" would be short of every team the plan could pick,
+     * so the ceiling is the honest answer instead.
+     */
+    BeamPlanIn in = base();
+    in.cores = 0;
+    in.omp_max = 1;
+    in.available = 5;
+    const int plan = beam_plan_threads(&in);
+    const int lay  = beam_plan_layout_threads(&in);
+    char msg[160];
+    snprintf(msg, sizeof msg,
+             "with the core count unknown, memory sized for %d threads but "
+             "%d will run", lay, plan);
+    ASSERT_MSG(lay >= plan, msg);
+    PASS();
+}
+
+
 /* ── Resolving the plan once per call ────────────────────────── */
 
 /*
@@ -646,6 +773,55 @@ static void test_leaving_a_default_scope_restores_the_previous_count(void) {
     PASS();
 }
 
+static void test_the_layout_count_holds_still_as_the_machine_fills(void) {
+    /*
+     * The same property through the real gathering path, which is where it
+     * broke: the pure function was never the problem, the call site that fed
+     * it `beam_threads()` was.
+     */
+    beam_model_set_threads(0);
+    omp_env_aside();
+    setenv("BEAM_AVAILABLE_CORES", "64", 1);
+    int token = beam_plan_enter_default();
+    const int idle_layout = beam_layout_threads();
+    const int idle_plan   = beam_threads();
+    beam_plan_leave(token);
+    setenv("BEAM_AVAILABLE_CORES", "1", 1);
+    token = beam_plan_enter_default();
+    const int busy_layout = beam_layout_threads();
+    const int busy_plan   = beam_threads();
+    beam_plan_leave(token);
+    unsetenv("BEAM_AVAILABLE_CORES");
+    omp_env_restore();
+    char msg[224];
+    snprintf(msg, sizeof msg,
+             "filling the machine moved the layout count %d -> %d; the plan "
+             "went %d -> %d, which is correct, but the layout must not follow "
+             "it", idle_layout, busy_layout, idle_plan, busy_plan);
+    ASSERT_MSG(idle_layout == busy_layout, msg);
+    ASSERT_MSG(busy_layout >= busy_plan,
+               "the layout must still cover the team that runs");
+    PASS();
+}
+
+static void test_the_layout_count_covers_the_team_with_no_plan_active(void) {
+    /*
+     * `make test` is this case: the C library is usable on its own, nothing
+     * enters a plan, and `beam_threads` falls back to the configured cap --
+     * which can be wider than the ceiling. Memory sized at the ceiling would
+     * then be short of the team that actually runs, so the layout count is
+     * never below whatever `beam_threads` is about to report.
+     */
+    const int got  = beam_layout_threads();
+    const int runs = beam_threads();
+    char msg[160];
+    snprintf(msg, sizeof msg,
+             "with no plan active memory is sized for %d threads but %d will "
+             "run", got, runs);
+    ASSERT_MSG(got >= runs, msg);
+    PASS();
+}
+
 /* ── Main ────────────────────────────────────────────────────── */
 
 int main(int argc, char **argv) {
@@ -668,6 +844,12 @@ int main(int argc, char **argv) {
     RUN_TEST(test_availability_above_the_core_count_is_clamped);
     RUN_TEST(test_a_null_input_plans_one_thread);
 
+    RUN_TEST(test_the_layout_count_ignores_how_busy_the_machine_is);
+    RUN_TEST(test_the_layout_count_never_undercuts_the_plan);
+    RUN_TEST(test_an_explicit_cap_sizes_memory_for_itself);
+    RUN_TEST(test_an_omp_env_setting_sizes_memory_for_itself);
+    RUN_TEST(test_an_unknown_core_count_still_covers_the_plan);
+
     RUN_TEST(test_beam_threads_is_stable_inside_a_plan_scope);
     RUN_TEST(test_leaving_a_plan_scope_restores_the_previous_value);
     RUN_TEST(test_plan_scopes_nest);
@@ -681,6 +863,8 @@ int main(int argc, char **argv) {
     RUN_TEST(test_the_default_scope_honours_an_explicit_cap);
     RUN_TEST(test_the_default_scope_stands_aside_for_omp_num_threads);
     RUN_TEST(test_leaving_a_default_scope_restores_the_previous_count);
+    RUN_TEST(test_the_layout_count_holds_still_as_the_machine_fills);
+    RUN_TEST(test_the_layout_count_covers_the_team_with_no_plan_active);
 
     printf("\n==============================================================\n");
     return beam_test_finish();

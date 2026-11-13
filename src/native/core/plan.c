@@ -86,3 +86,21 @@ int beam_plan_threads(const BeamPlanIn *in) {
     /* Clause 6. Zero would ask OpenMP for an empty team. */
     return n < 1 ? 1 : n;
 }
+
+int beam_plan_layout_threads(const BeamPlanIn *in) {
+    if (!in) return 1;
+    /*
+     * The same policy, told the machine is idle. Expressing it as a call
+     * rather than as its own arithmetic is the point: a layout count derived
+     * from a second copy of the five clauses would drift out of agreement
+     * with the team that runs, and the drift would show up only on the
+     * machine that runs out of memory.
+     *
+     * `cores` of 0 becomes the ceiling, not 0. The plan trusts `available`
+     * alone when the machine would not say how many cores it has, so zero
+     * here would size memory for one thread while the plan picked eight.
+     */
+    BeamPlanIn idle = *in;
+    idle.available = in->cores > 0 ? in->cores : BEAM_PLAN_MAX_WIDTH;
+    return beam_plan_threads(&idle);
+}

@@ -3051,3 +3051,38 @@ that do not exist there. So it stays stale until someone records it on 3.11.
 nothing else beyond the known 3.14 rendering noise** (`__init_subclass__`,
 `__subclasshook__`, `__replace__`). Anything else in it is a real change that
 nobody intended.
+
+## The layout-count fix: `c_cases` 430 -> 437, `pytest_cases` 1237 -> 1238
+
+Inventory only. Not one recorded NUMBER moved, and the numeric baselines were
+re-run against the new build to prove it rather than assumed to be safe
+because only inventories were recorded.
+
+Eight test cases were added, all of them about one defect: a memory LAYOUT
+derived from the thread plan followed the machine's load, so two identical
+calls could quote different scratch figures and, at a low enough budget, be
+refused inconsistently. CI found it; this machine is too wide and too idle to
+have shown it.
+
+`c_cases` 430 -> 437, every one new, none removed:
+
+    test_the_layout_count_ignores_how_busy_the_machine_is
+    test_the_layout_count_never_undercuts_the_plan
+    test_an_explicit_cap_sizes_memory_for_itself
+    test_an_omp_env_setting_sizes_memory_for_itself
+    test_an_unknown_core_count_still_covers_the_plan
+    test_the_layout_count_holds_still_as_the_machine_fills
+    test_the_layout_count_covers_the_team_with_no_plan_active
+
+`pytest_cases` 1237 -> 1238, one new, none removed:
+
+    tests/suites/analytics/test_memory_budget.py::test_a_refusal_does_not_move_with_the_machines_load
+
+Snapshots before recording are `c_cases.prelayout.txt` and
+`pytest_cases.prelayout.txt`. Both diffs are additions only; compare against
+those two files if any line above looks wrong.
+
+`test_the_default_scope_stops_at_the_ceiling` was CHANGED, not added, so it
+does not appear above: it asserted the literal 8 and so passed here and failed
+on a four-core runner. It now asserts against `beam_cores_present()` and
+`beam_plan_max_width()`, the two limits the rule is made of.

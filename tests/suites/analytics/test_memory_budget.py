@@ -25,6 +25,8 @@ honest:
 """
 from __future__ import annotations
 
+import contextlib
+import os
 import re
 
 import numpy as np
@@ -317,3 +319,58 @@ def test_a_refusal_can_be_repeated_without_growing(
     assert expected in first, (
         f"{name} at a {budget}-byte budget reached {first.split(' at length')[0]!r}, "
         f"not {expected!r}: this test is no longer exercising the return it names")
+
+
+@contextlib.contextmanager
+def _free_cores(n):
+    """Pin BEAM's free-core estimate for the calls inside the block.
+
+    `BEAM_AVAILABLE_CORES` is re-read on every call rather than cached, so
+    pinning it is the whole experiment: nothing else about two calls made
+    under two pins differs.
+    """
+    key = "BEAM_AVAILABLE_CORES"
+    before = os.environ.get(key)
+    os.environ[key] = str(n)
+    try:
+        yield
+    finally:
+        if before is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = before
+
+
+def test_a_refusal_does_not_move_with_the_machines_load(model, restore_budget):
+    """Identical calls must be refused identically, however busy the box is.
+
+    The layout under a refusal -- the stretch width, and so the figure the
+    message quotes -- is sized from a thread count. Sized from the PLAN, which
+    falls as the machine fills, two identical `log_mellin` calls a second
+    apart quoted "about 2.81 MB" and "about 2.82 MB", and at a low enough
+    budget the same drift decides whether the call is refused at all. A
+    refusal the caller is asked to act on cannot depend on the weather.
+
+    `test_a_refusal_can_be_repeated_without_growing` is the test that caught
+    it, on a four-core CI runner, by repeating one call fifty times while the
+    runner's load drifted. It could not catch it here: this machine is wide
+    enough that an idle plan sits on the ceiling and does not move. This test
+    pins the availability instead, so it reproduces that failure on any
+    machine with more than one core.
+    """
+    BEAM.set_memory_budget(STARVED)
+    seen, plans = {}, {}
+    for pin in (1, 4, 64):
+        with _free_cores(pin):
+            plans[pin] = BEAM.parallel_plan()["plan"]
+            with pytest.raises(BudgetExceeded) as exc:
+                model.log_mellin(0.5)
+            seen[pin] = str(exc.value)
+    if len(set(plans.values())) == 1:
+        pytest.skip(
+            f"this machine plans {plans[1]} threads at 1 and at 64 free cores, "
+            "so it cannot show the difference")
+    assert len(set(seen.values())) == 1, (
+        "the refusal text follows the machine's load:\n"
+        + "\n".join(f"  {k} free cores (plan {plans[k]}): {text}"
+                     for k, text in seen.items()))
