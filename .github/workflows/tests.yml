@@ -112,6 +112,40 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: make -j"$(nproc)" test
 
+  verification:
+    # The only check here that compares this build against RECORDED numbers
+    # rather than against expectations: 416 quantities held to independent
+    # enumeration, 58 math values compared bit for bit, the saved-model bytes,
+    # the public API and both test inventories. Until now it ran only when
+    # someone remembered to, which is how a stale baseline kept two new public
+    # functions unrecorded for a month and taught its readers to skip it.
+    #
+    # Pinned to one interpreter, the 3.11 that recorded python_api.txt. Every
+    # other check is interpreter-independent -- the numbers come out of the
+    # extension, not out of Python -- and the API check records what BEAM's
+    # own source declares, which agrees across versions. Running it on the
+    # newest Python as well would buy early warning of a CPython that
+    # synthesises a new dunder, at the price of letting that failure land on
+    # unrelated pull requests.
+    name: Verification gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.11"
+      - name: Install BEAM in place with test dependencies
+        # Editable: the gate reads src/BEAM/_cbeam*.so directly, and refuses
+        # to judge a binary older than the sources sitting beside it.
+        run: python -m pip install -e ".[dev]"
+      - name: Build the static library and the C test binaries
+        # list-tests, not test: the gate asks each binary what it runs, and
+        # running the C suite is the `native` job's business, not this one.
+        run: make -j"$(nproc)" list-tests > "$RUNNER_TEMP/c-inventory.txt"
+      - name: Verification gate
+        run: python verification/check.py
+
   packaging:
     name: Build and check distributions
     runs-on: ubuntu-latest
