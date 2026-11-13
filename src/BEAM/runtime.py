@@ -37,12 +37,48 @@ def threads() -> int:
 
 
 def effective_threads() -> int:
-    """Threads a parallel region would actually start right now.
+    """The thread cap in force. The value a run can be REPRODUCED with.
 
     The cap if one is set, otherwise the OpenMP runtime's own maximum, and
     always 1 in a build without OpenMP.
+
+    This used to be called "threads a parallel region would actually start",
+    and it is deliberately not that: a planned region may run narrower than
+    this on a busy machine, because BEAM decides thread counts per call. What
+    this reports does not move with the machine, which is why it is the figure
+    to pass to :func:`set_threads` to reproduce a timing.
     """
     return int(_c.effective_threads())
+
+
+def parallel_plan() -> dict:
+    """How many threads the next call will use, and every input behind it.
+
+    Keys: ``plan`` (threads a call would start now), ``user_cap`` (0 when
+    unset), ``omp_num_threads`` (whether the caller set it), ``cores``,
+    ``available`` (free cores, estimated) and ``max_width`` (the widest team
+    auto mode will plan, where the work stops scaling).
+
+    The inputs matter more than the answer. A surprising thread count is
+    almost always surprising because of WHICH of them decided it: an explicit
+    cap, an ``OMP_NUM_THREADS`` in the environment, a busy machine, or the
+    ceiling. This reports all four so the question is answerable rather than
+    guessable.
+
+    Pin ``BEAM_AVAILABLE_CORES`` to make the plan reproducible, which is what
+    a benchmark or a CI run wants.
+    """
+    return dict(_c.parallel_plan())
+
+
+def available_cores() -> int:
+    """Free cores right now, as the thread policy estimates them.
+
+    Affinity and any cgroup CPU quota, narrowed by the count of runnable
+    tasks. At least 1, never more than the cores present. ``BEAM_AVAILABLE_CORES``
+    overrides it.
+    """
+    return int(_c.available_cores())
 
 
 def set_memory_budget(nbytes: int) -> None:

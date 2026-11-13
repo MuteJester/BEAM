@@ -2796,3 +2796,293 @@ see two tests collapsing into one, and bare names cannot see a test moving
 between files. `removed: 0` is the line that matters here — re-recording an
 inventory is the one operation in this repository that can silently absorb a
 dropped test, which is why it is never recorded together with anything else.
+
+# Why the C test inventory was re-recorded for the thread-count policy
+
+Re-recorded 2026-11-12, for the policy's own test suite. The previous file is
+kept beside it as `c_cases.preplan.txt`.
+
+    c_cases   390 -> 403   (+13, nothing removed)
+
+Thirteen tests added, none replacing anything, all in one new suite
+(`tests/native/test_plan.c`) for one new function, `beam_plan_threads`:
+
+  - test_auto_plans_half_the_available_cores
+  - test_a_saturated_machine_plans_one_thread
+  - test_the_plan_never_drops_below_one
+  - test_more_free_cores_never_plans_fewer_threads
+  - test_an_explicit_cap_is_honoured_exactly
+  - test_an_omp_env_setting_is_not_overridden
+  - test_the_memory_cap_is_never_exceeded
+  - test_an_explicit_cap_does_not_override_the_memory_cap
+  - test_no_more_threads_than_work_items
+  - test_the_same_input_always_plans_the_same_count
+  - test_degenerate_input_is_defined
+  - test_availability_above_the_core_count_is_clamped
+  - test_a_null_input_plans_one_thread
+
+The change was not taken on trust. The two files were compared as MULTISETS
+rather than diffed, because a plain diff cannot see two tests collapsing into
+one name and `comm` refuses these files as unsorted:
+
+    old 390, new 403, added 13, removed 0
+
+`removed 0` is the line that matters. A wholesale re-record is how a dropped
+test disappears quietly, so the additions are enumerated above and the count
+of removals is asserted, not assumed.
+
+**No recorded NUMBER moved.** On a freshly built extension -- the first run
+of the gate reported `FAIL extension freshness` and so had tested the
+previous binary, which is why it was rebuilt and the gate re-run -- `numeric`
+(78 keys), `math values` (58, bit-identical), `saved-model bytes`,
+`thread independence` and `exact against enumeration` (416 quantities) all
+report OK. Nothing calls `beam_plan_threads` yet: the function is compiled
+and tested but consulted by nothing, so it cannot move a number, and the
+gate confirms it did not.
+
+Two notes the gate prints that are NOT from this change, recorded here so the
+next reader does not attribute them to it:
+
+  - `17 internal symbol(s) newly external`. Only `beam_plan_threads` is new
+    here. The other sixteen (`beam_line_plan`, `beam_log_gamma_ratio`,
+    `beam_ztp_count_spectrum` and so on) are absent from
+    `c_symbols.txt` as well, so they are pre-existing drift from earlier
+    merged work. Newly external internal symbols are noted and not failed,
+    by design, so none of them blocks.
+  - `1 internal symbol(s) no longer exported: beam_positional_banded_bytes`.
+    Also pre-existing.
+
+The `Python public API` FAIL is the known Python 3.14 rendering difference
+(`__init_subclass__`, `__subclasshook__`, `__replace__`) and is judged by
+diff against a same-interpreter capture, never by the gate's exit code.
+`python_api.txt` must never be recorded on this machine: 3.14 would write
+signatures that do not exist on the 3.11 that CI checks against.
+
+# Why the C test inventory was re-recorded for the plan scope
+
+Re-recorded 2026-11-12, for the tests covering the plan in force. The previous
+file is kept beside it as `c_cases.preplanscope.txt`.
+
+    c_cases   403 -> 410   (+7, nothing removed)
+
+Seven tests added to the existing `tests/native/test_plan.c`, none replacing
+anything:
+
+  - test_beam_threads_is_stable_inside_a_plan_scope
+  - test_leaving_a_plan_scope_restores_the_previous_value
+  - test_plan_scopes_nest
+  - test_with_no_plan_active_nothing_changes
+  - test_effective_threads_reports_the_cap_not_the_plan
+  - test_budget_concurrency_follows_the_active_plan
+  - test_a_plan_does_not_reach_another_thread
+
+Compared as multisets, as before: old 403, new 410, added 7, **removed 0**.
+
+**No recorded NUMBER moved**, on a freshly built extension: `numeric` (78
+keys), `math values` (58, bit-identical), `saved-model bytes`,
+`thread independence` and `exact against enumeration` (416 quantities) all
+report OK. That is the point of the change and not a happy accident. Nothing
+calls `beam_plan_enter` yet, so no plan is ever in force during the gate, and
+`beam_threads()` falls through to exactly the value it returned before.
+
+Three of the newly external internal symbols are from this work --
+`beam_plan_enter`, `beam_plan_leave`, `beam_plan_threads`. The other sixteen
+in that note, and the one no longer exported, are pre-existing drift from
+earlier merged work; see the previous section.
+
+The `Python public API` FAIL remains the known Python 3.14 rendering
+difference, judged by diff rather than by exit code. `python_api.txt` must
+never be recorded on this machine.
+
+# Why the C test inventory was re-recorded for the free-core estimate
+
+Re-recorded 2026-11-12, for the availability signal and a corrected policy
+rule. The previous file is kept beside it as `c_cases.preavail.txt`.
+
+    c_cases   410 -> 422   (+13, -1)
+
+**This is the first of these sections with a REMOVAL, so it is the one to read
+carefully.** The removed line is a rename, not a dropped test:
+
+    - test_auto_plans_half_the_available_cores
+    + test_auto_plans_the_free_cores_up_to_the_scaling_ceiling
+
+The policy's rule changed from `available / 2` to `min(available, 8)`, so the
+test's name no longer described what it asserts. The assertions were rewritten
+with it; this is not the same test under a new name, and it is not a test that
+stopped running. The count of cases in `test_plan` went from 20 to 22: the
+rename is net zero, plus `test_beyond_the_ceiling_more_free_cores_buy_nothing`
+and the rule test itself.
+
+Why the rule changed, since a baseline move should name its cause: the first
+rule halved availability, having been fitted against free cores counted as
+`cores - competitors`. That ignores the two or three other runnable entities
+any real machine has, so it halved a number already contention-aware --
+conservative twice, and 33% and 69% off the measured optimum at the two
+busiest points. `min(available, 8)` is exact at two of four points and worst
+by 8%.
+
+The other eleven additions are one new suite, `tests/native/test_avail.c`, for
+the free-core estimate:
+
+  - test_the_runnable_count_is_read_from_the_fourth_field
+  - test_an_unreadable_loadavg_is_reported_as_unknown
+  - test_the_cgroup_quota_is_read_as_whole_cores
+  - test_no_cgroup_limit_is_reported_as_unknown
+  - test_an_unreadable_cpu_max_is_reported_as_unknown
+  - test_free_cores_is_what_is_allowed_minus_what_is_running
+  - test_unknown_contention_falls_back_to_the_headroom_rule
+  - test_free_cores_is_never_below_one_or_above_what_is_allowed
+  - test_more_competitors_never_frees_more_cores
+  - test_the_machine_reports_a_usable_estimate
+  - test_the_estimate_does_not_exceed_the_cores_present
+
+Compared as multisets: old 410, new 422, added 13, removed 1, and the one
+removal is accounted for above. Nothing else left the inventory.
+
+**No recorded NUMBER moved**, on a freshly built extension: `numeric` (78
+keys), `math values` (58, bit-identical), `saved-model bytes`,
+`thread independence` and `exact against enumeration` (416 quantities) all
+report OK. Still nothing calls `beam_plan_enter`, so no plan is ever in force
+during the gate and the estimate is never consulted.
+
+The `Python public API` FAIL remains the known 3.14 rendering difference.
+
+# Why the C test inventory was re-recorded for the plan wiring
+
+Re-recorded 2026-11-12, for the availability pin and the per-call gathering.
+The previous file is kept beside it as `c_cases.prewiring.txt`.
+
+    c_cases   422 -> 430   (+8, nothing removed)
+
+Three in `test_avail.c`, for pinning the estimate through
+`BEAM_AVAILABLE_CORES`:
+
+  - test_a_pinned_estimate_overrides_the_measurement
+  - test_a_nonsense_pin_is_ignored_rather_than_obeyed
+  - test_a_pin_above_the_cores_present_is_clamped
+
+Five in `test_plan.c`, for `beam_plan_enter_default` -- the once-per-call read:
+
+  - test_the_default_scope_plans_from_the_pinned_availability
+  - test_the_default_scope_stops_at_the_ceiling
+  - test_the_default_scope_honours_an_explicit_cap
+  - test_the_default_scope_stands_aside_for_omp_num_threads
+  - test_leaving_a_default_scope_restores_the_previous_count
+
+Compared as multisets: old 422, new 430, added 8, removed 0.
+
+**This is the commit where behaviour changes**, so the numbers matter more here
+than in the three before it. Twenty-nine analytics bindings now resolve a
+thread count per call, from the machine, and every recorded number is
+nonetheless byte-identical on a freshly built extension: `numeric` (78 keys),
+`math values` (58, bit-identical), `saved-model bytes`, `thread independence`
+and `exact against enumeration` (416 quantities). That is not luck. It is the
+thread-independence guarantee -- every reduction either order-independent or
+summed in a fixed index order -- doing the job it was built for, and this is
+the first change that actually leaned on it.
+
+The full Python suite was also run, not only the gate: **1230 passed, 2
+skipped**. The gate pins recorded quantities; the Python suite is what covers
+the analytics surface broadly, and a wiring change to 29 call sites deserves
+both.
+
+A new gate check arrives with this commit, `thread plan wiring`. It reads
+source rather than timing anything: no bare `Py_BEGIN_ALLOW_THREADS` may
+remain in the planned binding files, and no `return` or `goto` may appear
+inside a planned region, because the macro's exception-safety rests on there
+being no such path. A static answer cannot be passed by a lucky machine and it
+fails on the next region added without the macro.
+
+The `Python public API` FAIL remains the known 3.14 rendering difference. Note
+for whoever records it on 3.11: nothing in this commit adds Python API. The
+`parallel_plan` probe, which does, is deliberately held back -- it would also
+need `cbeam_methods.txt` edited by hand, since that baseline has no `--record`
+path at all.
+
+# Why three baselines moved for the parallel-plan probe
+
+2026-11-12. `BEAM.parallel_plan()` and `BEAM.available_cores()` let a caller
+ask how many threads the next call will use and why. Three baselines move, and
+they move by three different mechanisms, which is the reason this section is
+longer than the addition deserves.
+
+## `pytest_cases` -- recorded normally
+
+    pytest_cases   +5, nothing removed
+
+Five tests in the existing `tests/suites/model/test_runtime.py`:
+
+  - test_the_plan_reports_every_input_it_used
+  - test_an_explicit_cap_is_what_the_plan_reports
+  - test_the_plan_is_capped_by_the_scaling_ceiling
+  - test_a_pinned_availability_is_visible_in_the_plan
+  - test_available_cores_never_exceeds_the_cores_present
+
+Previous file kept as `pytest_cases.preprobe.txt`; compared as multisets.
+
+## `cbeam_methods` -- edited BY HAND, because it has no recorder
+
+    cbeam_methods   99 -> 101   (+available_cores, +parallel_plan)
+
+`cbeam_methods.txt` is not in `check_lib.RECORDABLE`, so `--record` cannot
+write it and there is no mechanism to regenerate it. It was therefore edited
+by hand, and then checked two ways rather than trusted: the two names are the
+only difference from `cbeam_methods.preprobe.txt` as multisets, and the
+recorded list is identical to `dir(BEAM._cbeam)` as the module now exposes it.
+
+A hand-edited baseline is the weakest kind in this directory, so the check
+that it matches the live module is the one that makes it safe. If this file
+needs editing again, do that comparison.
+
+## `python_api` -- CANNOT be recorded on this machine
+
+Two lines are expected to appear, and they are the entire intended change:
+
+    __all__ gains 'available_cores' and 'parallel_plan'
+    runtime: def parallel_plan() and def available_cores()
+
+`python_api.txt` can only be recorded by the interpreter CI checks against,
+and the only interpreter here that can import BEAM is Python 3.14, which
+renders inherited dunders differently from 3.11 and would write signatures
+that do not exist there. So it stays stale until someone records it on 3.11.
+
+**Whoever does that: the diff should contain the two additions above and
+nothing else beyond the known 3.14 rendering noise** (`__init_subclass__`,
+`__subclasshook__`, `__replace__`). Anything else in it is a real change that
+nobody intended.
+
+## The layout-count fix: `c_cases` 430 -> 437, `pytest_cases` 1237 -> 1238
+
+Inventory only. Not one recorded NUMBER moved, and the numeric baselines were
+re-run against the new build to prove it rather than assumed to be safe
+because only inventories were recorded.
+
+Eight test cases were added, all of them about one defect: a memory LAYOUT
+derived from the thread plan followed the machine's load, so two identical
+calls could quote different scratch figures and, at a low enough budget, be
+refused inconsistently. CI found it; this machine is too wide and too idle to
+have shown it.
+
+`c_cases` 430 -> 437, every one new, none removed:
+
+    test_the_layout_count_ignores_how_busy_the_machine_is
+    test_the_layout_count_never_undercuts_the_plan
+    test_an_explicit_cap_sizes_memory_for_itself
+    test_an_omp_env_setting_sizes_memory_for_itself
+    test_an_unknown_core_count_still_covers_the_plan
+    test_the_layout_count_holds_still_as_the_machine_fills
+    test_the_layout_count_covers_the_team_with_no_plan_active
+
+`pytest_cases` 1237 -> 1238, one new, none removed:
+
+    tests/suites/analytics/test_memory_budget.py::test_a_refusal_does_not_move_with_the_machines_load
+
+Snapshots before recording are `c_cases.prelayout.txt` and
+`pytest_cases.prelayout.txt`. Both diffs are additions only; compare against
+those two files if any line above looks wrong.
+
+`test_the_default_scope_stops_at_the_ceiling` was CHANGED, not added, so it
+does not appear above: it asserted the literal 8 and so passed here and failed
+on a four-core runner. It now asserts against `beam_cores_present()` and
+`beam_plan_max_width()`, the two limits the rule is made of.

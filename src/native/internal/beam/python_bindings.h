@@ -49,6 +49,8 @@ PyObject *py_compact(PyObject *self, PyObject *arg);
 PyObject *py_temper(PyObject *self, PyObject *args);
 PyObject *py_config(PyObject *self, PyObject *arg);
 PyObject *py_effective_threads(PyObject *self, PyObject *arg);
+PyObject *py_parallel_plan(PyObject *self, PyObject *arg);
+PyObject *py_available_cores(PyObject *self, PyObject *arg);
 PyObject *py_entropy(PyObject *self, PyObject *arg);
 PyObject *py_expected_counts(PyObject *self, PyObject *args);
 PyObject *py_explain(PyObject *self, PyObject *args);
@@ -145,5 +147,37 @@ void release_f64_buffers(Py_buffer *views, int n);
 PyObject *set_beam_error(BeamError err);
 PyObject *py_fingerprint_search(PyObject *self, PyObject *args);
 PyObject *py_local_distance(PyObject *self, PyObject *args);
+
+
+#include "beam/plan.h"
+
+/* ── One analytics call, with a thread plan in force ─────────── */
+
+/*
+ * Wraps the GIL-release region that every analytics binding already has, and
+ * resolves the thread plan for exactly that region.
+ *
+ * This is the seam because it is the only exception-safe one. The C entry
+ * points have six to nine returns each, so bracketing them would mean a leave
+ * on every path and a leak on the one that was missed -- and a leaked plan
+ * silently applies one call's thread count to the next, unrelated call. The
+ * block between these two macros calls no Python API, so it cannot raise, and
+ * contains no return or goto, which is asserted by the gate rather than
+ * assumed. There is no path out of it but falling through to the leave.
+ *
+ * It is also the right place for the read: the GIL is already released, so the
+ * one /proc read per call does not hold it.
+ *
+ * C API callers are not covered and keep today's behaviour, which is a safe
+ * default rather than an oversight. They opt in by calling
+ * `beam_plan_enter_default` and `beam_plan_leave` around their own work.
+ */
+#define BEAM_PY_PLANNED_BEGIN                                               \
+    Py_BEGIN_ALLOW_THREADS                                                  \
+    const int beam_plan_token_ = beam_plan_enter_default();
+
+#define BEAM_PY_PLANNED_END                                                 \
+    beam_plan_leave(beam_plan_token_);                                      \
+    Py_END_ALLOW_THREADS
 
 #endif /* BEAM_INTERNAL_PYTHON_BINDINGS_H */

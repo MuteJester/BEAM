@@ -2,6 +2,7 @@ accumulator_max
 add
 alphabet_info
 alphabets
+available_cores
 beta_contour_sums
 beta_contour_tail
 build
@@ -55,6 +56,7 @@ n_skipped
 n_states
 new
 observe
+parallel_plan
 path_count
 path_count_total
 positional_banded

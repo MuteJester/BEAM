@@ -321,6 +321,50 @@ if c_problems:
 else:
     check("C test inventory", c_got, c_want)
 
+# ── The thread plan is actually in force ───────────────────────────────────
+# Every analytics binding must resolve a thread plan for its call. The wiring
+# is a macro around the GIL-release region, so "did all of them get it" is a
+# question about SOURCE, and a static answer is stronger than a timing test:
+# it cannot be passed by a lucky machine, and it fails on the next region
+# somebody adds without the macro.
+#
+# Two things are checked, because each catches what the other cannot. A
+# remaining `Py_BEGIN_ALLOW_THREADS` is a region that plans nothing. A `return`
+# or `goto` inside a planned region is a path that skips the leave, which would
+# apply one call's thread count to the next, unrelated call -- the macro's
+# safety rests on there being no such path, so that is verified and not assumed.
+PLANNED_BINDINGS = ("analytics_bindings.c", "common.c")
+_bind = ROOT / "src" / "native" / "bindings" / "python"
+_unplanned, _escapes, _regions = [], [], 0
+for _name in PLANNED_BINDINGS:
+    _lines = (_bind / _name).read_text(encoding="utf-8").splitlines()
+    _depth = 0
+    for _i, _ln in enumerate(_lines, 1):
+        if "Py_BEGIN_ALLOW_THREADS" in _ln:
+            _unplanned.append(f"{_name}:{_i}")
+        if "BEAM_PY_PLANNED_BEGIN" in _ln:
+            _depth, _regions = 1, _regions + 1
+            continue
+        if "BEAM_PY_PLANNED_END" in _ln:
+            _depth = 0
+            continue
+        if _depth and ("return" in _ln.split("/*")[0].split("//")[0]
+                       or "goto" in _ln.split("/*")[0].split("//")[0]):
+            _escapes.append(f"{_name}:{_i}: {_ln.strip()}")
+if _unplanned:
+    fail.append("unplanned analytics region")
+    print(f"  FAIL  {len(_unplanned)} analytics region(s) resolve no thread plan: "
+          f"{', '.join(_unplanned)}")
+elif _escapes:
+    fail.append("escape from a planned region")
+    print(f"  FAIL  {len(_escapes)} path(s) leave a planned region without "
+          f"restoring the plan:")
+    for _e in _escapes:
+        print(f"          {_e}")
+else:
+    print(f"  OK    thread plan wiring ({_regions} analytics regions planned, "
+          f"no escapes)")
+
 # ── Numerical contract ─────────────────────────────────────────────────────
 c = json.loads((B / "corpus.json").read_text())
 seqs, ab = c["seqs"], c["ab"]

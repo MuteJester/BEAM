@@ -235,6 +235,7 @@ tests/suites/analytics/test_memory_budget.py::test_a_refusal_can_be_repeated_wit
 tests/suites/analytics/test_memory_budget.py::test_a_refusal_can_be_repeated_without_growing[length_marginals]
 tests/suites/analytics/test_memory_budget.py::test_a_refusal_can_be_repeated_without_growing[log_mellin]
 tests/suites/analytics/test_memory_budget.py::test_a_refusal_can_be_repeated_without_growing[surprisal_moments]
+tests/suites/analytics/test_memory_budget.py::test_a_refusal_does_not_move_with_the_machines_load
 tests/suites/analytics/test_memory_budget.py::test_every_heavy_entry_point_refuses_under_a_starved_budget[cgf_jet]
 tests/suites/analytics/test_memory_budget.py::test_every_heavy_entry_point_refuses_under_a_starved_budget[entropy]
 tests/suites/analytics/test_memory_budget.py::test_every_heavy_entry_point_refuses_under_a_starved_budget[hill_number]
@@ -1012,8 +1013,13 @@ tests/suites/model/test_reference_agreement.py::test_path_count_matches_referenc
 tests/suites/model/test_reference_agreement.py::test_scores_match_reference[2]
 tests/suites/model/test_reference_agreement.py::test_scores_match_reference[3]
 tests/suites/model/test_reference_agreement.py::test_scores_match_reference[4]
+tests/suites/model/test_runtime.py::test_a_pinned_availability_is_visible_in_the_plan
+tests/suites/model/test_runtime.py::test_an_explicit_cap_is_what_the_plan_reports
 tests/suites/model/test_runtime.py::test_atoms_feed_the_publicness_model
+tests/suites/model/test_runtime.py::test_available_cores_never_exceeds_the_cores_present
 tests/suites/model/test_runtime.py::test_results_do_not_depend_on_the_thread_count
+tests/suites/model/test_runtime.py::test_the_plan_is_capped_by_the_scaling_ceiling
+tests/suites/model/test_runtime.py::test_the_plan_reports_every_input_it_used
 tests/suites/model/test_runtime.py::test_thread_cap_round_trips
 tests/suites/model/test_runtime.py::test_thread_cap_treats_negative_as_default
 tests/suites/model/test_scoring.py::test_abundance_is_replication

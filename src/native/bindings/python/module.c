@@ -37,6 +37,8 @@ static PyMethodDef module_methods[] = {
     {"set_threads",        py_set_threads,                   METH_O, NULL},
     {"threads",            py_threads,                       METH_NOARGS, NULL},
     {"effective_threads",  py_effective_threads,             METH_NOARGS, NULL},
+    {"parallel_plan",      py_parallel_plan,                 METH_NOARGS, NULL},
+    {"available_cores",    py_available_cores,               METH_NOARGS, NULL},
     {"set_memory_budget",  py_set_memory_budget,             METH_O, NULL},
     {"memory_budget",      py_memory_budget,                 METH_NOARGS, NULL},
     {"spectrum_pair",      py_spectrum_pair,                 METH_VARARGS, NULL},
