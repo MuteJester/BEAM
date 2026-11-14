@@ -3362,3 +3362,43 @@ The last of those is why `gil_regions` returns `unbalanced` separately. The
 first attempt left the scanner inside a region for the rest of the FILE, so
 every later `return` became an escape: that mutation printed **87** escape
 lines and never said the macro was unbalanced.
+
+## 2026-11-14: `pytest_cases` 1238 -> 1242, four ids added by the fork guard
+
+Four added, **none removed** — the whole diff is additions:
+
+```
+tests/suites/model/test_runtime.py::test_a_fork_with_nothing_running_is_silent
+tests/suites/model/test_runtime.py::test_a_real_fork_after_parallel_work_warns_in_the_child
+tests/suites/model/test_runtime.py::test_an_unreadable_thread_count_is_one_rather_than_a_guess
+tests/suites/model/test_runtime.py::test_the_fork_warning_names_the_hang_and_the_remedy
+```
+
+They cover `BEAM.runtime`'s new at-fork guard. An OpenMP thread pool does not
+survive `fork`: only the calling thread exists in the child, so the child
+waits at its first parallel computation and hangs — no exception, no
+traceback, nothing to search for. The documentation said to use `spawn` and
+did not say what happens otherwise, so the advice was read after the hang
+rather than before it. The guard warns in the child when the process had more
+than one native thread at fork time, read from `/proc/self/status` because an
+OpenMP worker is not a Python thread and `threading.active_count()` cannot
+see it. A fork before any computation is safe and is not warned about —
+verified: a fresh import reports 1 thread, and building a model under
+`set_threads(4)` reports 4.
+
+All four were mutation-tested, and one of them was wrong until that was done.
+`test_a_fork_with_nothing_running_is_silent` originally used
+`simplefilter("error")`, which `_after_fork_in_child` swallows on purpose, so
+it passed against a guard mutated to warn on **every** fork. It now asserts
+on the recorded warning list.
+
+| mutation | caught by |
+|---|---|
+| `os.register_at_fork` call removed | only `test_a_real_fork_...` (the other three pass — which is why an end-to-end fork test is there at all) |
+| predicate `> 1` relaxed to `> 0` | `test_a_fork_with_nothing_running_is_silent`, after it was fixed |
+| `"spawn"` dropped from the message | `test_the_fork_warning_names_the_hang_and_the_remedy` |
+| unreadable thread count guesses 99 instead of 1 | `test_an_unreadable_thread_count_is_one_rather_than_a_guess` |
+
+No other baseline moved: `python_api.txt` is byte-identical, which is the
+check that matters here — every added name is underscore-private, so BEAM's
+declared surface is unchanged.

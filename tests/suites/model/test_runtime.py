@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import importlib.util
 import math
+import os
 import random
+import warnings
 
 import numpy as np
 import pytest
@@ -163,3 +165,108 @@ def test_available_cores_never_exceeds_the_cores_present():
     import BEAM
 
     assert 1 <= BEAM.available_cores() <= BEAM.parallel_plan()["cores"]
+
+
+# Forking
+#
+# The guard exists because the failure it reports is a hang: no exception, no
+# traceback, nothing for a user to search for. These tests never let a child
+# reach a parallel region, which is the thing that would hang -- each one
+# exits immediately after reading what the handler did.
+# ════════════════════════════════════════════════════════════════════════
+
+
+def test_the_fork_warning_names_the_hang_and_the_remedy():
+    """The message has to answer "why has my program stopped" by itself.
+
+    Asserted on content rather than on being non-empty: a warning that fires
+    in the right place and does not say `spawn` leaves the reader exactly
+    where they were.
+    """
+    from BEAM import runtime
+    before = runtime._FORK_THREADS
+    runtime._FORK_THREADS = 8
+    try:
+        with pytest.warns(RuntimeWarning) as caught:
+            runtime._after_fork_in_child()
+    finally:
+        runtime._FORK_THREADS = before
+    message = str(caught[0].message)
+    assert "hang" in message
+    assert "spawn" in message
+    assert "set_threads" in message
+    assert "8" in message              # the count it actually observed
+
+
+def test_a_fork_with_nothing_running_is_silent():
+    """A fork before any parallel work is safe, and must not be warned about.
+
+    This is what keeps the guard usable: a library that warns on every fork
+    teaches people to filter the category, which silences it for the case it
+    was written for.
+    """
+    from BEAM import runtime
+    before = runtime._FORK_THREADS
+    runtime._FORK_THREADS = 1
+    try:
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            runtime._after_fork_in_child()
+    finally:
+        runtime._FORK_THREADS = before
+    # Asserted on the RECORDED list, not by turning warnings into errors:
+    # `_after_fork_in_child` swallows exceptions on purpose, so an error
+    # raised by a filter would be caught there and this test would pass
+    # against a guard that warns on every fork. Mutating the predicate to
+    # `> 0` is what showed it.
+    assert caught == [], f"warned with nothing running: {[str(c.message) for c in caught]}"
+
+
+def test_an_unreadable_thread_count_is_one_rather_than_a_guess(monkeypatch):
+    """Reporting 1 makes the guard silent on a platform without /proc.
+
+    The alternative -- assuming the worst -- would warn on every fork of every
+    process on such a platform, which is the failure above.
+    """
+    from BEAM import runtime
+
+    def _no_proc(*a, **k):
+        raise OSError("no /proc here")
+
+    monkeypatch.setattr("builtins.open", _no_proc)
+    assert runtime._native_thread_count() == 1
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="no fork on this platform")
+def test_a_real_fork_after_parallel_work_warns_in_the_child(model,
+                                                            restore_threads):
+    """End to end, which is the only way to prove the handler is REGISTERED.
+
+    The three tests above call `_after_fork_in_child` directly, so all of them
+    would still pass if `os.register_at_fork` were never reached -- and that
+    one line is the whole mechanism.
+    """
+    from BEAM import runtime, set_threads
+    set_threads(4)
+    model.entropy()          # any analytic starts a team, which is the hazard
+    if runtime._native_thread_count() < 2:
+        pytest.skip("no worker pool on this build, so there is nothing to warn "
+                    "about and the test would pass without testing anything")
+
+    read_fd, write_fd = os.pipe()
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        pid = os.fork()
+        if pid == 0:
+            # Forked from a threaded process: anything that takes a lock may
+            # deadlock here, so this does one syscall and leaves. It never
+            # returns into pytest.
+            try:
+                os.write(write_fd, b"1" if caught else b"0")
+            finally:
+                os._exit(0)
+        os.close(write_fd)
+        answer = os.read(read_fd, 1)
+        os.waitpid(pid, 0)
+    os.close(read_fd)
+    assert answer == b"1", "the child was not warned that it had forked"

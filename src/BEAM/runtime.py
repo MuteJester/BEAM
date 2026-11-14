@@ -2,7 +2,8 @@
 """
 from __future__ import annotations
 
-
+import os
+import warnings
 
 from . import _cbeam as _c
 from ._simulation_result import SimulationResult
@@ -123,3 +124,74 @@ def file_provenance_span() -> tuple[int, int]:
     """
     off, nbytes = _c.file_provenance_span()
     return int(off), int(nbytes)
+
+
+# ── Forking ────────────────────────────────────────────────────────────────
+#
+# BEAM's OpenMP runtime does not survive `fork`. Once any parallel region has
+# run, the runtime holds a pool of worker threads, and `fork` copies only the
+# thread that called it: the child's first parallel computation then waits on
+# workers that do not exist there and hangs -- no exception, no traceback, no
+# exit. That is the worst failure mode a library has, and the documentation
+# that says to use `spawn` gets read after the hang rather than before it.
+#
+# So the child says so itself, on the way past. The condition is "this process
+# had more than one native thread when it forked", read from /proc rather than
+# from `threading.active_count()`, which cannot see an OpenMP worker because
+# it is not a Python thread.
+#
+# That condition is deliberately broader than "BEAM had a pool": another
+# library's threads satisfy it too, and this will occasionally warn a child
+# that would have been fine. Forking a multithreaded process is the hazard
+# whoever started the threads, the warning is suppressible by category, and a
+# guard that stays quiet through the case it exists for is worth less than one
+# that is sometimes early.
+_FORK_THREADS = 1
+
+_FORK_WARNING = (
+    "this process forked while {n} native threads were running. BEAM's "
+    "OpenMP runtime does not survive fork: the first parallel computation in "
+    "this child will hang, with no error raised. Start workers with "
+    'multiprocessing.get_context("spawn") and call BEAM.set_threads(T) in '
+    "each one."
+)
+
+
+def _native_thread_count() -> int:
+    """Threads in this process, including the ones Python cannot see.
+
+    1 when the count cannot be read, which makes the fork warning silent on a
+    platform without /proc rather than wrong about it.
+    """
+    try:
+        with open("/proc/self/status", encoding="utf-8") as fh:
+            for line in fh:
+                if line.startswith("Threads:"):
+                    return int(line.split()[1])
+    except (OSError, ValueError, IndexError):
+        pass
+    return 1
+
+
+def _before_fork() -> None:
+    # Read in the parent: by the time the child runs it has one thread, so the
+    # count that matters is gone.
+    global _FORK_THREADS
+    _FORK_THREADS = _native_thread_count()
+
+
+def _after_fork_in_child() -> None:
+    if _FORK_THREADS > 1:
+        # Wrapped, because a child that cannot warn must still run. The point
+        # is to explain a hang, never to become a different failure.
+        try:
+            warnings.warn(_FORK_WARNING.format(n=_FORK_THREADS),
+                          RuntimeWarning, stacklevel=2)
+        except Exception:                                    # pragma: no cover
+            pass
+
+
+# Unix only: Windows has no fork, and no register_at_fork to hang it on.
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(before=_before_fork,
+                        after_in_child=_after_fork_in_child)
