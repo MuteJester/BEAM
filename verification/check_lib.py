@@ -190,7 +190,7 @@ def _strip_c_comments(line: str, in_block: bool) -> tuple[str, bool]:
 _C_FUNC = re.compile(r"^(?:static\s+)?[A-Za-z_][\w\s\*]*?\**\s*([A-Za-z_]\w*)\s*\(")
 
 
-def gil_regions(root: Path) -> tuple[list[str], list[str]]:
+def gil_regions(root: Path) -> tuple[list[str], list[str], list[str]]:
     """Every region that drops the GIL, and whether it resolves a thread plan.
 
     Returns (regions, escapes, unbalanced). Each region is one line,
@@ -278,6 +278,112 @@ def gil_regions(root: Path) -> tuple[list[str], list[str]]:
             unbalanced.append(f"{path.name}:{open_at}: planned region in "
                               f"{open_in} is never closed")
     return sorted(regions), escapes, unbalanced
+
+#: A C cast, so that `num_threads((int)conc)` and `num_threads(conc)` are one
+#: form rather than two.
+_C_CAST = re.compile(r"\((?:unsigned\s+)?(?:int|long|short|char|size_t|u?int\d+_t)\)")
+
+#: Every expression a `num_threads(...)` clause may name, normalised. This is
+#: a tripwire, not a recording: a NEW name here is a deliberate decision that
+#: someone has to make in review, and the question it forces is "where does
+#: that count come from".
+#:
+#:   beam_threads()      the plan in force on this thread
+#:   conc, conc_e, conc_z   budget concurrency, already narrowed by the plan
+#:   nth, team           a count resolved once for the call and held
+#:   conc ? conc : 1     the same, floored at one (model/finalize.c)
+#:
+#: What it exists to reject: `omp_get_max_threads()`, `omp_get_num_procs()`,
+#: and any literal -- each of which asks for one thread per core behind the
+#: caller's back, which is the whole failure plan.h was written to stop.
+_PERMITTED_THREAD_COUNTS = frozenset({
+    "beam_threads()", "conc", "conc_e", "conc_z", "nth", "team",
+    "conc ? conc : 1",
+})
+
+
+def _logical_lines(path: Path) -> list[str]:
+    r"""Comment-free lines with `\` continuations joined.
+
+    Both are required to read a pragma: `num_threads` is routinely on the
+    continuation line, and a prose mention of one in a comment is not a
+    clause. A naive grep over the raw text already produced one wrong finding
+    in the parallel design's own notes.
+    """
+    inb, out, buf = False, [], ""
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        code, inb = _strip_c_comments(raw, inb)
+        if code.rstrip().endswith("\\"):
+            buf += code.rstrip()[:-1] + " "
+            continue
+        out.append(buf + code)
+        buf = ""
+    if buf:
+        out.append(buf)
+    return out
+
+
+def _paren_expr(text: str, after: int) -> str | None:
+    """The text inside the parentheses starting at or after `after`.
+
+    Matched rather than pattern-captured, because the expression may itself
+    contain parentheses -- `num_threads((int)conc)` and
+    `num_threads(conc ? (int)conc : 1)` both do, and a regex that stops at
+    the first `)` truncates them.
+    """
+    try:
+        i = text.index("(", after)
+    except ValueError:
+        return None
+    depth = 0
+    for j in range(i, len(text)):
+        if text[j] == "(":
+            depth += 1
+        elif text[j] == ")":
+            depth -= 1
+            if depth == 0:
+                return text[i + 1:j]
+    return None
+
+
+def thread_count_clauses(root: Path) -> tuple[list[str], list[str], int]:
+    """Where every parallel region gets its thread count.
+
+    Returns (missing, forbidden, n_clauses).
+
+    This is the other half of `gil_regions`, and the half that was missing.
+    `gil_regions` proves the plan is RESOLVED at the Python boundary; it says
+    nothing about whether the region underneath names it. One region did not:
+    `occupancy/poisson_binomial/pgf.c` carried no `num_threads` at all, so
+    `py_publicness_pgf` ran at one thread per core however narrow a team the
+    caller's plan had resolved -- and the gate reported the plan "in force"
+    the whole time, because wrapping an entry point and applying a plan are
+    different things. A plan is applied by NAMING it in the clause.
+
+    `#pragma omp for` and `#pragma omp critical` are not matched and must not
+    be: an `omp for` inside an enclosing `parallel` takes no `num_threads`,
+    and requiring one would be a demand the language rejects.
+    """
+    missing: list[str] = []
+    forbidden: list[str] = []
+    n = 0
+    for path in sorted(root.joinpath("src", "native").rglob("*.[ch]")):
+        for ln in _logical_lines(path):
+            stripped = ln.strip()
+            if not stripped.startswith("#pragma omp parallel"):
+                continue
+            rel = path.relative_to(root)
+            k = stripped.find("num_threads")
+            if k < 0:
+                missing.append(f"{rel}: {stripped[:72]}")
+                continue
+            n += 1
+            raw = _paren_expr(stripped, k)
+            norm = re.sub(r"\s+", " ", _C_CAST.sub("", raw or "")).strip()
+            if norm not in _PERMITTED_THREAD_COUNTS:
+                forbidden.append(f"{rel}: num_threads({raw}) -> {norm!r}")
+    return missing, forbidden, n
+
 
 #: Every baseline `--record` can write, by the name `--only` accepts.
 RECORDABLE = frozenset({"python_api", "pytest_cases", "c_cases",

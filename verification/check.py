@@ -19,7 +19,9 @@ import numpy as np
 import BEAM
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import check_lib
 from check_lib import (c_inventory, collect_ids, compare, gil_regions,
+                       thread_count_clauses,
                        inventory_difference, missing_baseline_is_fatal,
                        python_collect_argv, python_inventory,
                        record_targets, refuse_short_c_inventory)
@@ -459,6 +461,38 @@ else:
       print(f"  OK    thread plan wiring (all {len(_regions)} GIL-releasing "
             f"regions resolve a thread plan; no escapes)")
 
+# ── Every region names a thread count, and names a permitted one ───────────
+# The other half of the check above, and the half that was missing. The macro
+# scan proves a plan is RESOLVED at the Python boundary. It cannot prove the
+# region underneath NAMES it -- and one region did not: pgf.c carried no
+# `num_threads` at all, so py_publicness_pgf ran at one thread per core
+# however narrow a team the plan had resolved, while this gate reported the
+# plan "in force". Wrapping an entry point and applying a plan are different
+# things; a plan is applied by naming it in the clause.
+#
+# Specified in the parallel policy plan as a brace-matched check rather than a
+# grep, because the pragmas are multi-line and a naive grep already produced
+# one wrong finding in that design's own notes.
+_tc_missing, _tc_forbidden, _tc_n = thread_count_clauses(ROOT)
+if _tc_missing:
+    fail.append("region without a thread count")
+    print(f"  FAIL  {len(_tc_missing)} parallel region(s) name no thread "
+          f"count, so they run at the OpenMP default:")
+    for _m in _tc_missing:
+        print(f"          {_m}")
+elif _tc_forbidden:
+    fail.append("forbidden thread count")
+    print(f"  FAIL  {len(_tc_forbidden)} region(s) name a thread count that "
+          f"is not a permitted form:")
+    for _f in _tc_forbidden:
+        print(f"          {_f}")
+    print("          Permitted: "
+          f"{', '.join(sorted(check_lib._PERMITTED_THREAD_COUNTS))}.")
+    print("          Add a name there only when you can say what resolves it.")
+else:
+    print(f"  OK    thread counts ({_tc_n} parallel regions, every one names "
+          f"a permitted thread count)")
+
 # ── Numerical contract ─────────────────────────────────────────────────────
 c = json.loads((B / "corpus.json").read_text())
 seqs, ab = c["seqs"], c["ab"]
@@ -606,6 +640,7 @@ check("thread independence", tg, tw)
 # a defect that predates the baseline. Three such defects were found that way,
 # all inside quantities the baseline already pinned.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import check_lib
 import exact                                                     # noqa: E402
 
 if exact.run():

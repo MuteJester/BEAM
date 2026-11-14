@@ -78,7 +78,10 @@ TEST_BINS := $(TEST_SRCS:tests/native/%.c=$(BUILD)/tests/native/%)
 # parallelism. The runner caps threads per suite and runs several suites at
 # once instead.
 test: $(TEST_BINS)
-	@tools/qa/run c
+# --bin-dir, because BUILD is a variable now: without it `make test
+# BUILD=elsewhere` linked into elsewhere/ and then ran build/, reporting
+# a pass for binaries it had not just built.
+	@tools/qa/run c --bin-dir $(BUILD)/tests/native
 
 # verification/check.py reads the C test inventory by asking each binary what
 # it runs, rather than by grepping RUN_TEST out of these sources -- see
