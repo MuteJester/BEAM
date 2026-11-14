@@ -51,9 +51,9 @@ PyObject *py_observe(PyObject *self, PyObject *args) {
     if (!ok) { PyMem_Free(v); return NULL; }
 
     BeamError err;
-    Py_BEGIN_ALLOW_THREADS
+    BEAM_PY_PLANNED_BEGIN
     err = beam_model_observe(m, v, w, (uint32_t)n);
-    Py_END_ALLOW_THREADS
+    BEAM_PY_PLANNED_END
     PyMem_Free(v); PyMem_Free(w);
     if (err != BEAM_OK) return set_beam_error(err);
     Py_RETURN_NONE;
@@ -70,9 +70,9 @@ PyObject *py_finalize(PyObject *self, PyObject *arg) {
     BeamModel *m = edge_from_capsule(arg);
     if (!m) return NULL;
     BeamError err;
-    Py_BEGIN_ALLOW_THREADS
+    BEAM_PY_PLANNED_BEGIN
     err = beam_model_finalize(m);
-    Py_END_ALLOW_THREADS
+    BEAM_PY_PLANNED_END
     if (err != BEAM_OK) return set_beam_error(err);
     Py_RETURN_NONE;
 }
@@ -102,10 +102,10 @@ PyObject *py_build(PyObject *self, PyObject *args) {
     }
 
     BeamError err;
-    Py_BEGIN_ALLOW_THREADS
+    BEAM_PY_PLANNED_BEGIN
     err = beam_model_observe(m, v, w, (uint32_t)n);
     if (err == BEAM_OK) err = beam_model_finalize(m);
-    Py_END_ALLOW_THREADS
+    BEAM_PY_PLANNED_END
     PyMem_Free(v); PyMem_Free(w);
     if (err != BEAM_OK) { beam_model_destroy(m); return set_beam_error(err); }
     return PyCapsule_New(m, BEAM_CAPSULE_NAME, capsule_destructor);
@@ -115,9 +115,9 @@ PyObject *py_load(PyObject *self, PyObject *arg) {
     const char *path = PyUnicode_AsUTF8(arg);
     if (!path) return NULL;
     BeamModel *m;
-    Py_BEGIN_ALLOW_THREADS
+    BEAM_PY_PLANNED_BEGIN
     m = beam_model_load(path);
-    Py_END_ALLOW_THREADS
+    BEAM_PY_PLANNED_END
     if (!m) {
         if (beam_last_error() != BEAM_OK) {
             /*
@@ -145,9 +145,9 @@ PyObject *py_save(PyObject *self, PyObject *args) {
     BeamModel *m = edge_from_capsule(cap);
     if (!m) return NULL;
     BeamError err;
-    Py_BEGIN_ALLOW_THREADS
+    BEAM_PY_PLANNED_BEGIN
     err = beam_model_save(m, path);
-    Py_END_ALLOW_THREADS
+    BEAM_PY_PLANNED_END
     if (err != BEAM_OK) return set_beam_error(err);
     Py_RETURN_NONE;
 }
@@ -236,9 +236,9 @@ PyObject *py_temper(PyObject *self, PyObject *args) {
     BeamModel *m = edge_from_capsule(cap);
     if (!m) return NULL;
     BeamError err;
-    Py_BEGIN_ALLOW_THREADS
+    BEAM_PY_PLANNED_BEGIN
     err = beam_model_temper(m, t);
-    Py_END_ALLOW_THREADS
+    BEAM_PY_PLANNED_END
     if (err != BEAM_OK) return set_beam_error(err);
     Py_RETURN_NONE;
 }
@@ -250,10 +250,10 @@ PyObject *py_posterior(PyObject *self, PyObject *args) {
     BeamModel *p = edge_from_capsule(prior_cap);
     if (!m || !p) return NULL;
     BeamError err;
-    Py_BEGIN_ALLOW_THREADS
+    BEAM_PY_PLANNED_BEGIN
     err = beam_model_posterior(m, p, kappa);
     if (err == BEAM_OK) err = beam_model_finalize(m);
-    Py_END_ALLOW_THREADS
+    BEAM_PY_PLANNED_END
     if (err != BEAM_OK) return set_beam_error(err);
     Py_RETURN_NONE;
 }
@@ -288,10 +288,10 @@ PyObject *py_set_prior(PyObject *self, PyObject *args) {
         Py_DECREF(fast);
     }
     BeamError err;
-    Py_BEGIN_ALLOW_THREADS
+    BEAM_PY_PLANNED_BEGIN
     err = beam_model_set_prior(m, alpha_obj == Py_None ? NULL : alpha,
                                (uint32_t)n, alpha_length);
-    Py_END_ALLOW_THREADS
+    BEAM_PY_PLANNED_END
     if (err != BEAM_OK) return set_beam_error(err);
     Py_RETURN_NONE;
 }
@@ -303,10 +303,10 @@ PyObject *py_subtract(PyObject *self, PyObject *args) {
     BeamModel *o = edge_from_capsule(other_cap);
     if (!m || !o) return NULL;
     BeamError err;
-    Py_BEGIN_ALLOW_THREADS
+    BEAM_PY_PLANNED_BEGIN
     err = beam_model_subtract(m, o);
     if (err == BEAM_OK) err = beam_model_finalize(m);
-    Py_END_ALLOW_THREADS
+    BEAM_PY_PLANNED_END
     if (err != BEAM_OK) return set_beam_error(err);
     Py_RETURN_NONE;
 }
@@ -318,10 +318,10 @@ PyObject *py_add(PyObject *self, PyObject *args) {
     BeamModel *o = edge_from_capsule(other_cap);
     if (!m || !o) return NULL;
     BeamError err;
-    Py_BEGIN_ALLOW_THREADS
+    BEAM_PY_PLANNED_BEGIN
     err = beam_model_add(m, o);
     if (err == BEAM_OK) err = beam_model_finalize(m);
-    Py_END_ALLOW_THREADS
+    BEAM_PY_PLANNED_END
     if (err != BEAM_OK) return set_beam_error(err);
     Py_RETURN_NONE;
 }
@@ -439,9 +439,9 @@ PyObject *py_depth_occupancy(PyObject *self, PyObject *arg) {
                              (uint64_t)2u * n * sizeof(uint64_t));
     }
     BeamError err;
-    Py_BEGIN_ALLOW_THREADS
+    BEAM_PY_PLANNED_BEGIN
     err = beam_model_depth_occupancy(m, rows, cells);
-    Py_END_ALLOW_THREADS
+    BEAM_PY_PLANNED_END
     if (err != BEAM_OK) { free(rows); free(cells); return set_beam_error(err); }
     PyObject *lr = PyList_New((Py_ssize_t)n), *lc = PyList_New((Py_ssize_t)n);
     if (!lr || !lc) { Py_XDECREF(lr); Py_XDECREF(lc); free(rows); free(cells);
@@ -467,9 +467,9 @@ PyObject *py_path_count_total(PyObject *self, PyObject *arg) {
     BeamModel *m = edge_from_capsule(arg);
     if (!m) return NULL;
     double v;
-    Py_BEGIN_ALLOW_THREADS
+    BEAM_PY_PLANNED_BEGIN
     v = beam_model_path_count_total(m);
-    Py_END_ALLOW_THREADS
+    BEAM_PY_PLANNED_END
     if (beam_last_error() != BEAM_OK) return set_beam_error(beam_last_error());
     return PyFloat_FromDouble(v);
 }
@@ -488,9 +488,9 @@ PyObject *py_accumulator_max(PyObject *self, PyObject *arg) {
     BeamModel *m = edge_from_capsule(arg);
     if (!m) return NULL;
     double v;
-    Py_BEGIN_ALLOW_THREADS
+    BEAM_PY_PLANNED_BEGIN
     v = beam_model_accumulator_max(m);
-    Py_END_ALLOW_THREADS
+    BEAM_PY_PLANNED_END
     if (beam_last_error() != BEAM_OK) return set_beam_error(beam_last_error());
     return PyFloat_FromDouble(v);
 }
@@ -533,9 +533,9 @@ PyObject *py_log_partition_by_layer(PyObject *self, PyObject *args) {
     if (!buf) return beam_py_nomem("the per-layer partition buffer",
                                    (uint64_t)L * sizeof(double));
     BeamError err;
-    Py_BEGIN_ALLOW_THREADS
+    BEAM_PY_PLANNED_BEGIN
     err = beam_model_log_partition_by_layer(m, L, buf);
-    Py_END_ALLOW_THREADS
+    BEAM_PY_PLANNED_END
     if (err != BEAM_OK) { PyMem_Free(buf); return set_beam_error(err); }
     PyObject *out = PyList_New((Py_ssize_t)L);
     if (!out) { PyMem_Free(buf); return NULL; }

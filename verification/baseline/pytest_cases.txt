@@ -1013,11 +1013,16 @@ tests/suites/model/test_reference_agreement.py::test_path_count_matches_referenc
 tests/suites/model/test_reference_agreement.py::test_scores_match_reference[2]
 tests/suites/model/test_reference_agreement.py::test_scores_match_reference[3]
 tests/suites/model/test_reference_agreement.py::test_scores_match_reference[4]
+tests/suites/model/test_runtime.py::test_a_fork_with_nothing_running_is_silent
 tests/suites/model/test_runtime.py::test_a_pinned_availability_is_visible_in_the_plan
+tests/suites/model/test_runtime.py::test_a_real_fork_after_parallel_work_warns_in_the_child
 tests/suites/model/test_runtime.py::test_an_explicit_cap_is_what_the_plan_reports
+tests/suites/model/test_runtime.py::test_an_unreadable_thread_count_is_one_rather_than_a_guess
 tests/suites/model/test_runtime.py::test_atoms_feed_the_publicness_model
 tests/suites/model/test_runtime.py::test_available_cores_never_exceeds_the_cores_present
 tests/suites/model/test_runtime.py::test_results_do_not_depend_on_the_thread_count
+tests/suites/model/test_runtime.py::test_the_fork_warning_names_the_hang_and_the_remedy
+tests/suites/model/test_runtime.py::test_the_fork_warning_survives_warnings_as_errors
 tests/suites/model/test_runtime.py::test_the_plan_is_capped_by_the_scaling_ceiling
 tests/suites/model/test_runtime.py::test_the_plan_reports_every_input_it_used
 tests/suites/model/test_runtime.py::test_thread_cap_round_trips

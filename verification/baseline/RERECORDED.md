@@ -3265,3 +3265,297 @@ No recorded NUMBER. On the rebuilt extension the gate reports OK for `numeric`
 `thread independence` and `exact against enumeration` (416 quantities), and
 `C public symbols` is unchanged. The two notes this section exists to silence
 are gone from the gate's output, which now has no `note` lines at all.
+
+## 2026-11-14: `gil_regions.txt` — a new baseline, nothing re-recorded
+
+`--record preforkguard --only pytest_cases,gil_regions` wrote
+`gil_regions.txt` for the first time. **No recorded number moved on that
+run:** `numeric.json` (78 keys), `math_values.json` (58 quantities), the
+saved-model sha256, the thread-independence table at 1/4/16 threads and
+`exact` (416 quantities) all compared equal, `python_api.txt` is
+byte-identical at 381 signature lines, and `c_cases.txt` is unchanged at 439.
+The only other baseline written is `pytest_cases.txt`, in its own section
+below. The forced rebuild that preceded the run produced a byte-identical
+extension, `sha256 227a5fb3931208cfc4b6d9f91d43b2dd06dca6e915b171ecfa54f0c470d4f6b0`,
+so nothing in `src/native/` changed.
+
+69 lines, one per region that drops the GIL, each
+`<file>::<function>[#N] planned|unplanned`:
+
+| file | planned | unplanned |
+|---|---|---|
+| `algorithm_bindings.c` | 0 | 2 |
+| `analytics_bindings.c` | 28 | 0 |
+| `common.c` | 1 | 0 |
+| `distance_bindings.c` | 0 | 1 |
+| `fingerprint_bindings.c` | 0 | 1 |
+| `insights_bindings.c` | 0 | 1 |
+| `mixture_bindings.c` | 0 | 7 |
+| `model_bindings.c` | 0 | 14 |
+| `publicness_bindings.c` | 0 | 4 |
+| `query_bindings.c` | 0 | 8 |
+| `scoring_bindings.c` | 0 | 2 |
+| **total** | **29** | **40** |
+
+### Why it exists
+
+The check this replaces read TWO of the fourteen binding files, named in a
+`PLANNED_BINDINGS` tuple, and on a clean tree printed
+
+    OK    thread plan wiring (29 analytics regions planned, no escapes)
+
+A reader takes that for a statement about the library. It was a statement
+about `analytics_bindings.c` and `common.c`. The other twelve files hold 40
+regions that drop the GIL and resolve no thread plan, so `beam_threads()`
+falls through to `threads_cap()` — with no cap set, `omp_get_max_threads()`,
+which is one thread per core: the default `plan.h` exists to stop asking for.
+Measured on this 16-core box with 15 cores free, `BEAM.parallel_plan()`
+reports `plan: 8` while `effective_threads()` is 16, so an analytics call runs
+8 and `py_observe` runs 16. On the saturated 48-core node it asks for 48,
+which `.private/parallelism` measures at 301x worse than serial at half that.
+
+`model_bindings.c`'s 14 are the expensive half of the library: `py_observe`,
+`py_finalize`, `py_build`, `py_load`, `py_save`, `py_temper`, `py_posterior`,
+`py_set_prior`, `py_subtract`, `py_add`, `py_depth_occupancy`,
+`py_path_count_total`, `py_accumulator_max`, `py_log_partition_by_layer`.
+
+That is a DEFERRAL and not a defect. DESIGN.md decision 9 reads: *"Does the
+adaptive default apply to fitting? No. Query-time calls only, for now;
+fitting keeps today's behaviour until it is profiled."* So the 40 are
+recorded rather than failed. What recording buys is what a printed count
+cannot: a **new** unplanned region fails the gate, so the deferral cannot
+quietly grow, and wiring one up prints a note asking to be re-recorded. The
+lesson behind that is `c_symbols.txt` two sections above — a baseline with no
+recorder at all, which drifted by thirty symbols across four merges.
+
+Identified by function rather than by line, because a line-numbered baseline
+churns on every unrelated edit above it and teaches its reader to re-record
+without reading.
+
+### The count is 40, not 41
+
+Worth recording because the first version of this file said 41. The scan is a
+text search, and `mixture_bindings.c` opens with a doc comment explaining
+what holds across "the `Py_BEGIN_ALLOW_THREADS` region". That sentence was
+counted as a 41st unplanned region, attributed to no function at all because
+it sits above the first one — the same mistake `public_text_names` records
+near the top of `check.py`, where `jet_sweep` matched a prose comment and was
+counted as public API. `check_lib._strip_c_comments` now removes comments,
+tracking `/* */` across lines, before anything is matched, and
+`verification/tests/test_gil_regions.py` pins it with
+`test_a_region_named_only_in_a_comment_is_not_a_region`. The `::?` guard in
+that file is what found it.
+
+### How it was proved to work
+
+Five mutations against the real gate, each caught by the intended branch:
+
+| mutation | result |
+|---|---|
+| clean tree | `OK ... 29 of 69 ... 40 unplanned by decision 9, none new` |
+| a second `Py_BEGIN_ALLOW_THREADS` added to `scoring_bindings.c` | FAIL, 1 new region |
+| a `BEAM_PY_PLANNED_BEGIN` in `analytics_bindings.c` turned back into `Py_BEGIN_ALLOW_THREADS` | FAIL, 1 region stopped planning |
+| `py_observe` wired with a matched BEGIN/END pair | note, "now resolve a thread plan", no failure |
+| `BEAM_PY_PLANNED_BEGIN` with no matching END | FAIL, one line naming `py_observe` |
+
+The last of those is why `gil_regions` returns `unbalanced` separately. The
+first attempt left the scanner inside a region for the rest of the FILE, so
+every later `return` became an escape: that mutation printed **87** escape
+lines and never said the macro was unbalanced.
+
+## 2026-11-14: `pytest_cases` 1238 -> 1242, four ids added by the fork guard
+
+Four added, **none removed** — the whole diff is additions:
+
+```
+tests/suites/model/test_runtime.py::test_a_fork_with_nothing_running_is_silent
+tests/suites/model/test_runtime.py::test_a_real_fork_after_parallel_work_warns_in_the_child
+tests/suites/model/test_runtime.py::test_an_unreadable_thread_count_is_one_rather_than_a_guess
+tests/suites/model/test_runtime.py::test_the_fork_warning_names_the_hang_and_the_remedy
+```
+
+They cover `BEAM.runtime`'s new at-fork guard. An OpenMP thread pool does not
+survive `fork`: only the calling thread exists in the child, so the child
+waits at its first parallel computation and hangs — no exception, no
+traceback, nothing to search for. The documentation said to use `spawn` and
+did not say what happens otherwise, so the advice was read after the hang
+rather than before it. The guard warns in the child when the process had more
+than one native thread at fork time, read from `/proc/self/status` because an
+OpenMP worker is not a Python thread and `threading.active_count()` cannot
+see it. A fork before any computation is safe and is not warned about —
+verified: a fresh import reports 1 thread, and building a model under
+`set_threads(4)` reports 4.
+
+All four were mutation-tested, and one of them was wrong until that was done.
+`test_a_fork_with_nothing_running_is_silent` originally used
+`simplefilter("error")`, which `_after_fork_in_child` swallows on purpose, so
+it passed against a guard mutated to warn on **every** fork. It now asserts
+on the recorded warning list.
+
+| mutation | caught by |
+|---|---|
+| `os.register_at_fork` call removed | only `test_a_real_fork_...` (the other three pass — which is why an end-to-end fork test is there at all) |
+| predicate `> 1` relaxed to `> 0` | `test_a_fork_with_nothing_running_is_silent`, after it was fixed |
+| `"spawn"` dropped from the message | `test_the_fork_warning_names_the_hang_and_the_remedy` |
+| unreadable thread count guesses 99 instead of 1 | `test_an_unreadable_thread_count_is_one_rather_than_a_guess` |
+
+No other baseline moved: `python_api.txt` is byte-identical, which is the
+check that matters here — every added name is underscore-private, so BEAM's
+declared surface is unchanged.
+
+## 2026-11-14: `gil_regions` 29 planned of 69 -> all 69, fitting wired once profiled
+
+`--record wiredfitting --only gil_regions`. **No recorded number moved**, and
+that is the result worth stating plainly: this change alters the thread count
+of 40 entry points, the whole model-building path among them, and
+`numeric.json` (78 keys), `math_values.json` (58 quantities, bit-identical),
+the saved-model sha256, the thread-independence table at 1/4/16 and `exact`
+(416 quantities) all compared equal on the run that recorded it.
+`python_api.txt` is byte-identical at 381 lines; `pytest_cases.txt` is
+unchanged at 1242 and `c_cases.txt` at 439. The Python suite is 1240 passed /
+2 skipped and the C suite 439/439.
+
+The extension's sha256 DID change, `227a5fb3...` -> `4dc81355...`, because
+this is the first change in the series that edits C. Numbers surviving a new
+binary is the point of the numeric baselines, not a contradiction of them.
+
+### What decision 9 asked for, and what the profile said
+
+> | 9 | Does the adaptive default apply to fitting? | **No. Query-time calls
+> only**, for now; fitting keeps today's behaviour until it is profiled. |
+
+Matched-sample sweep, 5 processes per thread count, median of medians, on the
+16-core desktop at load 2.8-6.5 (`.private/parallelism/fitting/`):
+
+| threads | order 2 | order 3 |
+|---|---|---|
+| 1 | 189.0 ms 1.00x | 630.8 ms 1.00x |
+| 3 | 159.7 ms **1.18x** | 405.6 ms 1.56x |
+| 6 | 169.1 ms 1.12x | 378.7 ms **1.67x** |
+| 8 | 171.2 ms 1.10x | 397.7 ms 1.59x |
+| 12 | 215.2 ms 0.88x | 509.9 ms 1.24x |
+| 16 | 410.7 ms **0.46x** | 693.4 ms 0.91x |
+
+Fitting parallelises weakly and degrades past 8. The behaviour decision 9
+preserved asked `omp_get_max_threads()`, which on this box is 16 -- the WORST
+point on both curves, and 2.2x worse than serial at order 2. Measured again
+in auto mode after wiring: order 2 410.7 -> 178.1 ms (2.31x), order 3
+693.4 -> 405.2 ms (1.71x), with `parallel_plan()` reporting 8.
+
+A fitting-specific ceiling of 4-6 was considered and rejected: it adds ~7%
+(order 2) and ~5% (order 3) over the existing ceiling, which does not pay for
+a second measured constant that has to stay correct on machines nobody has
+measured. The ceiling is a cap, and both workload classes now measured --
+analytics, which scales to 8, and fitting, which peaks at 3-6 -- are better
+served by any value at or below 8 than by one thread per core.
+
+### Why the wiring was mechanical
+
+Checked before any edit, across all 40 regions: every one sits in a file that
+already includes `python_bindings.h`, **none** contains a `return` or `goto`,
+and **none** lacks a matching `Py_END_ALLOW_THREADS`. `BEAM_PY_PLANNED_BEGIN`
+is `Py_BEGIN_ALLOW_THREADS` plus `beam_plan_enter_default()`, and `_END` is
+`beam_plan_leave(token)` plus `Py_END_ALLOW_THREADS`, so it is a drop-in. The
+replacement was made comment-aware rather than textual, so
+`mixture_bindings.c`'s doc comment was not silently rewritten -- it was
+corrected by hand, because the region it describes is no longer spelled that
+way.
+
+### The baseline is kept although nothing is exempt
+
+69 lines, all `planned`. The record is not about today's count: a region added
+later without the macro is a FAILURE against it, which is the whole reason
+this check stopped being a printed number. The gate's line now reads `all 69
+GIL-releasing regions resolve a thread plan; no escapes` -- phrased without
+the word "unplanned", because "0 unplanned" is a sentence a reader parses
+twice to learn that nothing is wrong.
+
+### Still open
+
+Why fitting degrades at all. A 2.2x penalty at sixteen threads points at
+barrier or contention cost in the per-length regions rather than at a thread
+count being wrong; `omp critical(beam_live_cache)` and the per-length regions'
+small bodies are the candidates. That is an optimisation, possibly a larger
+one than choosing a thread count. And this is one idle-ish desktop: on the
+saturated 48-core node auto mode asked for 48, further past the degradation
+point than 16 is here, so the direction is robust and only the magnitude
+needs ig05.
+
+## 2026-11-14: `pytest_cases` 1242 -> 1243, and the check that should have existed first
+
+`--record forkerrfallback --only pytest_cases`. One id added, none removed:
+
+```
+tests/suites/model/test_runtime.py::test_the_fork_warning_survives_warnings_as_errors
+```
+
+No other baseline moved. `gil_regions.txt` is byte-identical at 69,
+`c_cases.txt` at 439, `python_api.txt` at 381 lines, and `numeric.json` (78
+keys), `math_values.json` (58 bit-identical), the saved-model sha256, thread
+independence and `exact` (416 quantities) all compared equal -- although this
+change edits C and the extension's sha256 moved
+`4dc81355...` -> `a2cc902b...`.
+
+### Why: the gate was certifying something it did not check
+
+An independent review of the branch found it. The gate printed
+
+    OK    thread plan wiring (all 69 GIL-releasing regions resolve a thread plan; no escapes)
+
+under the heading "The thread plan is actually in force". The scan proves the
+macro is present at the Python boundary. It cannot prove the region
+underneath NAMES the plan -- and **one did not**:
+`src/native/occupancy/poisson_binomial/pgf.c` carried no `num_threads` clause
+at all, the only such region in `src/native`. So `py_publicness_pgf` ran at
+one thread per core however narrow a team the caller's plan had resolved,
+measured at 16 native threads after `set_threads(1)`. Wrapping an entry point
+and applying a plan are different things: a plan is applied by NAMING it in
+the clause.
+
+This is the same fault the `c_symbols` and `python_api` sections above
+record -- a green line that asserts more than it verifies -- reproduced while
+fixing it. `plan.h` carried the matching overstatement ("Every `omp parallel`
+... carries `num_threads(...)` with this"), untrue twice over: 29 regions name
+a budget-derived local rather than `beam_threads()`, and one named nothing.
+
+### What now holds it
+
+`check_lib.thread_count_clauses`, the brace-matched check the parallel policy
+plan specified as Task 5 and that was never built. It joins `\`
+continuations, strips comments, finds every `#pragma omp parallel`, and
+paren-matches the `num_threads(...)` expression -- matched and not
+pattern-captured, because `conc ? (int)conc : 1` contains parentheses and a
+regex stopping at the first `)` truncates it. Two failures: a region naming no
+count, and a count outside `_PERMITTED_THREAD_COUNTS`.
+
+That set is a tripwire in source rather than a recorded baseline: adding a
+name to it is a decision someone makes in review, and the question it forces
+is "what resolves that count". The seven forms in the tree are
+`beam_threads()` (64), `conc` (14), `nth` (10), `team` (2), `conc_e`,
+`conc_z` and `conc ? conc : 1`. What it rejects is
+`omp_get_max_threads()`, `omp_get_num_procs()` and any literal.
+
+`#pragma omp for` and `omp critical` are deliberately not matched: an
+`omp for` inside an enclosing `parallel` takes no `num_threads`, and
+demanding one would be a demand the language rejects.
+
+Both failure paths were mutated against the real gate, not only unit-tested:
+stripping the clause from `math/moments.c` gives `FAIL 1 parallel region(s)
+name no thread count`, and changing it to `omp_get_max_threads()` gives
+`FAIL 1 region(s) name a thread count that is not a permitted form`. 11 unit
+tests in `verification/tests/test_thread_counts.py`.
+
+### The recorded id
+
+The same review found the fork guard mute under `-W error`: `warnings.warn`
+RAISES there, and the `except Exception: pass` that existed so a child which
+cannot warn still runs had turned the guard off in exactly the configuration
+that asked to hear about warnings most loudly. Measured: the child hung and
+printed nothing. There is now an `os.write(2, ...)` fallback of a constant
+built at import -- the most that can safely be done in a child forked from a
+threaded process -- and it degrades to a stderr line rather than an exception
+because an exception raised from an at-fork handler has nowhere to go. The
+new test uses `capfd` and not `capsys`, since the fallback writes to the file
+descriptor and never passes through `sys.stderr`; it fails when the fallback
+is removed.
+

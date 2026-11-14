@@ -44,9 +44,9 @@ PyObject *py_log_pseq_batch(PyObject *self, PyObject *args) {
                                      (uint64_t)n * sizeof(double)); }
 
     BeamError err;
-    Py_BEGIN_ALLOW_THREADS
+    BEAM_PY_PLANNED_BEGIN
     err = beam_model_log_pseq_batch(m, v, (uint32_t)n, out);
-    Py_END_ALLOW_THREADS
+    BEAM_PY_PLANNED_END
     PyMem_Free(v);
     if (err != BEAM_OK) { PyMem_Free(out); return set_beam_error(err); }
 
@@ -112,11 +112,11 @@ PyObject *py_log_pseq_packed(PyObject *self, PyObject *args) {
     }
 
     BeamError err;
-    Py_BEGIN_ALLOW_THREADS
+    BEAM_PY_PLANNED_BEGIN
     err = beam_model_log_pseq_packed(m, have_data ? (const char *)data.buf : NULL,
                                      have_data ? (uint64_t)data.len : 0u,
                                      (const int64_t *)off.buf, n, (double *)out.buf);
-    Py_END_ALLOW_THREADS
+    BEAM_PY_PLANNED_END
     PyBuffer_Release(&out); PyBuffer_Release(&off);
     if (have_data) PyBuffer_Release(&data);
     if (err != BEAM_OK) return set_beam_error(err);

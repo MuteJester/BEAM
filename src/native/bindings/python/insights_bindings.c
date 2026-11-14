@@ -93,9 +93,9 @@ PyObject *py_insights_logos(PyObject *self, PyObject *args) {
 
     BeamLogoSet set;
     BeamError err;
-    Py_BEGIN_ALLOW_THREADS
+    BEAM_PY_PLANNED_BEGIN
     err = beam_insights_logos(m, &req, &set);
-    Py_END_ALLOW_THREADS
+    BEAM_PY_PLANNED_END
     if (err != BEAM_OK) return set_beam_error(err);
 
     PyObject *logos = PyList_New((Py_ssize_t)set.n_logos);
