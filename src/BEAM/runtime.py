@@ -149,11 +149,21 @@ def file_provenance_span() -> tuple[int, int]:
 _FORK_THREADS = 1
 
 _FORK_WARNING = (
-    "this process forked while {n} native threads were running. BEAM's "
-    "OpenMP runtime does not survive fork: the first parallel computation in "
-    "this child will hang, with no error raised. Start workers with "
+    "this process forked while {n} native threads were running. An OpenMP "
+    "thread pool does not survive fork, so if this child uses BEAM its first "
+    "parallel computation may hang, with no error raised. Start workers with "
     'multiprocessing.get_context("spawn") and call BEAM.set_threads(T) in '
     "each one."
+)
+
+#: The same thing, pre-encoded, for the one path that cannot use `warnings`.
+#: Built once at import: the fallback runs in a child forked from a threaded
+#: process, where anything that allocates or takes a lock may not come back.
+_FORK_WARNING_BYTES = (
+    b"RuntimeWarning: BEAM: this process forked while native threads were "
+    b"running. An OpenMP thread pool does not survive fork, so if this child "
+    b"uses BEAM its first parallel computation may hang. Start workers with "
+    b'multiprocessing.get_context("spawn").\n'
 )
 
 
@@ -181,13 +191,28 @@ def _before_fork() -> None:
 
 
 def _after_fork_in_child() -> None:
-    if _FORK_THREADS > 1:
-        # Wrapped, because a child that cannot warn must still run. The point
-        # is to explain a hang, never to become a different failure.
+    if _FORK_THREADS <= 1:
+        return
+    # Wrapped, because a child that cannot warn must still run: the point is
+    # to explain a hang, never to become a different failure.
+    #
+    # The except branch is NOT a silent pass, and that was a real defect once.
+    # Under `-W error` -- or a pytest `filterwarnings = error` -- `warn` RAISES
+    # the warning, so a bare `except: pass` turned the guard off in exactly
+    # the configuration that asked to be told about warnings most loudly. It
+    # was measured: the child hung and printed nothing. The fallback is a
+    # single `write` of a constant built at import, which is the most that can
+    # safely be done in a child forked from a threaded process.
+    #
+    # It degrades to a stderr line rather than an exception on purpose: an
+    # exception raised from an at-fork handler has nowhere to go.
+    try:
+        warnings.warn(_FORK_WARNING.format(n=_FORK_THREADS),
+                      RuntimeWarning, stacklevel=2)
+    except Exception:
         try:
-            warnings.warn(_FORK_WARNING.format(n=_FORK_THREADS),
-                          RuntimeWarning, stacklevel=2)
-        except Exception:                                    # pragma: no cover
+            os.write(2, _FORK_WARNING_BYTES)
+        except OSError:                                      # pragma: no cover
             pass
 
 

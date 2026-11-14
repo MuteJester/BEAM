@@ -3481,3 +3481,81 @@ saturated 48-core node auto mode asked for 48, further past the degradation
 point than 16 is here, so the direction is robust and only the magnitude
 needs ig05.
 
+## 2026-11-14: `pytest_cases` 1242 -> 1243, and the check that should have existed first
+
+`--record forkerrfallback --only pytest_cases`. One id added, none removed:
+
+```
+tests/suites/model/test_runtime.py::test_the_fork_warning_survives_warnings_as_errors
+```
+
+No other baseline moved. `gil_regions.txt` is byte-identical at 69,
+`c_cases.txt` at 439, `python_api.txt` at 381 lines, and `numeric.json` (78
+keys), `math_values.json` (58 bit-identical), the saved-model sha256, thread
+independence and `exact` (416 quantities) all compared equal -- although this
+change edits C and the extension's sha256 moved
+`4dc81355...` -> `a2cc902b...`.
+
+### Why: the gate was certifying something it did not check
+
+An independent review of the branch found it. The gate printed
+
+    OK    thread plan wiring (all 69 GIL-releasing regions resolve a thread plan; no escapes)
+
+under the heading "The thread plan is actually in force". The scan proves the
+macro is present at the Python boundary. It cannot prove the region
+underneath NAMES the plan -- and **one did not**:
+`src/native/occupancy/poisson_binomial/pgf.c` carried no `num_threads` clause
+at all, the only such region in `src/native`. So `py_publicness_pgf` ran at
+one thread per core however narrow a team the caller's plan had resolved,
+measured at 16 native threads after `set_threads(1)`. Wrapping an entry point
+and applying a plan are different things: a plan is applied by NAMING it in
+the clause.
+
+This is the same fault the `c_symbols` and `python_api` sections above
+record -- a green line that asserts more than it verifies -- reproduced while
+fixing it. `plan.h` carried the matching overstatement ("Every `omp parallel`
+... carries `num_threads(...)` with this"), untrue twice over: 29 regions name
+a budget-derived local rather than `beam_threads()`, and one named nothing.
+
+### What now holds it
+
+`check_lib.thread_count_clauses`, the brace-matched check the parallel policy
+plan specified as Task 5 and that was never built. It joins `\`
+continuations, strips comments, finds every `#pragma omp parallel`, and
+paren-matches the `num_threads(...)` expression -- matched and not
+pattern-captured, because `conc ? (int)conc : 1` contains parentheses and a
+regex stopping at the first `)` truncates it. Two failures: a region naming no
+count, and a count outside `_PERMITTED_THREAD_COUNTS`.
+
+That set is a tripwire in source rather than a recorded baseline: adding a
+name to it is a decision someone makes in review, and the question it forces
+is "what resolves that count". The seven forms in the tree are
+`beam_threads()` (64), `conc` (14), `nth` (10), `team` (2), `conc_e`,
+`conc_z` and `conc ? conc : 1`. What it rejects is
+`omp_get_max_threads()`, `omp_get_num_procs()` and any literal.
+
+`#pragma omp for` and `omp critical` are deliberately not matched: an
+`omp for` inside an enclosing `parallel` takes no `num_threads`, and
+demanding one would be a demand the language rejects.
+
+Both failure paths were mutated against the real gate, not only unit-tested:
+stripping the clause from `math/moments.c` gives `FAIL 1 parallel region(s)
+name no thread count`, and changing it to `omp_get_max_threads()` gives
+`FAIL 1 region(s) name a thread count that is not a permitted form`. 11 unit
+tests in `verification/tests/test_thread_counts.py`.
+
+### The recorded id
+
+The same review found the fork guard mute under `-W error`: `warnings.warn`
+RAISES there, and the `except Exception: pass` that existed so a child which
+cannot warn still runs had turned the guard off in exactly the configuration
+that asked to hear about warnings most loudly. Measured: the child hung and
+printed nothing. There is now an `os.write(2, ...)` fallback of a constant
+built at import -- the most that can safely be done in a child forked from a
+threaded process -- and it degrades to a stderr line rather than an exception
+because an exception raised from an at-fork handler has nowhere to go. The
+new test uses `capfd` and not `capsys`, since the fallback writes to the file
+descriptor and never passes through `sys.stderr`; it fails when the fallback
+is removed.
+

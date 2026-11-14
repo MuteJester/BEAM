@@ -54,8 +54,13 @@ so that workers × `T` fits the machine.
 Spawn rather than fork, because an OpenMP thread pool does not survive `fork`: only the thread
 that called it exists in the child, so the child waits at its first parallel computation instead
 of raising. BEAM warns in the child when it is forked from a process that had worker threads
-running, which is the signal to switch start methods — but spawn avoids it altogether. A fork
-before any computation has run is safe, and is not warned about.
+running, which is the signal to switch start methods — but spawn avoids it altogether.
+
+The check is whether *any* native thread was running at the fork, not whether BEAM itself had
+started one, so another library's threads can trigger it even when BEAM has not run. That is
+deliberate — forking a multithreaded process is the hazard whoever started the threads — and the
+warning is a `RuntimeWarning`, so it can be filtered by category. A fork from a single-threaded
+process is not warned about.
 
 Models are not pickled: pass each worker the model's file path and load it there with
 `BeamModel.from_file`.

@@ -1022,6 +1022,7 @@ tests/suites/model/test_runtime.py::test_atoms_feed_the_publicness_model
 tests/suites/model/test_runtime.py::test_available_cores_never_exceeds_the_cores_present
 tests/suites/model/test_runtime.py::test_results_do_not_depend_on_the_thread_count
 tests/suites/model/test_runtime.py::test_the_fork_warning_names_the_hang_and_the_remedy
+tests/suites/model/test_runtime.py::test_the_fork_warning_survives_warnings_as_errors
 tests/suites/model/test_runtime.py::test_the_plan_is_capped_by_the_scaling_ceiling
 tests/suites/model/test_runtime.py::test_the_plan_reports_every_input_it_used
 tests/suites/model/test_runtime.py::test_thread_cap_round_trips

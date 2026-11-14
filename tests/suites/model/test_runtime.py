@@ -270,3 +270,28 @@ def test_a_real_fork_after_parallel_work_warns_in_the_child(model,
         os.waitpid(pid, 0)
     os.close(read_fd)
     assert answer == b"1", "the child was not warned that it had forked"
+
+def test_the_fork_warning_survives_warnings_as_errors(capfd):
+    """The guard must speak when warnings are errors, which is where it was mute.
+
+    `_after_fork_in_child` wraps `warnings.warn` so that a child which cannot
+    warn still runs. Under `-W error`, or a pytest `filterwarnings = error`,
+    `warn` RAISES instead of printing -- so the wrapper turned the guard off
+    in exactly the configuration that asked to hear about warnings most
+    loudly. Measured before the fix: the child hung and printed nothing.
+
+    `capfd` and not `capsys`: the fallback is `os.write(2, ...)`, which goes
+    to the file descriptor and never passes through `sys.stderr`.
+    """
+    from BEAM import runtime
+    before = runtime._FORK_THREADS
+    runtime._FORK_THREADS = 8
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            runtime._after_fork_in_child()        # must not raise
+    finally:
+        runtime._FORK_THREADS = before
+    err = capfd.readouterr().err
+    assert "fork" in err
+    assert "spawn" in err
