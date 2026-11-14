@@ -3402,3 +3402,82 @@ on the recorded warning list.
 No other baseline moved: `python_api.txt` is byte-identical, which is the
 check that matters here — every added name is underscore-private, so BEAM's
 declared surface is unchanged.
+
+## 2026-11-14: `gil_regions` 29 planned of 69 -> all 69, fitting wired once profiled
+
+`--record wiredfitting --only gil_regions`. **No recorded number moved**, and
+that is the result worth stating plainly: this change alters the thread count
+of 40 entry points, the whole model-building path among them, and
+`numeric.json` (78 keys), `math_values.json` (58 quantities, bit-identical),
+the saved-model sha256, the thread-independence table at 1/4/16 and `exact`
+(416 quantities) all compared equal on the run that recorded it.
+`python_api.txt` is byte-identical at 381 lines; `pytest_cases.txt` is
+unchanged at 1242 and `c_cases.txt` at 439. The Python suite is 1240 passed /
+2 skipped and the C suite 439/439.
+
+The extension's sha256 DID change, `227a5fb3...` -> `4dc81355...`, because
+this is the first change in the series that edits C. Numbers surviving a new
+binary is the point of the numeric baselines, not a contradiction of them.
+
+### What decision 9 asked for, and what the profile said
+
+> | 9 | Does the adaptive default apply to fitting? | **No. Query-time calls
+> only**, for now; fitting keeps today's behaviour until it is profiled. |
+
+Matched-sample sweep, 5 processes per thread count, median of medians, on the
+16-core desktop at load 2.8-6.5 (`.private/parallelism/fitting/`):
+
+| threads | order 2 | order 3 |
+|---|---|---|
+| 1 | 189.0 ms 1.00x | 630.8 ms 1.00x |
+| 3 | 159.7 ms **1.18x** | 405.6 ms 1.56x |
+| 6 | 169.1 ms 1.12x | 378.7 ms **1.67x** |
+| 8 | 171.2 ms 1.10x | 397.7 ms 1.59x |
+| 12 | 215.2 ms 0.88x | 509.9 ms 1.24x |
+| 16 | 410.7 ms **0.46x** | 693.4 ms 0.91x |
+
+Fitting parallelises weakly and degrades past 8. The behaviour decision 9
+preserved asked `omp_get_max_threads()`, which on this box is 16 -- the WORST
+point on both curves, and 2.2x worse than serial at order 2. Measured again
+in auto mode after wiring: order 2 410.7 -> 178.1 ms (2.31x), order 3
+693.4 -> 405.2 ms (1.71x), with `parallel_plan()` reporting 8.
+
+A fitting-specific ceiling of 4-6 was considered and rejected: it adds ~7%
+(order 2) and ~5% (order 3) over the existing ceiling, which does not pay for
+a second measured constant that has to stay correct on machines nobody has
+measured. The ceiling is a cap, and both workload classes now measured --
+analytics, which scales to 8, and fitting, which peaks at 3-6 -- are better
+served by any value at or below 8 than by one thread per core.
+
+### Why the wiring was mechanical
+
+Checked before any edit, across all 40 regions: every one sits in a file that
+already includes `python_bindings.h`, **none** contains a `return` or `goto`,
+and **none** lacks a matching `Py_END_ALLOW_THREADS`. `BEAM_PY_PLANNED_BEGIN`
+is `Py_BEGIN_ALLOW_THREADS` plus `beam_plan_enter_default()`, and `_END` is
+`beam_plan_leave(token)` plus `Py_END_ALLOW_THREADS`, so it is a drop-in. The
+replacement was made comment-aware rather than textual, so
+`mixture_bindings.c`'s doc comment was not silently rewritten -- it was
+corrected by hand, because the region it describes is no longer spelled that
+way.
+
+### The baseline is kept although nothing is exempt
+
+69 lines, all `planned`. The record is not about today's count: a region added
+later without the macro is a FAILURE against it, which is the whole reason
+this check stopped being a printed number. The gate's line now reads `all 69
+GIL-releasing regions resolve a thread plan; no escapes` -- phrased without
+the word "unplanned", because "0 unplanned" is a sentence a reader parses
+twice to learn that nothing is wrong.
+
+### Still open
+
+Why fitting degrades at all. A 2.2x penalty at sixteen threads points at
+barrier or contention cost in the per-length regions rather than at a thread
+count being wrong; `omp critical(beam_live_cache)` and the per-length regions'
+small bodies are the candidates. That is an optimisation, possibly a larger
+one than choosing a thread count. And this is one idle-ish desktop: on the
+saturated 48-core node auto mode asked for 48, further past the degradation
+point than 16 is here, so the direction is robust and only the magnitude
+needs ig05.
+

@@ -349,11 +349,11 @@ else:
     check("C test inventory", c_got, c_want)
 
 # ── The thread plan is actually in force ───────────────────────────────────
-# Every region that drops the GIL is accounted for: either it resolves a
-# thread plan, or it is one of the regions DESIGN.md decision 9 deliberately
-# left on the old behaviour ("Query-time calls only, for now; fitting keeps
-# today's behaviour until it is profiled"). check_lib.gil_regions says why
-# this reads all fourteen binding files and not the two it used to.
+# Every region that drops the GIL is accounted for, and all 69 of them now
+# resolve a thread plan. The baseline is kept anyway: it is what makes a NEW
+# region added without the macro a failure rather than a note nobody reads,
+# which is the shape this check was in when it covered two of the fourteen
+# binding files. check_lib.gil_regions has the history and the measurements.
 #
 # The wiring is a macro around the GIL-release region, so this is a question
 # about SOURCE, and a static answer is stronger than a timing test: it cannot
@@ -448,10 +448,16 @@ else:
           print(f"          + {_r}")
       for _r in sorted(_want_set - _got_set):
           print(f"          - {_r}")
-  else:
+  elif _unplanned:
       print(f"  OK    thread plan wiring ({_n_planned} of {len(_regions)} "
             f"GIL-releasing regions resolve a thread plan; "
             f"{len(_unplanned)} unplanned by decision 9, none new; no escapes)")
+  else:
+      # Every one of them, which is the state decision 9 deferred reaching.
+      # Phrased without the word "unplanned" on purpose: "0 unplanned" is a
+      # sentence a reader has to parse twice to learn that nothing is wrong.
+      print(f"  OK    thread plan wiring (all {len(_regions)} GIL-releasing "
+            f"regions resolve a thread plan; no escapes)")
 
 # ── Numerical contract ─────────────────────────────────────────────────────
 c = json.loads((B / "corpus.json").read_text())

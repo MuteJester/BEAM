@@ -49,9 +49,9 @@ PyObject *py_sample(PyObject *self, PyObject *args) {
     BeamRng rng;
     beam_rng_seed(&rng, (uint64_t)seed);
     BeamError err;
-    Py_BEGIN_ALLOW_THREADS
+    BEAM_PY_PLANNED_BEGIN
     err = beam_model_sample(m, n, length, &rng, buf, NULL);
-    Py_END_ALLOW_THREADS
+    BEAM_PY_PLANNED_END
     if (err != BEAM_OK) { PyMem_Free(buf); return set_beam_error(err); }
 
     PyObject *list = PyList_New(n);
@@ -89,9 +89,9 @@ PyObject *py_top_k(PyObject *self, PyObject *args) {
                                             + (uint64_t)k * sizeof(double)); }
     uint32_t n = 0;
     BeamError err;
-    Py_BEGIN_ALLOW_THREADS
+    BEAM_PY_PLANNED_BEGIN
     err = beam_model_top_k(m, k, length, buf, lp, &n);
-    Py_END_ALLOW_THREADS
+    BEAM_PY_PLANNED_END
     if (err != BEAM_OK) { PyMem_Free(buf); PyMem_Free(lp); return set_beam_error(err); }
 
     PyObject *seqs = PyList_New(n), *probs = PyList_New(n);

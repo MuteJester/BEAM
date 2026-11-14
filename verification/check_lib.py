@@ -201,21 +201,24 @@ def gil_regions(root: Path) -> tuple[list[str], list[str]]:
     a `PLANNED_BINDINGS` tuple, and print `29 analytics regions planned, no
     escapes` -- a sentence a reader takes for a statement about the library.
     It was a statement about analytics_bindings.c and common.c. The other
-    twelve files hold 41 regions that drop the GIL and plan nothing, so
-    `beam_threads()` falls through to `threads_cap()`, which with no cap set
-    is `omp_get_max_threads()`: one thread per core, the default plan.h
-    exists to stop asking for. Measured on a 16-core box with 15 free, an
-    analytics call plans 8 and `py_observe` runs 16; on the saturated
-    48-core node it asks for 48, which the design notes measure at 301x
-    worse than serial at half that.
-    
-    That is a DEFERRAL, not a defect -- DESIGN.md decision 9 reads "No.
-    Query-time calls only, for now; fitting keeps today's behaviour until it
-    is profiled" -- so the 41 are recorded rather than failed. What the
-    recording buys is the thing a count alone cannot: a NEW unplanned region
-    fails, so the deferral cannot quietly grow, and wiring one up shows as a
-    note that asks to be re-recorded. The lesson is c_symbols.txt, which had
-    no recorder at all and drifted by thirty symbols across four merges.
+    twelve files held 40 regions that dropped the GIL and planned nothing,
+    so `beam_threads()` fell through to `threads_cap()`, which with no cap
+    set is `omp_get_max_threads()`: one thread per core, the default plan.h
+    exists to stop asking for.
+
+    All 69 now resolve a plan. The 40 were wired once fitting had been
+    profiled, which is what DESIGN.md decision 9 asked for ("Query-time
+    calls only, for now; fitting keeps today's behaviour until it is
+    profiled"): fitting peaks at 1.18x on 3 threads at order 2 and 1.67x on
+    6 at order 3, and DEGRADES past 8 -- 0.46x and 0.91x at sixteen -- so
+    the old default of one thread per core was the worst point on both
+    curves. See .private/parallelism/fitting/.
+
+    The baseline stays because the check is not about today's count: a NEW
+    unplanned region fails, so a future entry point cannot quietly skip the
+    macro, and the record says which regions were ever exempt. The lesson is
+    c_symbols.txt, which had no recorder at all and drifted by thirty
+    symbols across four merges.
 
     Identified by function rather than by line, because a line-numbered
     baseline churns on every unrelated edit above it and teaches its reader

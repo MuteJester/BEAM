@@ -6,7 +6,7 @@
  * the only structural difference from the rest of the bindings. The borrowed
  * pointer array is built once per call and the models are kept alive by the
  * caller's own references for the duration, which the GIL guarantees across
- * the `Py_BEGIN_ALLOW_THREADS` region: the Python `Mixture` object holds the
+ * the planned region: the Python `Mixture` object holds the
  * models it was built from, so nothing can collect one mid-sweep.
  */
 #define PY_SSIZE_T_CLEAN
@@ -102,9 +102,9 @@ PyObject *py_mixture_inner_product(PyObject *self, PyObject *args) {
 
     double total = 0.0;
     BeamError err;
-    Py_BEGIN_ALLOW_THREADS
+    BEAM_PY_PLANNED_BEGIN
     err = beam_mixture_log_inner_product_by_length(v, n, by, &total);
-    Py_END_ALLOW_THREADS
+    BEAM_PY_PLANNED_END
     PyMem_Free(v);
     if (err != BEAM_OK) { PyMem_Free(by); return set_beam_error(err); }
 
@@ -175,11 +175,11 @@ PyObject *py_mixture_power_position(PyObject *self, PyObject *args) {
 
     double total = 0.0, sink = 0.0, konst = 0.0;
     BeamError err;
-    Py_BEGIN_ALLOW_THREADS
+    BEAM_PY_PLANNED_BEGIN
     err = beam_mixture_log_power_product_by_position(v, a, n, (uint32_t)len,
                                                      by, &sink, &konst,
                                                      &total);
-    Py_END_ALLOW_THREADS
+    BEAM_PY_PLANNED_END
     PyMem_Free(v); PyMem_Free(a);
     if (err != BEAM_OK) { PyMem_Free(by); return set_beam_error(err); }
 
@@ -208,9 +208,9 @@ PyObject *py_mixture_power_product(PyObject *self, PyObject *args) {
 
     double total = 0.0;
     BeamError err;
-    Py_BEGIN_ALLOW_THREADS
+    BEAM_PY_PLANNED_BEGIN
     err = beam_mixture_log_power_product_by_length(v, a, n, by, &total);
-    Py_END_ALLOW_THREADS
+    BEAM_PY_PLANNED_END
     PyMem_Free(v); PyMem_Free(a);
     if (err != BEAM_OK) { PyMem_Free(by); return set_beam_error(err); }
 
@@ -234,9 +234,9 @@ PyObject *py_mixture_power_gram(PyObject *self, PyObject *args) {
     if (!g) { PyMem_Free(v); return NULL; }
 
     BeamError err;
-    Py_BEGIN_ALLOW_THREADS
+    BEAM_PY_PLANNED_BEGIN
     err = beam_mixture_power_gram(v, n, a, g);
-    Py_END_ALLOW_THREADS
+    BEAM_PY_PLANNED_END
     PyMem_Free(v);
     if (err != BEAM_OK) { PyMem_Free(g); return set_beam_error(err); }
 
@@ -275,10 +275,10 @@ PyObject *py_mixture_power_pairs(PyObject *self, PyObject *args) {
     if (!out) { PyMem_Free(v); PyBuffer_Release(&pb); return NULL; }
 
     BeamError err;
-    Py_BEGIN_ALLOW_THREADS
+    BEAM_PY_PLANNED_BEGIN
     err = beam_mixture_power_pairs(v, n, a, (const uint32_t *)pb.buf,
                                    n_pairs, out);
-    Py_END_ALLOW_THREADS
+    BEAM_PY_PLANNED_END
     PyMem_Free(v);
     PyBuffer_Release(&pb);
     if (err != BEAM_OK) { PyMem_Free(out); return set_beam_error(err); }
@@ -306,10 +306,10 @@ PyObject *py_mixture_support_union(PyObject *self, PyObject *args) {
     double total = 0.0;
     uint64_t peak = 0;
     BeamError err;
-    Py_BEGIN_ALLOW_THREADS
+    BEAM_PY_PLANNED_BEGIN
     err = beam_mixture_support_union_by_length(v, n, (uint64_t)cap, by,
                                                &total, &peak);
-    Py_END_ALLOW_THREADS
+    BEAM_PY_PLANNED_END
     PyMem_Free(v);
     if (err != BEAM_OK) { PyMem_Free(by); return set_beam_error(err); }
 
@@ -334,9 +334,9 @@ PyObject *py_mixture_gram(PyObject *self, PyObject *args) {
     if (!g) { PyMem_Free(v); return NULL; }
 
     BeamError err;
-    Py_BEGIN_ALLOW_THREADS
+    BEAM_PY_PLANNED_BEGIN
     err = beam_mixture_gram(v, n, g);
-    Py_END_ALLOW_THREADS
+    BEAM_PY_PLANNED_END
     PyMem_Free(v);
     if (err != BEAM_OK) { PyMem_Free(g); return set_beam_error(err); }
 

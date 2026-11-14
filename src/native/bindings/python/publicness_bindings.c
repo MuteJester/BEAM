@@ -52,7 +52,7 @@ PyObject *py_publicness_moments(PyObject *self, PyObject *args) {
         return NULL;
     }
 
-    Py_BEGIN_ALLOW_THREADS
+    BEAM_PY_PLANNED_BEGIN
     err = beam_publicness_moments((const double *)views[0].buf,
                                  (uint32_t)n_atoms,
                                  (const double *)views[1].buf,
@@ -60,7 +60,7 @@ PyObject *py_publicness_moments(PyObject *self, PyObject *args) {
                                  (uint32_t)n_groups,
                                  (double *)views[3].buf,
                                  (double *)views[4].buf);
-    Py_END_ALLOW_THREADS
+    BEAM_PY_PLANNED_END
 
     release_f64_buffers(views, 5);
     if (err != BEAM_OK) return set_beam_error(err);
@@ -105,13 +105,13 @@ PyObject *py_publicness_pgf(PyObject *self, PyObject *args) {
 
     /* Release the GIL: this is n_atoms * n_groups * k_fft/2 complex powers,
      * which reaches tens of seconds on a foundation-scale cohort. */
-    Py_BEGIN_ALLOW_THREADS
+    BEAM_PY_PLANNED_BEGIN
     err = beam_publicness_pgf((const double *)views[0].buf, (uint32_t)n_atoms,
                              (const double *)views[1].buf,
                              (const double *)views[2].buf,
                              (uint32_t)n_groups, (uint32_t)k_fft,
                              (double *)views[3].buf);
-    Py_END_ALLOW_THREADS
+    BEAM_PY_PLANNED_END
 
     release_f64_buffers(views, 4);
     if (err != BEAM_OK) return set_beam_error(err);
@@ -160,7 +160,7 @@ PyObject *py_publicness_accumulate(PyObject *self, PyObject *args) {
         return NULL;
     }
 
-    Py_BEGIN_ALLOW_THREADS
+    BEAM_PY_PLANNED_BEGIN
     err = beam_publicness_accumulate((const double *)views[0].buf,
                                     (uint32_t)n_atoms, (uint32_t)k_fft,
                                     (const double *)views[1].buf,
@@ -171,7 +171,7 @@ PyObject *py_publicness_accumulate(PyObject *self, PyObject *args) {
                                     tail_sigma, tail_floor, mass_tol,
                                     (double *)views[5].buf,
                                     (double *)views[6].buf);
-    Py_END_ALLOW_THREADS
+    BEAM_PY_PLANNED_END
 
     release_f64_buffers(views, 7);
     if (err != BEAM_OK) return set_beam_error(err);
@@ -233,7 +233,7 @@ PyObject *py_publicness_accumulate_grouped(
         return NULL;
     }
 
-    Py_BEGIN_ALLOW_THREADS
+    BEAM_PY_PLANNED_BEGIN
     err = beam_publicness_accumulate_grouped(
         (const double *)views[0].buf,
         (uint32_t)n_atoms, (uint32_t)k_fft,
@@ -244,7 +244,7 @@ PyObject *py_publicness_accumulate_grouped(
         (const double *)views[4].buf, (uint32_t)n_bins,
         tail_sigma, tail_floor, mass_tol,
         (double *)views[5].buf, (double *)views[6].buf);
-    Py_END_ALLOW_THREADS
+    BEAM_PY_PLANNED_END
 
     PyBuffer_Release(&group_view);
     release_f64_buffers(views, 7);
