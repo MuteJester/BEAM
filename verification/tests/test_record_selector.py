@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 ALL = {"python_api", "pytest_cases", "c_cases", "numeric", "threads",
-       "math_values"}
+       "math_values", "gil_regions"}
 
 
 def test_no_only_flag_means_every_baseline():

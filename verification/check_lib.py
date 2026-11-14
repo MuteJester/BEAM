@@ -6,6 +6,7 @@ here.
 """
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 from collections import Counter
@@ -154,9 +155,131 @@ def python_inventory(want_text: str, collected_text: str) -> tuple[list[str], li
     return collect_ids(want_text), collect_ids(collected_text)
 
 
+def _strip_c_comments(line: str, in_block: bool) -> tuple[str, bool]:
+    """The code on one line, with comments removed, tracking `/* */` across lines.
+
+    Needed because the region scan is a text search, and this file's own
+    history says why a raw text search is not enough: a prose mention of
+    `Py_BEGIN_ALLOW_THREADS` in the doc comment at the top of
+    mixture_bindings.c was counted as a region that drops the GIL, exactly as
+    `jet_sweep` once matched a comment and was recorded as public API.
+    """
+    out, i = [], 0
+    while i < len(line):
+        if in_block:
+            j = line.find("*/", i)
+            if j < 0:
+                return "".join(out), True
+            in_block, i = False, j + 2
+            continue
+        j, k = line.find("/*", i), line.find("//", i)
+        if j < 0 and k < 0:
+            out.append(line[i:])
+            break
+        if k >= 0 and (j < 0 or k < j):
+            out.append(line[i:k])
+            break
+        out.append(line[i:j])
+        i, in_block = j + 2, True
+    return "".join(out), in_block
+
+
+#: Lines at column 0 that define a function. `#define FOO(x)` is excluded by
+#: the leading-# test at the call site; `static PyMethodDef x[] = {` cannot
+#: match because the regex requires `(` immediately after the name.
+_C_FUNC = re.compile(r"^(?:static\s+)?[A-Za-z_][\w\s\*]*?\**\s*([A-Za-z_]\w*)\s*\(")
+
+
+def gil_regions(root: Path) -> tuple[list[str], list[str]]:
+    """Every region that drops the GIL, and whether it resolves a thread plan.
+
+    Returns (regions, escapes, unbalanced). Each region is one line,
+    `<file>::<function>[#N] <planned|unplanned>`, and the pair is what the
+    baseline holds.
+
+    WHY THIS READS ALL FOURTEEN BINDING FILES. It used to read two, named in
+    a `PLANNED_BINDINGS` tuple, and print `29 analytics regions planned, no
+    escapes` -- a sentence a reader takes for a statement about the library.
+    It was a statement about analytics_bindings.c and common.c. The other
+    twelve files hold 41 regions that drop the GIL and plan nothing, so
+    `beam_threads()` falls through to `threads_cap()`, which with no cap set
+    is `omp_get_max_threads()`: one thread per core, the default plan.h
+    exists to stop asking for. Measured on a 16-core box with 15 free, an
+    analytics call plans 8 and `py_observe` runs 16; on the saturated
+    48-core node it asks for 48, which the design notes measure at 301x
+    worse than serial at half that.
+    
+    That is a DEFERRAL, not a defect -- DESIGN.md decision 9 reads "No.
+    Query-time calls only, for now; fitting keeps today's behaviour until it
+    is profiled" -- so the 41 are recorded rather than failed. What the
+    recording buys is the thing a count alone cannot: a NEW unplanned region
+    fails, so the deferral cannot quietly grow, and wiring one up shows as a
+    note that asks to be re-recorded. The lesson is c_symbols.txt, which had
+    no recorder at all and drifted by thirty symbols across four merges.
+
+    Identified by function rather than by line, because a line-numbered
+    baseline churns on every unrelated edit above it and teaches its reader
+    to re-record without reading.
+    """
+    bind = root / "src" / "native" / "bindings" / "python"
+    regions: list[str] = []
+    escapes: list[str] = []
+    unbalanced: list[str] = []
+    for path in sorted(bind.glob("*.c")):
+        func, seen = "?", {}
+        open_at, open_in = None, ""      # line and function of an unclosed BEGIN
+        in_block = False
+        for i, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            # Everything below reads `code`, never the raw line.
+            code, in_block = _strip_c_comments(raw, in_block)
+            if code[:1] not in ("", " ", "\t", "#", "}"):
+                m = _C_FUNC.match(code)
+                if m:
+                    # A region still open at the next function's definition is
+                    # never closed. Reported here, and `open_at` cleared, so
+                    # that one unbalanced macro implicates its own function
+                    # rather than every `return` in the rest of the file -- a
+                    # mutation of exactly this shape produced 87 escape lines
+                    # and no statement of the actual fault.
+                    if open_at is not None:
+                        unbalanced.append(
+                            f"{path.name}:{open_at}: planned region in "
+                            f"{open_in} is never closed")
+                        open_at = None
+                    func = m.group(1)
+            if "BEAM_PY_PLANNED_BEGIN" in code or "Py_BEGIN_ALLOW_THREADS" in code:
+                planned = ("planned" if "BEAM_PY_PLANNED_BEGIN" in code
+                           else "unplanned")
+                n = seen.get(func, 0)
+                seen[func] = n + 1
+                regions.append(f"{path.name}::{func}{f'#{n}' if n else ''} {planned}")
+                if planned == "planned":
+                    if open_at is not None:
+                        unbalanced.append(
+                            f"{path.name}:{open_at}: planned region in "
+                            f"{open_in} is never closed")
+                    open_at, open_in = i, func
+                continue
+            if "BEAM_PY_PLANNED_END" in code:
+                if open_at is None:
+                    unbalanced.append(f"{path.name}:{i}: a planned region is "
+                                      f"closed in {func} without being opened")
+                open_at = None
+                continue
+            # A `return` or `goto` out of a planned region skips the leave,
+            # which would apply one call's thread count to the next, unrelated
+            # call. The macro's safety rests on there being no such path.
+            if open_at is not None and ("return" in code or "goto" in code):
+                escapes.append(f"{path.name}:{i}: {code.strip()}")
+        if open_at is not None:
+            unbalanced.append(f"{path.name}:{open_at}: planned region in "
+                              f"{open_in} is never closed")
+    return sorted(regions), escapes, unbalanced
+
 #: Every baseline `--record` can write, by the name `--only` accepts.
 RECORDABLE = frozenset({"python_api", "pytest_cases", "c_cases",
-                        "numeric", "threads", "math_values"})
+                        "numeric", "threads", "math_values", "gil_regions",
+                        })
 
 
 def missing_baseline_is_fatal(name: str, argv: list[str]) -> bool:

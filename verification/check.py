@@ -19,7 +19,7 @@ import numpy as np
 import BEAM
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from check_lib import (c_inventory, collect_ids, compare,
+from check_lib import (c_inventory, collect_ids, compare, gil_regions,
                        inventory_difference, missing_baseline_is_fatal,
                        python_collect_argv, python_inventory,
                        record_targets, refuse_short_c_inventory)
@@ -349,48 +349,109 @@ else:
     check("C test inventory", c_got, c_want)
 
 # ── The thread plan is actually in force ───────────────────────────────────
-# Every analytics binding must resolve a thread plan for its call. The wiring
-# is a macro around the GIL-release region, so "did all of them get it" is a
-# question about SOURCE, and a static answer is stronger than a timing test:
-# it cannot be passed by a lucky machine, and it fails on the next region
-# somebody adds without the macro.
+# Every region that drops the GIL is accounted for: either it resolves a
+# thread plan, or it is one of the regions DESIGN.md decision 9 deliberately
+# left on the old behaviour ("Query-time calls only, for now; fitting keeps
+# today's behaviour until it is profiled"). check_lib.gil_regions says why
+# this reads all fourteen binding files and not the two it used to.
 #
-# Two things are checked, because each catches what the other cannot. A
-# remaining `Py_BEGIN_ALLOW_THREADS` is a region that plans nothing. A `return`
-# or `goto` inside a planned region is a path that skips the leave, which would
-# apply one call's thread count to the next, unrelated call -- the macro's
-# safety rests on there being no such path, so that is verified and not assumed.
-PLANNED_BINDINGS = ("analytics_bindings.c", "common.c")
-_bind = ROOT / "src" / "native" / "bindings" / "python"
-_unplanned, _escapes, _regions = [], [], 0
-for _name in PLANNED_BINDINGS:
-    _lines = (_bind / _name).read_text(encoding="utf-8").splitlines()
-    _depth = 0
-    for _i, _ln in enumerate(_lines, 1):
-        if "Py_BEGIN_ALLOW_THREADS" in _ln:
-            _unplanned.append(f"{_name}:{_i}")
-        if "BEAM_PY_PLANNED_BEGIN" in _ln:
-            _depth, _regions = 1, _regions + 1
-            continue
-        if "BEAM_PY_PLANNED_END" in _ln:
-            _depth = 0
-            continue
-        if _depth and ("return" in _ln.split("/*")[0].split("//")[0]
-                       or "goto" in _ln.split("/*")[0].split("//")[0]):
-            _escapes.append(f"{_name}:{_i}: {_ln.strip()}")
-if _unplanned:
-    fail.append("unplanned analytics region")
-    print(f"  FAIL  {len(_unplanned)} analytics region(s) resolve no thread plan: "
-          f"{', '.join(_unplanned)}")
-elif _escapes:
-    fail.append("escape from a planned region")
-    print(f"  FAIL  {len(_escapes)} path(s) leave a planned region without "
-          f"restoring the plan:")
-    for _e in _escapes:
-        print(f"          {_e}")
+# The wiring is a macro around the GIL-release region, so this is a question
+# about SOURCE, and a static answer is stronger than a timing test: it cannot
+# be passed by a lucky machine, and it fails on the next region somebody adds
+# without the macro.
+_regions, _escapes, _unbalanced = gil_regions(ROOT)
+_gil_path = B / "gil_regions.txt"
+if not _gil_path.exists():
+    # Same exemption, and the same bound, as math_values above: only the run
+    # that writes a new baseline may find it absent. Without the bound a tree
+    # where this file was never checked out reports a clean gate with the
+    # whole comparison gone, which is the one failure a recorded baseline
+    # exists to prevent.
+    _want_regions = None
+    if missing_baseline_is_fatal("gil_regions", sys.argv):
+        fail.append("thread plan wiring")
+        print(f"  FAIL  thread plan wiring: no baseline at {_gil_path.name} "
+              f"(record it with --only gil_regions)")
+    else:
+        print("  note  thread plan wiring: no baseline yet, recording it now")
 else:
-    print(f"  OK    thread plan wiring ({_regions} analytics regions planned, "
-          f"no escapes)")
+    _want_regions = [l for l in _gil_path.read_text(
+        encoding="utf-8").splitlines() if l.strip()]
+
+if _want_regions is None:
+    _escapes_only = True          # nothing to compare; the notes above stand
+    if _unbalanced:
+        fail.append("unbalanced planned region")
+        print(f"  FAIL  {len(_unbalanced)} planned region(s) are not balanced:")
+        for _u in _unbalanced:
+            print(f"          {_u}")
+    elif _escapes:
+        fail.append("escape from a planned region")
+        print(f"  FAIL  {len(_escapes)} path(s) leave a planned region "
+              f"without restoring the plan:")
+        for _e in _escapes:
+            print(f"          {_e}")
+else:
+  _got_set, _want_set = set(_regions), set(_want_regions)
+  _unplanned = {r.rsplit(" ", 1)[0] for r in _regions if r.endswith("unplanned")}
+  _was_unplanned = {r.rsplit(" ", 1)[0] for r in _want_regions
+                    if r.endswith("unplanned")}
+  _was_planned = {r.rsplit(" ", 1)[0] for r in _want_regions
+                  if r.endswith("planned") and not r.endswith("unplanned")}
+  _new_unplanned = sorted(_unplanned - _was_unplanned - _was_planned)
+  _regressed = sorted(_unplanned & _was_planned)
+  _wired = sorted(_was_unplanned - _unplanned
+                  - {r.rsplit(" ", 1)[0] for r in _regions} )
+  _now_planned = sorted({r.rsplit(" ", 1)[0] for r in _regions
+                         if not r.endswith("unplanned")} & _was_unplanned)
+  _n_planned = sum(1 for r in _regions if not r.endswith("unplanned"))
+
+  if _unbalanced:
+      # Reported before the escapes, because an unbalanced macro is what makes
+      # the escape count meaningless rather than a finding of its own.
+      fail.append("unbalanced planned region")
+      print(f"  FAIL  {len(_unbalanced)} planned region(s) are not balanced:")
+      for _u in _unbalanced:
+          print(f"          {_u}")
+  elif _escapes:
+      fail.append("escape from a planned region")
+      print(f"  FAIL  {len(_escapes)} path(s) leave a planned region without "
+            f"restoring the plan:")
+      for _e in _escapes:
+          print(f"          {_e}")
+  elif _regressed:
+      fail.append("planned region stopped planning")
+      print(f"  FAIL  {len(_regressed)} region(s) that resolved a thread plan "
+            f"no longer do:")
+      for _r in _regressed:
+          print(f"          {_r}")
+  elif _new_unplanned:
+      # The one that matters most. A region added without the macro runs at
+      # omp_get_max_threads(), which is one thread per core -- between 1.7x and
+      # 3814x the optimum by the measurements in .private/parallelism, and
+      # bimodal, so it is unpredictable as well as slow.
+      fail.append("new unplanned GIL region")
+      print(f"  FAIL  {len(_new_unplanned)} new region(s) drop the GIL and "
+            f"resolve no thread plan:")
+      for _r in _new_unplanned:
+          print(f"          {_r}")
+      print("          Wrap it in BEAM_PY_PLANNED_BEGIN/END, or record the "
+            "deferral with --record TAG --only gil_regions.")
+  elif _now_planned:
+      print(f"  note  {len(_now_planned)} region(s) now resolve a thread plan "
+            f"that did not: {', '.join(_now_planned)}")
+      print("          Progress. Re-record with --only gil_regions.")
+  elif _got_set != _want_set:
+      fail.append("GIL region inventory")
+      print("  FAIL  the set of GIL-releasing regions moved")
+      for _r in sorted(_got_set - _want_set):
+          print(f"          + {_r}")
+      for _r in sorted(_want_set - _got_set):
+          print(f"          - {_r}")
+  else:
+      print(f"  OK    thread plan wiring ({_n_planned} of {len(_regions)} "
+            f"GIL-releasing regions resolve a thread plan; "
+            f"{len(_unplanned)} unplanned by decision 9, none new; no escapes)")
 
 # ── Numerical contract ─────────────────────────────────────────────────────
 c = json.loads((B / "corpus.json").read_text())
@@ -611,6 +672,8 @@ if "--record" in sys.argv:
         _write("pytest_cases.txt", "\n".join(sorted(py_got_lines)) + "\n")
     if "c_cases" in _targets:
         _write("c_cases.txt", "\n".join(sorted(c_got)) + "\n")
+    if "gil_regions" in _targets:
+        _write("gil_regions.txt", "\n".join(_regions) + "\n")
     if "numeric" in _targets:
         _num = dict(got)
         _num["fixture_sha256"] = digest

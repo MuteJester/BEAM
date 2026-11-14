@@ -3265,3 +3265,100 @@ No recorded NUMBER. On the rebuilt extension the gate reports OK for `numeric`
 `thread independence` and `exact against enumeration` (416 quantities), and
 `C public symbols` is unchanged. The two notes this section exists to silence
 are gone from the gate's output, which now has no `note` lines at all.
+
+## 2026-11-14: `gil_regions.txt` — a new baseline, nothing re-recorded
+
+`--record preforkguard --only pytest_cases,gil_regions` wrote
+`gil_regions.txt` for the first time. **No recorded number moved on that
+run:** `numeric.json` (78 keys), `math_values.json` (58 quantities), the
+saved-model sha256, the thread-independence table at 1/4/16 threads and
+`exact` (416 quantities) all compared equal, `python_api.txt` is
+byte-identical at 381 signature lines, and `c_cases.txt` is unchanged at 439.
+The only other baseline written is `pytest_cases.txt`, in its own section
+below. The forced rebuild that preceded the run produced a byte-identical
+extension, `sha256 227a5fb3931208cfc4b6d9f91d43b2dd06dca6e915b171ecfa54f0c470d4f6b0`,
+so nothing in `src/native/` changed.
+
+69 lines, one per region that drops the GIL, each
+`<file>::<function>[#N] planned|unplanned`:
+
+| file | planned | unplanned |
+|---|---|---|
+| `algorithm_bindings.c` | 0 | 2 |
+| `analytics_bindings.c` | 28 | 0 |
+| `common.c` | 1 | 0 |
+| `distance_bindings.c` | 0 | 1 |
+| `fingerprint_bindings.c` | 0 | 1 |
+| `insights_bindings.c` | 0 | 1 |
+| `mixture_bindings.c` | 0 | 7 |
+| `model_bindings.c` | 0 | 14 |
+| `publicness_bindings.c` | 0 | 4 |
+| `query_bindings.c` | 0 | 8 |
+| `scoring_bindings.c` | 0 | 2 |
+| **total** | **29** | **40** |
+
+### Why it exists
+
+The check this replaces read TWO of the fourteen binding files, named in a
+`PLANNED_BINDINGS` tuple, and on a clean tree printed
+
+    OK    thread plan wiring (29 analytics regions planned, no escapes)
+
+A reader takes that for a statement about the library. It was a statement
+about `analytics_bindings.c` and `common.c`. The other twelve files hold 40
+regions that drop the GIL and resolve no thread plan, so `beam_threads()`
+falls through to `threads_cap()` — with no cap set, `omp_get_max_threads()`,
+which is one thread per core: the default `plan.h` exists to stop asking for.
+Measured on this 16-core box with 15 cores free, `BEAM.parallel_plan()`
+reports `plan: 8` while `effective_threads()` is 16, so an analytics call runs
+8 and `py_observe` runs 16. On the saturated 48-core node it asks for 48,
+which `.private/parallelism` measures at 301x worse than serial at half that.
+
+`model_bindings.c`'s 14 are the expensive half of the library: `py_observe`,
+`py_finalize`, `py_build`, `py_load`, `py_save`, `py_temper`, `py_posterior`,
+`py_set_prior`, `py_subtract`, `py_add`, `py_depth_occupancy`,
+`py_path_count_total`, `py_accumulator_max`, `py_log_partition_by_layer`.
+
+That is a DEFERRAL and not a defect. DESIGN.md decision 9 reads: *"Does the
+adaptive default apply to fitting? No. Query-time calls only, for now;
+fitting keeps today's behaviour until it is profiled."* So the 40 are
+recorded rather than failed. What recording buys is what a printed count
+cannot: a **new** unplanned region fails the gate, so the deferral cannot
+quietly grow, and wiring one up prints a note asking to be re-recorded. The
+lesson behind that is `c_symbols.txt` two sections above — a baseline with no
+recorder at all, which drifted by thirty symbols across four merges.
+
+Identified by function rather than by line, because a line-numbered baseline
+churns on every unrelated edit above it and teaches its reader to re-record
+without reading.
+
+### The count is 40, not 41
+
+Worth recording because the first version of this file said 41. The scan is a
+text search, and `mixture_bindings.c` opens with a doc comment explaining
+what holds across "the `Py_BEGIN_ALLOW_THREADS` region". That sentence was
+counted as a 41st unplanned region, attributed to no function at all because
+it sits above the first one — the same mistake `public_text_names` records
+near the top of `check.py`, where `jet_sweep` matched a prose comment and was
+counted as public API. `check_lib._strip_c_comments` now removes comments,
+tracking `/* */` across lines, before anything is matched, and
+`verification/tests/test_gil_regions.py` pins it with
+`test_a_region_named_only_in_a_comment_is_not_a_region`. The `::?` guard in
+that file is what found it.
+
+### How it was proved to work
+
+Five mutations against the real gate, each caught by the intended branch:
+
+| mutation | result |
+|---|---|
+| clean tree | `OK ... 29 of 69 ... 40 unplanned by decision 9, none new` |
+| a second `Py_BEGIN_ALLOW_THREADS` added to `scoring_bindings.c` | FAIL, 1 new region |
+| a `BEAM_PY_PLANNED_BEGIN` in `analytics_bindings.c` turned back into `Py_BEGIN_ALLOW_THREADS` | FAIL, 1 region stopped planning |
+| `py_observe` wired with a matched BEGIN/END pair | note, "now resolve a thread plan", no failure |
+| `BEAM_PY_PLANNED_BEGIN` with no matching END | FAIL, one line naming `py_observe` |
+
+The last of those is why `gil_regions` returns `unbalanced` separately. The
+first attempt left the scanner inside a region for the rest of the FILE, so
+every later `return` became an escape: that mutation printed **87** escape
+lines and never said the macro was unbalanced.
