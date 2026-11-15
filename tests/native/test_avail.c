@@ -138,15 +138,184 @@ static void test_free_cores_is_what_is_allowed_minus_what_is_running(void) {
 
 static void test_unknown_contention_falls_back_to_the_headroom_rule(void) {
     /*
-     * With no runnable count -- no /proc, as on Windows -- the estimate is
-     * everything allowed, and the policy's own halving then yields exactly the
-     * conservative constant that was wanted for that case. The fallback is not
-     * a special case anywhere; it falls out of the existing rule.
+     * With no runnable count the estimate is everything allowed, and clause 3
+     * of the policy then caps it at the scaling ceiling -- so an unknown
+     * machine is planned at 8. The fallback is not a special case anywhere; it
+     * falls out of the existing rule.
+     *
+     * This comment used to credit "the policy's own halving" with that answer,
+     * which plan.c stopped doing when the ceiling form replaced the halving.
+     * It also used to say "as on Windows", which was the whole gap: Windows
+     * and macOS answered unknown on EVERY call, so they were planned at 8
+     * whatever the machine was doing. They now difference two CPU-time
+     * readings instead, and reach this path only until a window accumulates.
      */
     ASSERT_MSG(beam_available_from(16, -1) == 16,
                "unknown contention assumes none and lets the policy halve it");
     ASSERT_MSG(beam_available_from(16, 0) == 16,
                "a nonsensical zero runnable count is treated as unknown");
+    PASS();
+}
+
+static void test_a_window_too_short_to_mean_anything_is_unknown(void) {
+    /*
+     * CPU time is accounted in ticks -- about 10 ms on both platforms that
+     * need this -- so a window of a few microseconds between two BEAM calls
+     * carries no information at all: the deltas are zero or one tick and the
+     * quotient is noise. Unknown, which the policy already handles as "assume
+     * no contention", is the honest answer and the existing safe fallback.
+     */
+    ASSERT_MSG(beam_competitors_from_cpu_time(0u, 0u, 1000u, 16) == -1,
+               "a one-microsecond window cannot be measured");
+    ASSERT_MSG(beam_competitors_from_cpu_time(100000000u, 0u, 5000000u, 16) == -1,
+               "five milliseconds is still below one accounting tick");
+    PASS();
+}
+
+static void test_an_idle_machine_reports_only_ourselves(void) {
+    /* One second of wall, one core's worth of CPU, all of it ours. */
+    ASSERT_MSG(beam_competitors_from_cpu_time(1000000000u, 1000000000u,
+                                              1000000000u, 16) == 1,
+               "our own core does not compete with us");
+    PASS();
+}
+
+static void test_competitors_are_counted_in_whole_cores(void) {
+    /*
+     * One second of wall during which the machine burned five core-seconds,
+     * one of them ours: four competitors, plus ourselves, is five runnable --
+     * the same units beam_available_from takes.
+     */
+    ASSERT_MSG(beam_competitors_from_cpu_time(5000000000u, 1000000000u,
+                                              1000000000u, 16) == 5,
+               "four competing cores plus ourselves");
+    ASSERT_MSG(beam_available_from(16, beam_competitors_from_cpu_time(
+                   5000000000u, 1000000000u, 1000000000u, 16)) == 12,
+               "and that leaves twelve of sixteen");
+    PASS();
+}
+
+static void test_our_own_threads_are_not_competition(void) {
+    /*
+     * THE reason this function subtracts. A tick difference spanning BEAM's
+     * own eight-thread region reads the machine as eight cores busy, and
+     * without the subtraction the next call would plan narrow BECAUSE OF THE
+     * PREVIOUS ONE -- the feedback loop avail.h warns about for the load
+     * average, which "would serialise every call for a minute after BEAM's own
+     * previous call finished". Eight core-seconds, all ours, is an idle
+     * machine as far as the plan is concerned.
+     */
+    ASSERT_MSG(beam_competitors_from_cpu_time(8000000000u, 8000000000u,
+                                              1000000000u, 16) == 1,
+               "our own eight threads leave the machine ours");
+    PASS();
+}
+
+static void test_a_saturated_machine_cannot_report_more_than_it_has(void) {
+    /*
+     * System CPU time covers every CPU, while `allowed` may be a subset --
+     * the same approximation the runnable count already makes on Linux. The
+     * clamp keeps a hundred busy cores from producing a negative estimate,
+     * and the policy's own floor then yields one.
+     */
+    const int nr = beam_competitors_from_cpu_time(100000000000u, 0u,
+                                                  1000000000u, 16);
+    ASSERT_MSG(nr == 17, "sixteen allowed, so at most sixteen competitors plus us");
+    ASSERT_MSG(beam_available_from(16, nr) == 1, "a saturated machine leaves one");
+    PASS();
+}
+
+static void test_a_fraction_of_a_core_rounds_towards_contention(void) {
+    /*
+     * Half a core of competition rounds up to one, not down to none. Planning
+     * too narrow costs about 2x and planning too wide cost up to 3814x, so
+     * the rounding goes the cheap way.
+     */
+    ASSERT_MSG(beam_competitors_from_cpu_time(1500000000u, 0u,
+                                              1000000000u, 16) == 3,
+               "one and a half competing cores counts as two, plus ourselves");
+    PASS();
+}
+
+static void test_an_inconsistent_sample_is_not_negative_competition(void) {
+    /*
+     * The two clocks are read one after the other, not atomically, so our own
+     * CPU time can exceed the system total the sample before it. Reporting
+     * fewer than zero competitors would widen the plan on the strength of a
+     * sampling race.
+     */
+    ASSERT_MSG(beam_competitors_from_cpu_time(1000000000u, 4000000000u,
+                                              1000000000u, 16) == 1,
+               "more of our own time than the system's means no competition");
+    PASS();
+}
+
+static void test_a_threads_first_reading_is_only_a_baseline(void) {
+    /* Nothing to difference against, so unknown -- and the reading is kept. */
+    BeamAvailSample s = {0};
+    ASSERT_MSG(beam_competitors_from_samples(&s, 5000000000u, 1000000000u,
+                                             1000000000u, 16) == -1,
+               "the first reading cannot be interpreted");
+    ASSERT_MSG(s.have == 1, "but it becomes the baseline");
+    ASSERT_MSG(s.wall == 1000000000u, "stored as given");
+    PASS();
+}
+
+static void test_a_short_window_leaves_the_baseline_to_age(void) {
+    /*
+     * The rule the whole mechanism depends on. A tight loop of short calls
+     * must not restart the window each time, or twenty milliseconds is never
+     * reached and the estimate stays unknown on exactly the workload that
+     * needs it. Three five-millisecond calls report unknown and leave the
+     * baseline where it was; the fourth, now twenty-five milliseconds from
+     * that baseline, answers.
+     */
+    BeamAvailSample s = {0};
+    (void)beam_competitors_from_samples(&s, 0u, 0u, 1000000000u, 16);
+    const uint64_t base = s.wall;
+    for (int i = 1; i <= 3; i++) {
+        const uint64_t at = 1000000000u + (uint64_t)i * 5000000u;
+        ASSERT_MSG(beam_competitors_from_samples(&s, 0u, 0u, at, 16) == -1,
+                   "five milliseconds cannot be measured");
+        ASSERT_MSG(s.wall == base, "and the baseline must not move");
+    }
+    const int nr = beam_competitors_from_samples(&s, 50000000u, 0u,
+                                                 1025000000u, 16);
+    ASSERT_MSG(nr == 3, "two competing cores plus ourselves, once the window is real");
+    ASSERT_MSG(s.wall == 1025000000u, "and now the baseline advances");
+    PASS();
+}
+
+static void test_a_reading_that_moves_backwards_resets_rather_than_underflows(void) {
+    /*
+     * The clocks promise monotonicity; this pins what happens if one breaks
+     * it, because the subtraction is unsigned and the failure would not be a
+     * wrong answer but a vast one.
+     */
+    BeamAvailSample s = {0};
+    (void)beam_competitors_from_samples(&s, 9000000000u, 2000000000u,
+                                        5000000000u, 16);
+    ASSERT_MSG(beam_competitors_from_samples(&s, 9000000000u, 2000000000u,
+                                             4000000000u, 16) == -1,
+               "a wall clock that went backwards is unknown, not enormous");
+    ASSERT_MSG(beam_competitors_from_samples(&s, 1000000000u, 2000000000u,
+                                             9000000000u, 16) == -1,
+               "system time that went backwards is unknown too");
+    PASS();
+}
+
+static void test_the_sampled_estimate_tracks_competitors_over_the_window(void) {
+    /*
+     * End to end through the stateful step: one second of wall in which the
+     * machine burned twelve core-seconds, four of them BEAM's own, leaves
+     * eight competitors and so eight of sixteen cores free.
+     */
+    BeamAvailSample s = {0};
+    (void)beam_competitors_from_samples(&s, 0u, 0u, 0u, 16);
+    const int nr = beam_competitors_from_samples(&s, 12000000000u, 4000000000u,
+                                                 1000000000u, 16);
+    ASSERT_MSG(nr == 9, "eight competing cores plus ourselves");
+    ASSERT_MSG(beam_available_from(16, nr) == 8, "which leaves eight free");
     PASS();
 }
 
@@ -288,6 +457,17 @@ int main(int argc, char **argv) {
     RUN_TEST(test_an_unreadable_cpu_max_is_reported_as_unknown);
     RUN_TEST(test_free_cores_is_what_is_allowed_minus_what_is_running);
     RUN_TEST(test_unknown_contention_falls_back_to_the_headroom_rule);
+    RUN_TEST(test_a_window_too_short_to_mean_anything_is_unknown);
+    RUN_TEST(test_an_idle_machine_reports_only_ourselves);
+    RUN_TEST(test_competitors_are_counted_in_whole_cores);
+    RUN_TEST(test_our_own_threads_are_not_competition);
+    RUN_TEST(test_a_saturated_machine_cannot_report_more_than_it_has);
+    RUN_TEST(test_a_fraction_of_a_core_rounds_towards_contention);
+    RUN_TEST(test_an_inconsistent_sample_is_not_negative_competition);
+    RUN_TEST(test_a_threads_first_reading_is_only_a_baseline);
+    RUN_TEST(test_a_short_window_leaves_the_baseline_to_age);
+    RUN_TEST(test_a_reading_that_moves_backwards_resets_rather_than_underflows);
+    RUN_TEST(test_the_sampled_estimate_tracks_competitors_over_the_window);
     RUN_TEST(test_free_cores_is_never_below_one_or_above_what_is_allowed);
     RUN_TEST(test_more_competitors_never_frees_more_cores);
     RUN_TEST(test_the_machine_reports_a_usable_estimate);

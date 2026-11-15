@@ -15,6 +15,8 @@ beam_betas_tilted
 beam_binomials
 beam_clear_error
 beam_cohort_private_sums
+beam_competitors_from_cpu_time
+beam_competitors_from_samples
 beam_compute_log_z
 beam_config_invalid_reason
 beam_config_valid

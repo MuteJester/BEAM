@@ -15,10 +15,24 @@ BEAM.threads()               # the limit in force (0: the system's choice)
 BEAM.effective_threads()     # what a parallel step would start right now
 ```
 
-BEAM uses all available cores by default, or `OMP_NUM_THREADS` if it is set. `set_threads` is
-a hard limit, which is what you want inside a job scheduler or next to another parallel step. It
-applies to every model in the process; `set_threads(0)` restores the default. Set it before
-starting work, not while another thread is computing.
+By default BEAM picks the width itself, from how busy the machine is and from where its own
+work stops scaling — on a quiet workstation that is up to eight threads, and on a shared node
+with little free it is far fewer, which is the difference between a job that runs and one that
+thrashes. `OMP_NUM_THREADS`, if you set it, decides instead: BEAM treats it as your instruction
+and stands aside.
+
+`set_threads` is a hard limit, which is what you want inside a job scheduler or next to another
+parallel step. It applies to every model in the process; `set_threads(0)` restores the default.
+Set it before starting work, not while another thread is computing.
+
+```python
+BEAM.parallel_plan()         # what the default resolved to, and from what
+```
+
+For a benchmark or a figure you want to reproduce exactly, pin the machine estimate with the
+`BEAM_AVAILABLE_CORES` environment variable; the plan then depends only on your own settings
+rather than on what else happened to be running. `parallel_plan()` reports the width and the
+inputs it came from, so a surprising thread count can be explained rather than guessed at.
 
 **Results do not depend on the number of threads.** Every sum is taken in a fixed order, so one
 thread and sixteen give the same answer, bit for bit.
