@@ -98,7 +98,7 @@ void beam_plan_inputs(BeamPlanIn *in) {
 #else
     in->omp_max = 1;
 #endif
-    in->available = beam_available_cores();
+    in->available = beam_available_cores_ex(&in->available_measured);
 }
 
 int beam_plan_enter_default(void) {

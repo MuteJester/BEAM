@@ -3614,3 +3614,54 @@ gate only NOTES a new internal symbol, so leaving these unrecorded would have
 cost nothing today and 2 permanent notes thereafter -- which is how 30 symbols
 drifted across four merges before they were recorded in #7. Previous versions
 kept as `c_cases.availsample.txt` and `c_symbols.availsample.txt`.
+
+## The estimate says whether it measured (2026-11-15)
+
+A follow-up to the section above, and the reason it was needed: CI passed on
+all fifteen checks with the new sampled estimate, and that proved nothing about
+whether the estimate ever ran. On a quiet runner `available == cores` whether
+the reading worked or fell back to "assume no contention", so a working
+estimate and a dead code path produce identical output — which is how those
+platforms could have stayed on the fallback with every leg green, in both
+directions.
+
+`parallel_plan()` therefore reports `available_measured`, filled from the same
+single reading (`beam_available_cores_ex`) rather than from a second one: on the
+sampled platforms a sample CONSUMES the window it is measured over, so a probe
+that re-read would report "not measured" almost always and would perturb the
+signal it describes.
+
+Three files moved, all inventory. No recorded NUMBER changed.
+
+### `pytest_cases.txt`: 1243 -> 1244
+
+- `tests/suites/model/test_runtime.py::test_the_estimate_says_whether_it_measured_the_machine`
+
+Mutated against the real build, which is the only reason it is worth having:
+pointing the Linux reader at `/proc/loadavg_absent` makes the machine never
+answer, and the test fails with `assert False is True`. Restored, it passes. So
+a pass on the macOS and Windows legs is evidence that the sampled path
+measures, and not merely that it compiles.
+
+### `c_cases.txt`: 450 -> 452
+
+- `test_the_estimate_reports_whether_it_measured`
+- `test_the_two_spellings_of_the_estimate_agree`
+
+The first pins that a pin counts as measured (the estimate came from outside,
+not from the fallback), which holds on every platform unlike a bare reading.
+The second pins `beam_available_cores()` against
+`beam_available_cores_ex(NULL)` under a pin, which removes the per-call freedom
+the sampled platforms otherwise have and makes the comparison exact.
+
+### `c_symbols.txt`: 263 -> 264
+
+- `beam_available_cores_ex`
+
+Previous versions kept as `c_cases.measuredflag.txt`,
+`pytest_cases.measuredflag.txt` and `c_symbols.measuredflag.txt`.
+
+`BeamPlanIn` gained `available_measured` to carry it. The field is reporting
+only: `beam_plan_threads()` does not read it and must not, since a plan that
+behaved differently depending on whether the estimate was measured would make
+the fallback a second policy.

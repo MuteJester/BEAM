@@ -354,12 +354,13 @@ PyObject *py_parallel_plan(PyObject *self, PyObject *arg) {
     BeamPlanIn in;
     beam_plan_inputs(&in);
     return Py_BuildValue(
-        "{s:i,s:i,s:O,s:i,s:i,s:i}",
+        "{s:i,s:i,s:O,s:i,s:i,s:O,s:i}",
         "plan", beam_plan_threads(&in),
         "user_cap", in.user_cap,
         "omp_num_threads", in.omp_env ? Py_True : Py_False,
         "cores", in.cores,
         "available", in.available,
+        "available_measured", in.available_measured ? Py_True : Py_False,
         "max_width", beam_plan_max_width());
 }
 

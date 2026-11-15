@@ -351,10 +351,18 @@ static int available_pin(void) {
     return (int)n;
 }
 
-int beam_available_cores(void) {
+int beam_available_cores(void) { return beam_available_cores_ex(NULL); }
+
+int beam_available_cores_ex(int *measured) {
+    if (measured) *measured = 0;
     const int allowed = beam_allowed_cores();
     const int pin = available_pin();
-    if (pin > 0) return pin < allowed ? pin : allowed;
+    if (pin > 0) {
+        /* A pin is a measurement in the only sense that matters here: the
+         * estimate came from outside rather than from the fallback. */
+        if (measured) *measured = 1;
+        return pin < allowed ? pin : allowed;
+    }
 
     int nr = -1;
 #if defined(__linux__)
@@ -371,5 +379,6 @@ int beam_available_cores(void) {
      */
     nr = sampled_competitors(allowed);
 #endif
+    if (measured && nr >= 1) *measured = 1;
     return beam_available_from(allowed, nr);
 }

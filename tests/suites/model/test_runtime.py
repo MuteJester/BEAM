@@ -107,7 +107,7 @@ def test_the_plan_reports_every_input_it_used():
 
     plan = BEAM.parallel_plan()
     for key in ("plan", "user_cap", "omp_num_threads", "cores",
-                "available", "max_width"):
+                "available", "available_measured", "max_width"):
         assert key in plan, f"{key} missing from {sorted(plan)}"
     assert plan["plan"] >= 1
     assert plan["cores"] >= 1
@@ -151,6 +151,40 @@ def test_the_plan_is_capped_by_the_scaling_ceiling():
             pytest.skip("OMP_NUM_THREADS selects clause 2, not the ceiling")
         assert plan["plan"] <= plan["max_width"]
         assert plan["plan"] <= max(plan["available"], 1)
+    finally:
+        BEAM.set_threads(before)
+
+
+def test_the_estimate_says_whether_it_measured_the_machine():
+    """An idle machine and a dead code path report the same number.
+
+    On a quiet machine `available == cores` whether the reading worked or fell
+    back to "assume no contention", so the number alone cannot tell a working
+    estimate from one that never ran -- and every CI leg would pass either
+    way. That is how the platforms without /proc went from "always assumes an
+    idle machine" to "reads the machine" without a single test noticing the
+    difference, in both directions.
+
+    The platforms that sample need a window to measure over, so the first
+    reading on a thread is only a baseline. Two calls either side of one are
+    enough on every platform: Linux measures immediately, and the sampled
+    platforms measure by the second.
+    """
+    import time
+
+    import BEAM
+
+    before = BEAM.threads()
+    try:
+        BEAM.set_threads(0)
+        BEAM.parallel_plan()                 # baseline, where one is needed
+        time.sleep(0.03)                     # longer than the 20 ms minimum
+        plan = BEAM.parallel_plan()
+        assert plan["available_measured"] is True, (
+            "availability was never measured, so the plan is running on the "
+            f"fallback rather than on this machine: {plan}"
+        )
+        assert 1 <= plan["available"] <= plan["cores"]
     finally:
         BEAM.set_threads(before)
 

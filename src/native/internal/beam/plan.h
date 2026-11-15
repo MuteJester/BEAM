@@ -44,6 +44,13 @@ typedef struct {
     int      cores;      /**< Cores present, from omp_get_num_procs().       */
     int      omp_max;    /**< omp_get_max_threads(): respects OMP_NUM_THREADS.*/
     int      available;  /**< Estimated free cores.                          */
+    /**
+     * 1 when `available` was measured, 0 when it is the "assume no contention"
+     * fallback. REPORTING ONLY: beam_plan_threads() does not read it, and must
+     * not -- a plan that behaved differently depending on whether the estimate
+     * was measured would make the fallback a second policy.
+     */
+    int      available_measured;
 } BeamPlanIn;
 
 /**
