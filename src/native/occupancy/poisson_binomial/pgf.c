@@ -127,7 +127,14 @@ BeamError beam_publicness_pgf(const double *p, uint32_t n_atoms,
     }
 
 #ifdef _OPENMP
-#pragma omp parallel for schedule(static) if(n_atoms >= 4u)
+/* The only parallel region in src/native that carried no `num_threads`, which
+ * meant it ran at the OpenMP default -- one thread per core -- however narrow
+ * a team the caller's plan had resolved. Wrapping the entry point in
+ * BEAM_PY_PLANNED_BEGIN could not fix that: the plan is applied by NAMING it
+ * here, not by being in scope. `beam_threads()` is already visible through
+ * beam/budget.h. */
+#pragma omp parallel for schedule(static) if(n_atoms >= 4u) \
+        num_threads(beam_threads())
 #endif
     for (uint32_t a = 0; a < n_atoms; a++) {
         double *row = out + (size_t)a * 2u * (size_t)k_fft;

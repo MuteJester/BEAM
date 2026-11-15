@@ -185,9 +185,9 @@ PyObject *py_query_probability(PyObject *self, PyObject *args) {
     QUERY_PROLOGUE(args, "OIOO");
     double lp = 0.0;
     BeamError err;
-    Py_BEGIN_ALLOW_THREADS
+    BEAM_PY_PLANNED_BEGIN
     err = beam_query_log_probability(m, c, &lp);
-    Py_END_ALLOW_THREADS
+    BEAM_PY_PLANNED_END
     beam_query_constraint_free(c);
     if (err != BEAM_OK) return set_beam_error(err);
     return PyFloat_FromDouble(lp);
@@ -203,9 +203,9 @@ PyObject *py_query_marginals(PyObject *self, PyObject *args) {
                 return beam_py_nomem("the query result", (uint64_t)length * R * sizeof(double)); }
     double logz = 0.0;
     BeamError err;
-    Py_BEGIN_ALLOW_THREADS
+    BEAM_PY_PLANNED_BEGIN
     err = beam_query_marginals(m, c, out, &logz);
-    Py_END_ALLOW_THREADS
+    BEAM_PY_PLANNED_END
     beam_query_constraint_free(c);
     if (err != BEAM_OK) { PyMem_Free(out); return set_beam_error(err); }
     PyObject *b = edge_doubles_to_bytes(out, (size_t)length * R);
@@ -220,9 +220,9 @@ PyObject *py_query_entropy(PyObject *self, PyObject *args) {
     QUERY_PROLOGUE(args, "OIOO");
     double h = 0.0, v = 0.0;
     BeamError err;
-    Py_BEGIN_ALLOW_THREADS
+    BEAM_PY_PLANNED_BEGIN
     err = beam_query_entropy(m, c, &h, &v);
-    Py_END_ALLOW_THREADS
+    BEAM_PY_PLANNED_END
     beam_query_constraint_free(c);
     if (err != BEAM_OK) return set_beam_error(err);
     return Py_BuildValue("(dd)", h, v);
@@ -255,9 +255,9 @@ PyObject *py_query_expect(PyObject *self, PyObject *args) {
     }
     BeamQueryMoments mo;
     BeamError err;
-    Py_BEGIN_ALLOW_THREADS
+    BEAM_PY_PLANNED_BEGIN
     err = beam_query_expect(m, c, &f, &mo);
-    Py_END_ALLOW_THREADS
+    BEAM_PY_PLANNED_END
     beam_query_constraint_free(c);
     PyMem_Free(tab);
     if (err != BEAM_OK) return set_beam_error(err);
@@ -272,9 +272,9 @@ PyObject *py_query_position_entropy(PyObject *self, PyObject *args) {
     if (!out) { beam_query_constraint_free(c);
                 return beam_py_nomem("the query result", (uint64_t)length * sizeof(double)); }
     BeamError err;
-    Py_BEGIN_ALLOW_THREADS
+    BEAM_PY_PLANNED_BEGIN
     err = beam_query_position_entropy(m, c, out);
-    Py_END_ALLOW_THREADS
+    BEAM_PY_PLANNED_END
     beam_query_constraint_free(c);
     if (err != BEAM_OK) { PyMem_Free(out); return set_beam_error(err); }
     PyObject *b = edge_doubles_to_bytes(out, length);
@@ -292,9 +292,9 @@ PyObject *py_query_pair_joint(PyObject *self, PyObject *args) {
     if (!out) { beam_query_constraint_free(c);
                 return beam_py_nomem("the query result", (uint64_t)R * R * sizeof(double)); }
     BeamError err;
-    Py_BEGIN_ALLOW_THREADS
+    BEAM_PY_PLANNED_BEGIN
     err = beam_query_pair_joint(m, c, i, j, out);
-    Py_END_ALLOW_THREADS
+    BEAM_PY_PLANNED_END
     beam_query_constraint_free(c);
     if (err != BEAM_OK) { PyMem_Free(out); return set_beam_error(err); }
     PyObject *b = edge_doubles_to_bytes(out, (size_t)R * R);
@@ -312,9 +312,9 @@ PyObject *py_query_information_matrix(PyObject *self, PyObject *args) {
     if (!out) { beam_query_constraint_free(c);
                 return beam_py_nomem("the query result", (uint64_t)length * length * sizeof(double)); }
     BeamError err;
-    Py_BEGIN_ALLOW_THREADS
+    BEAM_PY_PLANNED_BEGIN
     err = beam_query_information_matrix(m, c, out);
-    Py_END_ALLOW_THREADS
+    BEAM_PY_PLANNED_END
     beam_query_constraint_free(c);
     if (err != BEAM_OK) { PyMem_Free(out); return set_beam_error(err); }
     PyObject *b = edge_doubles_to_bytes(out, (size_t)length * length);
@@ -350,10 +350,10 @@ PyObject *py_query_neighbours(PyObject *self, PyObject *args) {
 
     BeamNeighbourhood nb;
     BeamError err;
-    Py_BEGIN_ALLOW_THREADS
+    BEAM_PY_PLANNED_BEGIN
     err = deletions ? beam_query_deletions(m, seq, &nb)
                     : beam_query_insertions(m, seq, &nb);
-    Py_END_ALLOW_THREADS
+    BEAM_PY_PLANNED_END
     if (err != BEAM_OK) return set_beam_error(err);
 
     PyObject *list = PyList_New(nb.n);

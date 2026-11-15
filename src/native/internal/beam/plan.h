@@ -163,9 +163,15 @@ void beam_plan_leave(int token);
  * thread if there is one, otherwise the cap from `beam_model_set_threads`,
  * otherwise the OpenMP runtime's own maximum. Always 1 without OpenMP.
  *
- * Every `omp parallel` in the implementation carries `num_threads(...)` with
- * this, so the cap is a hard cap rather than a hint and one stray region
- * cannot go wide behind the caller's back.
+ * Every `omp parallel` in the implementation carries `num_threads(...)`,
+ * naming either this directly (64 regions) or a count already resolved from
+ * it and the memory budget -- `conc`, `nth`, `team` (29). So the cap is a
+ * hard cap rather than a hint and one stray region cannot go wide behind the
+ * caller's back. That is verified rather than asserted:
+ * `check_lib.thread_count_clauses` fails the gate on a region that names no
+ * count, and on one that names an expression outside the permitted set. It
+ * was written because `occupancy/poisson_binomial/pgf.c` was exactly such a
+ * stray region, and nothing noticed.
  *
  * This is NOT `beam_model_effective_threads()`, which is public API and
  * answers the different question "what is configured". Conflating the two

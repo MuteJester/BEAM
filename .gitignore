@@ -5,6 +5,9 @@
 
 # Build artifacts
 build/
+# `make tsan` builds here so that build/ -- which the gate reads -- is
+# never clobbered. It is scratch, exactly as build/ is.
+build-tsan/
 dist/
 *.o
 *.d

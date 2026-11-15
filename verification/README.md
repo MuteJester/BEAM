@@ -61,6 +61,7 @@ make clean && make test          # 331 C tests
 | Python public API | a moved default, a renamed keyword, a method that stopped being public |
 | pytest inventory | a test that stopped being collected -- a subset of a passing suite also passes |
 | C test inventory | the same for `RUN_TEST` cases |
+| thread plan wiring | a region that drops the GIL and resolves no thread plan, an unbalanced plan macro, or a path that escapes one |
 | numeric | 78 quantities, order 2/3/4 x default/uneven prior, as hex floats |
 | saved-model bytes | the sha256 of a written model |
 | thread independence | results at 1, 4 and 16 threads |

@@ -6,6 +6,7 @@ here.
 """
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 from collections import Counter
@@ -154,9 +155,240 @@ def python_inventory(want_text: str, collected_text: str) -> tuple[list[str], li
     return collect_ids(want_text), collect_ids(collected_text)
 
 
+def _strip_c_comments(line: str, in_block: bool) -> tuple[str, bool]:
+    """The code on one line, with comments removed, tracking `/* */` across lines.
+
+    Needed because the region scan is a text search, and this file's own
+    history says why a raw text search is not enough: a prose mention of
+    `Py_BEGIN_ALLOW_THREADS` in the doc comment at the top of
+    mixture_bindings.c was counted as a region that drops the GIL, exactly as
+    `jet_sweep` once matched a comment and was recorded as public API.
+    """
+    out, i = [], 0
+    while i < len(line):
+        if in_block:
+            j = line.find("*/", i)
+            if j < 0:
+                return "".join(out), True
+            in_block, i = False, j + 2
+            continue
+        j, k = line.find("/*", i), line.find("//", i)
+        if j < 0 and k < 0:
+            out.append(line[i:])
+            break
+        if k >= 0 and (j < 0 or k < j):
+            out.append(line[i:k])
+            break
+        out.append(line[i:j])
+        i, in_block = j + 2, True
+    return "".join(out), in_block
+
+
+#: Lines at column 0 that define a function. `#define FOO(x)` is excluded by
+#: the leading-# test at the call site; `static PyMethodDef x[] = {` cannot
+#: match because the regex requires `(` immediately after the name.
+_C_FUNC = re.compile(r"^(?:static\s+)?[A-Za-z_][\w\s\*]*?\**\s*([A-Za-z_]\w*)\s*\(")
+
+
+def gil_regions(root: Path) -> tuple[list[str], list[str], list[str]]:
+    """Every region that drops the GIL, and whether it resolves a thread plan.
+
+    Returns (regions, escapes, unbalanced). Each region is one line,
+    `<file>::<function>[#N] <planned|unplanned>`, and the pair is what the
+    baseline holds.
+
+    WHY THIS READS ALL FOURTEEN BINDING FILES. It used to read two, named in
+    a `PLANNED_BINDINGS` tuple, and print `29 analytics regions planned, no
+    escapes` -- a sentence a reader takes for a statement about the library.
+    It was a statement about analytics_bindings.c and common.c. The other
+    twelve files held 40 regions that dropped the GIL and planned nothing,
+    so `beam_threads()` fell through to `threads_cap()`, which with no cap
+    set is `omp_get_max_threads()`: one thread per core, the default plan.h
+    exists to stop asking for.
+
+    All 69 now resolve a plan. The 40 were wired once fitting had been
+    profiled, which is what DESIGN.md decision 9 asked for ("Query-time
+    calls only, for now; fitting keeps today's behaviour until it is
+    profiled"): fitting peaks at 1.18x on 3 threads at order 2 and 1.67x on
+    6 at order 3, and DEGRADES past 8 -- 0.46x and 0.91x at sixteen -- so
+    the old default of one thread per core was the worst point on both
+    curves. See .private/parallelism/fitting/.
+
+    The baseline stays because the check is not about today's count: a NEW
+    unplanned region fails, so a future entry point cannot quietly skip the
+    macro, and the record says which regions were ever exempt. The lesson is
+    c_symbols.txt, which had no recorder at all and drifted by thirty
+    symbols across four merges.
+
+    Identified by function rather than by line, because a line-numbered
+    baseline churns on every unrelated edit above it and teaches its reader
+    to re-record without reading.
+    """
+    bind = root / "src" / "native" / "bindings" / "python"
+    regions: list[str] = []
+    escapes: list[str] = []
+    unbalanced: list[str] = []
+    for path in sorted(bind.glob("*.c")):
+        func, seen = "?", {}
+        open_at, open_in = None, ""      # line and function of an unclosed BEGIN
+        in_block = False
+        for i, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            # Everything below reads `code`, never the raw line.
+            code, in_block = _strip_c_comments(raw, in_block)
+            if code[:1] not in ("", " ", "\t", "#", "}"):
+                m = _C_FUNC.match(code)
+                if m:
+                    # A region still open at the next function's definition is
+                    # never closed. Reported here, and `open_at` cleared, so
+                    # that one unbalanced macro implicates its own function
+                    # rather than every `return` in the rest of the file -- a
+                    # mutation of exactly this shape produced 87 escape lines
+                    # and no statement of the actual fault.
+                    if open_at is not None:
+                        unbalanced.append(
+                            f"{path.name}:{open_at}: planned region in "
+                            f"{open_in} is never closed")
+                        open_at = None
+                    func = m.group(1)
+            if "BEAM_PY_PLANNED_BEGIN" in code or "Py_BEGIN_ALLOW_THREADS" in code:
+                planned = ("planned" if "BEAM_PY_PLANNED_BEGIN" in code
+                           else "unplanned")
+                n = seen.get(func, 0)
+                seen[func] = n + 1
+                regions.append(f"{path.name}::{func}{f'#{n}' if n else ''} {planned}")
+                if planned == "planned":
+                    if open_at is not None:
+                        unbalanced.append(
+                            f"{path.name}:{open_at}: planned region in "
+                            f"{open_in} is never closed")
+                    open_at, open_in = i, func
+                continue
+            if "BEAM_PY_PLANNED_END" in code:
+                if open_at is None:
+                    unbalanced.append(f"{path.name}:{i}: a planned region is "
+                                      f"closed in {func} without being opened")
+                open_at = None
+                continue
+            # A `return` or `goto` out of a planned region skips the leave,
+            # which would apply one call's thread count to the next, unrelated
+            # call. The macro's safety rests on there being no such path.
+            if open_at is not None and ("return" in code or "goto" in code):
+                escapes.append(f"{path.name}:{i}: {code.strip()}")
+        if open_at is not None:
+            unbalanced.append(f"{path.name}:{open_at}: planned region in "
+                              f"{open_in} is never closed")
+    return sorted(regions), escapes, unbalanced
+
+#: A C cast, so that `num_threads((int)conc)` and `num_threads(conc)` are one
+#: form rather than two.
+_C_CAST = re.compile(r"\((?:unsigned\s+)?(?:int|long|short|char|size_t|u?int\d+_t)\)")
+
+#: Every expression a `num_threads(...)` clause may name, normalised. This is
+#: a tripwire, not a recording: a NEW name here is a deliberate decision that
+#: someone has to make in review, and the question it forces is "where does
+#: that count come from".
+#:
+#:   beam_threads()      the plan in force on this thread
+#:   conc, conc_e, conc_z   budget concurrency, already narrowed by the plan
+#:   nth, team           a count resolved once for the call and held
+#:   conc ? conc : 1     the same, floored at one (model/finalize.c)
+#:
+#: What it exists to reject: `omp_get_max_threads()`, `omp_get_num_procs()`,
+#: and any literal -- each of which asks for one thread per core behind the
+#: caller's back, which is the whole failure plan.h was written to stop.
+_PERMITTED_THREAD_COUNTS = frozenset({
+    "beam_threads()", "conc", "conc_e", "conc_z", "nth", "team",
+    "conc ? conc : 1",
+})
+
+
+def _logical_lines(path: Path) -> list[str]:
+    r"""Comment-free lines with `\` continuations joined.
+
+    Both are required to read a pragma: `num_threads` is routinely on the
+    continuation line, and a prose mention of one in a comment is not a
+    clause. A naive grep over the raw text already produced one wrong finding
+    in the parallel design's own notes.
+    """
+    inb, out, buf = False, [], ""
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        code, inb = _strip_c_comments(raw, inb)
+        if code.rstrip().endswith("\\"):
+            buf += code.rstrip()[:-1] + " "
+            continue
+        out.append(buf + code)
+        buf = ""
+    if buf:
+        out.append(buf)
+    return out
+
+
+def _paren_expr(text: str, after: int) -> str | None:
+    """The text inside the parentheses starting at or after `after`.
+
+    Matched rather than pattern-captured, because the expression may itself
+    contain parentheses -- `num_threads((int)conc)` and
+    `num_threads(conc ? (int)conc : 1)` both do, and a regex that stops at
+    the first `)` truncates them.
+    """
+    try:
+        i = text.index("(", after)
+    except ValueError:
+        return None
+    depth = 0
+    for j in range(i, len(text)):
+        if text[j] == "(":
+            depth += 1
+        elif text[j] == ")":
+            depth -= 1
+            if depth == 0:
+                return text[i + 1:j]
+    return None
+
+
+def thread_count_clauses(root: Path) -> tuple[list[str], list[str], int]:
+    """Where every parallel region gets its thread count.
+
+    Returns (missing, forbidden, n_clauses).
+
+    This is the other half of `gil_regions`, and the half that was missing.
+    `gil_regions` proves the plan is RESOLVED at the Python boundary; it says
+    nothing about whether the region underneath names it. One region did not:
+    `occupancy/poisson_binomial/pgf.c` carried no `num_threads` at all, so
+    `py_publicness_pgf` ran at one thread per core however narrow a team the
+    caller's plan had resolved -- and the gate reported the plan "in force"
+    the whole time, because wrapping an entry point and applying a plan are
+    different things. A plan is applied by NAMING it in the clause.
+
+    `#pragma omp for` and `#pragma omp critical` are not matched and must not
+    be: an `omp for` inside an enclosing `parallel` takes no `num_threads`,
+    and requiring one would be a demand the language rejects.
+    """
+    missing: list[str] = []
+    forbidden: list[str] = []
+    n = 0
+    for path in sorted(root.joinpath("src", "native").rglob("*.[ch]")):
+        for ln in _logical_lines(path):
+            stripped = ln.strip()
+            if not stripped.startswith("#pragma omp parallel"):
+                continue
+            rel = path.relative_to(root)
+            k = stripped.find("num_threads")
+            if k < 0:
+                missing.append(f"{rel}: {stripped[:72]}")
+                continue
+            n += 1
+            raw = _paren_expr(stripped, k)
+            norm = re.sub(r"\s+", " ", _C_CAST.sub("", raw or "")).strip()
+            if norm not in _PERMITTED_THREAD_COUNTS:
+                forbidden.append(f"{rel}: num_threads({raw}) -> {norm!r}")
+    return missing, forbidden, n
+
+
 #: Every baseline `--record` can write, by the name `--only` accepts.
 RECORDABLE = frozenset({"python_api", "pytest_cases", "c_cases",
-                        "numeric", "threads", "math_values"})
+                        "numeric", "threads", "math_values", "gil_regions",
+                        })
 
 
 def missing_baseline_is_fatal(name: str, argv: list[str]) -> bool:

@@ -44,7 +44,10 @@ def test_every_wrapping_suite_names_its_flag_in_the_makefile():
     makefile = re.sub(r"\\\n\s*", " ",
                       (ROOT / "Makefile").read_text(encoding="utf-8"))
     for source, wrapped in _wrap_sources():
-        target = f"build/tests/native/{source.stem}"
+        # Spelled with $(BUILD), not `build`: the directory became a
+        # variable so that `make tsan` can build instrumented binaries
+        # without overwriting the ones the gate reads.
+        target = f"$(BUILD)/tests/native/{source.stem}"
         block = re.search(re.escape(target) + r":[^\n]*?LDEXTRA([^\n]*)",
                           makefile)
         assert block, f"{source.name} wraps {sorted(wrapped)} but no "\

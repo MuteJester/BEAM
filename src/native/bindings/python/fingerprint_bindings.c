@@ -20,9 +20,9 @@ PyObject *py_fingerprint_search(PyObject *self, PyObject *args) {
     if (!p || !q) return NULL;
     BeamFingerprintResult *r = NULL;
     BeamError err;
-    Py_BEGIN_ALLOW_THREADS
+    BEAM_PY_PLANNED_BEGIN
     err = beam_fingerprint_search(p,q,L,&cfg,&r);
-    Py_END_ALLOW_THREADS
+    BEAM_PY_PLANNED_END
     if (err != BEAM_OK) return set_beam_error(err);
     PyObject *indices = PyBytes_FromStringAndSize(NULL,(Py_ssize_t)r->n_nodes*6*sizeof(int32_t));
     PyObject *masses = PyBytes_FromStringAndSize(NULL,(Py_ssize_t)r->n_nodes*2*sizeof(double));

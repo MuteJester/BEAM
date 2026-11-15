@@ -15,9 +15,9 @@ PyObject *py_local_distance(PyObject *self, PyObject *args) {
     if (!p || !q) return NULL;
     BeamLocalDistanceResult *r=NULL;
     BeamError err;
-    Py_BEGIN_ALLOW_THREADS
+    BEAM_PY_PLANNED_BEGIN
     err=beam_local_distance(p,q,&config,&r);
-    Py_END_ALLOW_THREADS
+    BEAM_PY_PLANNED_END
     if (err!=BEAM_OK) return set_beam_error(err);
     /* Native scratch has been freed. Reserve retained native output plus the
      * raw lists/tuples/scalars AND the Python facade's result objects, attribute
