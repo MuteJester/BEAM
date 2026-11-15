@@ -393,6 +393,44 @@ static void test_the_estimate_does_not_exceed_the_cores_present(void) {
 
 /* ── Pinning the estimate ────────────────────────────────────── */
 
+static void test_the_estimate_reports_whether_it_measured(void) {
+    /*
+     * An idle machine and a reading that never happened produce the same
+     * number, so the flag is the only way to tell them apart -- and the
+     * platforms without /proc spent their whole existence on the fallback
+     * without a test noticing.
+     *
+     * A pin counts as measured: the estimate came from outside rather than
+     * from "assume no contention", which is the distinction the flag draws.
+     * This part holds on every platform, unlike a bare reading.
+     */
+    setenv("BEAM_AVAILABLE_CORES", "3", 1);
+    int measured = -1;
+    const int got = beam_available_cores_ex(&measured);
+    unsetenv("BEAM_AVAILABLE_CORES");
+    ASSERT_MSG(got == 3 || got == beam_cores_present(),
+               "a pin of three is honoured, or clamped to a smaller machine");
+    ASSERT_MSG(measured == 1, "a pin is a measurement, not a fallback");
+    PASS();
+}
+
+static void test_the_two_spellings_of_the_estimate_agree(void) {
+    /*
+     * beam_available_cores() must be exactly beam_available_cores_ex(NULL).
+     * They are read per call on the sampled platforms, so a second reading can
+     * legitimately differ -- the pin removes that freedom and makes the
+     * comparison exact.
+     */
+    setenv("BEAM_AVAILABLE_CORES", "2", 1);
+    const int plain = beam_available_cores();
+    const int with_flag = beam_available_cores_ex(NULL);
+    unsetenv("BEAM_AVAILABLE_CORES");
+    ASSERT_MSG(plain == with_flag, "the two spellings must not drift apart");
+    ASSERT_MSG(with_flag == 2 || with_flag == beam_cores_present(),
+               "and both honour the pin");
+    PASS();
+}
+
 static void test_a_pinned_estimate_overrides_the_measurement(void) {
     /*
      * A load-aware plan is not reproducible between runs, which the design
@@ -472,6 +510,8 @@ int main(int argc, char **argv) {
     RUN_TEST(test_more_competitors_never_frees_more_cores);
     RUN_TEST(test_the_machine_reports_a_usable_estimate);
     RUN_TEST(test_the_estimate_does_not_exceed_the_cores_present);
+    RUN_TEST(test_the_estimate_reports_whether_it_measured);
+    RUN_TEST(test_the_two_spellings_of_the_estimate_agree);
     RUN_TEST(test_a_pinned_estimate_overrides_the_measurement);
     RUN_TEST(test_a_nonsense_pin_is_ignored_rather_than_obeyed);
     RUN_TEST(test_a_pin_above_the_cores_present_is_clamped);

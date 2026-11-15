@@ -185,4 +185,21 @@ int beam_competitors_from_samples(BeamAvailSample *prev, uint64_t sys,
  */
 int beam_available_cores(void);
 
+/**
+ * The same estimate, also reporting whether it was MEASURED or assumed.
+ * `*measured` becomes 1 when the machine answered and 0 when the estimate fell
+ * back to "assume no contention". `measured` may be NULL.
+ *
+ * One read, both answers, which is the point: asking a second time would take
+ * a second sample, and on the sampled platforms a sample consumes the window
+ * it is measured over -- so a probe that re-read would report "not measured"
+ * almost always, and would perturb the signal it claims to describe.
+ *
+ * This exists because an idle machine and a dead code path produce the same
+ * number. On a quiet runner `available == allowed` whether the reading worked
+ * or returned -1, so without this flag there is no way to tell a working
+ * estimate from one that never ran -- and CI would pass either way.
+ */
+int beam_available_cores_ex(int *measured);
+
 #endif /* BEAM_INTERNAL_AVAIL_H */

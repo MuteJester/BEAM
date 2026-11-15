@@ -6,6 +6,7 @@ beam_alphabet_by_name
 beam_alphabet_info
 beam_applied_mmap_threshold
 beam_available_cores
+beam_available_cores_ex
 beam_available_from
 beam_best_completions
 beam_beta_contour_sums
