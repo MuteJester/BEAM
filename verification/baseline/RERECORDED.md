@@ -3559,3 +3559,58 @@ new test uses `capfd` and not `capsys`, since the fallback writes to the file
 descriptor and never passes through `sys.stderr`; it fails when the fallback
 is removed.
 
+
+## Contention on macOS and Windows (2026-11-15)
+
+Two files moved, both inventory. No recorded NUMBER changed: `numeric`,
+`math_values`, the saved-model sha256, thread independence and `exact` are all
+byte-identical, which is the property that matters, since this change adds a
+reading of the machine and must not touch an answer.
+
+### `c_cases.txt`: 439 -> 450
+
+Eleven tests, all in `tests/native/test_avail.c`, for the estimate the
+platforms without `/proc` now compute. Six exercise the pure arithmetic:
+
+- `test_a_window_too_short_to_mean_anything_is_unknown`
+- `test_an_idle_machine_reports_only_ourselves`
+- `test_competitors_are_counted_in_whole_cores`
+- `test_our_own_threads_are_not_competition`
+- `test_a_saturated_machine_cannot_report_more_than_it_has`
+- `test_a_fraction_of_a_core_rounds_towards_contention`
+- `test_an_inconsistent_sample_is_not_negative_competition`
+
+and four the sample-to-sample step, which carries the state:
+
+- `test_a_threads_first_reading_is_only_a_baseline`
+- `test_a_short_window_leaves_the_baseline_to_age`
+- `test_a_reading_that_moves_backwards_resets_rather_than_underflows`
+- `test_the_sampled_estimate_tracks_competitors_over_the_window`
+
+Four of them were mutated against the real suite rather than merely written:
+advancing the baseline on a short window, dropping the backwards guard,
+dropping the subtraction of BEAM's own CPU time, and rounding a fraction of a
+core down instead of up each fail exactly the test that names the property.
+The third of those is the one that matters most -- without the subtraction a
+window spanning BEAM's own eight-thread region reads as eight cores busy, so
+each call would narrow the next because of the previous one, which is the
+feedback loop `avail.h` rejects the load average for.
+
+(The mutation run also produced a false green worth recording: `cp -p` restored
+the backup with its original mtime, `make` judged the object current, and the
+"restored" run still reported the mutant's failure. The source was clean and
+the binary was not. `touch` before the rebuild is what the file's own warning
+about mtime granularity is for.)
+
+### `c_symbols.txt`: 261 -> 263
+
+- `beam_competitors_from_cpu_time`
+- `beam_competitors_from_samples`
+
+Both are declared in the internal header beside the existing
+`beam_parse_nr_running` and `beam_available_from`, and are external for the
+same reason those are: the tests link `libbeam.a` and call them directly. The
+gate only NOTES a new internal symbol, so leaving these unrecorded would have
+cost nothing today and 2 permanent notes thereafter -- which is how 30 symbols
+drifted across four merges before they were recorded in #7. Previous versions
+kept as `c_cases.availsample.txt` and `c_symbols.availsample.txt`.

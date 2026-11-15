@@ -25,6 +25,27 @@
 #include <sched.h>
 #endif
 
+/*
+ * The sampled estimate, for the platforms with no /proc. See avail.h for why
+ * the quantity is competitors rather than load, and why that costs a second
+ * clock read.
+ */
+#if defined(__APPLE__)
+#include <mach/mach.h>
+#include <sys/resource.h>
+#include <sys/time.h>
+#include <time.h>
+#include <unistd.h>
+#elif defined(_WIN32)
+#include <windows.h>
+#endif
+
+#ifdef _MSC_VER
+  #define TLS __declspec(thread)
+#else
+  #define TLS _Thread_local
+#endif
+
 /* ── Parsers ─────────────────────────────────────────────────── */
 
 int beam_parse_nr_running(const char *loadavg_text) {
@@ -92,6 +113,44 @@ int beam_available_from(int allowed, int nr_running) {
     return avail < 1 ? 1 : avail;
 }
 
+int beam_competitors_from_cpu_time(uint64_t sys_busy_ns, uint64_t own_ns,
+                                   uint64_t wall_ns, int allowed) {
+    if (allowed < 1) allowed = 1;
+    if (wall_ns < BEAM_AVAIL_MIN_WINDOW_NS) return -1;
+    /*
+     * Our own time can exceed the system total across a non-atomic pair of
+     * reads. Equal means the machine ran nothing but us.
+     */
+    if (sys_busy_ns <= own_ns) return 1;
+    const uint64_t other = sys_busy_ns - own_ns;
+    /* Ceiling: half a core of competition is one competitor, not none. */
+    uint64_t cores = (other + wall_ns - 1u) / wall_ns;
+    if (cores > (uint64_t)allowed) cores = (uint64_t)allowed;
+    return (int)cores + 1;
+}
+
+int beam_competitors_from_samples(BeamAvailSample *prev, uint64_t sys,
+                                  uint64_t own, uint64_t wall, int allowed) {
+    if (!prev) return -1;
+
+    if (!prev->have) {                              /* rule 1 */
+        prev->sys = sys; prev->own = own; prev->wall = wall; prev->have = 1;
+        return -1;
+    }
+    if (wall <= prev->wall || sys < prev->sys || own < prev->own) {  /* rule 3 */
+        prev->sys = sys; prev->own = own; prev->wall = wall;
+        return -1;
+    }
+    const uint64_t window = wall - prev->wall;
+    if (window < BEAM_AVAIL_MIN_WINDOW_NS) return -1;               /* rule 2 */
+
+    const int nr = beam_competitors_from_cpu_time(sys - prev->sys,
+                                                  own - prev->own,
+                                                  window, allowed);
+    prev->sys = sys; prev->own = own; prev->wall = wall;
+    return nr;
+}
+
 /* ── Reading the machine ─────────────────────────────────────── */
 
 int beam_cores_present(void) {
@@ -146,6 +205,129 @@ int beam_allowed_cores(void) {
     return allowed;
 }
 
+#if defined(__APPLE__) || defined(_WIN32)
+/*
+ * Busy CPU time across every CPU, our own process's CPU time, and a monotonic
+ * wall clock -- all in nanoseconds, so the pure arithmetic above never sees a
+ * platform's tick unit. Each returns 0 on failure, and a failed read means
+ * "unknown", which is the existing safe fallback rather than a special case.
+ */
+static int read_system_busy_ns(uint64_t *out) {
+#if defined(__APPLE__)
+    host_cpu_load_info_data_t info;
+    mach_msg_type_number_t count = HOST_CPU_LOAD_INFO_COUNT;
+    /*
+     * mach_host_self() hands out a send right, and this runs at every entry
+     * point: without the deallocate it leaks one Mach port reference per BEAM
+     * call, which no test would notice and a long-lived process would.
+     */
+    const host_t host = mach_host_self();
+    const kern_return_t kr = host_statistics(host, HOST_CPU_LOAD_INFO,
+                                             (host_info_t)&info, &count);
+    mach_port_deallocate(mach_task_self(), host);
+    if (kr != KERN_SUCCESS) return 0;
+    /* HOST_CPU_LOAD_INFO is already summed over the CPUs. Idle is excluded. */
+    const uint64_t ticks = (uint64_t)info.cpu_ticks[CPU_STATE_USER]
+                         + (uint64_t)info.cpu_ticks[CPU_STATE_SYSTEM]
+                         + (uint64_t)info.cpu_ticks[CPU_STATE_NICE];
+    const long hz = sysconf(_SC_CLK_TCK);
+    if (hz <= 0) return 0;
+    *out = ticks * (1000000000ull / (uint64_t)hz);
+    return 1;
+#else
+    FILETIME idle, kernel, user;
+    if (!GetSystemTimes(&idle, &kernel, &user)) return 0;
+    ULARGE_INTEGER i, k, u;
+    i.LowPart = idle.dwLowDateTime;     i.HighPart = idle.dwHighDateTime;
+    k.LowPart = kernel.dwLowDateTime;   k.HighPart = kernel.dwHighDateTime;
+    u.LowPart = user.dwLowDateTime;     u.HighPart = user.dwHighDateTime;
+    /* Kernel time INCLUDES idle, so busy is kernel + user - idle. */
+    const uint64_t total = (k.QuadPart + u.QuadPart) * 100ull;  /* 100-ns units */
+    const uint64_t spare = i.QuadPart * 100ull;
+    *out = total > spare ? total - spare : 0ull;
+    return 1;
+#endif
+}
+
+static int read_own_cpu_ns(uint64_t *out) {
+#if defined(__APPLE__)
+    struct rusage ru;
+    if (getrusage(RUSAGE_SELF, &ru) != 0) return 0;
+    *out = (uint64_t)ru.ru_utime.tv_sec * 1000000000ull
+         + (uint64_t)ru.ru_utime.tv_usec * 1000ull
+         + (uint64_t)ru.ru_stime.tv_sec * 1000000000ull
+         + (uint64_t)ru.ru_stime.tv_usec * 1000ull;
+    return 1;
+#else
+    FILETIME created, exited, kernel, user;
+    if (!GetProcessTimes(GetCurrentProcess(), &created, &exited,
+                         &kernel, &user)) return 0;
+    ULARGE_INTEGER k, u;
+    k.LowPart = kernel.dwLowDateTime;   k.HighPart = kernel.dwHighDateTime;
+    u.LowPart = user.dwLowDateTime;     u.HighPart = user.dwHighDateTime;
+    *out = (k.QuadPart + u.QuadPart) * 100ull;
+    return 1;
+#endif
+}
+
+static int read_wall_ns(uint64_t *out) {
+#if defined(__APPLE__)
+    struct timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) return 0;
+    *out = (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
+    return 1;
+#else
+    LARGE_INTEGER freq, now;
+    if (!QueryPerformanceFrequency(&freq) || freq.QuadPart <= 0) return 0;
+    if (!QueryPerformanceCounter(&now) || now.QuadPart < 0) return 0;
+    const uint64_t q = (uint64_t)now.QuadPart, f = (uint64_t)freq.QuadPart;
+    /*
+     * Seconds and remainder separately. Counter times a billion overflows
+     * int64 after roughly fifteen minutes of uptime at the usual 10 MHz --
+     * longer than a CI runner lives, so the obvious one-liner passes here and
+     * returns nonsense on a machine that has been up since Tuesday.
+     */
+    *out = (q / f) * 1000000000ull + ((q % f) * 1000000000ull) / f;
+    return 1;
+#endif
+}
+
+/*
+ * The previous sample, per thread.
+ *
+ * Thread-local for the reason threads.c gives for the plan itself: two BEAM
+ * calls on two threads sharing one baseline would measure each other's window
+ * and neither would get a window it could interpret. A thread's first call
+ * therefore reports unknown, which is what this platform did on every call
+ * before.
+ *
+ * A window shorter than the accounting resolution does NOT replace the
+ * baseline. Overwriting it on every call is the bug that makes this whole
+ * mechanism useless: a tight loop of short calls would reset the start of the
+ * window each time and never accumulate twenty milliseconds, so the estimate
+ * would be unknown forever on exactly the workload that needs it. The
+ * baseline is left to age instead.
+ */
+/*
+ * The previous sample, per thread.
+ *
+ * Thread-local for the reason threads.c gives for the plan itself: two BEAM
+ * calls on two threads sharing one baseline would measure each other's window
+ * and neither would get a window it could interpret. A thread's first call
+ * therefore reports unknown, which is what this platform answered on EVERY
+ * call before, so nothing here can be worse than it was.
+ */
+static TLS BeamAvailSample tl_sample;
+
+static int sampled_competitors(int allowed) {
+    uint64_t sys = 0u, own = 0u, wall = 0u;
+    if (!read_system_busy_ns(&sys)) return -1;
+    if (!read_own_cpu_ns(&own)) return -1;
+    if (!read_wall_ns(&wall)) return -1;
+    return beam_competitors_from_samples(&tl_sample, sys, own, wall, allowed);
+}
+#endif  /* __APPLE__ || _WIN32 */
+
 /*
  * An explicit pin, for reproducibility.
  *
@@ -180,6 +362,14 @@ int beam_available_cores(void) {
     if (read_small_file("/proc/loadavg", buf, sizeof buf)) {
         nr = beam_parse_nr_running(buf);
     }
+#elif defined(__APPLE__) || defined(_WIN32)
+    /*
+     * No /proc, so no instantaneous runnable count. The sampled estimate is
+     * second best and says so: it lags, and it reports unknown until a thread
+     * has a window worth measuring. Unknown is what this platform answered on
+     * every call before, so nothing here can be worse than it was.
+     */
+    nr = sampled_competitors(allowed);
 #endif
     return beam_available_from(allowed, nr);
 }

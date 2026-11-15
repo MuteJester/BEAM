@@ -38,13 +38,29 @@
  * conservative is the cheap direction -- planning too narrow costs about 2x,
  * planning too wide cost up to 3814x.
  *
- * Every parser returns -1 for "could not tell" rather than guessing. -1 then
- * means "assume no contention", and the policy's own halving supplies the
- * conservative answer. That is also exactly what a machine with no /proc at
- * all gets, so the non-Linux fallback is not a special case anywhere.
+ * Every reader returns -1 for "could not tell" rather than guessing, and -1
+ * means "assume no contention". It is the one answer that cannot be wrong in
+ * the expensive direction by more than the ceiling allows: clause 3 of the
+ * policy is min(available, 8), so an unknown machine is planned at 8 and the
+ * error is bounded by that, not by the core count. (An earlier version of
+ * plan.c halved availability instead, and this paragraph used to credit the
+ * halving with the conservative answer; the halving is gone and the ceiling
+ * does that work now.)
+ *
+ * What the platforms without /proc do. They have no instantaneous runnable
+ * count, and the load average they DO have is ruled out above. So they
+ * difference two cumulative CPU-time readings instead -- see
+ * beam_competitors_from_cpu_time and beam_competitors_from_samples -- which
+ * measures competitors over a window rather than at an instant. It is second
+ * best, and the second-best-ness is explicit: it lags, it reports unknown
+ * until a thread has a window worth measuring, and every failure path lands
+ * on the same -1 those platforms used to return on every call. It cannot be
+ * worse than what it replaced; it can only start being right sooner.
  */
 #ifndef BEAM_INTERNAL_AVAIL_H
 #define BEAM_INTERNAL_AVAIL_H
+
+#include <stdint.h>
 
 /**
  * Runnable scheduling entities, from the fourth field of /proc/loadavg
@@ -88,6 +104,75 @@ int beam_allowed_cores(void);
  * `allowed` unchanged.
  */
 int beam_available_from(int allowed, int nr_running);
+
+/**
+ * Minimum window worth measuring, in nanoseconds. CPU time is accounted in
+ * ticks of roughly 10 ms on both platforms that need the sampled estimate, so
+ * a shorter window carries no information: the deltas are zero or one tick
+ * and the quotient is noise.
+ */
+#define BEAM_AVAIL_MIN_WINDOW_NS 20000000u
+
+/**
+ * Competitors implied by two cumulative CPU-time samples, in the units
+ * `beam_available_from` takes: runnable entities including the caller. -1 when
+ * the window is too short to mean anything.
+ *
+ * This is how a machine with no /proc answers the question Linux answers with
+ * the runnable count. The quantity is competitors, NOT total load, which is
+ * why `own_ns` is subtracted: a window spanning BEAM's own eight-thread region
+ * reads as eight cores busy, and counting that as contention would narrow the
+ * next call BECAUSE OF THE PREVIOUS ONE -- the feedback loop this file rejects
+ * the load average for. Linux escapes it for free, the runnable count being
+ * instantaneous: by the time it reads, BEAM's workers have exited.
+ *
+ * Both reads are averages over the window rather than instants, so this signal
+ * lags where the runnable count does not. The lag is bounded and lands on the
+ * safe side: a machine that was busy and is now idle plans narrow, costing
+ * about 2x, while the error in the other direction cost up to 3814x. A
+ * fraction of a core therefore rounds UP, and a sample whose own time exceeds
+ * the system total -- the two clocks are not read atomically -- reports no
+ * competition rather than negative competition.
+ *
+ * Pure, so the arithmetic is tested directly; the platform readers that
+ * produce the samples are the only part a test cannot pin to an exact answer.
+ */
+int beam_competitors_from_cpu_time(uint64_t sys_busy_ns, uint64_t own_ns,
+                                   uint64_t wall_ns, int allowed);
+
+/**
+ * One thread's previous CPU-time sample. Exposed so that the sample-to-sample
+ * step below can be driven from a test rather than from two clocks.
+ */
+typedef struct {
+    uint64_t sys;      /**< Busy CPU nanoseconds across every CPU. */
+    uint64_t own;      /**< This process's CPU nanoseconds. */
+    uint64_t wall;     /**< Monotonic nanoseconds. */
+    int have;          /**< Zero until the first reading is stored. */
+} BeamAvailSample;
+
+/**
+ * The estimate from a new reading and the previous sample, updating the sample
+ * in place. -1 when the pair cannot be interpreted yet.
+ *
+ * Pure apart from `*prev`, which is the whole point: the three rules that make
+ * the sampled estimate work are here rather than in platform code, so a test
+ * can pin them on any machine.
+ *
+ *   1. A thread's FIRST reading becomes the baseline and reports unknown.
+ *      There is nothing to difference against.
+ *   2. A window below `BEAM_AVAIL_MIN_WINDOW_NS` reports unknown and LEAVES
+ *      THE BASELINE ALONE, so it keeps ageing. Replacing it on every call is
+ *      the bug that would make the mechanism useless: a tight loop of short
+ *      calls would restart the window each time and never reach twenty
+ *      milliseconds, so the estimate would stay unknown on exactly the
+ *      workload that needs it.
+ *   3. A reading that moves backwards in any of the three series -- which the
+ *      clocks promise not to do, and which a test must still pin -- resets the
+ *      baseline and reports unknown rather than subtracting into an underflow.
+ */
+int beam_competitors_from_samples(BeamAvailSample *prev, uint64_t sys,
+                                  uint64_t own, uint64_t wall, int allowed);
 
 /**
  * The estimate the policy is given: free cores right now, at least one.
