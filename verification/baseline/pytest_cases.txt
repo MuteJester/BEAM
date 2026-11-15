@@ -1014,6 +1014,7 @@ tests/suites/model/test_reference_agreement.py::test_scores_match_reference[2]
 tests/suites/model/test_reference_agreement.py::test_scores_match_reference[3]
 tests/suites/model/test_reference_agreement.py::test_scores_match_reference[4]
 tests/suites/model/test_runtime.py::test_a_fork_with_nothing_running_is_silent
+tests/suites/model/test_runtime.py::test_a_nesting_environment_does_not_multiply_the_planned_width
 tests/suites/model/test_runtime.py::test_a_pinned_availability_is_visible_in_the_plan
 tests/suites/model/test_runtime.py::test_a_real_fork_after_parallel_work_warns_in_the_child
 tests/suites/model/test_runtime.py::test_an_explicit_cap_is_what_the_plan_reports

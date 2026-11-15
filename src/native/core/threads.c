@@ -109,6 +109,39 @@ int beam_plan_enter_default(void) {
 
 int beam_threads(void) {
 #ifdef _OPENMP
+    /*
+     * Already inside an active team: whatever region this thread opens next
+     * is a NESTED one, and one thread is the only answer that cannot
+     * multiply. It comes first because the alternative is not that the plan
+     * gets multiplied -- it is that the plan is not consulted at all. The
+     * inner pragmas are encountered by the outer team's workers, and a worker
+     * holds no plan (it is thread-local, deliberately: see
+     * beam_plan_enter's neighbours and test_a_plan_does_not_reach_another_thread),
+     * so it fell through to threads_cap() -- omp_get_max_threads() with no
+     * configured cap. An 8-thread plan opened eight teams of sixteen.
+     * Measured on one entropy() call with the plan pinned at 8: 117 threads
+     * against 9 with nesting off.
+     *
+     * Nesting is off by default, so this changes nothing until a caller sets
+     * OMP_MAX_ACTIVE_LEVELS, which nothing here can prevent: pinning it would
+     * mean omp_set_max_active_levels, process-global state that two BEAM calls
+     * on two Python threads would fight over. The thread's own level is the
+     * one thing that is always true locally.
+     *
+     * ACTIVE level, not level. A team of one is an inactive region; it
+     * multiplies nothing, and treating it as nested would throw away the
+     * parallelism inside a single-length sweep for no gain.
+     * test_an_inactive_region_does_not_lose_the_plan pins that.
+     *
+     * Safe for the scratch sizing too, and in the direction that matters.
+     * A resolved count both sizes buffers and sets num_threads, so the
+     * dangerous disagreement is a buffer smaller than its team. This can only
+     * shrink the answer as the nesting deepens, and a region entered at this
+     * level or deeper is sized by a read at this level or deeper, never by a
+     * shallower one. math/spectrum.c's per-thread scratch, allocated inside a
+     * nested call, was being sized for omp_get_max_threads() and used by one.
+     */
+    if (omp_get_active_level() > 0) return 1;
     if (tl_plan > 0) return tl_plan;
     return threads_cap();
 #else

@@ -347,3 +347,88 @@ def test_the_fork_warning_survives_warnings_as_errors(capfd):
     err = capfd.readouterr().err
     assert "fork" in err
     assert "spawn" in err
+
+
+# Nesting
+#
+# BEAM enters nested parallel regions at depth 2 and pins nothing about
+# nesting, because the only way to pin it is omp_set_max_active_levels, which
+# is process-global state two calls on two Python threads would fight over.
+# So the caller's environment decides, and this is what keeps that decision
+# from costing the plan.
+# ════════════════════════════════════════════════════════════════════════
+
+_NESTING_CHILD = """
+import json, random, sys, threading, time
+import BEAM
+from BEAM import BeamModel
+
+def watch(stop, out):
+    hi = 0
+    while not stop.is_set():
+        try:
+            with open("/proc/self/status", encoding="utf-8") as f:
+                for line in f:
+                    if line.startswith("Threads:"):
+                        hi = max(hi, int(line.split()[1]))
+                        break
+        except OSError:
+            pass
+        time.sleep(0.001)
+    out.append(hi)
+
+rng = random.Random(7)
+seqs = ["TG" + "".join(rng.choice("ACGT") for _ in range(rng.randint(2, 20)))
+        + "C" for _ in range(800)]
+m = BeamModel(seqs, abundances=[rng.randint(1, 40) for _ in seqs],
+              alphabet="nt", order=3, max_length=24)
+plan = BEAM.parallel_plan()["plan"]
+
+stop, out = threading.Event(), []
+t = threading.Thread(target=watch, args=(stop, out), daemon=True)
+t.start()
+time.sleep(0.05)
+with open("/proc/self/status", encoding="utf-8") as f:
+    before = next(int(l.split()[1]) for l in f if l.startswith("Threads:"))
+h = m.entropy()
+stop.set()
+t.join(timeout=5)
+print(json.dumps({"plan": plan, "before": before,
+                  "peak": out[0] if out else -1, "entropy": h}))
+"""
+
+
+@pytest.mark.skipif(not os.path.exists("/proc/self/status"),
+                    reason="needs /proc to count the process's own threads")
+def test_a_nesting_environment_does_not_multiply_the_planned_width():
+    """`entropy` nests: math/diversity.c:306 parallel-for into expected_raw,
+    which has regions of its own. With OMP_MAX_ACTIVE_LEVELS=2 the inner ones
+    become real teams, and they are encountered by the OUTER team's workers --
+    which hold no plan, the plan being thread-local, so before
+    `beam_threads()` answered the nested case they fell through to the cap.
+    Measured on this call with the plan pinned at 8: 117 threads in the
+    process against 9 with nesting off, and 0.24 s against under a
+    millisecond.
+
+    Counted from `/proc/self/status`, which is the process's own thread table
+    rather than anything BEAM reports about itself: libgomp keeps its teams as
+    real threads, so a team that was created is a thread that exists. One of
+    the threads above `before` is this child's own sampler.
+    """
+    import json
+    import subprocess
+    import sys
+
+    env = dict(os.environ, OMP_MAX_ACTIVE_LEVELS="2",
+               BEAM_AVAILABLE_CORES="16")
+    env.pop("OMP_NUM_THREADS", None)   # or the policy stands aside entirely
+    r = subprocess.run([sys.executable, "-c", _NESTING_CHILD],
+                       capture_output=True, text=True, encoding="utf-8",
+                       timeout=900, env=env)
+    assert r.returncode == 0, r.stderr[-3000:]
+    got = json.loads(r.stdout.strip().splitlines()[-1])
+
+    if got["plan"] < 2:
+        pytest.skip(f"a plan of {got['plan']} cannot be multiplied")
+    assert got["peak"] - got["before"] <= got["plan"], (
+        f"nesting widened the process past its plan: {got}")
