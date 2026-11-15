@@ -131,13 +131,24 @@ def test_an_explicit_cap_is_what_the_plan_reports():
 
 def test_the_plan_is_capped_by_the_scaling_ceiling():
     """Auto mode never plans wider than where the work stops scaling, which
-    is the measured upper limit rather than the machine's size."""
+    is the measured upper limit rather than the machine's size.
+
+    Both assertions describe clause 3 of the policy, the one that reads the
+    free cores. OMP_NUM_THREADS selects clause 2 instead, where the runtime's
+    own answer stands and neither the ceiling nor availability revises it --
+    so under a cap of 16 the plan is 16, wider than `max_width`, by design.
+    This test asserted clause 3 without saying so and passed only because no
+    run had ever set the variable; it is skipped there rather than weakened,
+    the way the C side's clause-2 test skips when the variable is absent.
+    """
     import BEAM
 
     before = BEAM.threads()
     try:
         BEAM.set_threads(0)
         plan = BEAM.parallel_plan()
+        if plan["omp_num_threads"]:
+            pytest.skip("OMP_NUM_THREADS selects clause 2, not the ceiling")
         assert plan["plan"] <= plan["max_width"]
         assert plan["plan"] <= max(plan["available"], 1)
     finally:
@@ -154,7 +165,14 @@ def test_a_pinned_availability_is_visible_in_the_plan(monkeypatch):
     try:
         BEAM.set_threads(0)
         plan = BEAM.parallel_plan()
+        # Observable in every environment: the pin is what the policy read.
         assert plan["available"] == 2
+        if plan["omp_num_threads"]:
+            # Clause 2 stands aside for nothing, which is the property the C
+            # side asserts directly by pinning availability to 64 and
+            # expecting omp_get_max_threads() anyway
+            # (test_the_default_scope_stands_aside_for_omp_num_threads).
+            pytest.skip("OMP_NUM_THREADS selects clause 2, which ignores availability")
         assert plan["plan"] == 2
     finally:
         BEAM.set_threads(before)

@@ -47,10 +47,18 @@ it went wrong both times.
 ## Running the gate
 
 ```bash
-make clean && make test          # 331 C tests
+make clean && make test          # 439 C tests
 .venv/bin/python -m pytest tests -q     # Python suite
 .venv/bin/python verification/check.py    # the contract below
+.venv/bin/python -m pytest verification/tests -q   # the tests guarding this gate
 ```
+
+The last line is the suite that guards the checks themselves -- the comparison
+logic, the record selector, the inventory readers, the GIL-region and
+thread-count scans. It lives outside `tests/` because CI copies `tests/`
+elsewhere and runs it against the installed package, so a test that imports
+this repository's tooling cannot live under it. It runs in CI as
+`Verification tooling`; until that job existed it ran only by hand.
 
 `check.py` compares, against `baseline/`:
 
@@ -62,10 +70,11 @@ make clean && make test          # 331 C tests
 | pytest inventory | a test that stopped being collected -- a subset of a passing suite also passes |
 | C test inventory | the same for `RUN_TEST` cases |
 | thread plan wiring | a region that drops the GIL and resolves no thread plan, an unbalanced plan macro, or a path that escapes one |
+| thread counts | a parallel region naming no thread count -- so it runs at one thread per core whatever the plan resolved -- or naming one outside the permitted forms |
 | numeric | 78 quantities, order 2/3/4 x default/uneven prior, as hex floats |
 | saved-model bytes | the sha256 of a written model |
 | thread independence | results at 1, 4 and 16 threads |
-| exact | 351 quantities against brute-force enumeration of the whole support |
+| exact | 416 quantities against brute-force enumeration of the whole support |
 
 Every row above `exact` pins REPRODUCIBILITY: each quantity is compared with a
 recording of ITSELF, so a quantity that has been wrong since the day it was

@@ -146,6 +146,83 @@ jobs:
       - name: Verification gate
         run: python verification/check.py
 
+  tooling:
+    # The tests that guard the gate itself -- the comparison logic, the record
+    # selector, the C inventory, the GIL-region and thread-count scans, the
+    # move bijection. They live outside `tests/` deliberately: CI copies
+    # `tests/` elsewhere and runs it against the INSTALLED package, so a test
+    # that imports this repository's tooling cannot live under it.
+    #
+    # Until now no workflow ran them, which is the same shape as the gate
+    # before 845a4f2. Two of them are hardcoded tripwires -- the `ALL` set in
+    # test_record_selector, the Makefile target spelling in
+    # test_wrap_link_guard -- and a tripwire nobody runs is a comment.
+    name: Verification tooling
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.11"
+      - name: Install BEAM in place with test dependencies
+        run: python -m pip install -e ".[dev]"
+      - name: Build the C test binaries the inventory tests read
+        # tests-only, not test: these tests ask the binaries what they contain.
+        # Running the C suite is the `native` job's business.
+        run: make -j"$(nproc)" tests-only
+      - name: Tooling test suite
+        run: python -m pytest verification/tests -q
+
+  threads:
+    # One thread environment cannot find a defect that appears only in
+    # another, and two real ones in the parallelism work appeared only under a
+    # non-default cap: an assertion whose two outcomes collided on the same
+    # number, and a policy clause reading `omp_get_num_procs()` where it
+    # needed `omp_get_max_threads()` -- which planned 16 threads under
+    # OMP_NUM_THREADS=2. Running a test binary directly finds neither.
+    #
+    # The C runner pins OMP_NUM_THREADS=2 for every suite, so every CI run of
+    # it so far has used one environment. One is the case where a reduction or
+    # a per-thread buffer can be skipped entirely; three is odd and divides no
+    # chunk count evenly, which is the other half of the class.
+    #
+    # The Python leg is pinned to three for a second reason: unset is what the
+    # six matrix legs use today, and tests/conftest.py records that an unset
+    # cap lets every test claim every core and several then thrash rather than
+    # run. One environment here was chosen by the runner's hardware rather
+    # than by this repository.
+    name: Thread environments
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.11"
+      - name: Install BEAM in place with test dependencies
+        run: python -m pip install -e ".[dev]"
+      - name: Build the C test binaries once for both runs
+        run: make -j"$(nproc)" tests-only
+      - name: C suite, one thread per suite
+        run: tools/qa/run c --bin-dir build/tests/native --threads 1
+      - name: C suite, three threads per suite
+        run: tools/qa/run c --bin-dir build/tests/native --threads 3
+      - name: Python suite, three threads
+        # From the source tree against the editable install, unlike the six
+        # matrix legs, which run from a copy against the INSTALLED package to
+        # catch a file missing from the distribution. That is their job; this
+        # one varies the thread environment and nothing else, and running in
+        # place keeps the difference to one variable.
+        #
+        # faulthandler_timeout for the same reason the matrix legs carry it,
+        # only more so: a thread environment nobody has run before is where a
+        # deadlock would appear, and a hang should print its stacks rather
+        # than burn the 45-minute budget in silence.
+        env:
+          OMP_NUM_THREADS: "3"
+        run: python -m pytest tests -q -o faulthandler_timeout=300
+
   packaging:
     name: Build and check distributions
     runs-on: ubuntu-latest
