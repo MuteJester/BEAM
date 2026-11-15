@@ -50,7 +50,15 @@ it went wrong both times.
 make clean && make test          # 331 C tests
 .venv/bin/python -m pytest tests -q     # Python suite
 .venv/bin/python verification/check.py    # the contract below
+.venv/bin/python -m pytest verification/tests -q   # the tests guarding this gate
 ```
+
+The last line is the suite that guards the checks themselves -- the comparison
+logic, the record selector, the inventory readers, the GIL-region and
+thread-count scans. It lives outside `tests/` because CI copies `tests/`
+elsewhere and runs it against the installed package, so a test that imports
+this repository's tooling cannot live under it. It runs in CI as
+`Verification tooling`; until that job existed it ran only by hand.
 
 `check.py` compares, against `baseline/`:
 
