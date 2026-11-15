@@ -87,7 +87,7 @@ static inline void vt_sincos4(vt_v4d x, vt_v4d *s_out, vt_v4d *c_out) {
     *c_out = (vt_v4d)(ci ^ (cneg & sign));
 }
 
-#if defined(__x86_64__) && defined(__ELF__) && defined(__GNUC__)
+#if defined(__x86_64__) && defined(__ELF__) && defined(__GNUC__) && !BEAM_TSAN
 #define VT_CLONES __attribute__((target_clones("avx2", "default")))
 #else
 #define VT_CLONES

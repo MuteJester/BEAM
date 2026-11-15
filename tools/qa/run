@@ -19,12 +19,20 @@ The thread cap is applied as an environment variable and never as an
 in-process call. src/native/core/threads.c:24-26 records that BEAM does not
 edit global OpenMP state, and a runner that did would be deciding something
 the library deliberately leaves to the caller.
+
+`--tsan` runs the instrumented suites that `make tsan` builds. It exists
+because running them by hand is wrong in three ways at once -- no Archer, no
+TSAN_OPTIONS, and the address-space ceiling that TSan refuses to start under
+-- and each one of those turns a clean run into hundreds of reports about
+barriers. See verification/tests/test_tsan.py for what each setting is
+holding back.
 """
 from __future__ import annotations
 
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -51,6 +59,19 @@ DEFAULT_THREADS = 2
 TIMEOUT_CODES = {124, 137, 143}
 BOUNDED_REFUSED = 3          # bounded could not set the address-space ceiling
 
+# ThreadSanitizer's own exit code when it reported anything. Distinct from an
+# assertion failure (1) on purpose: a suite whose test cases all pass and
+# whose library raced needs a different person looking at it than a suite
+# with a broken expectation.
+TSAN_RACE = 66
+TSAN_REPORT = "WARNING: ThreadSanitizer"
+# Archer supplies the happens-before edges that libomp does not carry: it has
+# no sanitiser annotations, so without the tool TSan sees no synchronisation
+# between any two OpenMP threads and every barrier reads as a race. Measured
+# on test_distance at 8 threads: 783 reports without it, 0 with it.
+ARCHER_GLOB = "llvm-*/lib/libarcher.so"
+ARCHER_ROOT = Path("/usr/lib")
+
 
 def discover(bin_dir: Path) -> list[Path]:
     return sorted(p for p in bin_dir.glob("test_*")
@@ -67,20 +88,76 @@ def classify(code: int) -> str:
     return "fail"
 
 
-def run_one(binary: Path, *, threads: int, timeout: int, mem_gb: int) -> dict:
+def classify_tsan(code: int, reports: int) -> str:
+    """A race is its own outcome, not a failure.
+
+    A suite whose cases all pass and whose library raced, and a suite with a
+    broken expectation, need different people looking at them. Reports are
+    counted as well as trusted to the exit code, because TSAN_OPTIONS can be
+    told to exit zero and then a race would read as a pass."""
+    if reports > 0 or code == TSAN_RACE:
+        return "races"
+    return classify(code)
+
+
+def find_archer() -> Path | None:
+    """The newest installed Archer. Which LLVM version built the suites is
+    not knowable from here -- `make tsan` takes LLVM_VER -- and both 19 and
+    21 ship a working one, so this prefers the newest and `--archer` settles
+    any case where that is wrong."""
+    found = sorted(ARCHER_ROOT.glob(ARCHER_GLOB),
+                   key=lambda p: [int(n) if n.isdigit() else n
+                                  for n in re.split(r"(\d+)", p.parts[-3])])
+    return found[-1] if found else None
+
+
+def tsan_options(mem_gb: int) -> str:
+    """The sanitiser settings the instrumented run cannot do without.
+
+    `ignore_noninstrumented_modules` is what Archer itself asks for on
+    startup: without it the uninstrumented runtime's own internals report.
+    The allocator pair replaces the address-space ceiling that this run has
+    to do without -- TSan refuses to start under `ulimit -v` -- so that a
+    request BEAM cannot afford still fails inside the process that made it
+    rather than in whatever the OOM killer picks.
+
+    The caller's own TSAN_OPTIONS go last, because later settings win in the
+    sanitiser's parser: a suppressions file or a deeper history can be added
+    from outside without losing any of these."""
+    return " ".join(x for x in (
+        "ignore_noninstrumented_modules=1",
+        "allocator_may_return_null=1",
+        f"max_allocation_size_mb={mem_gb * 1024}",
+        os.environ.get("TSAN_OPTIONS", ""),
+    ) if x)
+
+
+def run_one(binary: Path, *, threads: int, timeout: int, mem_gb: int,
+            tsan: bool = False, archer: Path | None = None) -> dict:
     env = dict(os.environ)
     env["OMP_NUM_THREADS"] = str(threads)
+    if tsan:
+        env["OMP_TOOL_LIBRARIES"] = str(archer)
+        env["TSAN_OPTIONS"] = tsan_options(mem_gb)
     # An exit code cannot say how many tests ran, so the loop this replaces
     # could not tell 390 passes from 300. The harness writes its outcomes,
     # their durations and its own conditions; a binary built before the
     # harness, or one that died early, writes nothing, and that is reported
     # rather than quietly lowering the total.
+    # The instrumented run cannot go through `bounded`: it sets `ulimit -v`,
+    # and TSan maps shadow memory across the address space, so it refuses to
+    # start at all ("Program is run with limited virtual address space, which
+    # wouldn't work with ThreadSanitizer ... setrlimit() failed 22"). The
+    # wall-clock half of the wrapper is kept; the ceiling moves into
+    # TSAN_OPTIONS above.
+    wrapper = (["timeout", "--signal=TERM", "--kill-after=30", str(timeout)]
+               if tsan else
+               [str(BOUNDED), "-m", str(mem_gb), "-t", str(timeout), "--"])
     with tempfile.TemporaryDirectory(prefix="beam-qa-") as scratch:
         results = Path(scratch) / f"{binary.name}.json"
         started = time.monotonic()
         proc = subprocess.run(
-            [str(BOUNDED), "-m", str(mem_gb), "-t", str(timeout), "--",
-             str(binary), "--json", str(results)],
+            [*wrapper, str(binary), "--json", str(results)],
             capture_output=True, text=True, encoding="utf-8", errors="replace",
             env=env)
         seconds = time.monotonic() - started
@@ -90,12 +167,18 @@ def run_one(binary: Path, *, threads: int, timeout: int, mem_gb: int) -> dict:
                 tests = json.loads(results.read_text(encoding="utf-8"))
             except json.JSONDecodeError as exc:
                 tests = {"error": f"unreadable results: {exc}"}
-    return {"name": binary.name, "exit": proc.returncode,
-            "status": classify(proc.returncode), "seconds": round(seconds, 2),
-            "output": proc.stdout + proc.stderr, "tests": tests}
+    output = proc.stdout + proc.stderr
+    suite = {"name": binary.name, "exit": proc.returncode,
+             "status": classify(proc.returncode), "seconds": round(seconds, 2),
+             "output": output, "tests": tests}
+    if tsan:
+        suite["reports"] = output.count(TSAN_REPORT)
+        suite["status"] = classify_tsan(proc.returncode, suite["reports"])
+    return suite
 
 
-def conditions(*, threads: int, jobs: int, timeout: int, mem_gb: int) -> dict:
+def conditions(*, threads: int, jobs: int, timeout: int, mem_gb: int,
+               tsan: bool = False) -> dict:
     """What the durations below mean nothing without.
 
     The same suite took 3.4 minutes on an idle box and 106 minutes at load
@@ -109,16 +192,19 @@ def conditions(*, threads: int, jobs: int, timeout: int, mem_gb: int) -> dict:
         load = [-1.0, -1.0, -1.0]
     return {"threads": threads, "jobs": jobs, "cores": os.cpu_count() or 1,
             "loadavg": load, "timeout_seconds": timeout, "mem_gb": mem_gb,
+            "tsan": tsan,
             "started": time.strftime("%Y-%m-%dT%H:%M:%S%z")}
 
 
 def report(suite: dict, *, show_output: bool) -> None:
     if show_output and suite["output"]:
         print(suite["output"].rstrip("\n"))
-    tag = {"pass": "pass   ", "fail": "FAIL   ",
+    tag = {"pass": "pass   ", "fail": "FAIL   ", "races": "RACES  ",
            "timeout": "TIMEOUT", "error": "ERROR  "}[suite["status"]]
     note = ""
-    if suite["status"] == "fail":
+    if suite["status"] == "races":
+        note = f"  ({suite.get('reports', 0)} report(s), exit {suite['exit']})"
+    elif suite["status"] == "fail":
         note = f"  (exit {suite['exit']})"
     elif suite["status"] == "timeout":
         note = f"  (killed after {suite['seconds']:.0f} s)"
@@ -130,8 +216,14 @@ def report(suite: dict, *, show_output: bool) -> None:
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="tools/qa/run", description=__doc__)
     p.add_argument("kind", choices=["c"], help="which half of the suite to run")
-    p.add_argument("--bin-dir", type=Path,
-                   default=ROOT / "build" / "tests" / "native")
+    p.add_argument("--bin-dir", type=Path, default=None)
+    p.add_argument("--tsan", action="store_true",
+                   help="run the instrumented suites from build-tsan under "
+                        "Archer. Without this the binaries there report "
+                        "hundreds of races that are not there.")
+    p.add_argument("--archer", type=Path, default=None,
+                   help="the Archer OMPT tool; default is the newest "
+                        "/usr/lib/llvm-*/lib/libarcher.so")
     p.add_argument("--jobs", type=int, default=0,
                    help="suites at once; default fills the cores at the cap")
     p.add_argument("--threads", type=int, default=DEFAULT_THREADS,
@@ -147,14 +239,39 @@ def main(argv: list[str] | None = None) -> int:
                         "output of suites that passed")
     a = p.parse_args(argv)
 
+    build = "build-tsan" if a.tsan else "build"
+    how = "make tsan" if a.tsan else "make test"
+    if a.bin_dir is None:
+        a.bin_dir = ROOT / build / "tests" / "native"
+
+    archer = None
+    if a.tsan:
+        archer = a.archer if a.archer is not None else find_archer()
+        # Refusing is the whole point. libomp carries no sanitiser
+        # annotations, so with no tool loaded TSan has no happens-before edge
+        # between any two OpenMP threads and every barrier reads as a race:
+        # 783 reports on one suite, all of them artifacts. A log like that is
+        # worse than no log, because somebody reads it.
+        if archer is None or not archer.is_file():
+            print(f"{p.prog}: no Archer at "
+                  f"{archer or ARCHER_ROOT / ARCHER_GLOB}, so nothing was "
+                  f"run.", file=sys.stderr)
+            print("  Install it:  sudo apt install libomp-21-dev",
+                  file=sys.stderr)
+            print("  Or name one:  --archer /path/to/libarcher.so",
+                  file=sys.stderr)
+            print("  Without it every implicit barrier reads as a data race.",
+                  file=sys.stderr)
+            return 2
+
     if not a.bin_dir.is_dir():
         print(f"{p.prog}: no such directory: {a.bin_dir}\n"
-              f"Build the suites first: make test", file=sys.stderr)
+              f"Build the suites first: {how}", file=sys.stderr)
         return 2
     found = discover(a.bin_dir)
     if not found:
         print(f"{p.prog}: no executable test_* under {a.bin_dir}\n"
-              f"Build the suites first: make test", file=sys.stderr)
+              f"Build the suites first: {how}", file=sys.stderr)
         return 2
 
     if a.suite:
@@ -177,7 +294,9 @@ def main(argv: list[str] | None = None) -> int:
     probe = subprocess.run([str(BOUNDED), "-m", str(a.mem_gb), "-t", "10",
                             "--", "true"],
                            capture_output=True, text=True, encoding="utf-8")
-    if probe.returncode == BOUNDED_REFUSED:
+    if a.tsan:
+        probe = None            # the instrumented run never uses the wrapper
+    if probe is not None and probe.returncode == BOUNDED_REFUSED:
         print(f"{p.prog}: this environment refuses an address-space ceiling "
               f"of {a.mem_gb} GB, so nothing was run.", file=sys.stderr)
         print(f"  {probe.stderr.strip()}", file=sys.stderr)
@@ -193,15 +312,18 @@ def main(argv: list[str] | None = None) -> int:
     jobs = a.jobs if a.jobs > 0 else max(1, (os.cpu_count() or 1) // threads)
     jobs = min(jobs, len(found))
     cond = conditions(threads=threads, jobs=jobs, timeout=a.timeout,
-                      mem_gb=a.mem_gb)
+                      mem_gb=a.mem_gb, tsan=a.tsan)
     print(f"{len(found)} suite(s), {jobs} at a time x {threads} thread(s) "
           f"on {cond['cores']} cores, load {cond['loadavg'][0]}")
+    if a.tsan:
+        print(f"ThreadSanitizer, Archer at {archer}")
 
     started = time.monotonic()
     results: list[dict] = []
     with ThreadPoolExecutor(max_workers=jobs) as pool:
         futures = [pool.submit(run_one, b, threads=threads, timeout=a.timeout,
-                               mem_gb=a.mem_gb) for b in found]
+                               mem_gb=a.mem_gb, tsan=a.tsan, archer=archer)
+                   for b in found]
         for f in futures:
             suite = f.result()
             results.append(suite)
@@ -219,7 +341,7 @@ def main(argv: list[str] | None = None) -> int:
             print(s["output"].rstrip("\n"))
 
     counts = {k: sum(1 for s in results if s["status"] == k)
-              for k in ("pass", "fail", "timeout", "error")}
+              for k in ("pass", "fail", "races", "timeout", "error")}
 
     reported = [s["tests"] for s in results
                 if isinstance(s.get("tests"), dict) and "total" in s["tests"]]
@@ -238,7 +360,8 @@ def main(argv: list[str] | None = None) -> int:
     if silent:
         print(f"{len(silent)} suite(s) wrote no results, so their tests are "
               f"not counted above: {', '.join(silent)}")
-    print(f"\n{len(results)} suites, {counts['fail']} failed, "
+    races = f"{counts['races']} with races, " if a.tsan else ""
+    print(f"\n{len(results)} suites, {races}{counts['fail']} failed, "
           f"{counts['timeout']} timed out, {counts['error']} not run, "
           f"in {elapsed:.1f} s "
           f"(jobs {jobs} x {threads} threads on {cond['cores']} cores, "
@@ -251,6 +374,8 @@ def main(argv: list[str] | None = None) -> int:
              "suites": [{k: v for k, v in s.items() if k != "output"}
                         for s in sorted(results, key=lambda s: s["name"])],
              "totals": {"suites": len(results), "failed": counts["fail"],
+                        "with_races": counts["races"],
+                        "reports": sum(s.get("reports", 0) for s in results),
                         "timed_out": counts["timeout"],
                         "not_run": counts["error"],
                         "seconds": round(elapsed, 2)}},

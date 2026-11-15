@@ -1042,7 +1042,7 @@ static inline void line_store_body(uint32_t T, const double *restrict are,
  * agree to the bit. On AVX2 without AVX-512 the tile runs line_edge_body4,
  * the same arithmetic per lane with fewer lanes in flight
  * (`line_narrow_pick`). */
-#if defined(__x86_64__) && defined(__ELF__) && defined(__GNUC__)
+#if defined(__x86_64__) && defined(__ELF__) && defined(__GNUC__) && !BEAM_TSAN
 #define BEAM_EDGE_CLONES __attribute__((target_clones("avx512f", "avx2", "default")))
 #else
 #define BEAM_EDGE_CLONES
