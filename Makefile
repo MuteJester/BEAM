@@ -243,8 +243,30 @@ tsan:
 	@echo "   running the binaries bare reports hundreds of races that are"
 	@echo "   not there -- see verification/tests/test_tsan.py)"
 
+# ── The team-width observer ──────────────────────────────────
+#
+# Builds verification/teamwidth.c into an LD_PRELOAD library that records how
+# wide every OpenMP team BEAM creates actually was. Every other thread check in
+# this repository is static -- `thread counts` proves each of the 93 regions
+# NAMES a count, the GIL scan proves each resolves a plan -- and neither can see
+# what the runtime granted. The nesting defect lived in exactly that gap.
+#
+# Deliberately NOT built with $(OMPFLAG): the observer resolves libgomp through
+# dlopen at run time, so linking a second OpenMP runtime into it would be both
+# unnecessary and a way to end up measuring the wrong one.
+$(BUILD)/teamwidth.so: verification/teamwidth.c
+	@mkdir -p $(dir $@)
+	$(CC) -O2 -Wall -Wextra -std=c11 -fPIC -shared -o $@ $< -ldl
+
+teamwidth: $(BUILD)/teamwidth.so
+	@echo
+	@echo "Built $(BUILD)/teamwidth.so"
+	@echo "Use it:  LD_PRELOAD=$(BUILD)/teamwidth.so .venv/bin/python your_script.py"
+	@echo "  (read the counters via ctypes.CDLL(None); see"
+	@echo "   verification/tests/test_teamwidth.py)"
+
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all clean test list-tests selftest tests-only tsan
+.PHONY: all clean test list-tests selftest tests-only tsan teamwidth
 -include $(DEPS)

@@ -171,6 +171,11 @@ jobs:
         # tests-only, not test: these tests ask the binaries what they contain.
         # Running the C suite is the `native` job's business.
         run: make -j"$(nproc)" tests-only
+      - name: Build the team-width observer
+        # Without it test_teamwidth.py skips, and a skipped check is not a
+        # check. Linux-only by nature: it interposes libgomp through
+        # LD_PRELOAD, so this is the one job that can run it.
+        run: make teamwidth
       - name: Tooling test suite
         run: python -m pytest verification/tests -q
 

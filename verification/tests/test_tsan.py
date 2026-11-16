@@ -173,8 +173,13 @@ def test_the_instrumented_build_enables_avx():
     warning should stand out."""
     makefile = re.sub(r"\\\n\s*", " ",
                       (ROOT / "Makefile").read_text(encoding="utf-8"))
-    recipe = re.search(r"^tsan:.*?(?=^\w|\Z)", makefile,
-                       re.MULTILINE | re.DOTALL)
+    # Exactly one make recipe: the target line plus the tab-indented lines
+    # under it. An earlier version ran to the next line starting with a word
+    # character, which swallowed whatever target came next -- adding the
+    # teamwidth target between `tsan` and `clean` grew the match from 10 lines
+    # to 26, so this test would have passed on a Makefile where -mavx had
+    # drifted into a NEIGHBOURING recipe and out of this one.
+    recipe = re.search(r"^tsan:[^\n]*\n(?:\t[^\n]*\n)*", makefile, re.MULTILINE)
     assert recipe, "no tsan target in the Makefile"
     assert re.search(r"SANFLAGS=\"[^\"]*-mavx", recipe.group(0)), \
         "the tsan recipe does not pass -mavx; vtrig.c will not compile"
