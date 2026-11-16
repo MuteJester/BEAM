@@ -8,6 +8,11 @@ build/
 # `make tsan` builds here so that build/ -- which the gate reads -- is
 # never clobbered. It is scratch, exactly as build/ is.
 build-tsan/
+# Any other BUILD= the Makefile is handed, which is how a sanitiser or a
+# bisecting build is kept out of build/. build-asan/ arrived this way and was
+# untracked but NOT ignored, which is one `git add -A` away from committing a
+# few hundred object files.
+build-*/
 dist/
 *.o
 *.d

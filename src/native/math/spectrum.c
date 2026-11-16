@@ -200,7 +200,7 @@ static inline void spec_move(double *dst, const double *src, int64_t k,
 /* The CPU picks, at load time, a copy compiled for AVX-512, for AVX2 or for
  * the baseline; each lane is its own sum, with no fused multiply-add
  * (contraction is off under -std=c11), so the copies agree to the bit. */
-#if defined(__x86_64__) && defined(__ELF__) && defined(__GNUC__)
+#if defined(__x86_64__) && defined(__ELF__) && defined(__GNUC__) && !BEAM_TSAN
 #define SPEC_CLONES __attribute__((target_clones("avx512f", "avx2", "default")))
 #else
 #define SPEC_CLONES

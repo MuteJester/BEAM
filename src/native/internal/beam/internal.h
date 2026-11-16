@@ -61,6 +61,40 @@
 #endif
 
 /*
+ * BEAM_TSAN -- 1 when this translation unit is being compiled with
+ * ThreadSanitizer instrumentation, 0 otherwise. Zero in every shipped build,
+ * so nothing downstream of it changes a byte of what users get; `make tsan`
+ * is the only consumer.
+ *
+ * It exists because function multiversioning and TSan cannot coexist.
+ * `__attribute__((target_clones(...)))` makes the compiler emit an IFUNC
+ * resolver, and the dynamic loader calls that resolver during startup
+ * relocation -- before the sanitiser runtime has initialised. Clang
+ * instruments the resolver like any other function, so `__tsan_func_entry`
+ * runs against uninitialised state and the process dies inside ld.so, before
+ * main, having printed nothing. Nine of the 35 instrumented suites died that
+ * way: exit 139, empty log, no message to search for.
+ *
+ * So the three multiversioned functions compile single-versioned under
+ * instrumentation. The cost is that the instrumented build runs the baseline
+ * copy rather than the one the CPU would have picked, which is the right
+ * trade for a race detector: it changes how fast the arithmetic runs, not
+ * which threads touch which bytes. The copies are bit-identical by
+ * construction anyway -- each lane is its own sum with no fused
+ * multiply-add -- so nothing about a result depends on which one ran.
+ */
+#if defined(__SANITIZE_THREAD__)
+#define BEAM_TSAN 1
+#elif defined(__has_feature)
+#if __has_feature(thread_sanitizer)
+#define BEAM_TSAN 1
+#endif
+#endif
+#ifndef BEAM_TSAN
+#define BEAM_TSAN 0
+#endif
+
+/*
  * The former contents of this header, split by responsibility. They are
  * included here in their original order so that every translation unit still
  * sees exactly what it saw before. Narrow one file at a time to the specific

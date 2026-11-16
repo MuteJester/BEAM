@@ -172,16 +172,43 @@ selftest: $(BUILD)/tests/harness/selftest_outcomes
 # accesses, which survive -O2, and an instrumented build that tests different
 # code from the one that ships answers a question nobody asked.
 #
-# Two suites are excluded, and must stay excluded: test_model and
-# test_expected_counts_accounting link with -Wl,--wrap=malloc, while TSan
-# replaces the allocator itself, so the wrapper and the sanitiser contend for
-# one symbol. Both test allocation failure rather than parallelism, so nothing
-# about threads is lost with them out.
-LLVM_VER     ?= 19
+# FOUR suites are excluded, and must stay excluded. All four are about the
+# allocator, which is the one thing TSan replaces wholesale:
+#
+#   test_model and test_expected_counts_accounting link with
+#   -Wl,--wrap=malloc, so the wrapper and the sanitiser contend for one
+#   symbol. Both test allocation failure rather than parallelism.
+#
+#   test_allocator_linkage and test_allocator_policy assert on glibc's mmap
+#   threshold and on resident memory. TSan does not honour mallopt and maps
+#   shadow memory several times the heap, so under instrumentation they
+#   measure the sanitiser: run anyway, they failed at "the allocator policy
+#   did not reach this binary" and "resident memory is many times the model's
+#   own size". A suite that cannot pass instrumented has to be excluded
+#   rather than left to fail, or the run grows two failures everyone learns
+#   to scroll past. verification/tests/test_tsan.py derives this set from the
+#   sources, so a new suite of either kind is caught rather than assumed.
+#
+# -mavx IS NOT AN OPTIMISATION. src/native/math/vtrig.c passes a 32-byte
+# vector by value to a static helper, which clang reports as changing the ABI
+# when AVX is off. With target_clones in play that was a hard ERROR -- the
+# default clone cannot satisfy it, and __attribute__((always_inline)) does not
+# help because the check is in the frontend, before inlining -- and it was the
+# reason this flag went in. BEAM_TSAN now turns the clones off, which demotes
+# it to a -Wpsabi warning, so the flag is no longer what makes the build
+# compile. It stays for two smaller reasons: it keeps that call's vector ABI
+# the same as the shipping build's, and it keeps two warnings per build out of
+# a log where a new warning should stand out. AVX, not AVX2: the minimum the
+# ABI asks for, and on every x86-64 part since 2011.
+#
+# The version defaults to the one verified here. Archer ships in libomp-19-dev
+# as well; `make tsan LLVM_VER=19` uses it.
+LLVM_VER     ?= 21
 LLVM_DIR     ?= /usr/lib/llvm-$(LLVM_VER)
 TSAN_CC      ?= $(LLVM_DIR)/bin/clang
 TSAN_ARCHER  ?= $(LLVM_DIR)/lib/libarcher.so
-TSAN_EXCLUDE := test_model test_expected_counts_accounting
+TSAN_EXCLUDE := test_model test_expected_counts_accounting \
+                test_allocator_linkage test_allocator_policy
 TSAN_SUITES  ?= $(filter-out $(TSAN_EXCLUDE),\
                     $(patsubst tests/native/%.c,%,$(TEST_SRCS)))
 
@@ -197,7 +224,7 @@ tsan:
 	@test -x "$(TSAN_CC)" || { \
 	    echo "make tsan: no clang at $(TSAN_CC)."; \
 	    echo "  Install it:  sudo apt install clang-$(LLVM_VER) libomp-$(LLVM_VER)-dev"; \
-	    echo "  Or point at another one:  make tsan LLVM_VER=21"; \
+	    echo "  Or point at another one:  make tsan LLVM_VER=19"; \
 	    echo "  GCC is NOT a fallback -- see the comment above this target."; \
 	    exit 1; }
 	@test -f "$(TSAN_ARCHER)" || { \
@@ -206,9 +233,15 @@ tsan:
 	    echo "  Without Archer every barrier reads as a race."; \
 	    exit 1; }
 	@$(MAKE) --no-print-directory BUILD=build-tsan CC="$(TSAN_CC)" \
-	    SANFLAGS="-fsanitize=thread -g -fno-omit-frame-pointer" \
+	    SANFLAGS="-fsanitize=thread -g -fno-omit-frame-pointer -mavx" \
 	    OMPFLAG=-fopenmp=libomp \
 	    $(addprefix build-tsan/tests/native/,$(TSAN_SUITES))
+	@echo
+	@echo "Built $(words $(TSAN_SUITES)) instrumented suite(s) in build-tsan/."
+	@echo "Run them:  tools/qa/run c --tsan"
+	@echo "  (which loads Archer and sets the TSAN_OPTIONS the run needs;"
+	@echo "   running the binaries bare reports hundreds of races that are"
+	@echo "   not there -- see verification/tests/test_tsan.py)"
 
 clean:
 	rm -rf $(BUILD)

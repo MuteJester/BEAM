@@ -630,8 +630,116 @@ static void test_a_plan_does_not_reach_another_thread(void) {
     ASSERT_MSG(want != 7, "the plan must differ from the cap for this to test");
     ASSERT_MSG(master_saw == want,
                "the thread that entered the scope must see the plan");
-    ASSERT_MSG(worker_saw == 7,
-               "a worker must fall back to the cap, 7, not inherit the plan");
+    /*
+     * This asserted `worker_saw == 7` -- the cap -- until the nesting hazard
+     * below was measured. The property being pinned is unchanged and is in
+     * the name: the plan does not reach another thread, so 4 must not appear
+     * here. What changed is the fallback. A worker is by definition inside an
+     * active team, so the region it would open next is a nested one, and
+     * beam_threads() now answers 1 rather than the cap. The cap was how an
+     * 8-thread plan opened eight teams of sixteen.
+     *
+     * The cap of 7 is still set above, and still has to differ from the plan,
+     * because this test would otherwise pass on a day when they coincided.
+     */
+    ASSERT_MSG(worker_saw != want,
+               "a worker must not inherit the plan");
+    ASSERT_MSG(worker_saw == 1,
+               "a worker is inside an active team, so its next region would "
+               "be nested: it must ask for one thread, not the cap");
+    PASS();
+#else
+    BEAM_SKIP("no OpenMP in this build");
+#endif
+}
+
+/* ── Nested regions ──────────────────────────────────────────── */
+
+/*
+ * The hazard these two pin, measured before they were written.
+ *
+ * BEAM enters nested regions at depth 2 -- `entropy` is one, math/diversity.c
+ * line 306 parallel-for into expected_raw, which has regions of its own at
+ * :207 and :232. Nesting is off by default, so an inner region's request is
+ * ignored and its team is 1, and none of this shows. Nothing in the library
+ * pins that default: no omp_set_max_active_levels, no omp_set_nested, because
+ * both are process-global state and two BEAM calls on two Python threads
+ * would fight over them. So OMP_MAX_ACTIVE_LEVELS=2 in the caller's
+ * environment turns nesting on.
+ *
+ * What happened then was not that the plan multiplied. It was ignored. The
+ * inner pragma is encountered by the OUTER TEAM'S WORKERS, and
+ * test_a_plan_does_not_reach_another_thread above pins that a worker has no
+ * plan -- it fell back to the cap, which with no configured cap is
+ * omp_get_max_threads(), 16 on the box this was measured on. So an 8-thread
+ * plan opened eight teams of sixteen. Measured on one entropy() call with the
+ * plan pinned at 8: 117 threads in the process against 9 with nesting off,
+ * and the call went from under a millisecond to 240 ms. Phase 0 measured that
+ * class of oversubscription at 301x to 2275x worse than serial on a loaded
+ * cluster node.
+ *
+ * Hence: inside an ACTIVE region, the next region this thread opens is a
+ * nested one, and one thread is the only answer that cannot multiply. The
+ * check is on the active level and not the level, which the second test
+ * pins: a team of one is an inactive region, it multiplies nothing, and
+ * serialising the work inside it would cost parallelism for no gain.
+ */
+
+static void test_a_nested_region_is_planned_at_one_thread(void) {
+#ifdef _OPENMP
+    if (omp_get_max_threads() < 2) BEAM_SKIP("needs at least two OpenMP threads");
+    BeamPlanIn in = base();
+    in.available = 16;
+    const int token = beam_plan_enter(&in);
+    const int outside = beam_threads();
+    int master_inside = -1, worker_inside = -1, team = -1;
+    #pragma omp parallel num_threads(2)
+    {
+        if (omp_get_thread_num() == 0) {
+            team = omp_get_num_threads();
+            master_inside = beam_threads();
+        } else {
+            worker_inside = beam_threads();
+        }
+    }
+    beam_plan_leave(token);
+    ASSERT_MSG(outside > 1,
+               "the fixture must plan more than one thread, or this test "
+               "cannot tell the plan from the nested answer");
+    ASSERT_MSG(team == 2,
+               "the runtime gave no team of two, so nothing was nested");
+    ASSERT_MSG(master_inside == 1,
+               "the thread holding the plan must still ask for one thread "
+               "inside an active region: its next region would be nested");
+    ASSERT_MSG(worker_inside == 1,
+               "a worker must ask for one thread, not the cap -- the cap is "
+               "how an 8-thread plan opened eight teams of sixteen");
+    PASS();
+#else
+    BEAM_SKIP("no OpenMP in this build");
+#endif
+}
+
+static void test_an_inactive_region_does_not_lose_the_plan(void) {
+#ifdef _OPENMP
+    BeamPlanIn in = base();
+    in.available = 16;
+    const int want = beam_plan_threads(&in);
+    const int token = beam_plan_enter(&in);
+    int inside = -1, team = -1;
+    #pragma omp parallel num_threads(1)
+    {
+        team = omp_get_num_threads();
+        inside = beam_threads();
+    }
+    beam_plan_leave(token);
+    ASSERT_MSG(want > 1, "the fixture must plan more than one thread");
+    ASSERT_MSG(team == 1, "num_threads(1) must give a team of one");
+    ASSERT_MSG(inside == want,
+               "a team of one is an INACTIVE region: it multiplies nothing, "
+               "so the plan still applies. Testing omp_get_level() here "
+               "instead of omp_get_active_level() would read 1 and throw "
+               "away the parallelism inside a single-length sweep");
     PASS();
 #else
     BEAM_SKIP("no OpenMP in this build");
@@ -857,6 +965,8 @@ int main(int argc, char **argv) {
     RUN_TEST(test_effective_threads_reports_the_cap_not_the_plan);
     RUN_TEST(test_budget_concurrency_follows_the_active_plan);
     RUN_TEST(test_a_plan_does_not_reach_another_thread);
+    RUN_TEST(test_a_nested_region_is_planned_at_one_thread);
+    RUN_TEST(test_an_inactive_region_does_not_lose_the_plan);
 
     RUN_TEST(test_the_default_scope_plans_from_the_pinned_availability);
     RUN_TEST(test_the_default_scope_stops_at_the_ceiling);

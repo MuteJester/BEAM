@@ -3665,3 +3665,68 @@ Previous versions kept as `c_cases.measuredflag.txt`,
 only: `beam_plan_threads()` does not read it and must not, since a plan that
 behaved differently depending on whether the estimate was measured would make
 the fallback a second policy.
+
+## Amended 2026-11-15, for the nesting hazard
+
+`beam_threads()` now answers 1 when `omp_get_active_level() > 0`, before it
+consults the plan or the cap. Two files moved, both inventory. **No recorded
+NUMBER changed**, and the gate's own run says so in full: `numeric`, `math
+values`, `saved-model bytes`, `thread independence` and all 416 `exact against
+enumeration` quantities were OK in the same run that failed these two. So was
+`thread counts (93 parallel regions, every one names a permitted thread
+count)`, which is the check this change might have been expected to disturb
+and does not: the clauses are untouched, only what one of them evaluates to on
+a thread that is already inside a team.
+
+### `c_cases.txt`: 452 -> 454
+
+- `test_a_nested_region_is_planned_at_one_thread`
+- `test_an_inactive_region_does_not_lose_the_plan`
+
+The first is the fix. The second pins the choice of `omp_get_active_level()`
+over `omp_get_level()`: a team of one is an inactive region, it multiplies
+nothing, and reading the plain level there would serialise the work inside a
+single-length sweep for no gain. Written before the fix; the first failed, the
+second passed, which is why both are here -- the second is a guard against a
+later simplification, not a demonstration.
+
+### `pytest_cases.txt`: 1244 -> 1245
+
+- `tests/suites/model/test_runtime.py::test_a_nesting_environment_does_not_multiply_the_planned_width`
+
+Mutated against the real build, since it was written after the fix and would
+otherwise prove nothing. With the one line commented out and the extension
+rebuilt (`touch` first -- a preserved mtime makes `make` judge the object
+current and the "restored" run still exercises the mutant), it fails: 3.74 s
+and a process 109 threads above its plan. Restored, it passes in 0.35 s.
+
+### One existing assertion changed, which is the part to scrutinise
+
+`tests/native/test_plan.c`, in `test_a_plan_does_not_reach_another_thread`:
+
+```c
+-    ASSERT_MSG(worker_saw == 7,
+-               "a worker must fall back to the cap, 7, not inherit the plan");
++    ASSERT_MSG(worker_saw != want, "a worker must not inherit the plan");
++    ASSERT_MSG(worker_saw == 1, ...);
+```
+
+The test keeps its name and its property -- the plan is thread-local and does
+not reach another thread, so the plan's value must not appear there -- and the
+cap of 7 is still configured, still required to differ from the plan, so the
+test still cannot pass by the two coinciding. What changed is the fallback,
+deliberately. That fallback was the defect: a worker holds no plan, so the
+nested pragmas it encounters were asking for `threads_cap()`, which with no
+configured cap is `omp_get_max_threads()`. An 8-thread plan opened eight teams
+of sixteen.
+
+Measured on one `entropy()` call with the plan pinned at 8, nesting enabled
+from the environment with `OMP_MAX_ACTIVE_LEVELS=2`: **117 threads in the
+process against 9 with nesting off, 0.24 s against under a millisecond**.
+After the fix, 9 either way, and the entropy is 17.6075259553 in all four
+runs. Phase 0 measured that class of oversubscription at 301x to 2275x worse
+than serial on a loaded cluster node, which is what makes this worth a
+behaviour change rather than a note in the documentation.
+
+Previous versions kept as `c_cases.prenesting.txt` and
+`pytest_cases.prenesting.txt`.

@@ -44,6 +44,33 @@ anything the guard does not anticipate fails inside the process that asked
 rather than on the machine around it. Use it for one-liners too. That is where
 it went wrong both times.
 
+## Looking for data races
+
+```bash
+make tsan                      # clang + libomp + Archer, into build-tsan/
+tools/qa/run c --tsan          # 33 suites, Archer loaded, TSAN_OPTIONS set
+```
+
+Nothing in CI runs this; it needs a clang toolchain
+(`sudo apt install clang-21 libomp-21-dev`) and it is a developer's tool. Run
+it after anything that changes a parallel region.
+
+Run the binaries in `build-tsan/` any other way and the answer is noise.
+`libomp` carries no sanitiser annotations, so without Archer loaded as an OMPT
+tool ThreadSanitizer has no happens-before edge between any two OpenMP
+threads: every implicit barrier is invisible and every region whose result
+somebody later reads is reported as a race. On one suite at 8 threads that is
+783 reports with Archer off and 0 with it on; under GCC and `libgomp`, where
+there is no Archer at all, it was 1186. `--tsan` is the mode that gets all
+three settings right -- the tool, `ignore_noninstrumented_modules=1`, and no
+`ulimit -v`, which TSan refuses to start under.
+
+Four suites are not instrumented, all four about the allocator, which is the
+one thing TSan replaces wholesale. `verification/tests/test_tsan.py` derives
+that set from the sources rather than listing it, and its last test is the one
+that matters: it runs a suite with Archer off and checks the reports appear,
+because a clean run is only evidence if a dirty one is reachable.
+
 ## Running the gate
 
 ```bash
@@ -55,7 +82,7 @@ make clean && make test          # 439 C tests
 
 The last line is the suite that guards the checks themselves -- the comparison
 logic, the record selector, the inventory readers, the GIL-region and
-thread-count scans. It lives outside `tests/` because CI copies `tests/`
+thread-count scans, and the race detector's settings. It lives outside `tests/` because CI copies `tests/`
 elsewhere and runs it against the installed package, so a test that imports
 this repository's tooling cannot live under it. It runs in CI as
 `Verification tooling`; until that job existed it ran only by hand.

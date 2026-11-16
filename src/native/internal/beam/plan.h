@@ -166,9 +166,15 @@ int beam_plan_enter_default(void);
 void beam_plan_leave(int token);
 
 /**
- * Threads the next parallel region should use: the plan in force on this
- * thread if there is one, otherwise the cap from `beam_model_set_threads`,
- * otherwise the OpenMP runtime's own maximum. Always 1 without OpenMP.
+ * Threads the next parallel region should use: ONE if this thread is already
+ * inside an active team, since the region it opens next is a nested one and
+ * any other answer multiplies; otherwise the plan in force on this thread if
+ * there is one; otherwise the cap from `beam_model_set_threads`; otherwise the
+ * OpenMP runtime's own maximum. Always 1 without OpenMP.
+ *
+ * The nested case is first, and `threads.c` records what it is holding back:
+ * a worker holds no plan, so before this it fell through to the cap, and an
+ * 8-thread plan opened eight teams of sixteen under OMP_MAX_ACTIVE_LEVELS=2.
  *
  * Every `omp parallel` in the implementation carries `num_threads(...)`,
  * naming either this directly (64 regions) or a count already resolved from
