@@ -71,6 +71,42 @@ that set from the sources rather than listing it, and its last test is the one
 that matters: it runs a suite with Archer off and checks the reports appear,
 because a clean run is only evidence if a dirty one is reachable.
 
+## Observing the teams that actually ran
+
+```bash
+make teamwidth                                       # build/teamwidth.so
+python -m pytest verification/tests/test_teamwidth.py -q
+```
+
+Every other thread check here is static. `thread counts` proves each of the 93
+parallel regions *names* a thread count; `thread plan wiring` proves each
+GIL-releasing region *resolves* a plan. Neither can see what the runtime
+granted, and that is precisely where the nesting defect lived -- `thread
+counts` was OK in the same gate run that the defect was live in, because the
+clause was present and correct and only its value on a worker thread was wrong.
+
+`teamwidth.c` interposes the two libgomp entry points BEAM creates teams
+through and records, for every region entry, the count requested and the width
+that actually ran. One `entropy()` call creates **949 teams**, which is why
+reading 93 pragmas could never have answered the question. It observes the
+shipped extension through `LD_PRELOAD`, with no rebuild, so it measures the
+same binary the gate hashes.
+
+Both numbers are recorded because the mutation says they are not
+interchangeable. With the nested-region guard removed from `beam_threads()`, in
+the **default** environment, BEAM asked for 16 threads against a plan of 8 and
+every team that ran was still the correct width -- libgomp declines to widen a
+nested region when nesting is off. A check on the width that ran passes on that
+mutant; only the requested count catches it. The runtime's default policy was
+the only thing between the plan and sixteen-way oversubscription, which is luck
+rather than design, so the requested channel is the primary assertion.
+
+Two of the tests exist to stop the file lying to you. One reads the built
+extension's imports and fails if BEAM ever grows a third way to create a team,
+since the observer would then be blind *and* quiet. The other requires the
+measurement to have reached a nested region, because a dead path and a
+well-behaved one report the same zero.
+
 ## Running the gate
 
 ```bash
